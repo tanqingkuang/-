@@ -1,0 +1,36 @@
+name: Build Windows exe
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "requirements-gui.txt"
+      - "scripts/build_windows_exe.ps1"
+      - ".github/workflows/build-windows-exe.yml"
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: "x64"
+
+      - name: Build exe
+        shell: pwsh
+        run: ./scripts/build_windows_exe.ps1
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: formation-sim-windows-x64
+          path: dist/编队仿真.exe

@@ -126,6 +126,22 @@ app.quit()
 PY
 ```
 
+## Windows exe 打包
+
+Windows x64 exe 需要在 Windows x64 环境构建，不要在 macOS 上直接用本机 PyInstaller 伪造产物。原因是 PySide6/Qt 需要目标平台的 Python wheel、Qt DLL 和 platform plugin。
+
+本地 Windows 机器打包：
+
+```powershell
+.\scripts\build_windows_exe.ps1
+```
+
+GitHub Actions 打包：
+
+- workflow 文件：`.github/workflows/build-windows-exe.yml`
+- 触发方式：推送 `main` 相关文件，或手动 `workflow_dispatch`
+- 产物：`formation-sim-windows-x64` artifact，内含 `编队仿真.exe`
+
 ## 清理生成物
 
 测试后清理 Python 缓存：
