@@ -1,0 +1,22 @@
+#!/bin/zsh
+
+set -eu
+
+PYTHON_BIN="/Users/zhangmeng/miniforge3/bin/python"
+SCRIPT_DIR="${0:A:h}"
+CONTENTS_DIR="${SCRIPT_DIR:h}"
+APP_SRC="${CONTENTS_DIR}/Resources/appsrc"
+LOG_DIR="${HOME}/Library/Logs/FormationSimulation"
+LOG_FILE="${LOG_DIR}/gui.log"
+
+mkdir -p "${LOG_DIR}"
+cd "${APP_SRC}"
+
+export PATH="/Users/zhangmeng/miniforge3/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+exec "${PYTHON_BIN}" -c '
+import sys
+sys.path.insert(0, ".")
+from src.ui.gui.main_window import run_gui
+raise SystemExit(run_gui(sys.argv))
+' >>"${LOG_FILE}" 2>&1
