@@ -627,14 +627,21 @@ class TopView(QGraphicsView):
 class SideView(QWidget):
     """Altitude over distance side view."""
 
+    ALTITUDE_MIN_DEFAULT = 1120.0
+    ALTITUDE_MAX_DEFAULT = 1320.0
+    PLOT_BOTTOM_MARGIN = 24.0
+    PLOT_VERTICAL_MARGINS = 52.0
+    WORLD_GRID_SPACING = 48
+    ALTITUDE_GRID_SPACING = 40
+
     def __init__(self, top_view: TopView, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.top_view = top_view
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
         self.show_grid = True
-        self.altitude_min = 1120.0
-        self.altitude_max = 1320.0
+        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
+        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
         self._pan_origin: QPointF | None = None
         self._selection_origin: QPointF | None = None
         self._selection_current: QPointF | None = None
@@ -715,13 +722,12 @@ class SideView(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
         if event.button() == Qt.MouseButton.LeftButton:
-            self.reset_altitude_view()
             self.top_view.reset_view()
             event.accept()
 
     def reset_altitude_view(self) -> None:
-        self.altitude_min = 1120.0
-        self.altitude_max = 1320.0
+        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
+        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
         self.update()
 
     def _map_x(self, x: float) -> float:
@@ -731,12 +737,13 @@ class SideView(QWidget):
         return (x - self.top_view.offset.x()) / self.top_view.scale_value
 
     def _screen_to_altitude(self, y: float) -> float:
-        plot_height = max(1.0, self.height() - 52)
-        ratio = (self.height() - 24 - y) / plot_height
+        plot_height = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS)
+        ratio = (self.height() - self.PLOT_BOTTOM_MARGIN - y) / plot_height
         return self.altitude_min + ratio * (self.altitude_max - self.altitude_min)
 
     def _pan_altitude(self, delta_y: float) -> None:
-        altitude_delta = delta_y / max(1.0, self.height() - 52) * (self.altitude_max - self.altitude_min)
+        plot_height = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS)
+        altitude_delta = delta_y / plot_height * (self.altitude_max - self.altitude_min)
         self.altitude_min += altitude_delta
         self.altitude_max += altitude_delta
 
@@ -801,11 +808,13 @@ class SideView(QWidget):
         painter.drawRect(selection)
 
     def _map_y(self, altitude: float) -> float:
-        return self.height() - 24 - ((altitude - self.altitude_min) / (self.altitude_max - self.altitude_min)) * (self.height() - 52)
+        return self.height() - self.PLOT_BOTTOM_MARGIN - (
+            (altitude - self.altitude_min) / (self.altitude_max - self.altitude_min)
+        ) * (self.height() - self.PLOT_VERTICAL_MARGINS)
 
     def _draw_grid(self, painter: QPainter) -> None:
         painter.setPen(QPen(self.theme.grid, 1))
-        spacing = 48
+        spacing = self.WORLD_GRID_SPACING
         left = self._screen_to_world_x(0.0)
         right = self._screen_to_world_x(float(self.width()))
         start_x = math.floor(left / spacing) * spacing
@@ -814,7 +823,7 @@ class SideView(QWidget):
             x = self._map_x(float(world_x))
             painter.drawLine(QPointF(x, 0.0), QPointF(x, float(self.height())))
 
-        altitude_spacing = 40
+        altitude_spacing = self.ALTITUDE_GRID_SPACING
         start_altitude = math.floor(self.altitude_min / altitude_spacing) * altitude_spacing
         end_altitude = math.ceil(self.altitude_max / altitude_spacing) * altitude_spacing
         for altitude in range(start_altitude, end_altitude + altitude_spacing, altitude_spacing):
