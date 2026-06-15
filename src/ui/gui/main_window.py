@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import math
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
@@ -34,6 +36,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.runner.sim_control import SimulationController
+from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
+
 
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
@@ -60,6 +65,7 @@ class NodeState:
     y: float
     vx: float
     vy: float
+    altitude: float = 1200.0
     trail: list[TrailPoint] = field(default_factory=list)
 
 
@@ -227,6 +233,183 @@ class MockSimulation:
             nodes=self.nodes,
             links=self.links,
         )
+
+
+class ControllerSimulationAdapter:
+    """Adapt SimulationController snapshots to the existing UI drawing model."""
+
+    def __init__(self) -> None:
+        self.controller = SimulationController()
+        self.speed = 1.0
+        self.disturbance = "无"
+        self._trail_by_node: dict[str, list[TrailPoint]] = {}
+        self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
+        self._default_config_path = self._write_default_config()
+        self._load_result_message = ""
+        self.load_config(self._default_config_path)
+
+    @property
+    def time(self) -> float:
+        return self.controller.get_snapshot().time_s
+
+    def load_config(self, path: str) -> Snapshot:
+        result = self.controller.load_config(path)
+        self._load_result_message = result.message
+        if result.code == "OK":
+            self._trail_by_node.clear()
+            self._last_xy_by_node.clear()
+            self.disturbance = "无"
+        return self.snapshot()
+
+    def start(self) -> Snapshot:
+        result = self.controller.start()
+        self._load_result_message = result.message
+        return self.snapshot()
+
+    def pause(self) -> Snapshot:
+        snapshot = self.controller.get_snapshot()
+        if snapshot.run_state == "RUNNING":
+            result = self.controller.pause()
+        elif snapshot.run_state == "PAUSED":
+            result = self.controller.start()
+        else:
+            result = self.controller.pause()
+        self._load_result_message = result.message
+        return self.snapshot()
+
+    def single_step(self) -> Snapshot:
+        result = self.controller.step()
+        self._load_result_message = result.message
+        return self.snapshot()
+
+    def reset(self) -> Snapshot:
+        result = self.controller.reset()
+        self._load_result_message = result.message
+        if result.code == "OK":
+            self._trail_by_node.clear()
+            self._last_xy_by_node.clear()
+            self.disturbance = "无"
+        return self.snapshot()
+
+    def advance(self) -> Snapshot:
+        return self.snapshot()
+
+    def snapshot(self) -> Snapshot:
+        return self._convert_snapshot(self.controller.get_snapshot())
+
+    def inject_disturbance(self, kind: str) -> Snapshot:
+        command = self._disturbance_command(kind)
+        result = self.controller.inject_disturbance(command)
+        self._load_result_message = result.message
+        if result.code == "OK":
+            self.disturbance = {
+                "wind": "风场",
+                "fault": "节点故障",
+                "loss": "链路丢包",
+                "clear": "无",
+            }[kind]
+        return self.snapshot()
+
+    def set_speed(self, speed: float) -> None:
+        self.speed = speed
+        self.controller.set_playback_rate(speed)
+
+    def close(self) -> None:
+        self.controller.close()
+
+    def _convert_snapshot(self, snapshot: ControllerSnapshot) -> Snapshot:
+        nodes: list[NodeState] = []
+        for node in snapshot.nodes:
+            previous = self._last_xy_by_node.get(node.node_id)
+            if previous is None:
+                vx = math.cos(math.radians(node.psi_v_deg)) * node.speed_mps
+                vy = math.sin(math.radians(node.psi_v_deg)) * node.speed_mps
+            else:
+                previous_x, previous_y, previous_time = previous
+                dt = max(1e-6, snapshot.time_s - previous_time)
+                vx = (node.x_m - previous_x) / dt
+                vy = (node.y_m - previous_y) / dt
+            self._last_xy_by_node[node.node_id] = (node.x_m, node.y_m, snapshot.time_s)
+
+            trail = self._trail_by_node.setdefault(node.node_id, [])
+            if not trail or trail[-1].time != snapshot.time_s:
+                trail.append(TrailPoint(node.x_m, node.y_m, node.altitude_m, snapshot.time_s))
+            trail[:] = [point for point in trail if snapshot.time_s - point.time <= TRAIL_SECONDS]
+            nodes.append(
+                NodeState(
+                    node_id=node.node_id,
+                    role=node.role,
+                    x=node.x_m,
+                    y=node.y_m,
+                    vx=vx,
+                    vy=vy,
+                    altitude=node.altitude_m,
+                    trail=list(trail),
+                )
+            )
+
+        links: list[LinkState] = []
+        for link in snapshot.links:
+            source, _, target = link.link_id.partition("-")
+            links.append(
+                LinkState(
+                    source=source,
+                    target=target,
+                    latency_ms=round(link.latency_ms),
+                    loss=link.loss_rate,
+                    ok=link.status == "normal",
+                )
+            )
+        return Snapshot(
+            time=snapshot.time_s,
+            duration=snapshot.duration_s,
+            step=snapshot.step_s,
+            run_state=snapshot.run_state,
+            control_report=snapshot.control_report,
+            disturbance=self._visible_disturbance(snapshot),
+            nodes=nodes,
+            links=links,
+        )
+
+    def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
+        if self.disturbance == "清除扰动":
+            return "无"
+        if any(node.health != "normal" for node in snapshot.nodes):
+            return "节点故障"
+        if any(link.status != "normal" for link in snapshot.links):
+            return "链路丢包"
+        if snapshot.run_state == "READY":
+            return "无"
+        return self.disturbance
+
+    def _disturbance_command(self, kind: str) -> dict[str, object]:
+        if kind == "wind":
+            return {"type": "wind", "duration_s": 8.0, "params": {"speed_mps": 8.0, "direction_deg": 90.0}}
+        if kind == "fault":
+            return {"type": "node_fault", "target": "A02", "duration_s": 10.0, "params": {"mode": "degraded"}}
+        if kind == "loss":
+            return {"type": "link_loss", "target": "A01-A02", "duration_s": 12.0, "params": {"loss_rate": 0.3}}
+        return {"type": "clear"}
+
+    def _write_default_config(self) -> str:
+        config = {
+            "duration_s": 120.0,
+            "step_s": 0.005,
+            "playback_rate": self.speed,
+            "nodes": [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
+            ],
+            "links": [
+                {"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01},
+                {"link_id": "A01-A03", "latency_ms": 21.0, "loss_rate": 0.01},
+                {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
+            ],
+        }
+        path = Path(tempfile.gettempdir()) / "formation_sim_ui_default.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        return str(path)
 
 
 def node_altitude(index: int, time_value: float) -> float:
@@ -861,7 +1044,7 @@ class SideView(QWidget):
             if x < -24 or x > self.width() + 24:
                 continue
             color = self.theme.warn if snapshot.disturbance == "节点故障" and node.node_id == "A02" else self.theme.leader if index == 0 else self.theme.wingman
-            y = self._map_y(node_altitude(index, snapshot.time))
+            y = self._map_y(node.altitude)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
             painter.drawEllipse(QPointF(x, y), 8, 8)
@@ -917,7 +1100,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("编队仿真")
         self.resize(1440, 900)
         self.setMinimumSize(1280, 780)
-        self.sim = MockSimulation()
+        self.sim = ControllerSimulationAdapter()
         self.theme_key = "light"
         self.theme = THEMES[self.theme_key]
         self.timer = QTimer(self)
@@ -1327,9 +1510,12 @@ class MainWindow(QMainWindow):
     def _update_snapshot(self, snapshot: Snapshot) -> None:
         self.run_state_label.setText(snapshot.run_state)
         self.report_label.setText(f"回报：{snapshot.control_report}")
+        self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
-        self.pause_button.setEnabled(snapshot.run_state != "READY")
+        self.start_button.setEnabled(snapshot.run_state != "FINISHED")
+        self.pause_button.setEnabled(snapshot.run_state in {"RUNNING", "PAUSED"})
+        self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
         self.start_button.setText("继续" if snapshot.run_state == "PAUSED" else "开始")
         self.top_view.set_snapshot(snapshot)
         self.side_view.set_snapshot(snapshot)
@@ -1342,7 +1528,7 @@ class MainWindow(QMainWindow):
             side_offset = (node.y - WORLD_HEIGHT / 2) * 0.8
             distance_to_go = max(0.0, (WORLD_WIDTH - node.x) * 4)
             status = "降级" if snapshot.disturbance == "节点故障" and node.node_id == "A02" else "正常"
-            values = [node.node_id, f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{node_altitude(row, snapshot.time):.0f}", f"{speed:.1f}", status]
+            values = [node.node_id, f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{node.altitude:.0f}", f"{speed:.1f}", status]
             for column, value in enumerate(values):
                 self.node_table.setItem(row, column, QTableWidgetItem(value))
 
@@ -1355,7 +1541,7 @@ class MainWindow(QMainWindow):
     def _start(self) -> None:
         self._update_snapshot(self.sim.start())
         self.timer.start()
-        self._log("UI", "发送 start/resume 命令")
+        self._log("UI", "发送 start 命令")
 
     def _pause(self) -> None:
         snapshot = self.sim.pause()
@@ -1364,7 +1550,7 @@ class MainWindow(QMainWindow):
         elif snapshot.run_state == "RUNNING":
             self.timer.start()
         self._update_snapshot(snapshot)
-        self._log("UI", "发送 pause/resume 命令")
+        self._log("UI", "发送 pause/start 命令")
 
     def _step(self) -> None:
         self.timer.stop()
@@ -1379,7 +1565,7 @@ class MainWindow(QMainWindow):
     def _on_tick(self) -> None:
         snapshot = self.sim.advance()
         self._update_snapshot(snapshot)
-        if snapshot.run_state == "READY":
+        if snapshot.run_state in {"READY", "PAUSED", "FINISHED"}:
             self.timer.stop()
 
     def _inject_disturbance(self, kind: str) -> None:
@@ -1397,11 +1583,13 @@ class MainWindow(QMainWindow):
         if not path:
             return
         self.config_name.setText(Path(path).name)
-        self._log("Config", f"选择配置文件 {Path(path).name}")
+        self.timer.stop()
+        self._update_snapshot(self.sim.load_config(path))
+        self._log("Config", f"加载配置文件 {Path(path).name}")
 
     def _on_speed_changed(self, value: int) -> None:
         speed = value / 10.0
-        self.sim.speed = speed
+        self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")
 
     def _on_theme_changed(self) -> None:
@@ -1492,6 +1680,11 @@ class MainWindow(QMainWindow):
 
     def _log(self, source: str, message: str) -> None:
         self.log_dialog.append(self.sim.time, source, message)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.timer.stop()
+        self.sim.close()
+        super().closeEvent(event)
 
 
 def run_gui(argv: list[str] | None = None) -> int:

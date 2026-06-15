@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -10,7 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
-from src.ui.gui.main_window import MainWindow
+from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -117,6 +118,24 @@ class GuiViewInteractionTests(unittest.TestCase):
         ) / self.window.top_view.scale_value
         self.assertGreater(self.window.top_view.scale_value, old_scale)
         self.assertAlmostEqual(new_center_y, old_center_y)
+
+    def test_main_window_uses_simulation_controller_adapter(self) -> None:
+        self.assertIsInstance(self.window.sim, ControllerSimulationAdapter)
+        self.assertEqual(self.window.sim.controller.get_snapshot().run_state, "READY")
+
+    def test_start_pause_drives_real_controller_snapshot(self) -> None:
+        self.window._start()
+        time.sleep(0.04)
+        self.window._on_tick()
+        running_snapshot = self.window.sim.controller.get_snapshot()
+
+        self.assertEqual(running_snapshot.run_state, "RUNNING")
+        self.assertGreater(running_snapshot.time_s, 0.0)
+
+        self.window._pause()
+        paused_snapshot = self.window.sim.controller.get_snapshot()
+
+        self.assertEqual(paused_snapshot.run_state, "PAUSED")
 
 
 if __name__ == "__main__":
