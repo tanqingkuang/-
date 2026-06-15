@@ -623,6 +623,27 @@ class LogDialog(QDialog):
         self.text.append(f"{time_value:05.1f}s  {source:<10} {message}")
 
 
+class StageFullscreenDialog(QDialog):
+    """Top-level shell used to fullscreen only the realtime display stage."""
+
+    def __init__(self, owner: "MainWindow") -> None:
+        super().__init__(owner)
+        self.owner = owner
+        self.setWindowTitle("二维实时显示")
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.key() == Qt.Key.Key_Escape:
+            self.owner._exit_stage_fullscreen()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self.owner._stage_fullscreen_dialog is self:
+            self.owner._exit_stage_fullscreen()
+        event.accept()
+
+
 class MainWindow(QMainWindow):
     """Main PySide6 UI shell."""
 
@@ -638,6 +659,13 @@ class MainWindow(QMainWindow):
         self.timer.setInterval(100)
         self.timer.timeout.connect(self._on_tick)
         self.log_dialog = LogDialog(self)
+        self.main_layout: QHBoxLayout | None = None
+        self.stage: QWidget | None = None
+        self.fullscreen_button: QPushButton | None = None
+        self._stage_placeholder: QWidget | None = None
+        self._stage_fullscreen_dialog: StageFullscreenDialog | None = None
+        self._stage_layout_index = 1
+        self._stage_layout_stretch = 1
         self._build_ui()
         self._install_button_cursors()
         self._apply_theme()
@@ -653,11 +681,13 @@ class MainWindow(QMainWindow):
         outer.addWidget(self._build_header())
 
         main = QHBoxLayout()
+        self.main_layout = main
         main.setContentsMargins(8, 8, 8, 8)
         main.setSpacing(8)
         outer.addLayout(main, 1)
         main.addWidget(self._build_left_panel(), 0)
-        main.addWidget(self._build_stage(), 1)
+        self.stage = self._build_stage()
+        main.addWidget(self.stage, 1)
         main.addWidget(self._build_right_panel(), 0)
 
     def _build_header(self) -> QWidget:
@@ -761,6 +791,7 @@ class MainWindow(QMainWindow):
         fullscreen = QPushButton("⛶")
         fullscreen.setFixedSize(30, 30)
         fullscreen.clicked.connect(self._toggle_fullscreen)
+        self.fullscreen_button = fullscreen
         toolbar.addWidget(title)
         toolbar.addWidget(fullscreen)
         toolbar.addStretch(1)
@@ -1116,10 +1147,65 @@ class MainWindow(QMainWindow):
         self.side_view.update()
 
     def _toggle_fullscreen(self) -> None:
-        if self.isFullScreen():
-            self.showNormal()
+        if self._stage_fullscreen_dialog is not None:
+            self._exit_stage_fullscreen()
         else:
-            self.showFullScreen()
+            self._enter_stage_fullscreen()
+
+    def _enter_stage_fullscreen(self) -> None:
+        if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is not None:
+            return
+
+        index = self.main_layout.indexOf(self.stage)
+        if index < 0:
+            return
+
+        self._stage_layout_index = index
+        self._stage_layout_stretch = self.main_layout.stretch(index)
+        self.main_layout.removeWidget(self.stage)
+
+        self._stage_placeholder = QWidget()
+        self.main_layout.insertWidget(self._stage_layout_index, self._stage_placeholder, self._stage_layout_stretch)
+
+        dialog = StageFullscreenDialog(self)
+        dialog_layout = QVBoxLayout(dialog)
+        dialog_layout.setContentsMargins(0, 0, 0, 0)
+        dialog_layout.setSpacing(0)
+        dialog_layout.addWidget(self.stage)
+        self._stage_fullscreen_dialog = dialog
+        self._set_fullscreen_button_state(True)
+        dialog.showFullScreen()
+
+    def _exit_stage_fullscreen(self) -> None:
+        if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is None:
+            return
+
+        dialog = self._stage_fullscreen_dialog
+        dialog.layout().removeWidget(self.stage)
+        dialog.hide()
+        dialog.deleteLater()
+        self._stage_fullscreen_dialog = None
+
+        if self._stage_placeholder is not None:
+            placeholder_index = self.main_layout.indexOf(self._stage_placeholder)
+            if placeholder_index >= 0:
+                self.main_layout.removeWidget(self._stage_placeholder)
+            self._stage_placeholder.deleteLater()
+            self._stage_placeholder = None
+
+        insert_index = min(self._stage_layout_index, self.main_layout.count())
+        self.main_layout.insertWidget(insert_index, self.stage, self._stage_layout_stretch)
+        self._set_fullscreen_button_state(False)
+        self.stage.show()
+        self.top_view.update()
+        self.side_view.update()
+
+    def _set_fullscreen_button_state(self, active: bool) -> None:
+        if self.fullscreen_button is None:
+            return
+        self.fullscreen_button.setText("↙" if active else "⛶")
+        self.fullscreen_button.setToolTip("退出全屏" if active else "全屏显示")
+        self.fullscreen_button.setAccessibleName("退出全屏" if active else "全屏显示")
 
     def _log(self, source: str, message: str) -> None:
         self.log_dialog.append(self.sim.time, source, message)
