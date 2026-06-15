@@ -738,6 +738,7 @@ class SimulationController:
             event = self._disturbance.inject(normalized, self._time_s)
             self._append_event_object_unlocked(event)
             self._logger.write_event(event)
+            self._latest_snapshot = self._make_snapshot_unlocked()
         return CommandResult("OK", "disturbance injected")
 
     def subscribe_snapshot(self, callback: Callable[[SimulationSnapshot], None]) -> Subscription:

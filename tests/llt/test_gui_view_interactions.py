@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -125,9 +127,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
     def test_start_pause_drives_real_controller_snapshot(self) -> None:
         self.window._start()
-        time.sleep(0.04)
-        self.window._on_tick()
-        running_snapshot = self.window.sim.controller.get_snapshot()
+        running_snapshot = self._wait_for_controller_time()
 
         self.assertEqual(running_snapshot.run_state, "RUNNING")
         self.assertGreater(running_snapshot.time_s, 0.0)
@@ -136,6 +136,55 @@ class GuiViewInteractionTests(unittest.TestCase):
         paused_snapshot = self.window.sim.controller.get_snapshot()
 
         self.assertEqual(paused_snapshot.run_state, "PAUSED")
+
+    def test_disturbance_label_clears_after_duration(self) -> None:
+        self.window.sim.controller.inject_disturbance(
+            {"type": "link_loss", "target": "A01-A02", "duration_s": 0.005, "params": {"loss_rate": 0.3}}
+        )
+        disturbed = self.window.sim.snapshot()
+
+        self.assertEqual(disturbed.disturbance, "链路丢包")
+
+        self.window.sim.controller.step(3)
+        cleared = self.window.sim.snapshot()
+
+        self.assertEqual(cleared.disturbance, "无")
+
+    def test_config_load_failure_is_reported_without_replacing_label(self) -> None:
+        old_label = self.window.config_name.text()
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_config = Path(tmp) / "bad.json"
+            bad_config.write_text("{", encoding="utf-8")
+
+            self.window._apply_config_path(str(bad_config))
+
+        self.assertEqual(self.window.config_name.text(), old_label)
+        self.assertIn("加载配置失败", self.window.log_dialog.text.toPlainText())
+
+    def test_node_health_drives_table_status_and_warning_color_target(self) -> None:
+        self.window.sim.controller.inject_disturbance(
+            {"type": "node_fault", "target": "A03", "duration_s": 1.0, "params": {"mode": "fault"}}
+        )
+        self.window._update_snapshot(self.window.sim.snapshot())
+
+        statuses = {
+            self.window.node_table.item(row, 0).text(): self.window.node_table.item(row, 5).text()
+            for row in range(self.window.node_table.rowCount())
+        }
+
+        self.assertEqual(statuses["A03"], "故障")
+        self.assertEqual(statuses["A02"], "正常")
+
+    def _wait_for_controller_time(self, timeout_s: float = 1.0):
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            self.app.processEvents()
+            self.window._on_tick()
+            snapshot = self.window.sim.controller.get_snapshot()
+            if snapshot.time_s > 0.0:
+                return snapshot
+            time.sleep(0.01)
+        return self.window.sim.controller.get_snapshot()
 
 
 if __name__ == "__main__":
