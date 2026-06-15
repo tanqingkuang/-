@@ -375,6 +375,7 @@ class TopView(QGraphicsView):
 
     viewChanged = Signal()
     manualViewChanged = Signal()
+    resetViewRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -383,6 +384,7 @@ class TopView(QGraphicsView):
         self.scale_value = 1.0
         self.offset = QPointF(0.0, 0.0)
         self.auto_center = False
+        self.show_grid = True
         self._pan_origin: QPointF | None = None
         self._selection_origin: QPointF | None = None
         self._selection_current: QPointF | None = None
@@ -407,6 +409,7 @@ class TopView(QGraphicsView):
         self.viewport().update()
         self.viewChanged.emit()
         self.manualViewChanged.emit()
+        self.resetViewRequested.emit()
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001
         delta = event.pixelDelta().y() or event.angleDelta().y()
@@ -476,7 +479,8 @@ class TopView(QGraphicsView):
         painter.fillRect(self.rect(), self.theme.canvas)
         painter.translate(self.offset)
         painter.scale(self.scale_value, self.scale_value)
-        self._draw_grid(painter)
+        if self.show_grid:
+            self._draw_grid(painter)
         self._draw_route(painter)
         if self.snapshot:
             self._draw_links(painter, self.snapshot)
@@ -628,7 +632,14 @@ class SideView(QWidget):
         self.top_view = top_view
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
+        self.show_grid = True
+        self.altitude_min = 1120.0
+        self.altitude_max = 1320.0
+        self._pan_origin: QPointF | None = None
+        self._selection_origin: QPointF | None = None
+        self._selection_current: QPointF | None = None
         self.setMinimumHeight(150)
+        self.setMouseTracking(True)
 
     def set_theme(self, theme: Theme) -> None:
         self.theme = theme
@@ -642,7 +653,8 @@ class SideView(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.theme.canvas)
-        self._draw_grid(painter)
+        if self.show_grid:
+            self._draw_grid(painter)
         self._draw_reference(painter)
         if self.snapshot:
             self._draw_trails(painter, self.snapshot)
@@ -650,21 +662,164 @@ class SideView(QWidget):
         painter.setPen(self.theme.muted)
         painter.drawText(QPointF(self.width() - 76, self.height() - 8), "待飞距")
         painter.drawText(QPointF(12, 20), "高度")
+        self._draw_selection(painter)
+
+    def wheelEvent(self, event) -> None:  # noqa: ANN001
+        delta = event.pixelDelta().y() or event.angleDelta().y()
+        if delta == 0:
+            return
+        before_x = self._screen_to_world_x(event.position().x())
+        old_scale = self.top_view.scale_value
+        factor = math.pow(1.001, delta)
+        self.top_view.scale_value = min(3.5, max(0.45, old_scale * factor))
+        self.top_view.offset.setX(event.position().x() - before_x * self.top_view.scale_value)
+        self._preserve_top_view_vertical_center(old_scale)
+        self._emit_shared_view_changed()
+        event.accept()
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._pan_origin = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._selection_origin = event.position()
+            self._selection_current = event.position()
+            self.update()
+            event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
+        if self._pan_origin is not None:
+            delta = event.position() - self._pan_origin
+            self.top_view.offset.setX(self.top_view.offset.x() + delta.x())
+            self._pan_altitude(delta.y())
+            self._pan_origin = event.position()
+            self._emit_shared_view_changed()
+            event.accept()
+        elif self._selection_origin is not None:
+            self._selection_current = event.position()
+            self.update()
+            event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._pan_origin = None
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+            event.accept()
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._zoom_to_selection()
+            self._selection_origin = None
+            self._selection_current = None
+            self.update()
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.reset_altitude_view()
+            self.top_view.reset_view()
+            event.accept()
+
+    def reset_altitude_view(self) -> None:
+        self.altitude_min = 1120.0
+        self.altitude_max = 1320.0
+        self.update()
 
     def _map_x(self, x: float) -> float:
         return x * self.top_view.scale_value + self.top_view.offset.x()
 
+    def _screen_to_world_x(self, x: float) -> float:
+        return (x - self.top_view.offset.x()) / self.top_view.scale_value
+
+    def _screen_to_altitude(self, y: float) -> float:
+        plot_height = max(1.0, self.height() - 52)
+        ratio = (self.height() - 24 - y) / plot_height
+        return self.altitude_min + ratio * (self.altitude_max - self.altitude_min)
+
+    def _pan_altitude(self, delta_y: float) -> None:
+        altitude_delta = delta_y / max(1.0, self.height() - 52) * (self.altitude_max - self.altitude_min)
+        self.altitude_min += altitude_delta
+        self.altitude_max += altitude_delta
+
+    def _preserve_top_view_vertical_center(self, old_scale: float) -> None:
+        viewport = self.top_view.viewport().rect()
+        center_y = (viewport.height() / 2.0 - self.top_view.offset.y()) / old_scale
+        self.top_view.offset.setY(viewport.height() / 2.0 - center_y * self.top_view.scale_value)
+
+    def _emit_shared_view_changed(self) -> None:
+        self.top_view.viewport().update()
+        self.top_view.viewChanged.emit()
+        self.top_view.manualViewChanged.emit()
+
+    def _zoom_to_selection(self) -> None:
+        if self._selection_origin is None or self._selection_current is None:
+            return
+        left = min(self._selection_origin.x(), self._selection_current.x())
+        right = max(self._selection_origin.x(), self._selection_current.x())
+        top = min(self._selection_origin.y(), self._selection_current.y())
+        bottom = max(self._selection_origin.y(), self._selection_current.y())
+        selection_width = right - left
+        selection_height = bottom - top
+        has_width = selection_width >= 80 and selection_width >= selection_height * 1.25
+        has_height = selection_height >= 8
+        if not has_width and not has_height:
+            return
+
+        if has_width:
+            start_x = self._screen_to_world_x(left)
+            end_x = self._screen_to_world_x(right)
+            world_width = max(1.0, abs(end_x - start_x))
+            old_scale = self.top_view.scale_value
+            self.top_view.scale_value = min(3.5, max(0.45, self.width() / world_width * 0.94))
+            center_x = (start_x + end_x) / 2.0
+            self.top_view.offset.setX(self.width() / 2.0 - center_x * self.top_view.scale_value)
+            self._preserve_top_view_vertical_center(old_scale)
+
+        if has_height:
+            altitude_top = self._screen_to_altitude(top)
+            altitude_bottom = self._screen_to_altitude(bottom)
+            center = (altitude_top + altitude_bottom) / 2.0
+            span = max(8.0, abs(altitude_top - altitude_bottom) / 0.94)
+            self.altitude_min = center - span / 2.0
+            self.altitude_max = center + span / 2.0
+
+        self._emit_shared_view_changed()
+
+    def _draw_selection(self, painter: QPainter) -> None:
+        if self._selection_origin is None or self._selection_current is None:
+            return
+        left = min(self._selection_origin.x(), self._selection_current.x())
+        right = max(self._selection_origin.x(), self._selection_current.x())
+        top = min(self._selection_origin.y(), self._selection_current.y())
+        bottom = max(self._selection_origin.y(), self._selection_current.y())
+        if right - left < 2 or bottom - top < 2:
+            return
+        selection = QRectF(left, top, right - left, bottom - top)
+        pen = QPen(self.theme.accent, 1.4)
+        pen.setDashPattern([5, 4])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(selection)
+
     def _map_y(self, altitude: float) -> float:
-        min_alt = 1120.0
-        max_alt = 1320.0
-        return self.height() - 24 - ((altitude - min_alt) / (max_alt - min_alt)) * (self.height() - 52)
+        return self.height() - 24 - ((altitude - self.altitude_min) / (self.altitude_max - self.altitude_min)) * (self.height() - 52)
 
     def _draw_grid(self, painter: QPainter) -> None:
         painter.setPen(QPen(self.theme.grid, 1))
-        for x in range(56, self.width(), 88):
-            painter.drawLine(x, 0, x, self.height())
-        for y in range(28, self.height(), 40):
-            painter.drawLine(0, y, self.width(), y)
+        spacing = 48
+        left = self._screen_to_world_x(0.0)
+        right = self._screen_to_world_x(float(self.width()))
+        start_x = math.floor(left / spacing) * spacing
+        end_x = math.ceil(right / spacing) * spacing
+        for world_x in range(start_x, end_x + spacing, spacing):
+            x = self._map_x(float(world_x))
+            painter.drawLine(QPointF(x, 0.0), QPointF(x, float(self.height())))
+
+        altitude_spacing = 40
+        start_altitude = math.floor(self.altitude_min / altitude_spacing) * altitude_spacing
+        end_altitude = math.ceil(self.altitude_max / altitude_spacing) * altitude_spacing
+        for altitude in range(start_altitude, end_altitude + altitude_spacing, altitude_spacing):
+            y = self._map_y(float(altitude))
+            painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
 
     def _draw_reference(self, painter: QPainter) -> None:
         pen = QPen(self.theme.route, 2)
@@ -907,10 +1062,14 @@ class MainWindow(QMainWindow):
         for label in [self.legend_leader, self.legend_wingman, self.legend_link, self.legend_warn]:
             label.setContentsMargins(0, 0, 2, 0)
             toolbar.addWidget(label)
+        self.grid_toggle = QCheckBox("网格")
+        self.grid_toggle.setChecked(True)
+        self.grid_toggle.stateChanged.connect(self._on_grid_changed)
         self.auto_center = QCheckBox("自动居中")
         self.auto_center.stateChanged.connect(self._on_auto_center_changed)
         reset_view = QPushButton("重置视图")
         reset_view.clicked.connect(self._reset_view)
+        toolbar.addWidget(self.grid_toggle)
         toolbar.addWidget(self.auto_center)
         toolbar.addWidget(reset_view)
         layout.addLayout(toolbar)
@@ -919,6 +1078,7 @@ class MainWindow(QMainWindow):
         self.side_view = SideView(self.top_view)
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
+        self.top_view.resetViewRequested.connect(self.side_view.reset_altitude_view)
         layout.addWidget(self.top_view, 1)
         layout.addWidget(self.side_view, 0)
 
@@ -1244,6 +1404,13 @@ class MainWindow(QMainWindow):
     def _on_auto_center_changed(self) -> None:
         self.top_view.auto_center = self.auto_center.isChecked()
         self.top_view.set_snapshot(self.sim.snapshot())
+
+    def _on_grid_changed(self) -> None:
+        show_grid = self.grid_toggle.isChecked()
+        self.top_view.show_grid = show_grid
+        self.side_view.show_grid = show_grid
+        self.top_view.viewport().update()
+        self.side_view.update()
 
     def _disable_auto_center(self) -> None:
         if self.auto_center.isChecked():
