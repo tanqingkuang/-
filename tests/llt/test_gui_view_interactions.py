@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
+import tempfile
+import time
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
-from src.ui.gui.main_window import MainWindow
+from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -117,6 +121,124 @@ class GuiViewInteractionTests(unittest.TestCase):
         ) / self.window.top_view.scale_value
         self.assertGreater(self.window.top_view.scale_value, old_scale)
         self.assertAlmostEqual(new_center_y, old_center_y)
+
+    def test_main_window_uses_simulation_controller_adapter(self) -> None:
+        self.assertIsInstance(self.window.sim, ControllerSimulationAdapter)
+        self.assertEqual(self.window.sim.controller.get_snapshot().run_state, "UNLOADED")
+        self.assertEqual(self.window.node_table.rowCount(), 0)
+        self.assertEqual(self.window.link_table.rowCount(), 0)
+        self.assertFalse(self.window.start_button.isEnabled())
+        self.assertFalse(self.window.pause_button.isEnabled())
+        self.assertFalse(self.window.step_button.isEnabled())
+        self.assertFalse(self.window.reset_button.isEnabled())
+        self.assertTrue(all(not button.isEnabled() for button in self.window.disturbance_buttons))
+
+    def test_unloaded_window_does_not_draw_reference_route(self) -> None:
+        route_color = self.window.theme.route.name()
+
+        self.assertEqual(self._count_pixels(self.window.top_view, route_color), 0)
+        self.assertEqual(self._count_pixels(self.window.side_view, route_color), 0)
+
+    def test_start_pause_drives_real_controller_snapshot(self) -> None:
+        self._load_ui_config()
+
+        self.window._start()
+        running_snapshot = self._wait_for_controller_time()
+
+        self.assertEqual(running_snapshot.run_state, "RUNNING")
+        self.assertGreater(running_snapshot.time_s, 0.0)
+
+        self.window._pause()
+        paused_snapshot = self.window.sim.controller.get_snapshot()
+
+        self.assertEqual(paused_snapshot.run_state, "PAUSED")
+
+    def test_disturbance_label_clears_after_duration(self) -> None:
+        self._load_ui_config()
+
+        self.window.sim.controller.inject_disturbance(
+            {"type": "link_loss", "target": "A01-A02", "duration_s": 0.005, "params": {"loss_rate": 0.3}}
+        )
+        disturbed = self.window.sim.snapshot()
+
+        self.assertEqual(disturbed.disturbance, "链路丢包")
+
+        self.window.sim.controller.step(3)
+        cleared = self.window.sim.snapshot()
+
+        self.assertEqual(cleared.disturbance, "无")
+
+    def test_config_load_failure_is_reported_without_replacing_label(self) -> None:
+        old_label = self.window.config_name.text()
+        with tempfile.TemporaryDirectory() as tmp:
+            bad_config = Path(tmp) / "bad.json"
+            bad_config.write_text("{", encoding="utf-8")
+
+            self.window._apply_config_path(str(bad_config))
+
+        self.assertEqual(self.window.config_name.text(), old_label)
+        self.assertIn("加载配置失败", self.window.log_dialog.text.toPlainText())
+
+    def test_node_health_drives_table_status_and_warning_color_target(self) -> None:
+        self._load_ui_config()
+
+        self.window.sim.controller.inject_disturbance(
+            {"type": "node_fault", "target": "A03", "duration_s": 1.0, "params": {"mode": "fault"}}
+        )
+        self.window._update_snapshot(self.window.sim.snapshot())
+
+        statuses = {
+            self.window.node_table.item(row, 0).text(): self.window.node_table.item(row, 5).text()
+            for row in range(self.window.node_table.rowCount())
+        }
+
+        self.assertEqual(statuses["A03"], "故障")
+        self.assertEqual(statuses["A02"], "正常")
+
+    def _load_ui_config(self, *, duration_s: float = 0.05, step_s: float = 0.005) -> None:
+        config = {
+            "duration_s": duration_s,
+            "step_s": step_s,
+            "playback_rate": 10.0,
+            "nodes": [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
+            ],
+            "links": [
+                {"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01},
+                {"link_id": "A01-A03", "latency_ms": 21.0, "loss_rate": 0.01},
+                {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
+            ],
+        }
+        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
+            json.dump(config, handle)
+            config_path = handle.name
+        try:
+            self.window._apply_config_path(config_path)
+            self.app.processEvents()
+        finally:
+            Path(config_path).unlink(missing_ok=True)
+
+    def _count_pixels(self, widget, color_name: str) -> int:  # noqa: ANN001
+        image = widget.grab().toImage()
+        count = 0
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).name() == color_name:
+                    count += 1
+        return count
+
+    def _wait_for_controller_time(self, timeout_s: float = 1.0):
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            self.app.processEvents()
+            self.window._on_tick()
+            snapshot = self.window.sim.controller.get_snapshot()
+            if snapshot.time_s > 0.0:
+                return snapshot
+            time.sleep(0.01)
+        return self.window.sim.controller.get_snapshot()
 
 
 if __name__ == "__main__":

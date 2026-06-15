@@ -1,0 +1,28 @@
+# macOS 应用程序包（构建产物，由打包流程生成，不纳入版本控制）
+编队仿真.app/
+
+# 打包 / 构建产物
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# 测试 / 缓存
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 虚拟环境
+.venv/
+venv/
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/

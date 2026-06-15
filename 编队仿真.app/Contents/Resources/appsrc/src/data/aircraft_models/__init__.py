@@ -1,2 +1,0 @@
-"""Aircraft model library."""
-

@@ -34,6 +34,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.runner.sim_control import SimulationController
+from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
+
 
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
@@ -60,6 +63,8 @@ class NodeState:
     y: float
     vx: float
     vy: float
+    altitude: float = 1200.0
+    health: str = "normal"
     trail: list[TrailPoint] = field(default_factory=list)
 
 
@@ -228,6 +233,190 @@ class MockSimulation:
             links=self.links,
         )
 
+
+class ControllerSimulationAdapter:
+    """Adapt SimulationController snapshots to the existing UI drawing model."""
+
+    def __init__(self) -> None:
+        self.controller = SimulationController()
+        self.speed = 1.0
+        self.disturbance = "无"
+        self._trail_by_node: dict[str, list[TrailPoint]] = {}
+        self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
+        self._processed_event_count = 0
+        self.last_result_code = "OK"
+        self.last_result_message = ""
+
+    @property
+    def time(self) -> float:
+        return self.controller.get_snapshot().time_s
+
+    def load_config(self, path: str) -> Snapshot:
+        result = self.controller.load_config(path)
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        if result.code == "OK":
+            self._trail_by_node.clear()
+            self._last_xy_by_node.clear()
+            self._processed_event_count = len(self.controller.get_recent_events(limit=1000))
+            self.disturbance = "无"
+        return self.snapshot()
+
+    def start(self) -> Snapshot:
+        result = self.controller.start()
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        return self.snapshot()
+
+    def pause(self) -> Snapshot:
+        snapshot = self.controller.get_snapshot()
+        if snapshot.run_state == "RUNNING":
+            result = self.controller.pause()
+        elif snapshot.run_state == "PAUSED":
+            # UI convenience: the pause button becomes "continue" in PAUSED state.
+            result = self.controller.start()
+        else:
+            result = self.controller.pause()
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        return self.snapshot()
+
+    def single_step(self) -> Snapshot:
+        result = self.controller.step()
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        return self.snapshot()
+
+    def reset(self) -> Snapshot:
+        result = self.controller.reset()
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        if result.code == "OK":
+            self._trail_by_node.clear()
+            self._last_xy_by_node.clear()
+            self.disturbance = "无"
+        return self.snapshot()
+
+    def poll(self) -> Snapshot:
+        """Return the latest controller snapshot without advancing simulation time."""
+
+        return self.snapshot()
+
+    def advance(self) -> Snapshot:
+        return self.poll()
+
+    def snapshot(self) -> Snapshot:
+        return self._convert_snapshot(self.controller.get_snapshot())
+
+    def inject_disturbance(self, kind: str) -> Snapshot:
+        command = self._disturbance_command(kind)
+        result = self.controller.inject_disturbance(command)
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        if result.code == "OK":
+            self.disturbance = {
+                "wind": "风场",
+                "fault": "节点故障",
+                "loss": "链路丢包",
+                "clear": "无",
+            }[kind]
+        return self.snapshot()
+
+    def set_speed(self, speed: float) -> None:
+        self.speed = speed
+        self.controller.set_playback_rate(speed)
+
+    def close(self) -> None:
+        self.controller.close()
+
+    def _convert_snapshot(self, snapshot: ControllerSnapshot) -> Snapshot:
+        self._sync_disturbance_from_events()
+        nodes: list[NodeState] = []
+        for node in snapshot.nodes:
+            previous = self._last_xy_by_node.get(node.node_id)
+            if previous is None:
+                vx = math.cos(math.radians(node.psi_v_deg)) * node.speed_mps
+                vy = math.sin(math.radians(node.psi_v_deg)) * node.speed_mps
+            else:
+                previous_x, previous_y, previous_time = previous
+                dt = max(1e-6, snapshot.time_s - previous_time)
+                vx = (node.x_m - previous_x) / dt
+                vy = (node.y_m - previous_y) / dt
+            self._last_xy_by_node[node.node_id] = (node.x_m, node.y_m, snapshot.time_s)
+
+            trail = self._trail_by_node.setdefault(node.node_id, [])
+            if not trail or trail[-1].time != snapshot.time_s:
+                trail.append(TrailPoint(node.x_m, node.y_m, node.altitude_m, snapshot.time_s))
+            trail[:] = [point for point in trail if snapshot.time_s - point.time <= TRAIL_SECONDS]
+            nodes.append(
+                NodeState(
+                    node_id=node.node_id,
+                    role=node.role,
+                    x=node.x_m,
+                    y=node.y_m,
+                    vx=vx,
+                    vy=vy,
+                    altitude=node.altitude_m,
+                    health=node.health,
+                    trail=list(trail),
+                )
+            )
+
+        links: list[LinkState] = []
+        for link in snapshot.links:
+            source, _, target = link.link_id.partition("-")
+            links.append(
+                LinkState(
+                    source=source,
+                    target=target,
+                    latency_ms=round(link.latency_ms),
+                    loss=link.loss_rate,
+                    ok=link.status == "normal",
+                )
+            )
+        return Snapshot(
+            time=snapshot.time_s,
+            duration=snapshot.duration_s,
+            step=snapshot.step_s,
+            run_state=snapshot.run_state,
+            control_report=snapshot.control_report,
+            disturbance=self._visible_disturbance(snapshot),
+            nodes=nodes,
+            links=links,
+        )
+
+    def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
+        if any(node.health != "normal" for node in snapshot.nodes):
+            return "节点故障"
+        if any(link.status != "normal" for link in snapshot.links):
+            return "链路丢包"
+        if snapshot.run_state == "READY" and self.disturbance == "无":
+            return "无"
+        return self.disturbance
+
+    def _sync_disturbance_from_events(self) -> None:
+        events = self.controller.get_recent_events(limit=1000)
+        for event in events[self._processed_event_count:]:
+            if event.source != "Disturbance":
+                continue
+            if event.message == "清除扰动" or event.message.startswith("扰动结束"):
+                self.disturbance = "无"
+            elif "wind" in event.message:
+                self.disturbance = "风场"
+            elif "node_fault" in event.message:
+                self.disturbance = "节点故障"
+            elif "link_loss" in event.message or "link_fault" in event.message:
+                self.disturbance = "链路丢包"
+        self._processed_event_count = len(events)
+
+    def _disturbance_command(self, kind: str) -> dict[str, object]:
+        if kind == "wind":
+            return {"type": "wind", "duration_s": 8.0, "params": {"speed_mps": 8.0, "direction_deg": 90.0}}
+        if kind == "fault":
+            return {"type": "node_fault", "target": "A02", "duration_s": 10.0, "params": {"mode": "degraded"}}
+        if kind == "loss":
+            return {"type": "link_loss", "target": "A01-A02", "duration_s": 12.0, "params": {"loss_rate": 0.3}}
+        return {"type": "clear"}
 
 def node_altitude(index: int, time_value: float) -> float:
     """Return a demo altitude for side-view rendering."""
@@ -481,8 +670,9 @@ class TopView(QGraphicsView):
         painter.scale(self.scale_value, self.scale_value)
         if self.show_grid:
             self._draw_grid(painter)
-        self._draw_route(painter)
         if self.snapshot:
+            if self.snapshot.nodes:
+                self._draw_route(painter)
             self._draw_links(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
         painter.resetTransform()
@@ -541,7 +731,7 @@ class TopView(QGraphicsView):
     def _apply_auto_center(self) -> None:
         if not self.snapshot or not self.snapshot.nodes:
             return
-        active = [node for node in self.snapshot.nodes if self.snapshot.disturbance != "节点故障" or node.node_id != "A02"]
+        active = [node for node in self.snapshot.nodes if node.health == "normal"]
         if not active:
             active = self.snapshot.nodes
         center_x = sum(node.x for node in active) / len(active)
@@ -595,7 +785,7 @@ class TopView(QGraphicsView):
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         for index, node in enumerate(snapshot.nodes):
             self._draw_trail(painter, node, index, snapshot.time)
-            color = self.theme.warn if snapshot.disturbance == "节点故障" and node.node_id == "A02" else self.theme.leader if index == 0 else self.theme.wingman
+            color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
             painter.save()
             painter.translate(node.x, node.y)
             painter.rotate(math.degrees(math.atan2(node.vy, node.vx)))
@@ -662,8 +852,9 @@ class SideView(QWidget):
         painter.fillRect(self.rect(), self.theme.canvas)
         if self.show_grid:
             self._draw_grid(painter)
-        self._draw_reference(painter)
         if self.snapshot:
+            if self.snapshot.nodes:
+                self._draw_reference(painter)
             self._draw_trails(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
         painter.setPen(self.theme.muted)
@@ -860,8 +1051,8 @@ class SideView(QWidget):
             x = self._map_x(node.x)
             if x < -24 or x > self.width() + 24:
                 continue
-            color = self.theme.warn if snapshot.disturbance == "节点故障" and node.node_id == "A02" else self.theme.leader if index == 0 else self.theme.wingman
-            y = self._map_y(node_altitude(index, snapshot.time))
+            color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
+            y = self._map_y(node.altitude)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
             painter.drawEllipse(QPointF(x, y), 8, 8)
@@ -917,7 +1108,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("编队仿真")
         self.resize(1440, 900)
         self.setMinimumSize(1280, 780)
-        self.sim = MockSimulation()
+        self.sim = ControllerSimulationAdapter()
         self.theme_key = "light"
         self.theme = THEMES[self.theme_key]
         self.timer = QTimer(self)
@@ -931,11 +1122,12 @@ class MainWindow(QMainWindow):
         self._stage_fullscreen_dialog: StageFullscreenDialog | None = None
         self._stage_layout_index = 1
         self._stage_layout_stretch = 1
+        self.disturbance_buttons: list[QPushButton] = []
         self._build_ui()
         self._install_button_cursors()
         self._apply_theme()
         self._update_snapshot(self.sim.snapshot())
-        self._log("SimControl", "初始化场景，等待 start 命令")
+        self._log("SimControl", "初始化界面，等待加载配置")
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -1036,6 +1228,7 @@ class MainWindow(QMainWindow):
         for index, (text, kind) in enumerate(actions):
             button = QPushButton(text)
             button.clicked.connect(lambda checked=False, value=kind: self._inject_disturbance(value))
+            self.disturbance_buttons.append(button)
             grid.addWidget(button, index // 2, index % 2)
         layout.addWidget(disturb_group)
         layout.addStretch(1)
@@ -1327,9 +1520,16 @@ class MainWindow(QMainWindow):
     def _update_snapshot(self, snapshot: Snapshot) -> None:
         self.run_state_label.setText(snapshot.run_state)
         self.report_label.setText(f"回报：{snapshot.control_report}")
+        self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
-        self.pause_button.setEnabled(snapshot.run_state != "READY")
+        config_loaded = snapshot.run_state != "UNLOADED"
+        self.start_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
+        self.pause_button.setEnabled(snapshot.run_state in {"RUNNING", "PAUSED"})
+        self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
+        self.reset_button.setEnabled(config_loaded)
+        for button in self.disturbance_buttons:
+            button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         self.start_button.setText("继续" if snapshot.run_state == "PAUSED" else "开始")
         self.top_view.set_snapshot(snapshot)
         self.side_view.set_snapshot(snapshot)
@@ -1341,8 +1541,8 @@ class MainWindow(QMainWindow):
             speed = math.hypot(node.vx, node.vy)
             side_offset = (node.y - WORLD_HEIGHT / 2) * 0.8
             distance_to_go = max(0.0, (WORLD_WIDTH - node.x) * 4)
-            status = "降级" if snapshot.disturbance == "节点故障" and node.node_id == "A02" else "正常"
-            values = [node.node_id, f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{node_altitude(row, snapshot.time):.0f}", f"{speed:.1f}", status]
+            status = {"normal": "正常", "degraded": "降级", "fault": "故障", "lost": "失联"}.get(node.health, node.health)
+            values = [node.node_id, f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{node.altitude:.0f}", f"{speed:.1f}", status]
             for column, value in enumerate(values):
                 self.node_table.setItem(row, column, QTableWidgetItem(value))
 
@@ -1353,9 +1553,11 @@ class MainWindow(QMainWindow):
                 self.link_table.setItem(row, column, QTableWidgetItem(value))
 
     def _start(self) -> None:
-        self._update_snapshot(self.sim.start())
-        self.timer.start()
-        self._log("UI", "发送 start/resume 命令")
+        snapshot = self.sim.start()
+        self._update_snapshot(snapshot)
+        if self.sim.last_result_code == "OK":
+            self.timer.start()
+        self._log("UI", f"start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _pause(self) -> None:
         snapshot = self.sim.pause()
@@ -1364,22 +1566,24 @@ class MainWindow(QMainWindow):
         elif snapshot.run_state == "RUNNING":
             self.timer.start()
         self._update_snapshot(snapshot)
-        self._log("UI", "发送 pause/resume 命令")
+        self._log("UI", f"pause/start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _step(self) -> None:
         self.timer.stop()
-        self._update_snapshot(self.sim.single_step())
-        self._log("UI", "发送 step 命令，推进一个仿真步")
+        snapshot = self.sim.single_step()
+        self._update_snapshot(snapshot)
+        self._log("UI", f"step -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _reset(self) -> None:
         self.timer.stop()
-        self._update_snapshot(self.sim.reset())
-        self._log("SimControl", "重置仿真")
+        snapshot = self.sim.reset()
+        self._update_snapshot(snapshot)
+        self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
-        snapshot = self.sim.advance()
+        snapshot = self.sim.poll()
         self._update_snapshot(snapshot)
-        if snapshot.run_state == "READY":
+        if snapshot.run_state in {"READY", "PAUSED", "FINISHED"}:
             self.timer.stop()
 
     def _inject_disturbance(self, kind: str) -> None:
@@ -1389,19 +1593,28 @@ class MainWindow(QMainWindow):
             "loss": "注入链路丢包",
             "clear": "清除运行期扰动",
         }
-        self._update_snapshot(self.sim.inject_disturbance(kind))
-        self._log("Disturb", messages[kind])
+        snapshot = self.sim.inject_disturbance(kind)
+        self._update_snapshot(snapshot)
+        self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _choose_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", str(Path.cwd()), "Config (*.yaml *.yml *.json)")
         if not path:
             return
-        self.config_name.setText(Path(path).name)
-        self._log("Config", f"选择配置文件 {Path(path).name}")
+        self._apply_config_path(path)
+
+    def _apply_config_path(self, path: str) -> None:
+        self.timer.stop()
+        self._update_snapshot(self.sim.load_config(path))
+        if self.sim.last_result_code == "OK":
+            self.config_name.setText(Path(path).name)
+            self._log("Config", f"加载配置文件 {Path(path).name}")
+        else:
+            self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
 
     def _on_speed_changed(self, value: int) -> None:
         speed = value / 10.0
-        self.sim.speed = speed
+        self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")
 
     def _on_theme_changed(self) -> None:
@@ -1492,6 +1705,11 @@ class MainWindow(QMainWindow):
 
     def _log(self, source: str, message: str) -> None:
         self.log_dialog.append(self.sim.time, source, message)
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.timer.stop()
+        self.sim.close()
+        super().closeEvent(event)
 
 
 def run_gui(argv: list[str] | None = None) -> int:
