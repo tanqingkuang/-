@@ -299,11 +299,13 @@
       overflow: hidden;
     }
 
-    .top-view canvas {
-      cursor: grab;
+    .top-view canvas,
+    .side-view canvas {
+      cursor: crosshair;
     }
 
-    .top-view canvas.dragging {
+    .top-view canvas.dragging,
+    .side-view canvas.dragging {
       cursor: grabbing;
     }
 
@@ -721,6 +723,10 @@
               <span><i class="dot warn"></i>异常状态</span>
             </div>
             <label class="view-option">
+              <input id="gridView" type="checkbox" checked>
+              网格
+            </label>
+            <label class="view-option">
               <input id="autoFitView" type="checkbox">
               自动居中
             </label>
@@ -730,7 +736,7 @@
         <div class="canvas-wrap">
           <div class="view-stack">
             <div class="view-panel top-view">
-              <div class="view-label">俯视图：滚轮缩放，拖动平移</div>
+              <div class="view-label">俯视图：中键平移，左键框选放大</div>
               <canvas id="simCanvas"></canvas>
               <div class="overlay">
                 <div class="metric">
@@ -752,7 +758,7 @@
               </div>
             </div>
             <div class="view-panel side-view">
-              <div class="view-label">侧视图：待飞距 / 高度</div>
+              <div class="view-label">侧视图：中键平移，左键框选放大</div>
               <canvas id="sideCanvas"></canvas>
             </div>
           </div>
@@ -820,6 +826,7 @@
     const resetBtn = document.getElementById("resetBtn");
     const fullscreenBtn = document.getElementById("fullscreenBtn");
     const resetViewBtn = document.getElementById("resetViewBtn");
+    const gridView = document.getElementById("gridView");
     const autoFitView = document.getElementById("autoFitView");
     const themeSelect = document.getElementById("themeSelect");
     const configFile = document.getElementById("configFile");
@@ -861,10 +868,19 @@
       scale: 1,
       offsetX: 0,
       offsetY: 0,
-      dragging: false,
+      interaction: null,
+      interactionTarget: null,
       lastX: 0,
       lastY: 0,
+      selectionStart: null,
+      selectionEnd: null,
+      showGrid: true,
       autoFit: false,
+    };
+
+    const sideViewport = {
+      altitudeMin: 1120,
+      altitudeMax: 1320,
     };
 
     let resizeQueued = false;
@@ -938,7 +954,16 @@
       viewport.scale = 1;
       viewport.offsetX = 0;
       viewport.offsetY = 0;
+      sideViewport.altitudeMin = 1120;
+      sideViewport.altitudeMax = 1320;
+      disableAutoFit();
       render();
+    }
+
+    function disableAutoFit() {
+      if (!viewport.autoFit) return;
+      viewport.autoFit = false;
+      autoFitView.checked = false;
     }
 
     function activeNodesForView() {
@@ -961,12 +986,82 @@
       viewport.offsetY = height / 2 - ((minY + maxY) / 2) * viewport.scale;
     }
 
-    function canvasPoint(event) {
-      const rect = canvas.getBoundingClientRect();
+    function canvasPoint(event, targetCanvas = canvas) {
+      const rect = targetCanvas.getBoundingClientRect();
       return {
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       };
+    }
+
+    function pointToWorld(point) {
+      return {
+        x: (point.x - viewport.offsetX) / viewport.scale,
+        y: (point.y - viewport.offsetY) / viewport.scale,
+      };
+    }
+
+    function sidePointToAltitude(y) {
+      const height = sideCanvas.clientHeight || 150;
+      const plotHeight = Math.max(1, height - 52);
+      const ratio = (height - 24 - y) / plotHeight;
+      return sideViewport.altitudeMin + ratio * (sideViewport.altitudeMax - sideViewport.altitudeMin);
+    }
+
+    function panSideAltitude(deltaY) {
+      const height = sideCanvas.clientHeight || 150;
+      const deltaAlt = deltaY / Math.max(1, height - 52) * (sideViewport.altitudeMax - sideViewport.altitudeMin);
+      sideViewport.altitudeMin += deltaAlt;
+      sideViewport.altitudeMax += deltaAlt;
+    }
+
+    function zoomToSelection() {
+      if (!viewport.selectionStart || !viewport.selectionEnd) return;
+      const left = Math.min(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const right = Math.max(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const top = Math.min(viewport.selectionStart.y, viewport.selectionEnd.y);
+      const bottom = Math.max(viewport.selectionStart.y, viewport.selectionEnd.y);
+      if (right - left < 8 || bottom - top < 8) return;
+
+      if (viewport.interactionTarget === "top") {
+        const start = pointToWorld({ x: left, y: top });
+        const end = pointToWorld({ x: right, y: bottom });
+        const worldWidth = Math.max(1, Math.abs(end.x - start.x));
+        const width = canvas.clientWidth || 600;
+        const worldHeight = Math.max(1, Math.abs(end.y - start.y));
+        const height = canvas.clientHeight || 360;
+        const scale = Math.min(width / worldWidth, height / worldHeight) * 0.94;
+        viewport.scale = Math.min(3.5, Math.max(0.45, scale));
+        const centerX = (start.x + end.x) / 2;
+        const selectedCenterY = (start.y + end.y) / 2;
+        viewport.offsetX = width / 2 - centerX * viewport.scale;
+        viewport.offsetY = (canvas.clientHeight || 360) / 2 - selectedCenterY * viewport.scale;
+      } else {
+        const selectionWidth = right - left;
+        const selectionHeight = bottom - top;
+        const hasWidth = selectionWidth >= 80 && selectionWidth >= selectionHeight * 1.25;
+        const hasHeight = selectionHeight >= 8;
+        const oldScale = viewport.scale;
+        const topCenterY = ((canvas.clientHeight || 360) / 2 - viewport.offsetY) / oldScale;
+        if (hasWidth) {
+          const startX = (left - viewport.offsetX) / viewport.scale;
+          const endX = (right - viewport.offsetX) / viewport.scale;
+          const worldWidth = Math.max(1, Math.abs(endX - startX));
+          viewport.scale = Math.min(3.5, Math.max(0.45, (sideCanvas.clientWidth || 600) / worldWidth * 0.94));
+          const centerX = (startX + endX) / 2;
+          viewport.offsetX = (sideCanvas.clientWidth || 600) / 2 - centerX * viewport.scale;
+          viewport.offsetY = (canvas.clientHeight || 360) / 2 - topCenterY * viewport.scale;
+        }
+        if (hasHeight) {
+          const altitudeTop = sidePointToAltitude(top);
+          const altitudeBottom = sidePointToAltitude(bottom);
+          const center = (altitudeTop + altitudeBottom) / 2;
+          const span = Math.max(8, Math.abs(altitudeTop - altitudeBottom) / 0.94);
+          sideViewport.altitudeMin = center - span / 2;
+          sideViewport.altitudeMax = center + span / 2;
+        }
+      }
+      disableAutoFit();
     }
 
     function duration() {
@@ -1121,18 +1216,27 @@
     }
 
     function renderWorldGrid(targetCtx, width, height) {
+      const spacing = 48;
+      const left = (0 - viewport.offsetX) / viewport.scale;
+      const right = (width - viewport.offsetX) / viewport.scale;
+      const top = (0 - viewport.offsetY) / viewport.scale;
+      const bottom = (height - viewport.offsetY) / viewport.scale;
+      const startX = Math.floor(left / spacing) * spacing;
+      const endX = Math.ceil(right / spacing) * spacing;
+      const startY = Math.floor(top / spacing) * spacing;
+      const endY = Math.ceil(bottom / spacing) * spacing;
       targetCtx.strokeStyle = cssVar("--grid");
       targetCtx.lineWidth = 1 / viewport.scale;
-      for (let x = -480; x <= width + 480; x += 48) {
+      for (let x = startX; x <= endX + spacing; x += spacing) {
         targetCtx.beginPath();
-        targetCtx.moveTo(x, -240);
-        targetCtx.lineTo(x, height + 240);
+        targetCtx.moveTo(x, startY);
+        targetCtx.lineTo(x, endY);
         targetCtx.stroke();
       }
-      for (let y = -240; y <= height + 240; y += 48) {
+      for (let y = startY; y <= endY + spacing; y += spacing) {
         targetCtx.beginPath();
-        targetCtx.moveTo(-480, y);
-        targetCtx.lineTo(width + 480, y);
+        targetCtx.moveTo(startX, y);
+        targetCtx.lineTo(endX, y);
         targetCtx.stroke();
       }
     }
@@ -1157,11 +1261,26 @@
       ctx.save();
       ctx.translate(viewport.offsetX, viewport.offsetY);
       ctx.scale(viewport.scale, viewport.scale);
-      renderWorldGrid(ctx, WORLD_WIDTH, WORLD_HEIGHT);
+      if (viewport.showGrid) renderWorldGrid(ctx, width, height);
       drawRoute(ctx, WORLD_WIDTH, WORLD_HEIGHT);
       drawLinks(ctx);
       drawNodes(ctx);
       ctx.restore();
+      drawSelection("top", ctx);
+    }
+
+    function drawSelection(target, targetCtx) {
+      if (viewport.interactionTarget !== target || !viewport.selectionStart || !viewport.selectionEnd) return;
+      const left = Math.min(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const right = Math.max(viewport.selectionStart.x, viewport.selectionEnd.x);
+      const top = Math.min(viewport.selectionStart.y, viewport.selectionEnd.y);
+      const bottom = Math.max(viewport.selectionStart.y, viewport.selectionEnd.y);
+      if (right - left < 2 || bottom - top < 2) return;
+      targetCtx.strokeStyle = cssVar("--accent");
+      targetCtx.lineWidth = 1.4;
+      targetCtx.setLineDash([5, 4]);
+      targetCtx.strokeRect(left, top, right - left, bottom - top);
+      targetCtx.setLineDash([]);
     }
 
     function drawRoute(targetCtx, width, height) {
@@ -1243,25 +1362,35 @@
       const width = sideCanvas.clientWidth || 600;
       const height = sideCanvas.clientHeight || 150;
       renderScreenBackground(sideCtx, width, height);
-      sideCtx.strokeStyle = cssVar("--grid");
-      sideCtx.lineWidth = 1;
-      for (let x = 56; x < width; x += 88) {
-        sideCtx.beginPath();
-        sideCtx.moveTo(x, 0);
-        sideCtx.lineTo(x, height);
-        sideCtx.stroke();
-      }
-      for (let y = 28; y < height; y += 40) {
-        sideCtx.beginPath();
-        sideCtx.moveTo(0, y);
-        sideCtx.lineTo(width, y);
-        sideCtx.stroke();
+      const mapX = (x) => x * viewport.scale + viewport.offsetX;
+      const mapY = (alt) => height - 24 - ((alt - sideViewport.altitudeMin) / (sideViewport.altitudeMax - sideViewport.altitudeMin)) * (height - 52);
+      if (viewport.showGrid) {
+        sideCtx.strokeStyle = cssVar("--grid");
+        sideCtx.lineWidth = 1;
+        const spacing = 48;
+        const left = (0 - viewport.offsetX) / viewport.scale;
+        const right = (width - viewport.offsetX) / viewport.scale;
+        const startX = Math.floor(left / spacing) * spacing;
+        const endX = Math.ceil(right / spacing) * spacing;
+        for (let worldX = startX; worldX <= endX + spacing; worldX += spacing) {
+          const x = mapX(worldX);
+          sideCtx.beginPath();
+          sideCtx.moveTo(x, 0);
+          sideCtx.lineTo(x, height);
+          sideCtx.stroke();
+        }
+        const altitudeSpacing = 40;
+        const startAltitude = Math.floor(sideViewport.altitudeMin / altitudeSpacing) * altitudeSpacing;
+        const endAltitude = Math.ceil(sideViewport.altitudeMax / altitudeSpacing) * altitudeSpacing;
+        for (let altitude = startAltitude; altitude <= endAltitude + altitudeSpacing; altitude += altitudeSpacing) {
+          const y = mapY(altitude);
+          sideCtx.beginPath();
+          sideCtx.moveTo(0, y);
+          sideCtx.lineTo(width, y);
+          sideCtx.stroke();
+        }
       }
 
-      const minAlt = 1120;
-      const maxAlt = 1320;
-      const mapX = (x) => x * viewport.scale + viewport.offsetX;
-      const mapY = (alt) => height - 24 - ((alt - minAlt) / (maxAlt - minAlt)) * (height - 52);
       const startX = Math.max(-40, mapX(0));
       const endX = Math.min(width + 40, mapX(WORLD_WIDTH));
 
@@ -1316,6 +1445,7 @@
       sideCtx.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
       sideCtx.fillText("待飞距", width - 76, height - 8);
       sideCtx.fillText("高度", 12, 20);
+      drawSelection("side", sideCtx);
     }
 
     function updateTables() {
@@ -1406,6 +1536,10 @@
       }
     });
     resetViewBtn.addEventListener("click", resetViewport);
+    gridView.addEventListener("change", () => {
+      viewport.showGrid = gridView.checked;
+      render();
+    });
     autoFitView.addEventListener("change", () => {
       viewport.autoFit = autoFitView.checked;
       render();
@@ -1415,34 +1549,84 @@
       resetScenario();
       resetViewport();
     });
-    canvas.addEventListener("wheel", (event) => {
-      event.preventDefault();
-      const point = canvasPoint(event);
+    function zoomAtPoint(point, deltaY, target) {
       const beforeX = (point.x - viewport.offsetX) / viewport.scale;
       const beforeY = (point.y - viewport.offsetY) / viewport.scale;
-      const factor = event.deltaY < 0 ? 1.12 : 0.89;
+      const oldScale = viewport.scale;
+      const topCenterY = ((canvas.clientHeight || 360) / 2 - viewport.offsetY) / oldScale;
+      const factor = Math.pow(1.001, -deltaY);
       viewport.scale = Math.min(3.5, Math.max(0.45, viewport.scale * factor));
       viewport.offsetX = point.x - beforeX * viewport.scale;
-      viewport.offsetY = point.y - beforeY * viewport.scale;
+      if (target === "top") {
+        viewport.offsetY = point.y - beforeY * viewport.scale;
+      } else {
+        viewport.offsetY = (canvas.clientHeight || 360) / 2 - topCenterY * viewport.scale;
+      }
+      disableAutoFit();
       render();
-    }, { passive: false });
-    canvas.addEventListener("mousedown", (event) => {
-      viewport.dragging = true;
-      viewport.lastX = event.clientX;
-      viewport.lastY = event.clientY;
-      canvas.classList.add("dragging");
-    });
+    }
+
+    function attachViewInteractions(targetCanvas, target) {
+      targetCanvas.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        zoomAtPoint(canvasPoint(event, targetCanvas), event.deltaY, target);
+      }, { passive: false });
+      targetCanvas.addEventListener("mousedown", (event) => {
+        if (event.button === 1) {
+          event.preventDefault();
+          viewport.interaction = "pan";
+          viewport.interactionTarget = target;
+          viewport.lastX = event.clientX;
+          viewport.lastY = event.clientY;
+          targetCanvas.classList.add("dragging");
+        } else if (event.button === 0) {
+          viewport.interaction = "select";
+          viewport.interactionTarget = target;
+          viewport.selectionStart = canvasPoint(event, targetCanvas);
+          viewport.selectionEnd = viewport.selectionStart;
+          render();
+        }
+      });
+      targetCanvas.addEventListener("dblclick", (event) => {
+        if (event.button !== 0) return;
+        resetViewport();
+      });
+      targetCanvas.addEventListener("auxclick", (event) => {
+        if (event.button === 1) event.preventDefault();
+      });
+    }
+
+    attachViewInteractions(canvas, "top");
+    attachViewInteractions(sideCanvas, "side");
     window.addEventListener("mousemove", (event) => {
-      if (!viewport.dragging) return;
-      viewport.offsetX += event.clientX - viewport.lastX;
-      viewport.offsetY += event.clientY - viewport.lastY;
-      viewport.lastX = event.clientX;
-      viewport.lastY = event.clientY;
-      render();
+      if (viewport.interaction === "pan") {
+        viewport.offsetX += event.clientX - viewport.lastX;
+        if (viewport.interactionTarget === "top") {
+          viewport.offsetY += event.clientY - viewport.lastY;
+        } else {
+          panSideAltitude(event.clientY - viewport.lastY);
+        }
+        viewport.lastX = event.clientX;
+        viewport.lastY = event.clientY;
+        disableAutoFit();
+        render();
+      } else if (viewport.interaction === "select") {
+        const targetCanvas = viewport.interactionTarget === "side" ? sideCanvas : canvas;
+        viewport.selectionEnd = canvasPoint(event, targetCanvas);
+        render();
+      }
     });
     window.addEventListener("mouseup", () => {
-      viewport.dragging = false;
+      if (viewport.interaction === "select") {
+        zoomToSelection();
+      }
+      viewport.interaction = null;
+      viewport.interactionTarget = null;
+      viewport.selectionStart = null;
+      viewport.selectionEnd = null;
       canvas.classList.remove("dragging");
+      sideCanvas.classList.remove("dragging");
+      render();
     });
     speedInput.addEventListener("input", () => {
       state.speed = Number(speedInput.value);
