@@ -206,11 +206,9 @@ class _ModelEngine:
         self._time_s = 0.0
         self._wind_mps = 0.0
         self._states = {}
-        nodes = config.get("nodes") or [
-            {"node_id": "A01", "role": "leader", "x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0},
-            {"node_id": "A02", "role": "wingman", "x_m": -45.0, "y_m": 50.0, "altitude_m": 1215.0},
-            {"node_id": "A03", "role": "wingman", "x_m": -45.0, "y_m": -50.0, "altitude_m": 1230.0},
-        ]
+        nodes = config.get("nodes", [])
+        if nodes is None:
+            nodes = []
         if not isinstance(nodes, list):
             raise ValueError("nodes must be a list")
         for index, node in enumerate(nodes):
@@ -256,10 +254,10 @@ class _ModelEngine:
                 _ControlCommand(state.speed_mps, 0.0, 0.0),
             )
             state.speed_mps = max(0.0, control.speed_mps)
-            state.psi_v_deg = math.degrees(math.atan2(control.lateral_rate_mps, state.speed_mps or 1.0))
+            heading_rad = math.radians(state.psi_v_deg)
             wind_bias = self._wind_mps * 0.02 * math.sin(self._time_s + index)
-            state.x_m += state.speed_mps * dt_s
-            state.y_m += (control.lateral_rate_mps + wind_bias) * dt_s
+            state.x_m += math.cos(heading_rad) * state.speed_mps * dt_s
+            state.y_m += (math.sin(heading_rad) * state.speed_mps + control.lateral_rate_mps + wind_bias) * dt_s
             state.altitude_m += control.climb_rate_mps * dt_s
             state.cross_track_error_m = state.y_m
             state.distance_to_go_m = max(0.0, state.distance_to_go_m - state.speed_mps * dt_s)
@@ -305,11 +303,9 @@ class _CommunicationEngine:
         self._loss_until_s = 0.0
         self._active_loss_rate = 0.25
         self._active_latency_delta_ms = 40.0
-        configured_links = topology_config.get("links") or [
-            {"link_id": "A01-A02"},
-            {"link_id": "A01-A03"},
-            {"link_id": "A02-A03"},
-        ]
+        configured_links = topology_config.get("links", [])
+        if configured_links is None:
+            configured_links = []
         if not isinstance(configured_links, list):
             raise ValueError("links must be a list")
         links: list[LinkState] = []
@@ -409,9 +405,9 @@ class _NodeAlgorithm:
         time_s: float,
     ) -> _NodeAlgorithmOutput:
         del inbox
-        speed = 5.0 if state.health == "normal" else 3.0
-        lateral_rate = -state.cross_track_error_m * 0.2
-        climb_rate = (1200.0 - state.altitude_m) * 0.05
+        speed = state.speed_mps if state.health == "normal" else min(state.speed_mps, 3.0)
+        lateral_rate = 0.0
+        climb_rate = 0.0
         outbox = [
             MessageEnvelope(
                 topic="node.status",

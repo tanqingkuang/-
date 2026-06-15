@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import time
 import unittest
@@ -70,6 +71,41 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertGreater(snapshot.nodes[0].x_m, 0.0)
             controller.close()
 
+    def test_stub_algorithm_keeps_aircraft_heading_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {
+                "duration_s": 0.03,
+                "step_s": 0.005,
+                "nodes": [
+                    {"node_id": "A01", "role": "leader", "x_m": 0, "y_m": 0, "altitude_m": 1200},
+                    {
+                        "node_id": "A02",
+                        "role": "wingman",
+                        "x_m": -45,
+                        "y_m": 50,
+                        "altitude_m": 1215,
+                        "psi_v_deg": 30.0,
+                        "speed_mps": 7.0,
+                        "cross_track_error_m": 46.0,
+                    },
+                ],
+                "links": [],
+            }
+            config_path = Path(tmp) / "heading.json"
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+            before = {node.node_id: node for node in controller.get_snapshot().nodes}
+
+            controller.step()
+            after = {node.node_id: node for node in controller.get_snapshot().nodes}
+
+            self.assertAlmostEqual(after["A02"].psi_v_deg, 30.0)
+            self.assertAlmostEqual(after["A02"].speed_mps, 7.0)
+            self.assertAlmostEqual(after["A02"].x_m, before["A02"].x_m + 7.0 * 0.005 * math.cos(math.radians(30.0)))
+            self.assertAlmostEqual(after["A02"].y_m, before["A02"].y_m + 7.0 * 0.005 * math.sin(math.radians(30.0)))
+            controller.close()
+
     def test_run_until_complete_finishes_synchronously(self) -> None:
         controller = SimulationController()
 
@@ -86,6 +122,17 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(result.code, "OK")
         self.assertEqual(snapshot.run_state, "FINISHED")
         self.assertAlmostEqual(snapshot.time_s, 0.015)
+        controller.close()
+
+    def test_empty_config_does_not_create_default_aircraft_or_links(self) -> None:
+        controller = SimulationController()
+
+        result = controller.run_until_complete({"duration_s": 0.005, "step_s": 0.005})
+        snapshot = controller.get_snapshot()
+
+        self.assertEqual(result.code, "OK")
+        self.assertEqual(snapshot.nodes, [])
+        self.assertEqual(snapshot.links, [])
         controller.close()
 
     def test_start_without_config_is_rejected(self) -> None:

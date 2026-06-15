@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import json
 import math
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
@@ -248,8 +246,6 @@ class ControllerSimulationAdapter:
         self._processed_event_count = 0
         self.last_result_code = "OK"
         self.last_result_message = ""
-        self._default_config_path = self._write_default_config()
-        self.load_config(self._default_config_path)
 
     @property
     def time(self) -> float:
@@ -421,27 +417,6 @@ class ControllerSimulationAdapter:
         if kind == "loss":
             return {"type": "link_loss", "target": "A01-A02", "duration_s": 12.0, "params": {"loss_rate": 0.3}}
         return {"type": "clear"}
-
-    def _write_default_config(self) -> str:
-        config = {
-            "duration_s": 120.0,
-            "step_s": 0.005,
-            "playback_rate": self.speed,
-            "nodes": [
-                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
-                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
-                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
-            ],
-            "links": [
-                {"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01},
-                {"link_id": "A01-A03", "latency_ms": 21.0, "loss_rate": 0.01},
-                {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
-            ],
-        }
-        path = Path(tempfile.gettempdir()) / "formation_sim_ui_default.json"
-        path.write_text(json.dumps(config), encoding="utf-8")
-        return str(path)
-
 
 def node_altitude(index: int, time_value: float) -> float:
     """Return a demo altitude for side-view rendering."""
@@ -695,8 +670,9 @@ class TopView(QGraphicsView):
         painter.scale(self.scale_value, self.scale_value)
         if self.show_grid:
             self._draw_grid(painter)
-        self._draw_route(painter)
         if self.snapshot:
+            if self.snapshot.nodes:
+                self._draw_route(painter)
             self._draw_links(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
         painter.resetTransform()
@@ -876,8 +852,9 @@ class SideView(QWidget):
         painter.fillRect(self.rect(), self.theme.canvas)
         if self.show_grid:
             self._draw_grid(painter)
-        self._draw_reference(painter)
         if self.snapshot:
+            if self.snapshot.nodes:
+                self._draw_reference(painter)
             self._draw_trails(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
         painter.setPen(self.theme.muted)
@@ -1145,11 +1122,12 @@ class MainWindow(QMainWindow):
         self._stage_fullscreen_dialog: StageFullscreenDialog | None = None
         self._stage_layout_index = 1
         self._stage_layout_stretch = 1
+        self.disturbance_buttons: list[QPushButton] = []
         self._build_ui()
         self._install_button_cursors()
         self._apply_theme()
         self._update_snapshot(self.sim.snapshot())
-        self._log("SimControl", "初始化场景，等待 start 命令")
+        self._log("SimControl", "初始化界面，等待加载配置")
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -1250,6 +1228,7 @@ class MainWindow(QMainWindow):
         for index, (text, kind) in enumerate(actions):
             button = QPushButton(text)
             button.clicked.connect(lambda checked=False, value=kind: self._inject_disturbance(value))
+            self.disturbance_buttons.append(button)
             grid.addWidget(button, index // 2, index % 2)
         layout.addWidget(disturb_group)
         layout.addStretch(1)
@@ -1544,9 +1523,13 @@ class MainWindow(QMainWindow):
         self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
-        self.start_button.setEnabled(snapshot.run_state != "FINISHED")
+        config_loaded = snapshot.run_state != "UNLOADED"
+        self.start_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         self.pause_button.setEnabled(snapshot.run_state in {"RUNNING", "PAUSED"})
         self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
+        self.reset_button.setEnabled(config_loaded)
+        for button in self.disturbance_buttons:
+            button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         self.start_button.setText("继续" if snapshot.run_state == "PAUSED" else "开始")
         self.top_view.set_snapshot(snapshot)
         self.side_view.set_snapshot(snapshot)
@@ -1570,9 +1553,11 @@ class MainWindow(QMainWindow):
                 self.link_table.setItem(row, column, QTableWidgetItem(value))
 
     def _start(self) -> None:
-        self._update_snapshot(self.sim.start())
-        self.timer.start()
-        self._log("UI", "发送 start 命令")
+        snapshot = self.sim.start()
+        self._update_snapshot(snapshot)
+        if self.sim.last_result_code == "OK":
+            self.timer.start()
+        self._log("UI", f"start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _pause(self) -> None:
         snapshot = self.sim.pause()
@@ -1581,17 +1566,19 @@ class MainWindow(QMainWindow):
         elif snapshot.run_state == "RUNNING":
             self.timer.start()
         self._update_snapshot(snapshot)
-        self._log("UI", "发送 pause/start 命令")
+        self._log("UI", f"pause/start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _step(self) -> None:
         self.timer.stop()
-        self._update_snapshot(self.sim.single_step())
-        self._log("UI", "发送 step 命令，推进一个仿真步")
+        snapshot = self.sim.single_step()
+        self._update_snapshot(snapshot)
+        self._log("UI", f"step -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _reset(self) -> None:
         self.timer.stop()
-        self._update_snapshot(self.sim.reset())
-        self._log("SimControl", "重置仿真")
+        snapshot = self.sim.reset()
+        self._update_snapshot(snapshot)
+        self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
         snapshot = self.sim.poll()
@@ -1606,8 +1593,9 @@ class MainWindow(QMainWindow):
             "loss": "注入链路丢包",
             "clear": "清除运行期扰动",
         }
-        self._update_snapshot(self.sim.inject_disturbance(kind))
-        self._log("Disturb", messages[kind])
+        snapshot = self.sim.inject_disturbance(kind)
+        self._update_snapshot(snapshot)
+        self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _choose_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", str(Path.cwd()), "Config (*.yaml *.yml *.json)")

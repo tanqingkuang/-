@@ -36,6 +36,14 @@ macOS 也可以直接双击：
 编队仿真.app
 ```
 
+启动后默认处于 `UNLOADED` 状态，不会自动创建飞机。可以在左侧“选择文件”中加载示例配置：
+
+```text
+configs/base.json
+```
+
+该配置用于当前三机楔形 stub 场景，包含 A01/A02/A03 三个节点、三条通信链路、`120s` 仿真时长和 `0.005s` 仿真步长。
+
 ## Windows x64 打包
 
 Windows exe 需要在 Windows x64 环境构建。PySide6/Qt 依赖目标平台的 Python wheel、Qt DLL 和 platform plugin，不建议在 macOS 上直接交叉打包。

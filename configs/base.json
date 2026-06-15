@@ -1,0 +1,64 @@
+{
+  "duration_s": 120.0,
+  "step_s": 0.005,
+  "playback_rate": 1.0,
+  "seed": 1,
+  "nodes": [
+    {
+      "node_id": "A01",
+      "role": "leader",
+      "x_m": 140.0,
+      "y_m": 260.0,
+      "altitude_m": 1200.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 5.2,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 5840.0
+    },
+    {
+      "node_id": "A02",
+      "role": "wingman",
+      "x_m": 92.0,
+      "y_m": 318.0,
+      "altitude_m": 1245.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 5.0,
+      "cross_track_error_m": 46.0,
+      "distance_to_go_m": 6032.0
+    },
+    {
+      "node_id": "A03",
+      "role": "wingman",
+      "x_m": 88.0,
+      "y_m": 202.0,
+      "altitude_m": 1281.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 5.0,
+      "cross_track_error_m": -46.0,
+      "distance_to_go_m": 6048.0
+    }
+  ],
+  "links": [
+    {
+      "link_id": "A01-A02",
+      "direction": "duplex",
+      "latency_ms": 18.0,
+      "loss_rate": 0.01,
+      "status": "normal"
+    },
+    {
+      "link_id": "A01-A03",
+      "direction": "duplex",
+      "latency_ms": 21.0,
+      "loss_rate": 0.01,
+      "status": "normal"
+    },
+    {
+      "link_id": "A02-A03",
+      "direction": "duplex",
+      "latency_ms": 30.0,
+      "loss_rate": 0.02,
+      "status": "normal"
+    }
+  ]
+}
