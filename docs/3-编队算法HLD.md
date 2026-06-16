@@ -161,6 +161,22 @@ sequenceDiagram
 
 僚机的 `槽位解算`（算法库）用 `leader_nav + formation_type + 本机槽位号` → 期望目标点。**几何（槽位号 → 相对偏置）是队形定义的一部分，coord 与僚机共享同一份队形几何（算法库）**；coord 只发"谁是几号槽"、不发具体偏置——对应 §8 原则 4"槽位级"。
 
+### 6.5 实体内数据流（本轮：显式传参）
+
+`step()` 内按固定顺序调用各单元，**上一个单元的返回直接作为下一个的入参（链式）**；单元自身状态（PID 积分等）留在各自实例里。本轮只有"保持"一个模态、单条静态管线，**不引入共享黑板**。
+
+```python
+# 僚机实体
+def step(self, ctx: FormationAlgorithmContext) -> FormationAlgorithmOutput:
+    msg    = self.rx.parse(ctx.inbox)                                            # 收发
+    target = self.slot.resolve(msg.leader_nav, msg.formation_type, self.slot_id) # 槽位解算
+    dev    = self.solver.compute(ctx.self_state, target)                         # 误差解算
+    accel  = self.tracker.step(dev, ctx.dt_s)                                    # 跟踪 → AccelerationCommand
+    return FormationAlgorithmOutput(control=accel, outbox=[], status=self._status())
+```
+
+> 替代方案是"共享黑板"（单元各读各写一块每-tick 数据袋）。黑板的唯一收益是"动态重连"——本轮已延后，故用最简的显式传参（最贴 C 移植、单元可独立测试）。**待"编排 / 执行抽离 + 动态重连"出现时，连同 Q1/Q2 一起重新评估**（可能上黑板，或用按模态选的类型化分阶段管线）。
+
 ## 7. 两套库的内容
 
 ### 7.1 算法库（不感知状态机的纯数学 — 一目了然）
@@ -198,13 +214,14 @@ sequenceDiagram
 | 5 | control 只从飞行实体出 |
 | 6 | 可重入靠实例化（无全局共享态）；C 移植靠 对象↔结构体+函数 |
 | 7 | 动态重连本轮不建；编排 / 执行内联，留干净边界待抽离 |
+| 8 | 实体内单元间**显式传参（链式）**，不引入共享黑板（见 §6.5）；黑板待动态重连出现再评估 |
 
 ## 9. 待细化 / TODO
 
 | 项 | 说明 | 触发 / 归属 |
 | --- | --- | --- |
 | 编排 / 执行抽离 | 内联在长机方法 / 实体 `step()`；将来抽成独立单元 | 出现模态决策 / 异构僚机时 |
-| 动态数据管理（Q1 / Q2） | 单元间数据传递：显式传参 vs 共享上下文 | **与"编排抽离"连体**，一起做 |
+| 黑板 / 动态数据上下文 | 本轮显式传参已定（§6.5）；是否上黑板待重连出现再评估 | **与"编排抽离"连体**，一起做 |
 | 扩展性压测 | 加第二个待验证方案时回头检验弹性 | 第二方案进来时 |
 
 > **已定（非 TODO）**：
