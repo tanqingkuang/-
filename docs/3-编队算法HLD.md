@@ -107,9 +107,63 @@ sequenceDiagram
 > 长机广播**不直接写通信功能**：算法只把 outbox 交回仿真控制，由仿真控制写给 comm（搬运者模型）。
 > 编队保持闭环**穿过 comm 且带一拍延迟**：僚机这 tick 用的是"上一轮写入、受延迟 / 丢包的长机状态"，非真值——这是要仿真的对象，控制律须容忍此滞后。
 
-## 6. 两套库的内容
+## 6. 数据契约（编队算法 ↔ 仿真控制）
 
-### 6.1 算法库（不感知状态机的纯数学 — 一目了然）
+> 编队算法不直接碰 model / comm。下列结构由仿真控制注入（入参）/ 取走（返回），对应 §5 单 tick。锚定领航-跟随、3 自由度；代码实现可用 dataclass / TypedDict 承载。
+
+### 6.1 NavState — 注入算法的本机导航视图
+
+仿真控制从 `2-模型迭代` 的 `AircraftState` 投影得到，只保留真实机载导航可得量；**不含**模型内回路状态 `ax/ay/az(+rate)` 与质点输入 `nx/nz/phi`（移植到 C / 半物理时这些不存在）。将来传感器噪声 / 定位漂移叠加在此投影层。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `node_id` | `str` | 本机 ID |
+| `x_m / y_m / altitude_m` | `float` | 东 / 北 / 天 位置（E/N/U，沿用 `AircraftState` 工程字段名） |
+| `speed_mps` | `float` | 速度 V |
+| `theta_rad` | `float` | 航迹倾角 |
+| `psi_rad` | `float` | 航向（`0`=东，`π/2`=北，与 2- 一致） |
+
+> 速度分量 `vx/vy/vz` 可由 `V/θ/ψ` 派生，按需提供，不单列字段。
+
+### 6.2 FormationAlgorithmContext — `step` 入参
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `time_s` | `float` | 当前仿真时间 |
+| `dt_s` | `float` | 本实体步长（多速率下为该实体节拍） |
+| `self_state` | `NavState` | 本机导航视图 |
+| `inbox` | `list[MessageEnvelope]` | 上一轮派发到本实体的消息（僚机：长机广播；分布式：邻居） |
+| `mission_command` | `MissionCommand \| None` | 仅协调单元消费：场景 / UI 经仿真控制注入的任务触发；本轮恒"保持"，可为 `None` |
+
+> 静态参数（控制增益、队形几何表、本机 `entity_type` / 槽位号等）走 `init(entity_id, config)`，不进 context。
+
+### 6.3 FormationAlgorithmOutput — `step` 返回
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `control` | `AccelerationCommand \| None` | 本机 ENU 三轴期望加速度，对齐 2- 的 `AccelerationCommand{ax/ay/az_cmd_mps2}`；`entity_type==coordination` 时为 `None` |
+| `outbox` | `list[MessageEnvelope]` | 本实体要发的消息（长机协调单元在此放广播） |
+| `status` | `AlgorithmStatus` | 摘要：当前模态、关键误差（侧偏 / 待飞距等），供日志与控制回报 |
+
+### 6.4 长机→僚机消息 payload（领航-跟随插件自声明）
+
+通信功能只认通用 `MessageEnvelope{topic, source, target, timestamp, payload}`；下列 payload 是领航-跟随插件对私下约定的内容，comm 不解析（§8 原则 3）。本轮长机协调单元每个协调节拍**广播一条**消息：
+
+- `topic`: `"lead_broadcast"`；`source`: 长机 ID；`target`: `"*"`（广播）
+- `payload`:
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `task` | `str` | 当前任务 / 模态，本轮恒 `"formation_keep"` |
+| `leader_nav` | `NavState` | 长机导航量（位置 E/N/U、V、θ、ψ） |
+| `formation_type` | `str` | 队形类型，如 `"wedge"` / `"line"` / `"echelon"` |
+| `slot_assignment` | `dict[str, int]` | `{僚机 ID: 槽位号}` |
+
+僚机的 `槽位解算`（算法库）用 `leader_nav + formation_type + 本机槽位号` → 期望目标点。**几何（槽位号 → 相对偏置）是队形定义的一部分，coord 与僚机共享同一份队形几何（算法库）**；coord 只发"谁是几号槽"、不发具体偏置——对应 §8 原则 4"槽位级"。
+
+## 7. 两套库的内容
+
+### 7.1 算法库（不感知状态机的纯数学 — 一目了然）
 
 | 类别 | 内容 | 本轮 |
 | --- | --- | --- |
@@ -120,7 +174,7 @@ sequenceDiagram
 | 航线生成原语 | 航线插值；（未来）Dubins / 集结航线 / 避障航线 | 部分 |
 | 通用数学 | 坐标变换、限幅、滤波；（未来）一致性律 | 按需 |
 
-### 6.2 流程库（感知状态机的流程 — 本轮很薄）
+### 7.2 流程库（感知状态机的流程 — 本轮很薄）
 
 我们原先设想的"6 层"大部分一落地就**塌进两边**：纯计算（槽位解算 / 误差解算 / 制导律）归算法库，串联接线归实体 `step()`。真正属于"流程"且本轮需要的只剩：
 
@@ -133,7 +187,7 @@ sequenceDiagram
 
 > **结论**：本轮流程库薄到不必硬撑成正式库 = **算法库（完整）+ 实体（直接接线）+ 两三个薄流程 helper**。"流程库"作为会随模态长起来的东西，先留壳、记 TODO。
 
-## 7. 已定原则与约束
+## 8. 已定原则与约束
 
 | # | 原则 |
 | --- | --- |
@@ -145,23 +199,25 @@ sequenceDiagram
 | 6 | 可重入靠实例化（无全局共享态）；C 移植靠 对象↔结构体+函数 |
 | 7 | 动态重连本轮不建；编排 / 执行内联，留干净边界待抽离 |
 
-## 8. 待细化 / TODO
+## 9. 待细化 / TODO
 
 | 项 | 说明 | 触发 / 归属 |
 | --- | --- | --- |
 | 编排 / 执行抽离 | 内联在长机方法 / 实体 `step()`；将来抽成独立单元 | 出现模态决策 / 异构僚机时 |
 | 动态数据管理（Q1 / Q2） | 单元间数据传递：显式传参 vs 共享上下文 | **与"编排抽离"连体**，一起做 |
-| 静态数据管理（Q4） | 控制参数等 → 构造函数入参（用类后基本自然解决） | 细化时确认 |
-| control 三轴加速度向量定义 | 与 `2-模型迭代` 共享，**不对齐没法真跑** | 跨模块，需与同事对齐 |
-| coord→僚机 payload schema | `{任务, 长机状态, 队形类型, 槽位}` 字段级定义 | 细化 |
 | 扩展性压测 | 加第二个待验证方案时回头检验弹性 | 第二方案进来时 |
 
-> 统一实体契约**已收敛**：见 `1-仿真控制HLD` §8.4 的 `FormationAlgorithm.step(ctx) -> {control?, outbox, status}`（飞行 / 非飞行由 `entity_type` 区分）。
+> **已定（非 TODO）**：
+> - 统一实体契约：`1-仿真控制HLD` §8.4 的 `FormationAlgorithm.step(ctx) -> {control?, outbox, status}`（飞行 / 非飞行由 `entity_type` 区分）。
+> - 数据契约：`NavState` / `FormationAlgorithmContext` / `FormationAlgorithmOutput`，见 §6。
+> - control 向量：东北天三轴期望加速度，对齐 `2-模型迭代` 的 `AccelerationCommand{ax/ay/az_cmd_mps2}`（E/N/U）。
+> - 长机→僚机 payload：`{task, leader_nav, formation_type, slot_assignment}`，见 §6.4。
+> - 静态数据（Q4）：控制参数等走构造函数入参，用类后自然成立。
 
-## 9. 关联文档
+## 10. 关联文档
 
 - `docs/0-架构HLD.md`：**已对齐**——鲁棒图 / 高层分割 / 逻辑视图（图 + 源）及 3.2 / 3.3 / 4.1 / 4.4 已收敛为单一"编队算法"（含可寄宿协调能力）。
 - `docs/1-仿真控制HLD.md`：**已对齐**——§8.4 即统一实体契约 `FormationAlgorithm`（原 §8.5 节点算法已并入，§8.5/§8.6 顺延为加扰 / 关键数据日志）。
 - 早期的 `3-协调算法HLD.md` / `4-节点算法HLD.md` 已随两对象合并删除。
-- 剩余未完成项见 §8 待细化 / TODO。
+- 剩余未完成项见 §9 待细化 / TODO。
 - `src/algorithm/base.py`、`src/algorithm/coord/`、`src/algorithm/node/`。
