@@ -76,11 +76,14 @@ ResultCode = Literal[
 | `node_id` | `str` | 节点 ID，如 `A01` |
 | `role` | `str` | `leader` / `wingman` / `relay` 等 |
 | `health` | `str` | `normal` / `degraded` / `fault` / `lost` |
-| `x_m` | `float` | 地面坐标 x |
-| `y_m` | `float` | 地面坐标 y |
-| `altitude_m` | `float` | 高度 |
-| `psi_v_deg` | `float` | 航迹角，单位 deg |
+| `x_m` | `float` | 东向位置 `E`，单位 m |
+| `y_m` | `float` | 北向位置 `N`，单位 m |
+| `altitude_m` | `float` | 天向位置 / 高度 `U`，单位 m |
+| `psi_v_deg` | `float` | 航向角 / 航迹方位角，单位 deg；`0 deg` 指东，`90 deg` 指北 |
+| `theta_deg` | `float` | 航迹倾角，单位 deg |
 | `speed_mps` | `float` | 速度 |
+| `vx_mps/vy_mps/vz_mps` | `float` | 由 `V/theta/psi` 派生的东北天速度，供 UI 和日志使用 |
+| `nx/nz/phi_deg` | `float` | 由二阶滤波后的东北天加速度转换得到的质点模型输入 |
 | `cross_track_error_m` | `float` | 侧偏 |
 | `distance_to_go_m` | `float` | 待飞距 |
 
@@ -456,10 +459,10 @@ class ConfigLoader:
 ### 8.2 模型迭代
 
 ```python
-class ModelEngine:
+class ModelIterator:
     def init(config: dict[str, object], seed: int) -> None: ...
     def read_states() -> dict[str, AircraftState]: ...
-    def apply_controls(controls: dict[str, ControlCommand]) -> None: ...
+    def apply_controls(controls: dict[str, AccelerationCommand]) -> None: ...
     def step(dt_s: float) -> None: ...
     def reset() -> None: ...
     def close() -> None: ...
@@ -525,7 +528,7 @@ class NodeAlgorithm:
 
 ```python
 class DisturbanceEngine:
-    def init(config: dict[str, object], seed: int, model: ModelEngine, comm: CommunicationEngine) -> None: ...
+    def init(config: dict[str, object], seed: int, model: ModelIterator, comm: CommunicationEngine) -> None: ...
     def inject(command: DisturbanceCommand) -> None: ...
     def tick(time_s: float, dt_s: float) -> list[SimulationEvent]: ...
     def clear() -> None: ...
