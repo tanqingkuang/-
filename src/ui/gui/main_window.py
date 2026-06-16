@@ -356,8 +356,8 @@ class ControllerSimulationAdapter:
         for node in snapshot.nodes:
             previous = self._last_xy_by_node.get(node.node_id)
             if previous is None:
-                vx = math.cos(math.radians(node.psi_v_deg)) * node.speed_mps
-                vy = math.sin(math.radians(node.psi_v_deg)) * node.speed_mps
+                vx = node.vx_mps
+                vy = node.vy_mps
             else:
                 previous_x, previous_y, previous_time = previous
                 dt = max(1e-6, snapshot.time_s - previous_time)

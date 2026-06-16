@@ -1,15 +1,14 @@
-"""Simulation control facade and first-pass internal stubs.
+"""Simulation control facade.
 
 The controller implements the application contract described in
-``docs/1-仿真控制HLD.md``. Domain modules are intentionally small local stubs for
-now, so UI/CLI integration can start before the model, communication,
-algorithm, disturbance, and logger implementations are finalized.
+``docs/1-仿真控制HLD.md``. The UAV model is provided by
+``src.environment.model``; communication, algorithm, disturbance, and logging
+remain first-pass local implementations.
 """
 
 from __future__ import annotations
 
 import json
-import math
 import threading
 import time
 from collections import deque
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from src.common.envelope import MessageEnvelope
+from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
 
 
 RunState = Literal["UNLOADED", "READY", "RUNNING", "PAUSED", "FINISHED"]
@@ -46,13 +46,19 @@ class NodeState:
     node_id: str
     role: str
     health: str
+    # ENU position: x=east, y=north, altitude=up.
     x_m: float
     y_m: float
     altitude_m: float
     psi_v_deg: float
+    theta_deg: float
     speed_mps: float
-    cross_track_error_m: float
-    distance_to_go_m: float
+    vx_mps: float
+    vy_mps: float
+    vz_mps: float
+    nx: float
+    nz: float
+    phi_deg: float
 
 
 @dataclass(frozen=True)
@@ -123,29 +129,8 @@ class Subscription:
 
 
 @dataclass
-class _AircraftRuntimeState:
-    node_id: str
-    role: str
-    health: str
-    x_m: float
-    y_m: float
-    altitude_m: float
-    psi_v_deg: float
-    speed_mps: float
-    cross_track_error_m: float
-    distance_to_go_m: float
-
-
-@dataclass
-class _ControlCommand:
-    speed_mps: float
-    lateral_rate_mps: float
-    climb_rate_mps: float
-
-
-@dataclass
 class _NodeAlgorithmOutput:
-    control: _ControlCommand
+    control: AccelerationCommand
     outbox: list[MessageEnvelope]
     status: str
 
@@ -185,103 +170,12 @@ class _ConfigLoader:
             raise ValueError("playback_rate must be in [0.1, 10.0]")
         nodes = config.get("nodes", [])
         links = config.get("links", [])
+        model = config.get("model", {})
         if nodes is not None and not isinstance(nodes, list):
             raise ValueError("nodes must be a list")
         if links is not None and not isinstance(links, list):
             raise ValueError("links must be a list")
-
-
-class _ModelEngine:
-    """Deterministic aircraft model stub."""
-
-    def __init__(self) -> None:
-        self._states: dict[str, _AircraftRuntimeState] = {}
-        self._baseline_health: dict[str, str] = {}
-        self._controls: dict[str, _ControlCommand] = {}
-        self._wind_mps = 0.0
-        self._time_s = 0.0
-
-    def init(self, config: dict[str, object], seed: int) -> None:
-        del seed
-        self._time_s = 0.0
-        self._wind_mps = 0.0
-        self._states = {}
-        nodes = config.get("nodes", [])
-        if nodes is None:
-            nodes = []
-        if not isinstance(nodes, list):
-            raise ValueError("nodes must be a list")
-        for index, node in enumerate(nodes):
-            if not isinstance(node, dict):
-                raise ValueError("each node must be an object")
-            node_id = str(node.get("node_id") or node.get("id") or f"A{index + 1:02d}")
-            role = str(node.get("role") or ("leader" if index == 0 else "wingman"))
-            self._states[node_id] = _AircraftRuntimeState(
-                node_id=node_id,
-                role=role,
-                health=str(node.get("health", "normal")),
-                x_m=float(node.get("x_m", index * -45.0)),
-                y_m=float(node.get("y_m", 0.0 if index == 0 else (index * 2 - 3) * 50.0)),
-                altitude_m=float(node.get("altitude_m", 1200.0 + index * 15.0)),
-                psi_v_deg=float(node.get("psi_v_deg", 0.0)),
-                speed_mps=float(node.get("speed_mps", 5.0)),
-                cross_track_error_m=float(node.get("cross_track_error_m", 0.0)),
-                distance_to_go_m=float(node.get("distance_to_go_m", 6000.0)),
-            )
-        self._baseline_health = {
-            node_id: state.health
-            for node_id, state in self._states.items()
-        }
-        self._controls = {
-            node_id: _ControlCommand(state.speed_mps, 0.0, 0.0)
-            for node_id, state in self._states.items()
-        }
-
-    def read_states(self) -> dict[str, _AircraftRuntimeState]:
-        return {
-            node_id: _AircraftRuntimeState(**vars(state))
-            for node_id, state in self._states.items()
-        }
-
-    def apply_controls(self, controls: dict[str, _ControlCommand]) -> None:
-        self._controls.update(controls)
-
-    def step(self, dt_s: float) -> None:
-        self._time_s += dt_s
-        for index, state in enumerate(self._states.values()):
-            control = self._controls.get(
-                state.node_id,
-                _ControlCommand(state.speed_mps, 0.0, 0.0),
-            )
-            state.speed_mps = max(0.0, control.speed_mps)
-            heading_rad = math.radians(state.psi_v_deg)
-            wind_bias = self._wind_mps * 0.02 * math.sin(self._time_s + index)
-            state.x_m += math.cos(heading_rad) * state.speed_mps * dt_s
-            state.y_m += (math.sin(heading_rad) * state.speed_mps + control.lateral_rate_mps + wind_bias) * dt_s
-            state.altitude_m += control.climb_rate_mps * dt_s
-            state.cross_track_error_m = state.y_m
-            state.distance_to_go_m = max(0.0, state.distance_to_go_m - state.speed_mps * dt_s)
-
-    def inject_wind(self, command: DisturbanceCommand) -> None:
-        self._wind_mps = float(command.params.get("speed_mps", 0.0))
-
-    def inject_fault(self, command: DisturbanceCommand) -> None:
-        if command.target and command.target in self._states:
-            self._states[command.target].health = str(command.params.get("mode", "degraded"))
-
-    def clear_faults(self) -> None:
-        self._wind_mps = 0.0
-        for node_id, state in self._states.items():
-            state.health = self._baseline_health.get(node_id, "normal")
-
-    def reset(self) -> None:
-        self._time_s = 0.0
-        self._wind_mps = 0.0
-
-    def close(self) -> None:
-        self._states.clear()
-        self._baseline_health.clear()
-        self._controls.clear()
+        ModelIterator._parse_model_config(model)
 
 
 class _CommunicationEngine:
@@ -344,34 +238,36 @@ class _CommunicationEngine:
         for message in self._pending:
             self._inbox.setdefault(message.target, []).append(message)
         self._pending = []
+        self._refresh_links()
+
+    def _refresh_links(self) -> None:
         degraded = self._time_s < self._loss_until_s
-        updated: list[LinkState] = []
-        for link in self._base_links:
-            updated.append(
-                LinkState(
-                    link_id=link.link_id,
-                    direction=link.direction,
-                    latency_ms=link.latency_ms + (self._active_latency_delta_ms if degraded else 0.0),
-                    loss_rate=(
-                        self._active_loss_rate
-                        if degraded
-                        else max(0.0, min(1.0, link.loss_rate))
-                    ),
-                    status="degraded" if degraded else "normal",
-                )
+        self._links = [
+            LinkState(
+                link_id=link.link_id,
+                direction=link.direction,
+                latency_ms=link.latency_ms + (self._active_latency_delta_ms if degraded else 0.0),
+                loss_rate=(
+                    self._active_loss_rate
+                    if degraded
+                    else max(0.0, min(1.0, link.loss_rate))
+                ),
+                status="degraded" if degraded else "normal",
             )
-        self._links = updated
+            for link in self._base_links
+        ]
 
     def read_link_states(self) -> list[LinkState]:
         return list(self._links)
 
-    def inject_link_fault(self, command: DisturbanceCommand, current_time_s: float) -> None:
-        self._loss_until_s = current_time_s + float(command.duration_s or 0.0)
+    def inject_link_fault(self, command: DisturbanceCommand, until_s: float) -> None:
+        self._loss_until_s = until_s
         self._active_loss_rate = max(0.0, min(1.0, float(command.params.get("loss_rate", 0.25))))
         self._active_latency_delta_ms = float(command.params.get("latency_delta_ms", 40.0))
+        self._refresh_links()
 
-    def inject_link_qos(self, command: DisturbanceCommand, current_time_s: float) -> None:
-        self.inject_link_fault(command, current_time_s)
+    def inject_link_qos(self, command: DisturbanceCommand, until_s: float) -> None:
+        self.inject_link_fault(command, until_s)
 
     def reset(self) -> None:
         self._time_s = 0.0
@@ -383,7 +279,7 @@ class _CommunicationEngine:
         self._loss_until_s = 0.0
         self._active_loss_rate = 0.25
         self._active_latency_delta_ms = 40.0
-        self._links = list(self._base_links)
+        self._refresh_links()
 
     def close(self) -> None:
         self._links = []
@@ -395,30 +291,44 @@ class _CommunicationEngine:
 class _NodeAlgorithm:
     """Simple per-node formation algorithm stub."""
 
-    def __init__(self, node_id: str) -> None:
+    _VELOCITY_GAIN = 1.2
+
+    def __init__(self, node_id: str, trim_velocity_mps: tuple[float, float, float]) -> None:
         self._node_id = node_id
+        self._trim_velocity_mps = trim_velocity_mps
 
     def step(
         self,
-        state: _AircraftRuntimeState,
+        state: AircraftState,
         inbox: list[MessageEnvelope],
         time_s: float,
+        health: str = "normal",
     ) -> _NodeAlgorithmOutput:
         del inbox
-        speed = state.speed_mps if state.health == "normal" else min(state.speed_mps, 3.0)
-        lateral_rate = 0.0
-        climb_rate = 0.0
+        trim_speed = sum(value * value for value in self._trim_velocity_mps) ** 0.5
+        target_scale = 1.0
+        if health != "normal" and trim_speed > 0.0:
+            target_scale = min(1.0, 3.0 / trim_speed)
+        target_velocity = tuple(
+            target_scale * value
+            for value in self._trim_velocity_mps
+        )
+        control = AccelerationCommand(
+            self._VELOCITY_GAIN * (target_velocity[0] - state.vx_mps),
+            self._VELOCITY_GAIN * (target_velocity[1] - state.vy_mps),
+            self._VELOCITY_GAIN * (target_velocity[2] - state.vz_mps),
+        )
         outbox = [
             MessageEnvelope(
                 topic="node.status",
                 source=self._node_id,
                 target="broadcast",
                 timestamp=time_s,
-                payload={"health": state.health},
+                payload={"health": health},
             )
         ]
-        status = "reconfiguring" if state.health != "normal" else "forming"
-        return _NodeAlgorithmOutput(_ControlCommand(speed, lateral_rate, climb_rate), outbox, status)
+        status = "reconfiguring" if health != "normal" else "forming"
+        return _NodeAlgorithmOutput(control, outbox, status)
 
     def reset(self) -> None:
         return None
@@ -432,14 +342,32 @@ class _DisturbanceEngine:
 
     def __init__(self) -> None:
         self._active: list[tuple[DisturbanceCommand, float]] = []
-        self._model: _ModelEngine | None = None
+        self._model: ModelIterator | None = None
         self._comm: _CommunicationEngine | None = None
+        self._node_health: dict[str, str] = {}
+        self._baseline_health: dict[str, str] = {}
 
-    def init(self, config: dict[str, object], seed: int, model: _ModelEngine, comm: _CommunicationEngine) -> None:
-        del config, seed
+    def init(
+        self,
+        config: dict[str, object],
+        seed: int,
+        model: ModelIterator,
+        comm: _CommunicationEngine,
+    ) -> None:
+        del seed
         self._active = []
         self._model = model
         self._comm = comm
+        nodes = config.get("nodes") or []
+        self._baseline_health = {
+            node_id_from_config(node, i): str(node.get("health", "normal"))
+            for i, node in enumerate(nodes)
+            if isinstance(node, dict)
+        }
+        self._node_health = dict(self._baseline_health)
+
+    def read_health(self) -> dict[str, str]:
+        return dict(self._node_health)
 
     def inject(self, command: DisturbanceCommand, current_time_s: float) -> SimulationEvent:
         if command.type == "clear":
@@ -447,39 +375,46 @@ class _DisturbanceEngine:
             return SimulationEvent(current_time_s, "INFO", "Disturbance", "清除扰动")
         until_s = current_time_s + float(command.duration_s or 0.0)
         self._active.append((command, until_s))
-        self._apply(command, current_time_s)
+        self._apply(command, until_s)
         return SimulationEvent(current_time_s, "INFO", "Disturbance", f"注入扰动: {command.type}")
 
     def tick(self, time_s: float, dt_s: float) -> list[SimulationEvent]:
         del dt_s
         events: list[SimulationEvent] = []
-        active: list[tuple[DisturbanceCommand, float]] = []
-        had_active = bool(self._active)
+        remaining: list[tuple[DisturbanceCommand, float]] = []
+        had_expiry = False
         for command, until_s in self._active:
             if time_s > until_s:
                 events.append(SimulationEvent(time_s, "INFO", "Disturbance", f"扰动结束: {command.type}"))
+                had_expiry = True
                 continue
-            active.append((command, until_s))
-        self._active = active
-        if had_active and not self._active:
+            remaining.append((command, until_s))
+        self._active = remaining
+        if had_expiry:
             self._clear_dynamic_effects()
+            for command, until_s in self._active:
+                self._apply(command, until_s)
         return events
 
     def clear(self) -> None:
         self._active = []
         self._clear_dynamic_effects()
 
-    def _apply(self, command: DisturbanceCommand, current_time_s: float) -> None:
+    def _apply(self, command: DisturbanceCommand, until_s: float) -> None:
         if command.type == "wind" and self._model is not None:
             self._model.inject_wind(command)
-        elif command.type == "node_fault" and self._model is not None:
-            self._model.inject_fault(command)
+        elif command.type == "node_fault":
+            target = str(ModelIterator._command_value(command, "target") or "")
+            if target in self._node_health:
+                params = ModelIterator._command_params(command)
+                self._node_health[target] = str(params.get("mode", "degraded"))
         elif command.type in {"link_loss", "link_fault"} and self._comm is not None:
-            self._comm.inject_link_fault(command, current_time_s)
+            self._comm.inject_link_fault(command, until_s)
 
     def _clear_dynamic_effects(self) -> None:
         if self._model is not None:
-            self._model.clear_faults()
+            self._model.clear_wind()
+        self._node_health = dict(self._baseline_health)
         if self._comm is not None:
             self._comm.clear_faults()
 
@@ -490,6 +425,8 @@ class _DisturbanceEngine:
         self._active = []
         self._model = None
         self._comm = None
+        self._node_health.clear()
+        self._baseline_health.clear()
 
 
 class _DataLogger:
@@ -526,12 +463,13 @@ class SimulationController:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._config_loader = _ConfigLoader()
-        self._model = _ModelEngine()
+        self._model = ModelIterator()
         self._comm = _CommunicationEngine()
         self._disturbance = _DisturbanceEngine()
         self._logger = _DataLogger()
         self._node_algorithms: dict[str, _NodeAlgorithm] = {}
-        self._current_controls: dict[str, _ControlCommand] = {}
+        self._node_roles: dict[str, str] = {}
+        self._current_controls: dict[str, AccelerationCommand] = {}
         self._config: dict[str, object] | None = None
         self._seed = 0
         self._duration_s = 0.0
@@ -863,13 +801,24 @@ class SimulationController:
         self._model.init(config, self._seed)
         self._comm.init(config, dict(config.get("qos", {})) if isinstance(config.get("qos"), dict) else {}, self._seed)
         self._disturbance.init(config, self._seed, self._model, self._comm)
+        nodes = config.get("nodes") or []
+        self._node_roles = {
+            node_id_from_config(node, i): str(
+                node.get("role") or ("leader" if i == 0 else "wingman")
+            )
+            for i, node in enumerate(nodes)
+            if isinstance(node, dict)
+        }
         self._node_algorithms = {
-            node_id: _NodeAlgorithm(node_id)
-            for node_id in self._model.read_states()
+            node_id: _NodeAlgorithm(
+                node_id,
+                (state.vx_mps, state.vy_mps, state.vz_mps),
+            )
+            for node_id, state in self._model.read_states().items()
         }
         self._current_controls = {
-            node_id: _ControlCommand(state.speed_mps, 0.0, 0.0)
-            for node_id, state in self._model.read_states().items()
+            node_id: AccelerationCommand()
+            for node_id in self._model.read_states()
         }
         self._logger.open(f"run-{int(time.time())}", config)
 
@@ -910,12 +859,15 @@ class SimulationController:
 
     def _run_formation_algorithms_unlocked(self) -> None:
         states = self._model.read_states()
-        controls: dict[str, _ControlCommand] = {}
+        health_map = self._disturbance.read_health()
+        controls: dict[str, AccelerationCommand] = {}
         outbox: list[MessageEnvelope] = []
         status_values: list[str] = []
         for node_id, state in states.items():
             inbox = self._comm.read_inbox(node_id)
-            output = self._node_algorithms[node_id].step(state, inbox, self._time_s)
+            output = self._node_algorithms[node_id].step(
+                state, inbox, self._time_s, health_map.get(node_id, "normal")
+            )
             controls[node_id] = output.control
             outbox.extend(output.outbox)
             status_values.append(output.status)
@@ -931,18 +883,24 @@ class SimulationController:
             self._control_report = "重构"
 
     def _make_snapshot_unlocked(self) -> SimulationSnapshot:
+        health_map = self._disturbance.read_health()
         nodes = [
             NodeState(
                 node_id=state.node_id,
-                role=state.role,
-                health=state.health,
+                role=self._node_roles.get(state.node_id, "unknown"),
+                health=health_map.get(state.node_id, "normal"),
                 x_m=state.x_m,
                 y_m=state.y_m,
                 altitude_m=state.altitude_m,
                 psi_v_deg=state.psi_v_deg,
+                theta_deg=state.theta_deg,
                 speed_mps=state.speed_mps,
-                cross_track_error_m=state.cross_track_error_m,
-                distance_to_go_m=state.distance_to_go_m,
+                vx_mps=state.vx_mps,
+                vy_mps=state.vy_mps,
+                vz_mps=state.vz_mps,
+                nx=state.nx,
+                nz=state.nz,
+                phi_deg=state.phi_deg,
             )
             for state in self._model.read_states().values()
         ]
@@ -968,7 +926,7 @@ class SimulationController:
         )
 
     def _derive_control_report_unlocked(self) -> ControlReport:
-        if any(state.health != "normal" for state in self._model.read_states().values()):
+        if any(h != "normal" for h in self._disturbance.read_health().values()):
             return "重构"
         return "集结"
 

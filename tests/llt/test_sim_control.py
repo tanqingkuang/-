@@ -86,7 +86,6 @@ class SimulationControllerTests(unittest.TestCase):
                         "altitude_m": 1215,
                         "psi_v_deg": 30.0,
                         "speed_mps": 7.0,
-                        "cross_track_error_m": 46.0,
                     },
                 ],
                 "links": [],
@@ -249,6 +248,62 @@ class SimulationControllerTests(unittest.TestCase):
 
         self.assertTrue(any("callback failed" in event.message for event in events))
         controller.close()
+
+    def test_wind_expires_independently_of_concurrent_fault(self) -> None:
+        """Short wind overlapping a long fault must cancel when wind expires."""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp))))
+
+            # Wind lasts < 1 step (step_s=0.005); fault lasts 1 s
+            controller.inject_disturbance(
+                DisturbanceCommand("wind", duration_s=0.003,
+                                   params={"speed_mps": 50.0, "direction_deg": 0.0})
+            )
+            controller.inject_disturbance(
+                DisturbanceCommand("node_fault", target="A02", duration_s=1.0,
+                                   params={"mode": "fault"})
+            )
+            # 2 ticks: first tick at t=0.0 (wind active), second at t=0.005 (wind expires)
+            controller.step(2)
+            wind = controller._disturbance._model._wind_velocity_mps
+            self.assertEqual(wind, (0.0, 0.0, 0.0))
+            controller.close()
+
+    def test_wind_expiry_does_not_extend_link_loss_deadline(self) -> None:
+        """Wind expiring must not re-apply link_loss with a new deadline."""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp))))
+
+            # link_loss injected at t=0, expires at t=1.0
+            controller.inject_disturbance(
+                DisturbanceCommand("link_loss", duration_s=1.0,
+                                   params={"loss_rate": 0.8})
+            )
+            # wind expires after first tick (0.003s < step 0.005s)
+            controller.inject_disturbance(
+                DisturbanceCommand("wind", duration_s=0.003,
+                                   params={"speed_mps": 10.0, "direction_deg": 0.0})
+            )
+            expected_until_s = controller._disturbance._comm._loss_until_s
+
+            # step twice: wind expires, link_loss should NOT be renewed
+            controller.step(2)
+
+            self.assertAlmostEqual(
+                controller._disturbance._comm._loss_until_s,
+                expected_until_s,
+                places=9,
+                msg="_loss_until_s must not change when wind expires",
+            )
+            # link should still be degraded after wind expires
+            links = controller._disturbance._comm.read_link_states()
+            self.assertTrue(
+                any(lnk.loss_rate == 0.8 for lnk in links),
+                "link_loss must remain active after wind expiry",
+            )
+            controller.close()
 
     def test_error_code_paths_and_recent_event_filters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
