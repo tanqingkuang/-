@@ -4,11 +4,11 @@
 
 仿真控制是全系统唯一的编排 Control，负责生命周期、任务调度、配置分发、扰动触发、数据落盘和实时数据推送，不承载具体算法、动力学或链路领域逻辑。
 
-UI、CLI、批量脚本都只面向仿真控制，不直接调用协调算法、节点算法、模型迭代、通信功能或加扰模块。仿真控制对外提供稳定的应用层接口，对内适配各 Control 的领域接口。
+UI、CLI、批量脚本都只面向仿真控制，不直接调用编队算法、模型迭代、通信功能或加扰模块。仿真控制对外提供稳定的应用层接口，对内适配各 Control 的领域接口。
 
 ## 2. 职责
 
-- 基于配置初始化协调算法、节点算法、模型迭代、通信功能、加扰和日志。
+- 基于配置初始化编队算法、模型迭代、通信功能、加扰和日志。
 - 按配置节拍驱动各 Control 的 `tick` / `step`。
 - 将拓扑/QoS 配置下发给通信功能。
 - 将扰动配置和不确定性索引下发给加扰。
@@ -492,36 +492,28 @@ def inject_link_fault(command: object) -> None: ...
 def inject_link_qos(command: object) -> None: ...
 ```
 
-### 8.4 协调算法
+### 8.4 编队算法
 
-协调算法可选，未配置时仿真控制跳过。
-
-```python
-class CoordinationAlgorithm:
-    def init(config: dict[str, object]) -> None: ...
-    def step(context: CoordinationContext) -> CoordinationOutput: ...
-    def reset() -> None: ...
-    def close() -> None: ...
-```
-
-### 8.5 节点算法
+编队算法是每架飞机本地运行的算法实体（×N，N≥1），承载编队、制导、控制律；集中式协调能力按需以单元寄宿在某实体内（领航-跟随寄宿长机），或独立成一个不飞行的实体（地面站 / 虚拟节点 / 参考节点，见 `0-架构HLD` 3.3）。仿真控制对所有实体使用同一套统一契约，不再区分协调 / 节点两种类型。
 
 ```python
-class NodeAlgorithm:
-    def init(node_id: str, config: dict[str, object]) -> None: ...
-    def step(context: NodeAlgorithmContext) -> NodeAlgorithmOutput: ...
+class FormationAlgorithm:
+    def init(entity_id: str, config: dict[str, object]) -> None: ...
+    def step(context: FormationAlgorithmContext) -> FormationAlgorithmOutput: ...
     def declared_topics() -> list[MessageTopicSchema]: ...
     def reset() -> None: ...
     def close() -> None: ...
 ```
 
-`NodeAlgorithmOutput` 至少包含：
+`FormationAlgorithmOutput` 字段：
 
-- `control`: 本节点控制量。
-- `outbox`: 本节点要发送的消息。
+- `control`: 本实体控制量；**纯协调实体（不飞行）此字段为空**，仿真控制只对产出 control 的实体写模型。
+- `outbox`: 本实体要发送的消息（含协调单元广播的任务 / 队形指令）。
 - `status`: 算法状态摘要，供日志和控制回报使用。
 
-### 8.6 加扰
+> 协调能力寄宿在飞行实体内时，飞行与协调在同一实体对象内共享状态、直接接线，不经仿真控制来回搬运；实体之间的数据才走通信功能。详见 `3-编队算法HLD`。
+
+### 8.5 加扰
 
 ```python
 class DisturbanceEngine:
@@ -533,7 +525,7 @@ class DisturbanceEngine:
     def close() -> None: ...
 ```
 
-### 8.7 关键数据日志
+### 8.6 关键数据日志
 
 ```python
 class DataLogger:
@@ -587,7 +579,7 @@ class DataLogger:
 
 1. 实现 `SimulationController` 状态机和 `CommandResult` / `SimulationSnapshot` 数据结构。
 2. 接入配置加载，完成 `load_config()` 到 `READY` 的闭环。
-3. 先用最小模型迭代和 SimpleFollow 节点算法打通 `start()` / `step()` / `reset()`。
+3. 先用最小模型迭代和 SimpleFollow 编队算法打通 `start()` / `step()` / `reset()`。
 4. 将 PySide6 UI 的 `MockSimulation` 替换为 `SimulationController` 适配器。
 5. 接入通信功能、加扰和关键数据日志。
 
