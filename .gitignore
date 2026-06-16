@@ -17,6 +17,7 @@ __pycache__/
 .mypy_cache/
 .coverage
 htmlcov/
+config.ini
 
 # 虚拟环境
 .venv/
