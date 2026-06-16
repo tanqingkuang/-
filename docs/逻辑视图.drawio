@@ -22,7 +22,7 @@
         <mxCell id="p3" parent="1" style="shape=folder;fontSize=14;fontStyle=1;verticalAlign=top;tabWidth=120;tabHeight=24;tabPosition=left;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;align=left;spacingLeft=10;spacingTop=4;" value="编队算法" vertex="1">
           <mxGeometry height="170" width="380" x="880" y="60" as="geometry" />
         </mxCell>
-        <mxCell id="p3t" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=12;spacingTop=8;" value="• 生命周期接口&#10;• 消息 schema 声明 declared_topics()&#10;• tick 节拍 step(ctx) → (control?, outbox, status)&#10;• 每机一实体；协调能力按需寄宿其内或独立成不飞行实体" vertex="1">
+        <mxCell id="p3t" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=12;spacingLeft=12;spacingTop=8;" value="• 生命周期接口&#10;• tick 节拍 step(ctx) → (control?, outbox, status)&#10;• 每机一实体；协调能力按需寄宿其内或独立成不飞行实体" vertex="1">
           <mxGeometry height="120" width="360" x="890" y="100" as="geometry" />
         </mxCell>
 
