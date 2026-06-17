@@ -502,7 +502,6 @@ def inject_link_qos(command: object) -> None: ...
 class FormationAlgorithm:
     def init(entity_id: str, config: dict[str, object]) -> None: ...  # config.entity_type ∈ {flight, coordination}
     def step(context: FormationAlgorithmContext) -> FormationAlgorithmOutput: ...
-    def declared_topics() -> list[MessageTopicSchema]: ...
     def reset() -> None: ...
     def close() -> None: ...
 ```
@@ -513,7 +512,7 @@ class FormationAlgorithm:
 - `outbox`: 本实体要发送的消息（含协调单元广播的任务 / 队形指令）。
 - `status`: 算法状态摘要，供日志和控制回报使用。
 
-> 协调能力寄宿在飞行实体内时，飞行与协调在同一实体对象内共享状态、直接接线，不经仿真控制来回搬运；实体之间的数据才走通信功能。详见 `3-编队算法HLD`。
+> 协调能力寄宿在飞行实体内时，飞行与协调在同一实体对象内共享状态、直接接线，不经仿真控制来回搬运；实体之间的数据才走通信功能。详见 `3-编队算法设计文档/`。
 
 ### 8.5 加扰
 

@@ -150,7 +150,7 @@ src/
 ├── runner/                 # 编排组
 │   └── sim_control.py      # 仿真控制
 ├── algorithm/              # 验证对象组（唯一被移植到 C）= 编队算法
-│   │                       # 内部 = 实体组 + 算法库 + 流程库，详见 3-编队算法HLD
+│   │                       # 内部 = 实体组 + 算法库 + 流程库，详见 3-编队算法设计文档/
 │   ├── coord/              # （待重构）协调本体 / 协调能力
 │   ├── node/               # （待重构）飞机本体
 │   └── base.py             # 算法基类 + 消息 schema 声明 API
@@ -293,7 +293,7 @@ sequenceDiagram
     SimCtrl->>SimCtrl: ⑨ t += dt
 ```
 
-> 注：算法不直接触达模型迭代 / 通信功能——编队算法只接收仿真控制注入的状态 + Inbox，只返回 `{control?, outbox, status}`；读状态 / 读 Inbox / 写 control / 写 outbox 全部由仿真控制作为唯一搬运者完成（见 3.4 解释 3、`3-编队算法HLD`）。
+> 注：算法不直接触达模型迭代 / 通信功能——编队算法只接收仿真控制注入的状态 + Inbox，只返回 `{control?, outbox, status}`；读状态 / 读 Inbox / 写 control / 写 outbox 全部由仿真控制作为唯一搬运者完成（见 3.4 解释 3、`3-编队算法设计文档/`）。
 
 ### 4.4.4 扰动注入点（与执行阶段对应）
 
