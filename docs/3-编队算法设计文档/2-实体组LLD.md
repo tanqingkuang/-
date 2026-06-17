@@ -27,7 +27,7 @@
 # 僚机本体
 def step(self, ctx: FormationAlgorithmContext) -> FormationAlgorithmOutput:
     parsed = self.rx.step(ctx.inbox)                       # 收发(收)(流程库)
-    mode   = self.orch.step(parsed)                        # 任务编排(流程库, 僚机 Mode 来自广播, 恒"保持")
+    mode   = self.orch.step(parsed.task)                   # 任务编排(流程库), u=ModeSource(僚机源:广播 task), 恒"保持"
     plan   = self.planner.step((mode, parsed))             # 轨迹规划(流程库)
     target = self.possolve.step((plan, parsed.leader_nav)) # 位置解算(算法库) → Target
     dev    = self.devcalc.step((ctx.self_state, target))   # 误差解算(算法库)

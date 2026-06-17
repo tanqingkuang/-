@@ -115,7 +115,7 @@ class Unit:                  # Protocol / 抽象基类
 # 实体 step() 编排示意（统一 step(u)->y 模板；具体单元见 5-用例）
 def step(self, ctx):
     parsed = self.rx.step(ctx.inbox)                       # 流程：收发(收)
-    mode   = self.orch.step(parsed)                        # 流程：任务编排(僚机 Mode 来自广播, 恒"保持")
+    mode   = self.orch.step(parsed.task)                   # 流程：任务编排，u=ModeSource(僚机源:广播 task), 恒"保持"
     plan   = self.planner.step((mode, parsed))             # 流程：轨迹规划
     target = self.possolve.step((plan, parsed.leader_nav)) # 算法：位置解算
     dev    = self.devcalc.step((ctx.self_state, target))   # 算法：误差解算
@@ -138,7 +138,8 @@ def step(self, ctx):
 | 控制算法 | 算法 | `ControlLaw` | 控制误差 | 控制量（被跟踪组合） | ⏳ 待展开 |
 | 收发处理(发) | 流程 | `Outbound` | `(self_state, Mode)`（队形 / 槽位走 `init` 静态配置） | `list[MessageEnvelope]`（领航-跟随广播：1 条 `leader_nav + 队形 + 槽位`；"不发"＝空列表） | ⏳ 待展开 |
 
-> `Orchestrate` 族内 `u` 统一为中间类型 `ModeSource`、`y` 统一为 `Mode`；由实体接对的源（长机＝注入 `mission_command`、僚机＝广播 `ParsedInbox.task`），不破坏"同族同 u/y"。
+> `Orchestrate` 族内 `u` 统一为中间类型 `ModeSource`、`y` 统一为 `Mode`；由实体接对的源传入（长机＝注入 `mission_command`、僚机＝广播 `ParsedInbox.task`，**示例里 `step()` 只喂这一个来源字段、不喂整个 `ParsedInbox`**），不破坏"同族同 u/y"。
+> `ModeSource` 是**待定中间类型**：本轮编排占位恒"保持"、对其内容不敏感，故可先取"`task: str` 别名 / 长机指令与广播 task 的轻包装映射"，随编排单元定稿（届时长机侧 `mission_command` 也走同一 `ModeSource.from_*` 收敛）。
 > `Outbound` 的 `y` 取 `list[MessageEnvelope]`（非单条）：这样"广播 1 条""点对点 N 条""不发 0 条"同族同 `y`。实体 `step()` 直接把它作为 `outbox` 返回。
 
 **待定中间类型**（随单元定稿）：`Plan`、`Target`、`Deviation`、`ParsedInbox`、`Mode`、`ModeSource`、`AlgorithmStatus`、`MissionCommand`。
