@@ -130,17 +130,18 @@ def step(self, ctx):
 | 单元 | 库 | 抽象基类（族） | `u`（`step` 入参） | `y`（`step` 返回） | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 收发处理(收) | 流程 | `Inbound` | `inbox: list[MessageEnvelope]` | `ParsedInbox` | ⏳ 待展开 |
-| 任务编排 | 流程 | `Orchestrate` | `mission_command`（长机）/ `ParsedInbox.task`（僚机） | `Mode` | ⏳ 待展开 |
+| 任务编排 | 流程 | `Orchestrate` | `ModeSource`（长机 `mission_command` / 僚机 `ParsedInbox.task`） | `Mode` | ⏳ 待展开 |
 | 轨迹规划 | 流程 | `TrajectoryPlan` | `(Mode, ParsedInbox \| self_state)` | `Plan` | ⏳ 待展开 |
 | 位置解算 | 算法 | `PositionSolve` | `(Plan, leader_nav?)` | `Target` | ⏳ 待展开 |
 | 误差解算 | 算法 | `DeviationCalc` | `(self_state, Target)` | `Deviation` | ⏳ 待展开 |
 | 跟踪 | 算法 | `Tracking` | `(Deviation, self_state)` | `AccelerationCommand` | ⏳ 待展开 |
 | 控制算法 | 算法 | `ControlLaw` | 控制误差 | 控制量（被跟踪组合） | ⏳ 待展开 |
-| 收发处理(发) | 流程 | `Outbound` | `(self_state, Mode)`（队形 / 槽位走 `init` 静态配置） | `MessageEnvelope`（领航-跟随广播：`leader_nav + 队形 + 槽位`） | ⏳ 待展开 |
+| 收发处理(发) | 流程 | `Outbound` | `(self_state, Mode)`（队形 / 槽位走 `init` 静态配置） | `list[MessageEnvelope]`（领航-跟随广播：1 条 `leader_nav + 队形 + 槽位`；"不发"＝空列表） | ⏳ 待展开 |
 
-> `Orchestrate` 族内 `u` 统一为"模态来源"、`y` 统一为 `Mode`；由实体接对的源（长机＝注入 `mission_command`、僚机＝广播 `ParsedInbox.task`），不破坏"同族同 u/y"。
+> `Orchestrate` 族内 `u` 统一为中间类型 `ModeSource`、`y` 统一为 `Mode`；由实体接对的源（长机＝注入 `mission_command`、僚机＝广播 `ParsedInbox.task`），不破坏"同族同 u/y"。
+> `Outbound` 的 `y` 取 `list[MessageEnvelope]`（非单条）：这样"广播 1 条""点对点 N 条""不发 0 条"同族同 `y`。实体 `step()` 直接把它作为 `outbox` 返回。
 
-**待定中间类型**（随单元定稿）：`Plan`、`Target`、`Deviation`、`ParsedInbox`、`Mode`、`AlgorithmStatus`、`MissionCommand`。
+**待定中间类型**（随单元定稿）：`Plan`、`Target`、`Deviation`、`ParsedInbox`、`Mode`、`ModeSource`、`AlgorithmStatus`、`MissionCommand`。
 
 ---
 
@@ -151,7 +152,7 @@ def step(self, ctx):
 | 各单元 `u/y` 定稿 + 中间类型 | 本册 §2.4 / 算法库 / 流程库 | 逐模块评审 |
 | 编排丰富 / 动态管线 | 实体组 / 流程库 | 出现真实模态决策 / 异构僚机时 |
 | 动态队形 / 槽位分配（编排侧未来单元） | 流程库 / 实体组 | 出现集结 / 重构、需解分配问题时 |
-| 黑板 / 动态数据上下文 | 实体组 | 与"编排抽离"连体，重连出现再评估 |
+| 黑板 / 动态数据上下文 | 实体组 | 与"编排丰富 / 动态管线"连体，重连出现再评估 |
 | 算法库各单元数学（方程 / 参数 / 限幅） | `3-算法库LLD` | 实现阶段逐个补 |
 | 流程库各单元实现 | `4-流程库LLD` | 实现阶段逐个补 |
 | 扩展性压测（u/y、抽象基类按第二方案校验） | 全模块 | 加第二个方案时 |

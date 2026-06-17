@@ -11,8 +11,8 @@
 | 族（抽象基类） | 单元 | 本轮 | `u` → `y` | 同族可换实现 |
 | --- | --- | --- | --- | --- |
 | `Inbound` | 收发处理(收) | ✅ | `inbox` → `ParsedInbox` | 领航-跟随解析 / 点对点 / …（topic 与 payload 映射） |
-| `Outbound` | 收发处理(发) | ✅ | `(self_state, Mode)` + 静态队形 / 槽位 → 广播 envelope | 领航-跟随广播（长机：组装 `leader_nav + 队形 + 槽位`）/ 点对点 / 不发；队形 / 槽位走 `init` 静态配置 |
-| `Orchestrate` | 任务编排 | ✅（占位） | `mission_command \| None` → `Mode` | 常量"保持"（本轮）/ 真实模态状态机 |
+| `Outbound` | 收发处理(发) | ✅ | `(self_state, Mode)` → `list[MessageEnvelope]` | 领航-跟随广播（长机：组装 `leader_nav + 队形 + 槽位`，发 1 条）/ 点对点 / 不发（空列表）；队形 / 槽位走 `init` 静态配置 |
+| `Orchestrate` | 任务编排 | ✅（占位） | `ModeSource` → `Mode` | 常量"保持"（本轮）/ 真实模态状态机；`ModeSource` 长机＝注入 `mission_command`、僚机＝广播 `ParsedInbox.task` |
 | `TrajectoryPlan` | 轨迹规划 | ✅ | `(Mode, ParsedInbox \| self_state)` → `Plan` | 长机航线推进（航点切换 / 待飞距驱动）/ 僚机选队形 + 槽位；mode-aware，把 `Plan` 交给算法库位置解算 |
 
 > **结论**：本轮流程库 = 收发(收 / 发) + 编排(占位) + 轨迹规划；按模态串联各单元退化进 `step()`（固定顺序，不单列）。"流程库"作为会随模态长起来的东西，先留壳。
