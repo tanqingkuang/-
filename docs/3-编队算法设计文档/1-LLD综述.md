@@ -86,17 +86,22 @@ class Unit:                  # Protocol / 抽象基类
 
 ## 2.2 抽象基类与策略（同族可换）
 
-**同一"族"（同 `u`、同 `y`）的多个实现，用一个抽象基类约束**——这是策略模式的基础：实体只依赖基类，换实现（甚至运行期）不动实体代码。例（u/y 详见第二章）：
+**我们提炼出的每个单元都是一个策略族**：单元 = 一个抽象基类（同 `u`、同 `y`），情景差异靠**族内换实现**（不是散落的 `if/else`），换实现不动实体代码。选哪个实现由**实体在挂接时决定**（见 `2-实体组LLD.md` §2、`0-HLD.md` 原则 10）。本轮各族（u/y 详见 §2.4）：
 
 | 抽象基类（族） | 库 | 同族可换实现（示例） |
 | --- | --- | --- |
+| `Inbound`（收发-收） | 流程 | 领航-跟随解析 / 点对点 / … |
+| `Outbound`（收发-发） | 流程 | 领航-跟随广播 / 点对点 / 不发 / … |
+| `Orchestrate`（任务编排） | 流程 | 常量"保持" / 真实模态状态机 / … |
+| `TrajectoryPlan`（轨迹规划） | 流程 | 航线推进（长机）/ 槽位选择（僚机）——**mode-aware** |
 | `PositionSolve`（位置解算） | 算法 | 航线插值（长机）/ 槽位几何（僚机）/（未来）Dubins |
 | `DeviationCalc`（误差解算） | 算法 | 不同偏差口径 |
 | `Tracking`（轨迹 / 编队跟踪） | 算法 | 不同通道组合（垂向 TECS / 单通道 PID…），**组合控制算法而成** |
 | `ControlLaw`（控制算法） | 算法 | PID / L1 / ADRC（原子控制律，被 `Tracking` 组合调用） |
-| `TrajectoryPlan`（轨迹规划） | 流程 | 航线推进（长机）/ 槽位选择（僚机）——**mode-aware** |
 
 > **算法 / 流程分界 = 是否碰 `Mode`**（见 `0-HLD.md` 原则 9）：`Tracking`/`ControlLaw` 虽"不同模态用法不同"，但选哪个由外部流程切，自身不读状态机，故归算法。
+> **`ControlLaw` 不在 `step()` 顶层挂**，而被 `Tracking` 组合调用——对它"选实现"= 经 `Tracking` 间接选 / 配（实体仍经 config 决定）。
+> 注：`通用数学`（坐标变换 / 限幅 / 滤波）是工具函数、**不是 `step(u)->y` 单元**，不受本族原则约束。
 
 > 因为"换实现不动实体"靠的就是同族 `u/y` 一致，所以 `u/y` 必须**提前定死**——这是 §2.4 的任务。
 
@@ -124,14 +129,16 @@ def step(self, ctx):
 
 | 单元 | 库 | 抽象基类（族） | `u`（`step` 入参） | `y`（`step` 返回） | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| 收发处理(收) | 流程 | — | `inbox: list[MessageEnvelope]` | `ParsedInbox` | ⏳ 待展开 |
-| 任务编排 | 流程 | — | `mission_command`（长机）/ `ParsedInbox.task`（僚机） | `Mode` | ⏳ 待展开 |
+| 收发处理(收) | 流程 | `Inbound` | `inbox: list[MessageEnvelope]` | `ParsedInbox` | ⏳ 待展开 |
+| 任务编排 | 流程 | `Orchestrate` | `mission_command`（长机）/ `ParsedInbox.task`（僚机） | `Mode` | ⏳ 待展开 |
 | 轨迹规划 | 流程 | `TrajectoryPlan` | `(Mode, ParsedInbox \| self_state)` | `Plan` | ⏳ 待展开 |
 | 位置解算 | 算法 | `PositionSolve` | `(Plan, leader_nav?)` | `Target` | ⏳ 待展开 |
 | 误差解算 | 算法 | `DeviationCalc` | `(self_state, Target)` | `Deviation` | ⏳ 待展开 |
 | 跟踪 | 算法 | `Tracking` | `(Deviation, self_state)` | `AccelerationCommand` | ⏳ 待展开 |
 | 控制算法 | 算法 | `ControlLaw` | 控制误差 | 控制量（被跟踪组合） | ⏳ 待展开 |
-| 队形规划(广播) | 流程 | — | `(self_state, Mode, 队形, 槽位分配)` | `MessageEnvelope` | ⏳ 待展开 |
+| 收发处理(发) | 流程 | `Outbound` | `(self_state, Mode)`（队形 / 槽位走 `init` 静态配置） | `MessageEnvelope`（领航-跟随广播：`leader_nav + 队形 + 槽位`） | ⏳ 待展开 |
+
+> `Orchestrate` 族内 `u` 统一为"模态来源"、`y` 统一为 `Mode`；由实体接对的源（长机＝注入 `mission_command`、僚机＝广播 `ParsedInbox.task`），不破坏"同族同 u/y"。
 
 **待定中间类型**（随单元定稿）：`Plan`、`Target`、`Deviation`、`ParsedInbox`、`Mode`、`AlgorithmStatus`、`MissionCommand`。
 
@@ -142,10 +149,11 @@ def step(self, ctx):
 | 项 | 归属 | 触发 |
 | --- | --- | --- |
 | 各单元 `u/y` 定稿 + 中间类型 | 本册 §2.4 / 算法库 / 流程库 | 逐模块评审 |
-| 编排 / 执行抽离 | 实体组 / 流程库 | 出现模态决策 / 异构僚机时 |
+| 编排丰富 / 动态管线 | 实体组 / 流程库 | 出现真实模态决策 / 异构僚机时 |
+| 动态队形 / 槽位分配（编排侧未来单元） | 流程库 / 实体组 | 出现集结 / 重构、需解分配问题时 |
 | 黑板 / 动态数据上下文 | 实体组 | 与"编排抽离"连体，重连出现再评估 |
 | 算法库各单元数学（方程 / 参数 / 限幅） | `3-算法库LLD` | 实现阶段逐个补 |
 | 流程库各单元实现 | `4-流程库LLD` | 实现阶段逐个补 |
 | 扩展性压测（u/y、抽象基类按第二方案校验） | 全模块 | 加第二个方案时 |
 
-**已定（非 TODO）**：统一实体契约（§1.1）、数据契约（§1.2）、单元通用模板 `init/reset/step(u)->y/read_state`（§2.1）、策略基类机制（§2.2）、control = `AccelerationCommand`（ENU）、算法 / 流程分界＝是否碰 `Mode`、轨迹生成拆 `轨迹规划`(流程)+`位置解算`(算法)、跟踪拆 `跟踪`(组合)+`控制算法`(PID/L1/ADRC 原子)、静态数据走构造函数入参。
+**已定（非 TODO）**：统一实体契约（§1.1）、数据契约（§1.2）、单元通用模板 `init/reset/step(u)->y/read_state`（§2.1）、策略基类机制（§2.2）、control = `AccelerationCommand`（ENU）、算法 / 流程分界＝是否碰 `Mode`、轨迹生成拆 `轨迹规划`(流程)+`位置解算`(算法)、跟踪拆 `跟踪`(组合)+`控制算法`(PID/L1/ADRC 原子)、静态数据走构造函数入参、队形规划并入 `收发(发)`（本轮队形 / 槽位是静态 config、无规划动作；动态分配留编排侧未来单元）、任务执行不单列（退化为 `step()` 固定串联）。

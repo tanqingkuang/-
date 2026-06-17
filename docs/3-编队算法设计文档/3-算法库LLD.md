@@ -12,7 +12,7 @@
 | `DeviationCalc` | 误差解算 | `(self_state, Target)` → `Deviation`（侧偏 / 待飞距 / 航迹角偏差 / 曲率） | ✅ |
 | `Tracking` | 轨迹 / 编队跟踪 | `(Deviation, self_state)` → `AccelerationCommand`；**按通道组合控制算法** | ✅ |
 | `ControlLaw` | 控制算法 | 控制误差 → 控制量（被 `Tracking` 组合调用） | ✅ |
-| —（工具） | 通用数学 | 坐标变换、限幅、滤波；（未来）一致性律 | 按需 |
+| —（工具，非 `step` 单元） | 通用数学 | 坐标变换、限幅、滤波；（未来）一致性律 | 按需 |
 
 - **位置解算实现**：航线插值（长机，吃 `Plan` 的航段）/ 槽位几何（僚机，吃队形 + 槽位号 + `leader_nav`）/（未来）Dubins。
 - **跟踪实现**：不同通道组合（如垂向 TECS、横侧 PID）；跟踪本身不挑模态，挑哪套组合由流程在外部切。
