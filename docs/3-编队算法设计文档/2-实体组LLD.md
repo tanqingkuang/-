@@ -15,6 +15,7 @@
 ## 2. 挂接 / 实例化
 
 - `init(entity_id, config)`：按 `config` **实例化所需的库单元类并组合进实体**（挂接 = 把单元对象作为实体的成员）；静态参数（增益、队形几何表、槽位号、`entity_type`）在此注入各单元的构造函数。
+- **挂接 = 为每个族选一个实现**：每个单元都是一个策略族（抽象基类 + 多实现，见 `1-LLD综述.md` §2.2）；实体挂接时**给每个族挑定一个实现类并实例化**（如位置解算选"航线插值"还是"槽位几何"、编排选"常量保持"还是"状态机"、发选"广播"还是"不发"）。**"由实体来选实现"就落在这一步**——情景差异靠选不同实现，不靠单元内 `if/else`。
 - **可重入靠实例化**：N 个僚机 = `Wingman` 类的 N 个实例，各持各的状态；库类定义是那份共享代码，禁止全局 / 类级可变态。
 - **C 移植**：一个实体/单元对象 ≡ C 的 `struct + 接收 struct 指针的函数`；挂接 ≡ 工厂创建结构体、所有权归实体。
 
@@ -26,7 +27,7 @@
 # 僚机本体
 def step(self, ctx: FormationAlgorithmContext) -> FormationAlgorithmOutput:
     parsed = self.rx.step(ctx.inbox)                       # 收发(收)(流程库)
-    mode   = self.orch.step(parsed)                        # 任务编排(流程库, 僚机 Mode 来自广播, 恒"保持")
+    mode   = self.orch.step(parsed.task)                   # 任务编排(流程库), u=ModeSource(僚机源:广播 task), 恒"保持"
     plan   = self.planner.step((mode, parsed))             # 轨迹规划(流程库)
     target = self.possolve.step((plan, parsed.leader_nav)) # 位置解算(算法库) → Target
     dev    = self.devcalc.step((ctx.self_state, target))   # 误差解算(算法库)
@@ -48,5 +49,5 @@ def step(self, ctx: FormationAlgorithmContext) -> FormationAlgorithmOutput:
 
 ## 5. TODO
 
-- **编排 / 执行抽离**：本轮编排（定模态）写在长机方法、执行（串联）写在 `step()`；出现模态决策 / 异构僚机时抽成独立"任务执行单元"。
-- **黑板 / 动态数据上下文**：与"编排抽离"连体，动态重连出现时再评估是否替换显式传参。
+- **编排丰富 / 动态管线**：本轮编排占位恒"保持"、`step()` 内固定顺序串联各单元；出现真实模态决策 / 异构僚机时，编排长出真实逻辑、固定串联让位给按模态选管线（届时再评估黑板，见下条）。
+- **黑板 / 动态数据上下文**：与"编排丰富 / 动态管线"连体，动态重连出现时再评估是否替换显式传参。
