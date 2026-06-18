@@ -171,7 +171,7 @@ def step(self, ctx):
 | 误差解算（`DeviationCalc`） | 算法 | 长 / 僚 | `目标指令`、`本体运动状态` | `三轴误差` |
 | 跟踪（`Tracking`） | 算法 | 长 / 僚 | `三轴误差` | `三轴加速度`(=`control`) |
 | 控制算法（`ControlLaw`） | 算法 | — | 控制误差（被 `跟踪` 组合内部调） | 控制量 |
-| 发消息（`Outbound`） | 流程 | 长机 | `队形指令`、`主机运动状态`、`编队模式`；init`(网络拓扑)` | 写黑板 `outbox` 边界槽（`list[MessageEnvelope]`；`_emit` 取出进 `Output.outbox`） |
+| 发消息（`Outbound`） | 流程 | 长机 | `队形指令`、`主机运动状态`、`编队模式`、`time_s`；init`(网络拓扑)` | 写黑板 `outbox` 边界槽（`list[MessageEnvelope]`；`_emit` 取出进 `Output.outbox`） |
 | | | 僚机 | —（不发） | —（空列表） |
 
 补充：
