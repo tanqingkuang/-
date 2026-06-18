@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Callable, Literal
 
 from src.common.envelope import MessageEnvelope
+from src.environment.comm import CommunicationChannel
 from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
 
 
@@ -135,6 +136,12 @@ class _NodeAlgorithmOutput:
     status: str
 
 
+@dataclass(frozen=True)
+class _ConfiguredLink:
+    link_id: str
+    direction: str
+
+
 class _ConfigLoader:
     """Minimal JSON/YAML loader for the first controller implementation."""
 
@@ -177,115 +184,6 @@ class _ConfigLoader:
             raise ValueError("links must be a list")
         ModelIterator._parse_model_config(model)
 
-
-class _CommunicationEngine:
-    """Deterministic communication stub with link status outputs."""
-
-    def __init__(self) -> None:
-        self._links: list[LinkState] = []
-        self._base_links: list[LinkState] = []
-        self._inbox: dict[str, list[MessageEnvelope]] = {}
-        self._pending: list[MessageEnvelope] = []
-        self._loss_until_s = 0.0
-        self._active_loss_rate = 0.25
-        self._active_latency_delta_ms = 40.0
-        self._time_s = 0.0
-
-    def init(self, topology_config: dict[str, object], qos_config: dict[str, object], seed: int) -> None:
-        del qos_config, seed
-        self._time_s = 0.0
-        self._loss_until_s = 0.0
-        self._active_loss_rate = 0.25
-        self._active_latency_delta_ms = 40.0
-        configured_links = topology_config.get("links", [])
-        if configured_links is None:
-            configured_links = []
-        if not isinstance(configured_links, list):
-            raise ValueError("links must be a list")
-        links: list[LinkState] = []
-        for index, link in enumerate(configured_links):
-            if not isinstance(link, dict):
-                raise ValueError("each link must be an object")
-            link_id = str(link.get("link_id") or link.get("id") or "")
-            if "-" not in link_id:
-                source = str(link.get("source", f"A{index + 1:02d}"))
-                target = str(link.get("target", f"A{index + 2:02d}"))
-                link_id = f"{source}-{target}"
-            links.append(
-                LinkState(
-                    link_id=link_id,
-                    direction=str(link.get("direction", "duplex")),
-                    latency_ms=float(link.get("latency_ms", 18.0 + index * 5.0)),
-                    loss_rate=float(link.get("loss_rate", 0.01)),
-                    status=str(link.get("status", "normal")),
-                )
-            )
-        self._base_links = list(links)
-        self._links = list(links)
-        self._inbox = {}
-        self._pending = []
-
-    def read_inbox(self, node_id: str) -> list[MessageEnvelope]:
-        messages = self._inbox.get(node_id, [])
-        self._inbox[node_id] = []
-        return messages
-
-    def send(self, messages: list[MessageEnvelope]) -> None:
-        self._pending.extend(messages)
-
-    def tick(self, dt_s: float) -> None:
-        self._time_s += dt_s
-        for message in self._pending:
-            self._inbox.setdefault(message.target, []).append(message)
-        self._pending = []
-        self._refresh_links()
-
-    def _refresh_links(self) -> None:
-        degraded = self._time_s < self._loss_until_s
-        self._links = [
-            LinkState(
-                link_id=link.link_id,
-                direction=link.direction,
-                latency_ms=link.latency_ms + (self._active_latency_delta_ms if degraded else 0.0),
-                loss_rate=(
-                    self._active_loss_rate
-                    if degraded
-                    else max(0.0, min(1.0, link.loss_rate))
-                ),
-                status="degraded" if degraded else "normal",
-            )
-            for link in self._base_links
-        ]
-
-    def read_link_states(self) -> list[LinkState]:
-        return list(self._links)
-
-    def inject_link_fault(self, command: DisturbanceCommand, until_s: float) -> None:
-        self._loss_until_s = until_s
-        self._active_loss_rate = max(0.0, min(1.0, float(command.params.get("loss_rate", 0.25))))
-        self._active_latency_delta_ms = float(command.params.get("latency_delta_ms", 40.0))
-        self._refresh_links()
-
-    def inject_link_qos(self, command: DisturbanceCommand, until_s: float) -> None:
-        self.inject_link_fault(command, until_s)
-
-    def reset(self) -> None:
-        self._time_s = 0.0
-        self.clear_faults()
-        self._inbox = {}
-        self._pending = []
-
-    def clear_faults(self) -> None:
-        self._loss_until_s = 0.0
-        self._active_loss_rate = 0.25
-        self._active_latency_delta_ms = 40.0
-        self._refresh_links()
-
-    def close(self) -> None:
-        self._links = []
-        self._base_links = []
-        self._inbox = {}
-        self._pending = []
 
 
 class _NodeAlgorithm:
@@ -343,19 +241,23 @@ class _DisturbanceEngine:
     def __init__(self) -> None:
         self._active: list[tuple[DisturbanceCommand, float]] = []
         self._model: ModelIterator | None = None
-        self._comm: _CommunicationEngine | None = None
+        self._comm: CommunicationChannel | None = None
         self._node_health: dict[str, str] = {}
         self._baseline_health: dict[str, str] = {}
+        self._faulted_links: set[str] = set()
+        self._degraded_links: dict[str, float] = {}
 
     def init(
         self,
         config: dict[str, object],
         seed: int,
         model: ModelIterator,
-        comm: _CommunicationEngine,
+        comm: CommunicationChannel,
     ) -> None:
         del seed
         self._active = []
+        self._faulted_links = set()
+        self._degraded_links = {}
         self._model = model
         self._comm = comm
         nodes = config.get("nodes") or []
@@ -408,21 +310,53 @@ class _DisturbanceEngine:
             if target in self._node_health:
                 params = ModelIterator._command_params(command)
                 self._node_health[target] = str(params.get("mode", "degraded"))
-        elif command.type in {"link_loss", "link_fault"} and self._comm is not None:
-            self._comm.inject_link_fault(command, until_s)
+        elif command.type == "link_fault" and self._comm is not None:
+            link_id = str(command.target or "")
+            if link_id:
+                try:
+                    self._comm.inject_link_fault(link_id, "lost")
+                    self._faulted_links.add(link_id)
+                except (KeyError, ValueError):
+                    pass
+        elif command.type == "link_loss" and self._comm is not None:
+            link_id = str(command.target or "")
+            if link_id and link_id not in self._degraded_links:
+                params = ModelIterator._command_params(command)
+                rate_raw = params.get("loss_rate", 1.0)
+                try:
+                    rate = float(rate_raw) if isinstance(rate_raw, (int, float)) and not isinstance(rate_raw, bool) else 1.0
+                    states = {s.link_id: s for s in self._comm.read_link_states()}
+                    original = states[link_id].loss_rate if link_id in states else 0.0
+                    self._comm.inject_link_qos(link_id, latency_ms=None, loss_rate=rate)
+                    self._degraded_links[link_id] = original
+                except (KeyError, ValueError):
+                    pass
 
     def _clear_dynamic_effects(self) -> None:
         if self._model is not None:
             self._model.clear_wind()
         self._node_health = dict(self._baseline_health)
         if self._comm is not None:
-            self._comm.clear_faults()
+            for link_id in self._faulted_links:
+                try:
+                    self._comm.inject_link_fault(link_id, "normal")
+                except (KeyError, ValueError):
+                    pass
+            for link_id, original_rate in self._degraded_links.items():
+                try:
+                    self._comm.inject_link_qos(link_id, latency_ms=None, loss_rate=original_rate)
+                except (KeyError, ValueError):
+                    pass
+        self._faulted_links = set()
+        self._degraded_links = {}
 
     def reset(self) -> None:
         self.clear()
 
     def close(self) -> None:
         self._active = []
+        self._faulted_links = set()
+        self._degraded_links = {}
         self._model = None
         self._comm = None
         self._node_health.clear()
@@ -464,11 +398,12 @@ class SimulationController:
         self._lock = threading.RLock()
         self._config_loader = _ConfigLoader()
         self._model = ModelIterator()
-        self._comm = _CommunicationEngine()
+        self._comm = CommunicationChannel()
         self._disturbance = _DisturbanceEngine()
         self._logger = _DataLogger()
         self._node_algorithms: dict[str, _NodeAlgorithm] = {}
         self._node_roles: dict[str, str] = {}
+        self._configured_links: list[_ConfiguredLink] = []
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._config: dict[str, object] | None = None
         self._seed = 0
@@ -799,7 +734,13 @@ class SimulationController:
         self._tick_index = 0
         self._last_display_wall_s = 0.0
         self._model.init(config, self._seed)
-        self._comm.init(config, dict(config.get("qos", {})) if isinstance(config.get("qos"), dict) else {}, self._seed)
+        raw_links = list(config.get("links") or [])
+        comm_config = {
+            "nodes": list(config.get("nodes") or []),
+            "links": raw_links,
+        }
+        self._comm.init(comm_config, self._seed)
+        self._configured_links = self._parse_configured_links(raw_links)
         self._disturbance.init(config, self._seed, self._model, self._comm)
         nodes = config.get("nodes") or []
         self._node_roles = {
@@ -873,12 +814,7 @@ class SimulationController:
             status_values.append(output.status)
         self._current_controls = controls
         self._model.apply_controls(controls)
-        routed = [
-            message
-            for message in outbox
-            if message.target != "broadcast"
-        ]
-        self._comm.send(routed)
+        self._comm.send(outbox)
         if any(status != "forming" for status in status_values):
             self._control_report = "重构"
 
@@ -904,6 +840,7 @@ class SimulationController:
             )
             for state in self._model.read_states().values()
         ]
+        links = self._make_configured_link_snapshots()
         return SimulationSnapshot(
             time_s=self._time_s,
             duration_s=self._duration_s,
@@ -911,8 +848,50 @@ class SimulationController:
             run_state=self._run_state,
             control_report=self._control_report,
             nodes=nodes,
-            links=self._comm.read_link_states(),
+            links=links,
         )
+
+    def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
+        configured: list[_ConfiguredLink] = []
+        for link in raw_links:
+            if not isinstance(link, dict) or not link.get("link_id"):
+                continue
+            configured.append(
+                _ConfiguredLink(
+                    link_id=str(link["link_id"]),
+                    direction=str(link.get("direction") or "duplex"),
+                )
+            )
+        return configured
+
+    def _make_configured_link_snapshots(self) -> list[LinkState]:
+        states = {state.link_id: state for state in self._comm.read_link_states()}
+        links: list[LinkState] = []
+        for configured in self._configured_links:
+            ids = [configured.link_id]
+            if configured.direction == "duplex":
+                ids.append(self._reverse_link_id(configured.link_id))
+            directional_states = [states[link_id] for link_id in ids if link_id in states]
+            if not directional_states:
+                continue
+            status = "lost" if any(state.status == "lost" for state in directional_states) else directional_states[0].status
+            links.append(
+                LinkState(
+                    link_id=configured.link_id,
+                    direction=configured.direction,
+                    latency_ms=max(state.latency_ms for state in directional_states),
+                    loss_rate=max(state.loss_rate for state in directional_states),
+                    status=status,
+                )
+            )
+        return links
+
+    @staticmethod
+    def _reverse_link_id(link_id: str) -> str:
+        src, sep, dst = link_id.partition("-")
+        if not sep:
+            return link_id
+        return f"{dst}-{src}"
 
     def _make_snapshot_for_empty_controller(self) -> SimulationSnapshot:
         return SimulationSnapshot(

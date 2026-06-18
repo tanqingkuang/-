@@ -10,7 +10,7 @@ class MessageEnvelope:
 
     topic: str
     source: str
-    target: str
+    target: str | list[str]
     timestamp: float
     payload: Any
 

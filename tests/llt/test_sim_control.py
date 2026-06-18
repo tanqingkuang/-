@@ -51,6 +51,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(snapshot.run_state, "READY")
             self.assertEqual(snapshot.duration_s, 0.03)
             self.assertEqual([node.node_id for node in snapshot.nodes], ["A01", "A02"])
+            self.assertEqual(len(snapshot.links), 1)
             self.assertEqual(snapshot.links[0].link_id, "A01-A02")
             self.assertEqual(snapshot.links[0].latency_ms, 31.0)
             self.assertEqual(snapshot.links[0].loss_rate, 0.04)
@@ -195,21 +196,66 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertTrue(any("node_fault" in event.message for event in events))
             controller.close()
 
-    def test_link_loss_uses_command_loss_rate(self) -> None:
+    def test_link_fault_sets_link_status_lost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()
             controller.load_config(str(_write_config(Path(tmp))))
 
             result = controller.inject_disturbance(
-                {"type": "link_loss", "target": "A01-A02", "duration_s": 1.0, "params": {"loss_rate": 0.3}}
+                {"type": "link_fault", "target": "A01-A02", "duration_s": 1.0, "params": {}}
             )
             controller.step(2)
-            link = controller.get_snapshot().links[0]
+            links = {s.link_id: s for s in controller.get_snapshot().links}
+            link = links["A01-A02"]
 
             self.assertEqual(result.code, "OK")
-            self.assertEqual(link.status, "degraded")
-            self.assertAlmostEqual(link.loss_rate, 0.3)
-            self.assertEqual(link.latency_ms, 71.0)
+            self.assertEqual(link.status, "lost")
+            self.assertAlmostEqual(link.latency_ms, 31.0)   # QoS unchanged
+            self.assertAlmostEqual(link.loss_rate, 0.04)    # QoS unchanged
+            controller.close()
+
+    def test_link_loss_degrades_link_loss_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp))))
+
+            result = controller.inject_disturbance(
+                {"type": "link_loss", "target": "A01-A02", "duration_s": 1.0, "params": {"loss_rate": 0.9}}
+            )
+            controller.step(2)
+            links = {s.link_id: s for s in controller.get_snapshot().links}
+            link = links["A01-A02"]
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(link.status, "normal")          # fault status unchanged
+            self.assertAlmostEqual(link.latency_ms, 31.0)   # latency unchanged
+            self.assertAlmostEqual(link.loss_rate, 0.9)     # degraded to injected rate
+            controller.close()
+
+    def test_snapshot_exposes_configured_links_not_internal_directions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = {
+                "duration_s": 0.03,
+                "step_s": 0.005,
+                "nodes": [
+                    {"node_id": "A01", "x_m": 0, "y_m": 0, "altitude_m": 1000},
+                    {"node_id": "A02", "x_m": 10, "y_m": 0, "altitude_m": 1000},
+                    {"node_id": "A03", "x_m": 20, "y_m": 0, "altitude_m": 1000},
+                ],
+                "links": [
+                    {"link_id": "A01-A02", "direction": "duplex", "latency_ms": 18.0, "loss_rate": 0.01},
+                    {"link_id": "A02-A03", "direction": "simplex", "latency_ms": 30.0, "loss_rate": 0.02},
+                ],
+            }
+            path = Path(tmp) / "case.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            result = controller.load_config(str(path))
+            links = controller.get_snapshot().links
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual([link.link_id for link in links], ["A01-A02", "A02-A03"])
+            self.assertEqual([link.direction for link in links], ["duplex", "simplex"])
             controller.close()
 
     def test_subscribe_snapshot_invokes_callback_and_unsubscribes(self) -> None:
@@ -270,38 +316,29 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(wind, (0.0, 0.0, 0.0))
             controller.close()
 
-    def test_wind_expiry_does_not_extend_link_loss_deadline(self) -> None:
-        """Wind expiring must not re-apply link_loss with a new deadline."""
+    def test_wind_expiry_does_not_cancel_link_fault(self) -> None:
+        """Wind expiring must not cancel a still-active link_fault."""
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()
             controller.load_config(str(_write_config(Path(tmp))))
 
-            # link_loss injected at t=0, expires at t=1.0
+            # link_fault on A01-A02 lasts 1 s
             controller.inject_disturbance(
-                DisturbanceCommand("link_loss", duration_s=1.0,
-                                   params={"loss_rate": 0.8})
+                DisturbanceCommand("link_fault", target="A01-A02", duration_s=1.0, params={})
             )
-            # wind expires after first tick (0.003s < step 0.005s)
+            # wind expires after first tick (0.003 s < step 0.005 s)
             controller.inject_disturbance(
                 DisturbanceCommand("wind", duration_s=0.003,
                                    params={"speed_mps": 10.0, "direction_deg": 0.0})
             )
-            expected_until_s = controller._disturbance._comm._loss_until_s
 
-            # step twice: wind expires, link_loss should NOT be renewed
+            # step twice: wind expires at tick 1, link_fault must survive
             controller.step(2)
 
-            self.assertAlmostEqual(
-                controller._disturbance._comm._loss_until_s,
-                expected_until_s,
-                places=9,
-                msg="_loss_until_s must not change when wind expires",
-            )
-            # link should still be degraded after wind expires
-            links = controller._disturbance._comm.read_link_states()
-            self.assertTrue(
-                any(lnk.loss_rate == 0.8 for lnk in links),
-                "link_loss must remain active after wind expiry",
+            links = {s.link_id: s for s in controller.get_snapshot().links}
+            self.assertEqual(
+                links["A01-A02"].status, "lost",
+                "link_fault must remain active after wind expiry",
             )
             controller.close()
 
@@ -321,6 +358,32 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(controller.step(0).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual(controller.inject_disturbance({"type": "bad"}).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual([event.level for event in controller.get_recent_events(limit=1, min_level="WARN")], ["WARN"])
+            controller.close()
+
+    def test_broadcast_reaches_other_nodes_after_comm_latency(self) -> None:
+        """Algorithm outbox broadcasts must pass through CommunicationChannel and arrive in inbox."""
+        config = {
+            "duration_s": 0.1,
+            "step_s": 0.005,
+            "nodes": [
+                {"node_id": "A01", "x_m": 0, "y_m": 0, "altitude_m": 1000},
+                {"node_id": "A02", "x_m": 10, "y_m": 0, "altitude_m": 1000},
+            ],
+            "links": [
+                {"link_id": "A01-A02", "latency_ms": 20.0, "loss_rate": 0.0},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "case.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(path))
+            controller.step(16)
+            a01_inbox = controller._comm.read_inbox("A01")
+            a02_inbox = controller._comm.read_inbox("A02")
+
+            self.assertTrue(any(msg.topic == "node.status" for msg in a01_inbox))
+            self.assertTrue(any(msg.topic == "node.status" for msg in a02_inbox))
             controller.close()
 
 

@@ -1,5 +1,6 @@
 """Simulation environment package."""
 
+from src.environment.comm import CommunicationChannel, LinkState
 from src.environment.model import (
     AccelerationCommand,
     AircraftState,
@@ -10,6 +11,8 @@ from src.environment.model import (
 )
 
 __all__ = [
+    "CommunicationChannel",
+    "LinkState",
     "AccelerationCommand",
     "AircraftState",
     "ModelIterator",
