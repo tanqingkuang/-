@@ -1,0 +1,92 @@
+<mxfile host="Electron" agent="Claude">
+  <diagram name="系统架构图" id="formation-arch-4layer">
+    <mxGraphModel dx="1400" dy="900" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1320" pageHeight="760" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ============ L1 实体组 ============ -->
+        <mxCell id="L1" parent="1" vertex="1" style="swimlane;horizontal=0;startSize=42;fontSize=15;fontStyle=1;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;verticalAlign=middle;align=center;" value="L1 实体组（唯一持状态）">
+          <mxGeometry x="40" y="40" width="1240" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="L1note" parent="1" vertex="1" style="text;html=1;align=left;verticalAlign=top;fontSize=11;fontColor=#1565C0;spacingLeft=4;" value="每个实体 = 一个对象：实例化并组合所需库类，持有这些子对象 = 持有全部维护数据">
+          <mxGeometry x="100" y="48" width="560" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="LE" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fontStyle=1;fillColor=#BBDEFB;strokeColor=#1565C0;strokeWidth=2;" value="长机本体">
+          <mxGeometry x="110" y="86" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="W1" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fontStyle=1;fillColor=#BBDEFB;strokeColor=#1565C0;strokeWidth=2;" value="僚机本体 #1">
+          <mxGeometry x="340" y="86" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="dots" parent="1" vertex="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=20;fontStyle=1;fontColor=#1565C0;" value="…">
+          <mxGeometry x="556" y="86" width="40" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="Wn" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fontStyle=1;fillColor=#BBDEFB;strokeColor=#1565C0;strokeWidth=2;" value="僚机本体 #N">
+          <mxGeometry x="610" y="86" width="200" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="COORD" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fontStyle=1;fillColor=#F5F5F5;strokeColor=#90A4AE;strokeWidth=2;dashed=1;" value="（将来）独立协调本体&#10;如地面站">
+          <mxGeometry x="900" y="86" width="220" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ============ L2 单元 ============ -->
+        <mxCell id="L2" parent="1" vertex="1" style="swimlane;horizontal=0;startSize=42;fontSize=15;fontStyle=1;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=2;verticalAlign=middle;align=center;" value="L2 单元（每个单元 = 一个策略族）">
+          <mxGeometry x="40" y="220" width="1240" height="240" as="geometry" />
+        </mxCell>
+
+        <!-- 算法组 -->
+        <mxCell id="ALGO" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1;verticalAlign=top;align=center;fillColor=#C8E6C9;strokeColor=#2E7D32;strokeWidth=2;spacingTop=6;" value="算法组 — 不碰 Mode 的纯计算（不感知状态机）">
+          <mxGeometry x="110" y="270" width="560" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="A1" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="位置解算">
+          <mxGeometry x="128" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="A2" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="误差解算">
+          <mxGeometry x="262" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="A3" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="轨迹 / 编队跟踪">
+          <mxGeometry x="396" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="A4" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="控制算法&#10;PID / L1 / ADRC">
+          <mxGeometry x="530" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="A5" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=11;fontColor=#558B2F;fillColor=#F1F8E9;strokeColor=#9CCC65;dashed=1;" value="通用数学（坐标变换 / 限幅 / 滤波）— 工具函数，非 step 单元">
+          <mxGeometry x="128" y="372" width="522" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- 流程组 -->
+        <mxCell id="FLOW" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fontStyle=1;verticalAlign=top;align=center;fillColor=#C8E6C9;strokeColor=#2E7D32;strokeWidth=2;spacingTop=6;" value="流程组 — 碰 Mode 的流程（产 / 用 / 切模态，派活给算法）">
+          <mxGeometry x="700" y="270" width="420" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="F1" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="收发处理">
+          <mxGeometry x="720" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="F2" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="任务编排">
+          <mxGeometry x="854" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="F3" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="轨迹规划">
+          <mxGeometry x="988" y="306" width="120" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="FLOWnote" parent="1" vertex="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontColor=#2E7D32;" value="按 Mode 选 / 切策略、组装入参，把计算派给算法组 →">
+          <mxGeometry x="720" y="372" width="388" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ============ L3 黑板 ============ -->
+        <mxCell id="L3" parent="1" vertex="1" style="swimlane;horizontal=0;startSize=42;fontSize=15;fontStyle=1;html=1;fillColor=#FFF3E0;strokeColor=#EF6C00;strokeWidth=2;verticalAlign=middle;align=center;" value="L3 黑板 Context">
+          <mxGeometry x="40" y="490" width="1240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="BB" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fontStyle=1;fillColor=#FFE0B2;strokeColor=#EF6C00;strokeWidth=2;" value="Context — 定义一次任务过程中需要的全部内容">
+          <mxGeometry x="110" y="510" width="1010" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ============ L4 叶类型 ============ -->
+        <mxCell id="L4" parent="1" vertex="1" style="swimlane;horizontal=0;startSize=42;fontSize=15;fontStyle=1;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;strokeWidth=2;verticalAlign=middle;align=center;" value="L4 叶类型">
+          <mxGeometry x="40" y="610" width="1240" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="LEAF" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fontStyle=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;strokeWidth=2;" value="简单结构体与枚举，供上层使用&#10;NavState · Target · Deviation · Plan · AccelerationCommand · Mode …">
+          <mxGeometry x="110" y="632" width="1010" height="56" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

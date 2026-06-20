@@ -1,0 +1,59 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="实体间调用时序" id="inter-entity-seq">
+    <mxGraphModel dx="900" dy="640" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="680" pageHeight="600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="phaseN" value="第 N 拍" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eef6ff;strokeColor=#9cc3e6;verticalAlign=top;align=left;fontStyle=2;fontColor=#3c78a8;spacingLeft=8;spacingTop=4;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="100" width="640" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="phaseN1" value="第 N+1 拍" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff6ee;strokeColor=#e6b89c;verticalAlign=top;align=left;fontStyle=2;fontColor=#b5713a;spacingLeft=8;spacingTop=4;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="280" width="640" height="180" as="geometry" />
+        </mxCell>
+
+        <mxCell id="title" value="实体间调用时序（领航跟随保持）—— 跨拍 envelope 流" style="text;html=1;align=center;verticalAlign=middle;fontStyle=1;fontSize=15;" vertex="1" parent="1">
+          <mxGeometry x="60" y="8" width="560" height="28" as="geometry" />
+        </mxCell>
+
+        <mxCell id="hL" value="长机实体" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="50" y="44" width="120" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="hC" value="通信功能&#10;（仿真控制搬运）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="270" y="44" width="140" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="hF" value="僚机实体" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="510" y="44" width="120" height="36" as="geometry" />
+        </mxCell>
+
+        <mxCell id="llL" style="endArrow=none;dashed=1;html=1;strokeColor=#82b366;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="110" y="80" as="sourcePoint" /><mxPoint x="110" y="470" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="llC" style="endArrow=none;dashed=1;html=1;strokeColor=#d6b656;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="340" y="80" as="sourcePoint" /><mxPoint x="340" y="470" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="llF" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="570" y="80" as="sourcePoint" /><mxPoint x="570" y="470" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="noteL" value="第 N 拍 · 长机 step&#10;②产模态 ③航段 ④目标 ⑤误差 ⑥跟踪&#10;→ 产出 outbox(leader_nav/队形/槽位)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="30" y="120" width="220" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="msg1" value="⑦ 写 outbox（envelope）" style="endArrow=classic;html=1;strokeColor=#82b366;fontColor=#5a8a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="110" y="200" as="sourcePoint" /><mxPoint x="340" y="200" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="noteC" value="拍间派发：QoS 时延 / 丢包 / 带宽 ＋ 断链 link_fault" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
+          <mxGeometry x="250" y="232" width="180" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="msg2" value="更新 Inbox（envelope 到达）" style="endArrow=classic;html=1;strokeColor=#d6b656;fontColor=#9c7a1a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="340" y="312" as="sourcePoint" /><mxPoint x="570" y="312" as="targetPoint" /></mxGeometry></mxCell>
+
+        <mxCell id="noteF1" value="① 收消息：读到的是&#10;长机【第 N 拍】的 leader_nav" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=left;spacingLeft=6;" vertex="1" parent="1">
+          <mxGeometry x="430" y="328" width="210" height="44" as="geometry" />
+        </mxCell>
+
+        <mxCell id="noteF2" value="④⑤⑥ 用第 N 拍长机状态算槽位/控制&#10;→ 跨拍滞后（≥1 拍，再叠加通信时延）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=6;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="430" y="392" width="210" height="56" as="geometry" />
+        </mxCell>
+
+        <mxCell id="foot" value="★ 故意设计，非 bug：僚机本拍只能用长机【上一拍】状态，刻意复刻分布式代码固有的信息滞后，并取最差环境（可叠加时延/丢包/断链）。&#10;实体间不直接调用，搬运由仿真控制完成（见 0-架构HLD 4.4.3）；断链时沿用最后一帧 envelope，断链语义见收发处理 LLD。" style="text;html=1;align=left;verticalAlign=top;fontSize=11;fontColor=#555555;spacingLeft=4;" vertex="1" parent="1">
+          <mxGeometry x="24" y="486" width="632" height="60" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
