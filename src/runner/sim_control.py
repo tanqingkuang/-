@@ -121,6 +121,7 @@ class SimulationSnapshot:
     nodes: list[NodeState]
     links: list[LinkState]
     route: RouteState | None = None
+    route_segments: list[RouteState] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -444,6 +445,17 @@ def _leader_id_from_nodes(nodes: list[object]) -> str:
     return ""
 
 
+def _route_state_from_wayline(route: WayLineS) -> RouteState:
+    return RouteState(
+        start_x_m=route.start.pos.east,
+        start_y_m=route.start.pos.north,
+        start_altitude_m=route.start.pos.h,
+        end_x_m=route.end.pos.east,
+        end_y_m=route.end.pos.north,
+        end_altitude_m=route.end.pos.h,
+    )
+
+
 class _ConfigLoader:
     """Minimal JSON/YAML loader for the first controller implementation."""
 
@@ -743,6 +755,7 @@ class SimulationController:
         self._node_algorithms: dict[str, _NodeAlgorithm] = {}
         self._node_roles: dict[str, str] = {}
         self._configured_links: list[_ConfiguredLink] = []
+        self._leader_route: RouteS | None = None
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._config: dict[str, object] | None = None
         self._seed = 0
@@ -1099,6 +1112,7 @@ class SimulationController:
             else None
         )
         leader_route = _build_leader_route(config)
+        self._leader_route = leader_route
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
                 node_id,
@@ -1173,6 +1187,7 @@ class SimulationController:
     def _make_snapshot_unlocked(self) -> SimulationSnapshot:
         health_map = self._disturbance.read_health()
         route = self._make_route_snapshot()
+        route_segments = self._make_route_segment_snapshots()
         nodes = [
             NodeState(
                 node_id=state.node_id,
@@ -1205,6 +1220,7 @@ class SimulationController:
             nodes=nodes,
             links=links,
             route=route,
+            route_segments=route_segments,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
@@ -1247,15 +1263,13 @@ class SimulationController:
             route = algorithm.current_route()
             if route is None:
                 continue
-            return RouteState(
-                start_x_m=route.start.pos.east,
-                start_y_m=route.start.pos.north,
-                start_altitude_m=route.start.pos.h,
-                end_x_m=route.end.pos.east,
-                end_y_m=route.end.pos.north,
-                end_altitude_m=route.end.pos.h,
-            )
+            return _route_state_from_wayline(route)
         return None
+
+    def _make_route_segment_snapshots(self) -> list[RouteState]:
+        if not self._node_algorithms or self._leader_route is None:
+            return []
+        return [_route_state_from_wayline(line) for line in self._leader_route.lines]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:

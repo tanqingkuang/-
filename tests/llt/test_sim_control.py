@@ -202,6 +202,34 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(route.lines[1].end.pos.north, 80.0)
         self.assertTrue(all(line.vdCmd == 12.0 for line in route.lines))
 
+    def test_snapshot_exposes_full_reference_route_segments(self) -> None:
+        """Snapshot should expose the complete configured route for UI drawing, not only the active segment."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["route"] = {
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 100.0, "y_m": 80.0, "altitude_m": 1000.0},
+                ],
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            snapshot = controller.get_snapshot()
+
+            self.assertIsNotNone(snapshot.route)
+            self.assertEqual(len(snapshot.route_segments), 2)
+            self.assertAlmostEqual(snapshot.route_segments[0].start_x_m, 0.0)
+            self.assertAlmostEqual(snapshot.route_segments[0].end_x_m, 100.0)
+            self.assertAlmostEqual(snapshot.route_segments[1].start_x_m, 100.0)
+            self.assertAlmostEqual(snapshot.route_segments[1].end_y_m, 80.0)
+            controller.close()
+
     def test_default_triangle_slots_do_not_depend_on_initial_positions(self) -> None:
         """Default formation geometry should be a fixed wedge, not derived from start positions."""
         nodes = [

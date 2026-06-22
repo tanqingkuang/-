@@ -110,6 +110,32 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertLessEqual(end_x, rect.width() - 5.0)
         self.assertGreaterEqual(end_y, 5.0)
 
+    def test_multi_segment_route_is_available_to_views_after_load(self) -> None:
+        route_config = {
+            "speed_mps": 12.0,
+            "waypoints": [
+                {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                {"x_m": 6000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                {"x_m": 6000.0, "y_m": 3000.0, "altitude_m": 1000.0},
+            ],
+        }
+
+        self._load_ui_config(route=route_config)
+        snapshot = self.window.top_view.snapshot
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(len(snapshot.route_segments), 2)
+        self.assertAlmostEqual(snapshot.route_segments[0].end_x, 6000.0)
+        self.assertAlmostEqual(snapshot.route_segments[1].end_y, 3000.0)
+        second_end_x = snapshot.route_segments[1].end_x * self.window.top_view.scale_value + self.window.top_view.offset.x()
+        second_end_y = snapshot.route_segments[1].end_y * self.window.top_view.scale_value + self.window.top_view.offset.y()
+        rect = self.window.top_view.viewport().rect()
+        self.assertGreaterEqual(second_end_x, 5.0)
+        self.assertGreaterEqual(second_end_y, 5.0)
+        self.assertLessEqual(second_end_x, rect.width() - 5.0)
+        self.assertLessEqual(second_end_y, rect.height() - 5.0)
+
     def test_side_height_selection_does_not_move_top_view_aircraft(self) -> None:
         old_offset = QPointF(self.window.top_view.offset)
         old_scale = self.window.top_view.scale_value
@@ -423,6 +449,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         duration_s: float = 0.05,
         step_s: float = 0.005,
         links: list[dict[str, object]] | None = None,
+        route: dict[str, object] | None = None,
     ) -> None:
         config = {
             "duration_s": duration_s,
@@ -439,6 +466,8 @@ class GuiViewInteractionTests(unittest.TestCase):
                 {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
             ],
         }
+        if route is not None:
+            config["route"] = route
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
             json.dump(config, handle)
             config_path = handle.name

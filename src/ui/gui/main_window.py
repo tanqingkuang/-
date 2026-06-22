@@ -45,6 +45,8 @@ WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
 TRAIL_SECONDS = 18.0
 TOP_VIEW_ORIGIN_MARGIN = 40.0
+VIEW_MIN_SCALE = 0.05
+VIEW_MAX_SCALE = 3.5
 APP_CONFIG_SECTION = "config"
 APP_CONFIG_KEY_LAST_CONFIG = "last_config"
 APP_CONFIG_FILE_NAME = "config.ini"
@@ -128,6 +130,7 @@ class Snapshot:
     nodes: list[NodeState]
     links: list[LinkState]
     route: ReferenceRoute | None = None
+    route_segments: list[ReferenceRoute] = field(default_factory=list)
 
 
 class MockSimulation:
@@ -269,6 +272,7 @@ class MockSimulation:
             nodes=self.nodes,
             links=self.links,
             route=ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0),
+            route_segments=[ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0)],
         )
 
 
@@ -417,14 +421,13 @@ class ControllerSimulationAdapter:
             )
         route = None
         if snapshot.route is not None:
-            route = ReferenceRoute(
-                start_x=snapshot.route.start_x_m,
-                start_y=snapshot.route.start_y_m,
-                start_altitude=snapshot.route.start_altitude_m,
-                end_x=snapshot.route.end_x_m,
-                end_y=snapshot.route.end_y_m,
-                end_altitude=snapshot.route.end_altitude_m,
-            )
+            route = self._convert_route(snapshot.route)
+        route_segments = [
+            self._convert_route(segment)
+            for segment in snapshot.route_segments
+        ]
+        if not route_segments and route is not None:
+            route_segments = [route]
         return Snapshot(
             time=snapshot.time_s,
             duration=snapshot.duration_s,
@@ -435,6 +438,18 @@ class ControllerSimulationAdapter:
             nodes=nodes,
             links=links,
             route=route,
+            route_segments=route_segments,
+        )
+
+    @staticmethod
+    def _convert_route(route) -> ReferenceRoute:  # noqa: ANN001
+        return ReferenceRoute(
+            start_x=route.start_x_m,
+            start_y=route.start_y_m,
+            start_altitude=route.start_altitude_m,
+            end_x=route.end_x_m,
+            end_y=route.end_y_m,
+            end_altitude=route.end_altitude_m,
         )
 
     def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
@@ -677,7 +692,7 @@ class TopView(QGraphicsView):
             (cursor.y() - self.offset.y()) / self.scale_value,
         )
         factor = math.pow(1.001, delta)
-        self.scale_value = min(3.5, max(0.45, self.scale_value * factor))
+        self.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.scale_value * factor))
         self.offset = QPointF(
             cursor.x() - before.x() * self.scale_value,
             cursor.y() - before.y() * self.scale_value,
@@ -770,7 +785,7 @@ class TopView(QGraphicsView):
         viewport = self.viewport().rect()
         margin = 0.94
         scale = min(viewport.width() / world_width, viewport.height() / world_height) * margin
-        self.scale_value = min(3.5, max(0.45, scale))
+        self.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, scale))
 
         center_x = (world_start.x() + world_end.x()) / 2.0
         center_y = (world_start.y() + world_end.y()) / 2.0
@@ -814,22 +829,26 @@ class TopView(QGraphicsView):
         self.viewChanged.emit()
 
     def _fit_route_to_view(self) -> None:
-        if self.snapshot is None or self.snapshot.route is None:
+        if self.snapshot is None or not self._route_segments():
             self.offset = self._default_offset()
             return
-        route = self.snapshot.route
+        routes = self._route_segments()
         rect = self.viewport().rect()
         if rect.width() <= 0 or rect.height() <= 0:
             return
-        min_x = min(route.start_x, route.end_x)
-        max_x = max(route.start_x, route.end_x)
-        min_y = min(route.start_y, route.end_y)
-        max_y = max(route.start_y, route.end_y)
+        xs = [value for route in routes for value in (route.start_x, route.end_x)]
+        ys = [value for route in routes for value in (route.start_y, route.end_y)]
+        min_x = min(xs)
+        max_x = max(xs)
+        min_y = min(ys)
+        max_y = max(ys)
         span_x = max(1.0, max_x - min_x)
         span_y = max(1.0, max_y - min_y)
-        scale_x = rect.width() / (span_x + TOP_VIEW_ORIGIN_MARGIN * 2.0)
-        scale_y = rect.height() / (span_y + TOP_VIEW_ORIGIN_MARGIN * 2.0)
-        self.scale_value = min(1.0, max(0.45, min(scale_x, scale_y)))
+        available_width = max(1.0, rect.width() - TOP_VIEW_ORIGIN_MARGIN * 2.0)
+        available_height = max(1.0, rect.height() - TOP_VIEW_ORIGIN_MARGIN * 2.0)
+        scale_x = available_width / span_x
+        scale_y = available_height / span_y
+        self.scale_value = min(1.0, max(VIEW_MIN_SCALE, min(scale_x, scale_y)))
         self.offset = QPointF(
             TOP_VIEW_ORIGIN_MARGIN - min_x * self.scale_value,
             TOP_VIEW_ORIGIN_MARGIN - min_y * self.scale_value,
@@ -854,19 +873,29 @@ class TopView(QGraphicsView):
             painter.drawLine(start_x, y, end_x, y)
 
     def _draw_route(self, painter: QPainter) -> None:
-        if self.snapshot is None or self.snapshot.route is None:
+        routes = self._route_segments()
+        if not routes:
             return
-        route = self.snapshot.route
-        pen = QPen(self.theme.route, 2)
+        pen = QPen(self.theme.route, 2.0 / self.scale_value)
         pen.setDashPattern([8, 7])
         painter.setPen(pen)
-        start = QPointF(route.start_x, route.start_y)
-        end = QPointF(route.end_x, route.end_y)
-        painter.drawLine(start, end)
+        for route in routes:
+            painter.drawLine(QPointF(route.start_x, route.start_y), QPointF(route.end_x, route.end_y))
         painter.setBrush(self.theme.ink)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(start, 5, 5)
-        painter.drawEllipse(end, 5, 5)
+        marker_radius = 5.0 / self.scale_value
+        painter.drawEllipse(QPointF(routes[0].start_x, routes[0].start_y), marker_radius, marker_radius)
+        for route in routes:
+            painter.drawEllipse(QPointF(route.end_x, route.end_y), marker_radius, marker_radius)
+
+    def _route_segments(self) -> list[ReferenceRoute]:
+        if self.snapshot is None:
+            return []
+        if self.snapshot.route_segments:
+            return self.snapshot.route_segments
+        if self.snapshot.route is not None:
+            return [self.snapshot.route]
+        return []
 
     def _draw_links(self, painter: QPainter, snapshot: Snapshot) -> None:
         by_id = {node.node_id: node for node in snapshot.nodes}
@@ -965,7 +994,7 @@ class SideView(QWidget):
         before_x = self._screen_to_world_x(event.position().x())
         old_scale = self.top_view.scale_value
         factor = math.pow(1.001, delta)
-        self.top_view.scale_value = min(3.5, max(0.45, old_scale * factor))
+        self.top_view.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, old_scale * factor))
         self.top_view.offset.setX(event.position().x() - before_x * self.top_view.scale_value)
         self._preserve_top_view_vertical_center(old_scale)
         self._emit_shared_view_changed()
@@ -1063,7 +1092,7 @@ class SideView(QWidget):
             end_x = self._screen_to_world_x(right)
             world_width = max(1.0, abs(end_x - start_x))
             old_scale = self.top_view.scale_value
-            self.top_view.scale_value = min(3.5, max(0.45, self.width() / world_width * 0.94))
+            self.top_view.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.width() / world_width * 0.94))
             center_x = (start_x + end_x) / 2.0
             self.top_view.offset.setX(self.width() / 2.0 - center_x * self.top_view.scale_value)
             self._preserve_top_view_vertical_center(old_scale)
@@ -1118,16 +1147,26 @@ class SideView(QWidget):
             painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
 
     def _draw_reference(self, painter: QPainter) -> None:
-        if self.snapshot is None or self.snapshot.route is None:
+        routes = self._route_segments()
+        if not routes:
             return
-        route = self.snapshot.route
         pen = QPen(self.theme.route, 2)
         pen.setDashPattern([7, 6])
         painter.setPen(pen)
-        painter.drawLine(
-            QPointF(self._map_x(route.start_x), self._map_y(route.start_altitude)),
-            QPointF(self._map_x(route.end_x), self._map_y(route.end_altitude)),
-        )
+        for route in routes:
+            painter.drawLine(
+                QPointF(self._map_x(route.start_x), self._map_y(route.start_altitude)),
+                QPointF(self._map_x(route.end_x), self._map_y(route.end_altitude)),
+            )
+
+    def _route_segments(self) -> list[ReferenceRoute]:
+        if self.snapshot is None:
+            return []
+        if self.snapshot.route_segments:
+            return self.snapshot.route_segments
+        if self.snapshot.route is not None:
+            return [self.snapshot.route]
+        return []
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
         for index, node in enumerate(snapshot.nodes):
