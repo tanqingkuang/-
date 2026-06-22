@@ -1,6 +1,6 @@
 <mxfile host="app.diagrams.net">
   <diagram name="僚机调用时序" id="follower-seq">
-    <mxGraphModel dx="800" dy="600" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="520" pageHeight="760" math="0" shadow="0">
+    <mxGraphModel dx="800" dy="600" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="520" pageHeight="700" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -8,7 +8,7 @@
           <mxGeometry x="90" y="8" width="320" height="30" as="geometry" />
         </mxCell>
         <mxCell id="ctx" value="Context&#10;（黑板）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;verticalAlign=top;fontStyle=1;spacingTop=8;" vertex="1" parent="1">
-          <mxGeometry x="360" y="48" width="110" height="572" as="geometry" />
+          <mxGeometry x="360" y="48" width="110" height="490" as="geometry" />
         </mxCell>
         <mxCell id="s1" value="&lt;b&gt;① 收消息&lt;/b&gt;&lt;br&gt;接受并解析需要的数据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="100" y="48" width="180" height="56" as="geometry" />
@@ -19,40 +19,34 @@
         <mxCell id="s3" value="&lt;b&gt;③ 轨迹规划&lt;/b&gt;&lt;br&gt;预埋占位（本场景无意义，&#10;为兼容后续集结流程）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;dashed=1;fontColor=#999999;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="100" y="220" width="180" height="56" as="geometry" />
         </mxCell>
-        <mxCell id="s4" value="&lt;b&gt;④ 位置解算&lt;/b&gt;&lt;br&gt;基于主机位置+队形+槽位号&#10;计算位置指令" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="s4" value="&lt;b&gt;④ 位置解算&lt;/b&gt;&lt;br&gt;基于长机位置+队形+槽位号&#10;计算位置指令" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="100" y="306" width="180" height="56" as="geometry" />
         </mxCell>
-        <mxCell id="s5" value="&lt;b&gt;⑤ 误差解算&lt;/b&gt;&lt;br&gt;计算制导误差" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="s5" value="&lt;b&gt;⑤ 跟踪&lt;/b&gt;&lt;br&gt;编队跟踪（含求偏差）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="100" y="392" width="180" height="56" as="geometry" />
         </mxCell>
-        <mxCell id="s6" value="&lt;b&gt;⑥ 跟踪&lt;/b&gt;&lt;br&gt;编队跟踪算法" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=middle;" vertex="1" parent="1">
+        <mxCell id="s6" value="&lt;b&gt;⑥ 发送消息&lt;/b&gt;&lt;br&gt;空（本场景不发）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;dashed=1;fontColor=#999999;verticalAlign=middle;" vertex="1" parent="1">
           <mxGeometry x="100" y="478" width="180" height="56" as="geometry" />
-        </mxCell>
-        <mxCell id="s7" value="&lt;b&gt;⑦ 发送消息&lt;/b&gt;&lt;br&gt;空（本场景不发）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;dashed=1;fontColor=#999999;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="100" y="564" width="180" height="56" as="geometry" />
         </mxCell>
         <mxCell id="bcast" value="← 长机&#10;广播 envelope" style="text;html=1;align=center;verticalAlign=middle;fontStyle=2;fontColor=#82b366;" vertex="1" parent="1">
           <mxGeometry x="0" y="58" width="96" height="40" as="geometry" />
         </mxCell>
         <mxCell id="legend" value="块间纵向箭头＝调用顺序　｜　虚线＝读黑板　实线＝写黑板" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
-          <mxGeometry x="40" y="660" width="440" height="24" as="geometry" />
+          <mxGeometry x="40" y="574" width="440" height="24" as="geometry" />
         </mxCell>
         <mxCell id="note" value="本次目标：1 个航段 + 集中式通信 + 长机僚机 + PID 控制 + 三角队形" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontColor=#666666;" vertex="1" parent="1">
-          <mxGeometry x="40" y="686" width="440" height="24" as="geometry" />
+          <mxGeometry x="40" y="600" width="440" height="24" as="geometry" />
         </mxCell>
         <mxCell id="e12" style="endArrow=classic;html=1;" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e23" style="endArrow=classic;html=1;" edge="1" parent="1" source="s2" target="s3"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e34" style="endArrow=classic;html=1;" edge="1" parent="1" source="s3" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e45" style="endArrow=classic;html=1;" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry" /></mxCell>
         <mxCell id="e56" style="endArrow=classic;html=1;" edge="1" parent="1" source="s5" target="s6"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="e67" style="endArrow=classic;html=1;" edge="1" parent="1" source="s6" target="s7"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="w1" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.5;entryX=0;entryY=0.049;" edge="1" parent="1" source="s1" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="r4" value="读" style="endArrow=classic;html=1;dashed=1;fontColor=#996600;exitX=0;exitY=0.500;entryX=1;entryY=0.3;" edge="1" parent="1" source="ctx" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="w4" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.7;entryX=0;entryY=0.500;" edge="1" parent="1" source="s4" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="r5" value="读" style="endArrow=classic;html=1;dashed=1;fontColor=#996600;exitX=0;exitY=0.650;entryX=1;entryY=0.3;" edge="1" parent="1" source="ctx" target="s5"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="w5" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.7;entryX=0;entryY=0.650;" edge="1" parent="1" source="s5" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="r6" value="读" style="endArrow=classic;html=1;dashed=1;fontColor=#996600;exitX=0;exitY=0.801;entryX=1;entryY=0.3;" edge="1" parent="1" source="ctx" target="s6"><mxGeometry relative="1" as="geometry" /></mxCell>
-        <mxCell id="w6" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.7;entryX=0;entryY=0.801;" edge="1" parent="1" source="s6" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="w1" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.5;entryX=0;entryY=0.057;" edge="1" parent="1" source="s1" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="r4" value="读" style="endArrow=classic;html=1;dashed=1;fontColor=#996600;exitX=0;exitY=0.584;entryX=1;entryY=0.3;" edge="1" parent="1" source="ctx" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="w4" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.7;entryX=0;entryY=0.584;" edge="1" parent="1" source="s4" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="r5" value="读" style="endArrow=classic;html=1;dashed=1;fontColor=#996600;exitX=0;exitY=0.759;entryX=1;entryY=0.3;" edge="1" parent="1" source="ctx" target="s5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="w5" value="写" style="endArrow=classic;html=1;fontColor=#996600;exitX=1;exitY=0.7;entryX=0;entryY=0.759;" edge="1" parent="1" source="s5" target="ctx"><mxGeometry relative="1" as="geometry" /></mxCell>
       </root>
     </mxGraphModel>
   </diagram>
