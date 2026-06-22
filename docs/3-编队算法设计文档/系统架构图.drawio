@@ -40,11 +40,8 @@
         <mxCell id="A1" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="位置解算">
           <mxGeometry x="128" y="306" width="120" height="50" as="geometry" />
         </mxCell>
-        <mxCell id="A2" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="误差解算">
-          <mxGeometry x="262" y="306" width="120" height="50" as="geometry" />
-        </mxCell>
-        <mxCell id="A3" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="轨迹 / 编队跟踪">
-          <mxGeometry x="396" y="306" width="120" height="50" as="geometry" />
+        <mxCell id="A3" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="轨迹 / 编队跟踪&#10;（含求偏差）">
+          <mxGeometry x="330" y="306" width="120" height="50" as="geometry" />
         </mxCell>
         <mxCell id="A4" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fillColor=#FFFFFF;strokeColor=#2E7D32;" value="控制算法&#10;PID / L1 / ADRC">
           <mxGeometry x="530" y="306" width="120" height="50" as="geometry" />
@@ -82,7 +79,7 @@
         <mxCell id="L4" parent="1" vertex="1" style="swimlane;horizontal=0;startSize=42;fontSize=15;fontStyle=1;html=1;fillColor=#F3E5F5;strokeColor=#6A1B9A;strokeWidth=2;verticalAlign=middle;align=center;" value="L4 叶类型">
           <mxGeometry x="40" y="610" width="1240" height="100" as="geometry" />
         </mxCell>
-        <mxCell id="LEAF" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fontStyle=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;strokeWidth=2;" value="简单结构体与枚举，供上层使用&#10;NavState · Target · Deviation · Plan · AccelerationCommand · Mode …">
+        <mxCell id="LEAF" parent="1" vertex="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=12;fontStyle=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;strokeWidth=2;" value="简单结构体与枚举，供上层使用&#10;PosInEarthS · VdInEarthS · MotionProfS · WayLineS · FormSnapshotS · AccInEarthS · FormStageE …">
           <mxGeometry x="110" y="632" width="1010" height="56" as="geometry" />
         </mxCell>
 

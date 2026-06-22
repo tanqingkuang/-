@@ -30,11 +30,11 @@
         <mxCell id="llC" style="endArrow=none;dashed=1;html=1;strokeColor=#d6b656;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="340" y="80" as="sourcePoint" /><mxPoint x="340" y="470" as="targetPoint" /></mxGeometry></mxCell>
         <mxCell id="llF" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="570" y="80" as="sourcePoint" /><mxPoint x="570" y="470" as="targetPoint" /></mxGeometry></mxCell>
 
-        <mxCell id="noteL" value="第 N 拍 · 长机 step&#10;②产模态 ③航段 ④目标 ⑤误差 ⑥跟踪&#10;→ 产出 outbox(leader_nav/队形/槽位)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=6;" vertex="1" parent="1">
+        <mxCell id="noteL" value="第 N 拍 · 长机 step&#10;②产模态 ③航段 ④目标 ⑤跟踪&#10;→ 产出 outbox(leader_nav/队形/槽位)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;align=left;spacingLeft=6;" vertex="1" parent="1">
           <mxGeometry x="30" y="120" width="220" height="60" as="geometry" />
         </mxCell>
 
-        <mxCell id="msg1" value="⑦ 写 outbox（envelope）" style="endArrow=classic;html=1;strokeColor=#82b366;fontColor=#5a8a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="110" y="200" as="sourcePoint" /><mxPoint x="340" y="200" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="msg1" value="⑥ 写 outbox（envelope）" style="endArrow=classic;html=1;strokeColor=#82b366;fontColor=#5a8a3a;" edge="1" parent="1"><mxGeometry relative="1" as="geometry"><mxPoint x="110" y="200" as="sourcePoint" /><mxPoint x="340" y="200" as="targetPoint" /></mxGeometry></mxCell>
 
         <mxCell id="noteC" value="拍间派发：QoS 时延 / 丢包 / 带宽 ＋ 断链 link_fault" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
           <mxGeometry x="250" y="232" width="180" height="40" as="geometry" />
@@ -46,7 +46,7 @@
           <mxGeometry x="430" y="328" width="210" height="44" as="geometry" />
         </mxCell>
 
-        <mxCell id="noteF2" value="④⑤⑥ 用第 N 拍长机状态算槽位/控制&#10;→ 跨拍滞后（≥1 拍，再叠加通信时延）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=6;fontStyle=1;" vertex="1" parent="1">
+        <mxCell id="noteF2" value="④⑤ 用第 N 拍长机状态算槽位/控制&#10;→ 跨拍滞后（≥1 拍，再叠加通信时延）" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=left;spacingLeft=6;fontStyle=1;" vertex="1" parent="1">
           <mxGeometry x="430" y="392" width="210" height="56" as="geometry" />
         </mxCell>
 
