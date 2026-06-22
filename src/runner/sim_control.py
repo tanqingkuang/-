@@ -326,6 +326,10 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
     if not isinstance(route_config, dict):
         raise ValueError("route must be an object")
 
+    waypoints = route_config.get("waypoints")
+    if waypoints is not None:
+        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config))
+
     segments = route_config.get("segments", route_config.get("lines"))
     if segments is None:
         return RouteS(lines=[_wayline_from_config(route_config, 0, "route")])
@@ -337,6 +341,35 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
             for index, segment in enumerate(segments)
         ]
     )
+
+
+def _waylines_from_waypoints(raw_waypoints: object, route_defaults: dict[str, object]) -> list[WayLineS]:
+    if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
+        raise ValueError("route.waypoints must contain at least two points")
+    speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))
+    radius = float(route_defaults.get("radius_m", route_defaults.get("radius", 0.0)))
+    if speed < 0.0:
+        raise ValueError("route.speed_mps must be non-negative")
+    if radius != 0.0:
+        raise ValueError("route.radius_m must be 0 for straight route")
+    points = [
+        _route_point_from_config(raw_point, f"route.waypoints[{index}]")
+        for index, raw_point in enumerate(raw_waypoints)
+    ]
+    lines: list[WayLineS] = []
+    for index, (start, end) in enumerate(zip(points, points[1:])):
+        if start.east == end.east and start.north == end.north and start.h == end.h:
+            raise ValueError(f"route.waypoints[{index}] and route.waypoints[{index + 1}] must be different")
+        lines.append(
+            WayLineS(
+                idx=index,
+                start=WayPointS(idx=index, pos=start),
+                end=WayPointS(idx=index + 1, pos=end),
+                vdCmd=speed,
+                radius=radius,
+            )
+        )
+    return lines
 
 
 def _wayline_from_config(

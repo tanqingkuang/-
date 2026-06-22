@@ -11,7 +11,7 @@ from pathlib import Path
 
 from src.algorithm.context.leaf_types import FormPatE
 from src.environment.model import AircraftState
-from src.runner.sim_control import DisturbanceCommand, SimulationController, _build_formation_comm_init
+from src.runner.sim_control import DisturbanceCommand, SimulationController, _build_formation_comm_init, _build_leader_route
 
 
 def _write_config(directory: Path, *, duration_s: float = 0.03, step_s: float = 0.005) -> Path:
@@ -178,6 +178,29 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 50.0)
             self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 150.0)
             controller.close()
+
+    def test_route_waypoints_build_continuous_segments(self) -> None:
+        """route.waypoints should define a multi-segment route without repeated start/end objects."""
+
+        route = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 12.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                        {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
+                        {"x_m": 100.0, "y_m": 80.0, "altitude_m": 1000.0},
+                    ],
+                }
+            }
+        )
+
+        self.assertEqual(len(route.lines), 2)
+        self.assertAlmostEqual(route.lines[0].start.pos.east, 0.0)
+        self.assertAlmostEqual(route.lines[0].end.pos.east, 100.0)
+        self.assertAlmostEqual(route.lines[1].start.pos.east, 100.0)
+        self.assertAlmostEqual(route.lines[1].end.pos.north, 80.0)
+        self.assertTrue(all(line.vdCmd == 12.0 for line in route.lines))
 
     def test_default_triangle_slots_do_not_depend_on_initial_positions(self) -> None:
         """Default formation geometry should be a fixed wedge, not derived from start positions."""

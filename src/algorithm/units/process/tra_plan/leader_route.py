@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import MotionProfS, PosInEarthS, RouteS, WayLineS, WayPointS, copy_wayline
 from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
+
+_GRAVITY_MPS2 = 9.80665
+_TURN_BANK_DEG = 20.0
 
 
 @dataclass
@@ -40,10 +44,7 @@ class LeaderRoute(TraPlanBase):
             raise ValueError("route must contain at least one wayLine")
         if self_state is None:
             return lines[self._current_index]
-        while self._current_index < len(lines) - 1 and _line_progress(
-            lines[self._current_index],
-            self_state,
-        ) >= 1.0:
+        while self._current_index < len(lines) - 1 and _should_switch_to_next_line(lines[self._current_index], self_state):
             self._current_index += 1
         return lines[self._current_index]
 
@@ -85,3 +86,30 @@ def _line_progress(line: WayLineS, self_state: MotionProfS) -> float:
     rely = self_state.pos.north - start.north
     relz = self_state.pos.h - start.h
     return (relx * dx + rely * dy + relz * dz) / length2
+
+
+def _should_switch_to_next_line(line: WayLineS, self_state: MotionProfS) -> bool:
+    if _line_progress(line, self_state) >= 1.0:
+        return True
+    distance_to_go = _horizontal_distance_to_go(line, self_state)
+    if distance_to_go is None:
+        return False
+    return distance_to_go <= _turn_radius_m(line)
+
+
+def _horizontal_distance_to_go(line: WayLineS, self_state: MotionProfS) -> float | None:
+    start = line.start.pos
+    end = line.end.pos
+    dx = end.east - start.east
+    dy = end.north - start.north
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return None
+    track_x = dx / length
+    track_y = dy / length
+    return (end.east - self_state.pos.east) * track_x + (end.north - self_state.pos.north) * track_y
+
+
+def _turn_radius_m(line: WayLineS) -> float:
+    speed = max(0.0, line.vdCmd)
+    return speed * speed / (_GRAVITY_MPS2 * math.tan(math.radians(_TURN_BANK_DEG)))
