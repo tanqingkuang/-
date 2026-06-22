@@ -20,7 +20,7 @@ class PidComposeInitS(PosTrackInitS):
 
 class PidCompose(PosTrackBase):
     def __init__(self) -> None:
-        self._v_min = 3.0
+        self._v_min = PidComposeInitS.vMin
         self._forward = Pid()
         self._lateral = Pid()
         self._vertical = Pid()

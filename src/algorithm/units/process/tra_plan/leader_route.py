@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import MotionProfS, PosInEarthS, RouteS, WayLineS, WayPointS
+from src.algorithm.context.leaf_types import MotionProfS, PosInEarthS, RouteS, WayLineS, WayPointS, copy_wayline
 from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
 
 
@@ -29,7 +29,7 @@ class LeaderRoute(TraPlanBase):
         if y.wayLine is None:
             raise ValueError("LeaderRoute output port must be bound")
         line = self._select_current_line(u.selfState)
-        _copy_wayline(line, y.wayLine)
+        copy_wayline(line, y.wayLine)
 
     def reset(self) -> None:
         self._current_index = 0
@@ -62,23 +62,9 @@ def _default_line() -> WayLineS:
     )
 
 
-def _copy_wayline(src: WayLineS, dst: WayLineS) -> None:
-    dst.idx = src.idx
-    dst.start.idx = src.start.idx
-    dst.start.pos.east = src.start.pos.east
-    dst.start.pos.north = src.start.pos.north
-    dst.start.pos.h = src.start.pos.h
-    dst.end.idx = src.end.idx
-    dst.end.pos.east = src.end.pos.east
-    dst.end.pos.north = src.end.pos.north
-    dst.end.pos.h = src.end.pos.h
-    dst.vdCmd = src.vdCmd
-    dst.radius = src.radius
-
-
 def _clone_wayline(src: WayLineS) -> WayLineS:
     dst = WayLineS()
-    _copy_wayline(src, dst)
+    copy_wayline(src, dst)
     return dst
 
 

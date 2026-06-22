@@ -32,6 +32,7 @@ from src.algorithm.context.leaf_types import (
     VdInEarthS,
     WayLineS,
     WayPointS,
+    copy_motion,
 )
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
@@ -199,22 +200,9 @@ def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
     )
 
 
-def _copy_motion(src: MotionProfS, dst: MotionProfS) -> None:
-    dst.pos.east = src.pos.east
-    dst.pos.north = src.pos.north
-    dst.pos.h = src.pos.h
-    dst.vd.vEast = src.vd.vEast
-    dst.vd.vNorth = src.vd.vNorth
-    dst.vd.vUp = src.vd.vUp
-    dst.vd.vTheta = src.vd.vTheta
-    dst.vd.vPsi = src.vd.vPsi
-    dst.vd.vd = src.vd.vd
-
-
 def _build_formation_comm_init(
     nodes: list[object],
     links: list[object],
-    states: dict[str, AircraftState],
     config: dict[str, object] | None = None,
 ) -> FormCommInitS:
     network: list[NetWorkS] = []
@@ -299,9 +287,9 @@ def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
         if node_id == leader_id:
             slots.append(FormPosS(node_id, 0.0, 0.0, 0.0))
         else:
-            slot = _DEFAULT_TRIANGLE_WING_SLOTS[
-                min(wing_slot_index, len(_DEFAULT_TRIANGLE_WING_SLOTS) - 1)
-            ]
+            if wing_slot_index >= len(_DEFAULT_TRIANGLE_WING_SLOTS):
+                raise ValueError("default triangle formation requires explicit slots for more than two wingmen")
+            slot = _DEFAULT_TRIANGLE_WING_SLOTS[wing_slot_index]
             slots.append(FormPosS(node_id, slot[0], slot[1], slot[2]))
             wing_slot_index += 1
     return slots
@@ -464,7 +452,7 @@ class _ConfigLoader:
         if links is not None and not isinstance(links, list):
             raise ValueError("links must be a list")
         _build_leader_route(config)
-        _build_formation_comm_init(list(nodes or []), list(links or []), {}, config)
+        _build_formation_comm_init(list(nodes or []), list(links or []), config)
         ModelIterator._parse_model_config(model)
 
 
@@ -483,6 +471,7 @@ class _NodeAlgorithm:
         self._node_id = node_id
         self._role = role
         self._leader_route = leader_route
+        self._has_route_step = False
         if role == "leader":
             self._entity: EntityBase = LeaderEntity()
         else:
@@ -497,7 +486,7 @@ class _NodeAlgorithm:
         if role != "leader" and initial_leader_state is not None and hasattr(self._entity, "cxt"):
             self._entity.cxt.cmd.stage = FormStageE.HOLD  # type: ignore[attr-defined]
             self._entity.cxt.cmd.pattern = FormPatE.TRIANGLE  # type: ignore[attr-defined]
-            _copy_motion(initial_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
+            copy_motion(initial_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
 
     def step(
         self,
@@ -515,6 +504,8 @@ class _NodeAlgorithm:
             ),
             entity_output,
         )
+        if self._role == "leader":
+            self._has_route_step = True
         acc_cmd = entity_output.selfAccCmd or self._entity.cxt.selfAccCmd  # type: ignore[attr-defined]
         control = AccelerationCommand(
             acc_cmd.accEast,
@@ -529,6 +520,7 @@ class _NodeAlgorithm:
         return _NodeAlgorithmOutput(control, outbox, status)
 
     def reset(self) -> None:
+        self._has_route_step = False
         return None
 
     def close(self) -> None:
@@ -544,11 +536,7 @@ class _NodeAlgorithm:
         cxt = getattr(self._entity, "cxt", None)
         if cxt is None or self._role != "leader":
             return None
-        if (
-            cxt.wayLine.end.pos.east == cxt.wayLine.start.pos.east
-            and self._leader_route is not None
-            and self._leader_route.lines
-        ):
+        if not self._has_route_step and self._leader_route is not None and self._leader_route.lines:
             return self._leader_route.lines[0]
         return cxt.wayLine
 
@@ -1069,7 +1057,7 @@ class SimulationController:
             if isinstance(node, dict)
         }
         states = self._model.read_states()
-        formation_comm_init = _build_formation_comm_init(list(nodes), raw_links, states, config)
+        formation_comm_init = _build_formation_comm_init(list(nodes), raw_links, config)
         leader_id = _leader_id_from_nodes(list(nodes))
         initial_leader_state = states.get(leader_id)
         initial_leader_motion = (

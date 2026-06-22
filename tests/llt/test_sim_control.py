@@ -186,13 +186,7 @@ class SimulationControllerTests(unittest.TestCase):
             {"node_id": "A02", "role": "wingman"},
             {"node_id": "A03", "role": "wingman"},
         ]
-        states = {
-            "A01": _aircraft_state("A01", 140.0, 260.0),
-            "A02": _aircraft_state("A02", 999.0, -999.0),
-            "A03": _aircraft_state("A03", -321.0, 777.0),
-        }
-
-        comm_init = _build_formation_comm_init(nodes, [], states)
+        comm_init = _build_formation_comm_init(nodes, [])
         slots = {slot.id: slot for slot in comm_init.formPos[0]}
 
         self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
@@ -222,7 +216,7 @@ class SimulationControllerTests(unittest.TestCase):
             }
         }
 
-        comm_init = _build_formation_comm_init(nodes, [], {}, config)
+        comm_init = _build_formation_comm_init(nodes, [], config)
         slots = {slot.id: slot for slot in comm_init.formPos[0]}
 
         self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
@@ -232,6 +226,51 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(slots["A03"].x, -70.0)
         self.assertAlmostEqual(slots["A03"].y, -40.0)
         self.assertAlmostEqual(slots["A03"].z, -5.0)
+
+    def test_default_triangle_slots_reject_extra_wingmen(self) -> None:
+        """Default wedge geometry should fail fast when more wingmen need explicit slots."""
+        nodes = [
+            {"node_id": "A01", "role": "leader"},
+            {"node_id": "A02", "role": "wingman"},
+            {"node_id": "A03", "role": "wingman"},
+            {"node_id": "A04", "role": "wingman"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "explicit slots"):
+            _build_formation_comm_init(nodes, [])
+
+    def test_current_route_uses_written_vertical_segment_after_algorithm_step(self) -> None:
+        """UI route fallback should not mistake a north-south current segment for an empty route."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp), duration_s=0.02)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["route"] = {
+                "speed_mps": 8.0,
+                "radius_m": 0.0,
+                "segments": [
+                    {
+                        "start": {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                        "end": {"x_m": 0.0, "y_m": 10.0, "altitude_m": 1000.0},
+                    },
+                    {
+                        "start": {"x_m": 0.0, "y_m": 10.0, "altitude_m": 1000.0},
+                        "end": {"x_m": 0.0, "y_m": 20.0, "altitude_m": 1000.0},
+                    },
+                ],
+            }
+            config["nodes"][0].update({"x_m": 0.0, "y_m": 12.0, "altitude_m": 1000.0})
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            controller.step()
+            route = controller.get_snapshot().route
+
+            self.assertIsNotNone(route)
+            assert route is not None
+            self.assertAlmostEqual(route.start_y_m, 10.0)
+            self.assertAlmostEqual(route.end_y_m, 20.0)
+            controller.close()
 
     def test_off_route_initial_leader_runs_past_low_speed_guard(self) -> None:
         """Leader initially off the default route should not stop when descending toward the segment."""
