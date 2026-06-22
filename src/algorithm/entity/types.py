@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.algorithm.context.leaf_types import AccInEarthS, FormCommInitS, FormSelfInitS, MotionProfS, RemoteCmdS, WayLineS
+from src.algorithm.context.leaf_types import AccInEarthS, FormCommInitS, FormSelfInitS, MotionProfS, RemoteCmdS, RouteS
 from src.common.envelope import MessageEnvelope
 
 
@@ -12,7 +12,7 @@ from src.common.envelope import MessageEnvelope
 class EntityInitS:
     selfInit: FormSelfInitS = field(default_factory=FormSelfInitS)
     commInit: FormCommInitS = field(default_factory=FormCommInitS)
-    wayLine: WayLineS | None = None
+    route: RouteS | None = None
 
 
 @dataclass

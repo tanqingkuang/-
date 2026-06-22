@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.algorithm.context.context import FormContextS
+from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import RemoteCmdS, copy_motion
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
@@ -32,7 +32,7 @@ class LeaderEntity(EntityBase):
         self._outbound = LeaderBroadcast()
 
         self._task.init(None)
-        self._tra_plan.init(LeaderRouteInitS(cfg.wayLine))
+        self._tra_plan.init(LeaderRouteInitS(cfg.route))
         self._pos_calc.init(None)
         self._pos_track.init(_default_tracker_init())
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
@@ -68,7 +68,14 @@ class LeaderEntity(EntityBase):
         y.outbox.extend(self._outbox)
 
     def reset(self) -> None:
+        reset_context(self.cxt)
+        self._remote.stage = RemoteCmdS().stage
+        self._task.reset()
+        self._tra_plan.reset()
+        self._pos_calc.reset()
         self._pos_track.reset()
+        self._outbound.reset()
+        self._outbox.clear()
 
     def close(self) -> None:
         return None

@@ -12,7 +12,7 @@ from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS,
 
 @dataclass
 class PidComposeInitS(PosTrackInitS):
-    vMin: float = 3.0
+    vMin: float = 0.5
     gainForward: CtrlInitS | None = None
     gainLateral: CtrlInitS | None = None
     gainVertical: CtrlInitS | None = None

@@ -102,6 +102,11 @@ class WayLineS:
 
 
 @dataclass
+class RouteS:
+    lines: list[WayLineS] = field(default_factory=list)
+
+
+@dataclass
 class FormSnapshotS:
     stage: FormStageE = FormStageE.NONE
     pattern: FormPatE = FormPatE.NONE
@@ -131,6 +136,16 @@ def copy_velocity(src: VdInEarthS, dst: VdInEarthS) -> None:
 def copy_motion(src: MotionProfS, dst: MotionProfS) -> None:
     copy_position(src.pos, dst.pos)
     copy_velocity(src.vd, dst.vd)
+
+
+def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
+    dst.idx = src.idx
+    dst.start.idx = src.start.idx
+    copy_position(src.start.pos, dst.start.pos)
+    dst.end.idx = src.end.idx
+    copy_position(src.end.pos, dst.end.pos)
+    dst.vdCmd = src.vdCmd
+    dst.radius = src.radius
 
 
 def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:

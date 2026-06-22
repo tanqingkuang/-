@@ -147,6 +147,38 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 860.0)
             controller.close()
 
+    def test_configured_route_is_injected_into_leader_algorithm(self) -> None:
+        """Configured route should drive the leader algorithm and route-derived snapshot metrics."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["route"] = {
+                "start": {"x_m": 10.0, "y_m": 20.0, "altitude_m": 1100.0},
+                "end": {"x_m": 210.0, "y_m": 20.0, "altitude_m": 1100.0},
+                "speed_mps": 6.0,
+                "radius_m": 0.0,
+            }
+            config["nodes"][0].update({"x_m": 60.0, "y_m": 70.0, "altitude_m": 1150.0})
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            snapshot = controller.get_snapshot()
+            route = snapshot.route
+            leader = snapshot.nodes[0]
+
+            self.assertIsNotNone(route)
+            assert route is not None
+            self.assertAlmostEqual(route.start_x_m, 10.0)
+            self.assertAlmostEqual(route.start_y_m, 20.0)
+            self.assertAlmostEqual(route.start_altitude_m, 1100.0)
+            self.assertAlmostEqual(route.end_x_m, 210.0)
+            self.assertAlmostEqual(route.end_y_m, 20.0)
+            self.assertAlmostEqual(route.end_altitude_m, 1100.0)
+            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 50.0)
+            self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 150.0)
+            controller.close()
+
     def test_default_triangle_slots_do_not_depend_on_initial_positions(self) -> None:
         """Default formation geometry should be a fixed wedge, not derived from start positions."""
         nodes = [
@@ -171,6 +203,35 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(slots["A03"].x, -54.0)
         self.assertAlmostEqual(slots["A03"].y, -58.0)
         self.assertTrue(all(slot.z == 0.0 for slot in slots.values()))
+
+    def test_configured_formation_slots_are_injected_into_comm_init(self) -> None:
+        """Formation slots from config should replace the default wedge geometry."""
+        nodes = [
+            {"node_id": "A01", "role": "leader"},
+            {"node_id": "A02", "role": "wingman"},
+            {"node_id": "A03", "role": "wingman"},
+        ]
+        config = {
+            "formation": {
+                "pattern": "TRIANGLE",
+                "slots": [
+                    {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                    {"node_id": "A02", "x_m": -70.0, "y_m": 40.0, "z_m": 5.0},
+                    {"node_id": "A03", "x_m": -70.0, "y_m": -40.0, "z_m": -5.0},
+                ],
+            }
+        }
+
+        comm_init = _build_formation_comm_init(nodes, [], {}, config)
+        slots = {slot.id: slot for slot in comm_init.formPos[0]}
+
+        self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
+        self.assertAlmostEqual(slots["A02"].x, -70.0)
+        self.assertAlmostEqual(slots["A02"].y, 40.0)
+        self.assertAlmostEqual(slots["A02"].z, 5.0)
+        self.assertAlmostEqual(slots["A03"].x, -70.0)
+        self.assertAlmostEqual(slots["A03"].y, -40.0)
+        self.assertAlmostEqual(slots["A03"].z, -5.0)
 
     def test_off_route_initial_leader_runs_past_low_speed_guard(self) -> None:
         """Leader initially off the default route should not stop when descending toward the segment."""

@@ -18,6 +18,7 @@ from src.algorithm.context.leaf_types import (
     NetWorkS,
     PosInEarthS,
     RemoteCmdS,
+    RouteS,
     VdInEarthS,
     WayLineS,
     WayPointS,
@@ -40,7 +41,7 @@ from src.algorithm.units.process.inbound.leader_follower import LeaderFollower
 from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
 from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
-from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute
+from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.units.process.tra_plan.noop import Noop
 from src.common.envelope import MessageEnvelope
 
@@ -272,14 +273,44 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(ctx.cmd.pattern, FormPatE.TRIANGLE)
 
-    def test_leader_route_writes_single_straight_segment_and_noop_preserves_it(self) -> None:
-        """验证长机轨迹规划写入固定单航段，僚机 Noop 轨迹规划不改黑板航段。"""
+    def test_leader_route_selects_current_segment_from_route(self) -> None:
+        """验证长机轨迹规划持有整条航线，每拍只向黑板写当前航段。"""
 
         ctx = FormContextS()
-        LeaderRoute().step(
+        planner = LeaderRoute()
+        planner.init(
+            LeaderRouteInitS(
+                RouteS(
+                    lines=[
+                        WayLineS(
+                            idx=0,
+                            start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
+                            end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                            vdCmd=8.0,
+                        ),
+                        WayLineS(
+                            idx=1,
+                            start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                            end=WayPointS(idx=2, pos=PosInEarthS(200.0, 0.0, 1000.0)),
+                            vdCmd=8.0,
+                        ),
+                    ]
+                )
+            )
+        )
+        ctx.selfState = _motion(east=50.0, h=1000.0)
+        planner.step(
             TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
             TraPlanOutputS(wayLine=ctx.wayLine),
         )
+        self.assertEqual(ctx.wayLine.idx, 0)
+
+        ctx.selfState = _motion(east=120.0, h=1000.0)
+        planner.step(
+            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
+            TraPlanOutputS(wayLine=ctx.wayLine),
+        )
+        self.assertEqual(ctx.wayLine.idx, 1)
         original_end = ctx.wayLine.end.pos.east
 
         Noop().step(
@@ -287,8 +318,6 @@ class ProcessUnitTests(unittest.TestCase):
             TraPlanOutputS(wayLine=ctx.wayLine),
         )
 
-        self.assertEqual(ctx.wayLine.idx, 0)
-        self.assertGreater(original_end, 0.0)
         self.assertEqual(ctx.wayLine.end.pos.east, original_end)
 
     def test_leader_broadcast_targets_topology_and_inbound_parses_latest(self) -> None:
@@ -372,6 +401,46 @@ class EntityTests(unittest.TestCase):
         self.assertEqual(follower_out.outbox, [])
         self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -25.0)
         self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 20.0)
+
+    def test_entity_reset_clears_context_and_boundary_buffers(self) -> None:
+        """验证实体 reset 会原地复位 Context、边界缓存和子单元状态。"""
+
+        comm = FormCommInitS(
+            netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
+            formPat=[FormPatE.TRIANGLE],
+            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, 0.0)]],
+        )
+        leader = LeaderEntity()
+        follower = FollowerEntity()
+        leader.init(EntityInitS(selfInit=FormSelfInitS("A01"), commInit=comm))
+        follower.init(EntityInitS(selfInit=FormSelfInitS("A02"), commInit=comm))
+
+        leader.step(
+            EntityInputS(
+                selfState=_motion(east=5.0, h=1000.0, v_east=8.0),
+                remote=RemoteCmdS(FormStageE.HOLD),
+            ),
+            EntityOutputS(),
+        )
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=-30.0, h=1000.0, v_east=8.0),
+                inbox=list(leader._outbox),
+            ),
+            EntityOutputS(),
+        )
+
+        leader.reset()
+        follower.reset()
+
+        self.assertEqual(leader.cxt.cmd.stage, FormStageE.NONE)
+        self.assertEqual(leader.cxt.selfState.pos.h, 0.0)
+        self.assertEqual(leader._outbox, [])
+        self.assertIs(leader._task_u.remote, leader._remote)
+        self.assertEqual(follower.cxt.cmd.stage, FormStageE.NONE)
+        self.assertEqual(follower.cxt.leaderState.pos.h, 0.0)
+        self.assertEqual(follower._inbox, [])
+        self.assertIs(follower._inbound_y.leaderState, follower.cxt.leaderState)
 
 
 if __name__ == "__main__":

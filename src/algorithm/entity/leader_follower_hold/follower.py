@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.algorithm.context.context import FormContextS
+from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import copy_motion
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init
@@ -63,7 +63,12 @@ class FollowerEntity(EntityBase):
         y.outbox.clear()
 
     def reset(self) -> None:
+        reset_context(self.cxt)
+        self._inbound.reset()
+        self._tra_plan.reset()
+        self._pos_calc.reset()
         self._pos_track.reset()
+        self._inbox.clear()
 
     def close(self) -> None:
         return None
