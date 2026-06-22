@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointS
 from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
+
+
+@dataclass
+class LeaderRouteInitS(TraPlanInitS):
+    wayLine: WayLineS | None = None
 
 
 class LeaderRoute(TraPlanBase):
     def __init__(self) -> None:
         self._line = _default_line()
 
-    def init(self, cfg: TraPlanInitS) -> None:
-        del cfg
-        self._line = _default_line()
+    def init(self, cfg: TraPlanInitS | None) -> None:
+        if isinstance(cfg, LeaderRouteInitS) and cfg.wayLine is not None:
+            self._line = _clone_wayline(cfg.wayLine)
+        else:
+            self._line = _default_line()
 
     def step(self, u: TraPlanInputS, y: TraPlanOutputS) -> None:
         del u
@@ -46,3 +55,9 @@ def _copy_wayline(src: WayLineS, dst: WayLineS) -> None:
     dst.end.pos.h = src.end.pos.h
     dst.vdCmd = src.vdCmd
     dst.radius = src.radius
+
+
+def _clone_wayline(src: WayLineS) -> WayLineS:
+    dst = WayLineS()
+    _copy_wayline(src, dst)
+    return dst

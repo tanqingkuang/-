@@ -6,7 +6,6 @@ import math
 from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import MotionProfS, WayLineS
-from src.algorithm.units.algo.formation_math import clamp
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
 
 
@@ -42,7 +41,7 @@ class RouteInterp(PosCalcBase):
         relx = u.selfState.pos.east - start.east
         rely = u.selfState.pos.north - start.north
         relz = u.selfState.pos.h - start.h
-        t = clamp((relx * dx + rely * dy + relz * dz) / length2, 0.0, 1.0)
+        t = max((relx * dx + rely * dy + relz * dz) / length2, 0.0)
         y.selfCmd.pos.east = start.east + t * dx
         y.selfCmd.pos.north = start.north + t * dy
         y.selfCmd.pos.h = start.h + t * dz

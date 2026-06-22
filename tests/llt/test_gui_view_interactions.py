@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 
-from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow, default_project_root
+from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow, TOP_VIEW_ORIGIN_MARGIN, default_project_root
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -89,9 +89,26 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertEqual(self.window.top_view.scale_value, 1.0)
-        self.assertEqual(self.window.top_view.offset, QPointF(0.0, 0.0))
+        self.assertEqual(self.window.top_view.offset, QPointF(TOP_VIEW_ORIGIN_MARGIN, TOP_VIEW_ORIGIN_MARGIN))
         self.assertEqual(self.window.side_view.altitude_min, self.window.side_view.ALTITUDE_MIN_DEFAULT)
         self.assertEqual(self.window.side_view.altitude_max, self.window.side_view.ALTITUDE_MAX_DEFAULT)
+
+    def test_route_endpoints_are_visible_after_load(self) -> None:
+        self._load_ui_config()
+        route = self.window.top_view.snapshot.route
+        self.assertIsNotNone(route)
+        assert route is not None
+
+        start_x = route.start_x * self.window.top_view.scale_value + self.window.top_view.offset.x()
+        start_y = route.start_y * self.window.top_view.scale_value + self.window.top_view.offset.y()
+        end_x = route.end_x * self.window.top_view.scale_value + self.window.top_view.offset.x()
+        end_y = route.end_y * self.window.top_view.scale_value + self.window.top_view.offset.y()
+        rect = self.window.top_view.viewport().rect()
+
+        self.assertGreaterEqual(start_x, 5.0)
+        self.assertGreaterEqual(start_y, 5.0)
+        self.assertLessEqual(end_x, rect.width() - 5.0)
+        self.assertGreaterEqual(end_y, 5.0)
 
     def test_side_height_selection_does_not_move_top_view_aircraft(self) -> None:
         old_offset = QPointF(self.window.top_view.offset)

@@ -16,7 +16,7 @@ from src.algorithm.units.process.formation_task.hold import Hold
 from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
 from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
-from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute
+from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 
 
 class LeaderEntity(EntityBase):
@@ -32,7 +32,7 @@ class LeaderEntity(EntityBase):
         self._outbound = LeaderBroadcast()
 
         self._task.init(None)
-        self._tra_plan.init(None)
+        self._tra_plan.init(LeaderRouteInitS(cfg.wayLine))
         self._pos_calc.init(None)
         self._pos_track.init(_default_tracker_init())
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
@@ -76,6 +76,6 @@ class LeaderEntity(EntityBase):
 
 def _default_tracker_init() -> PidComposeInitS:
     gain_forward = CtrlInitS(kp=0.0, ki=0.0, kd=1.0, dt=0.1, outMax=6.0)
-    gain_lateral = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=0.1, outMax=6.0)
+    gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=0.1, outMax=1.0)
     gain_vertical = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=0.1, outMax=6.0)
-    return PidComposeInitS(3.0, gain_forward, gain_lateral, gain_vertical)
+    return PidComposeInitS(0.5, gain_forward, gain_lateral, gain_vertical)

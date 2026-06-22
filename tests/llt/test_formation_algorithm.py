@@ -132,6 +132,27 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.vd.vEast, -10.0 / (2.0 ** 0.5))
         self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, -10.0 / (2.0 ** 0.5))
 
+    def test_route_interp_extends_after_segment_end(self) -> None:
+        """验证单航段过终点后沿切向延拓目标点，避免长机长期追身后的终点。"""
+
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=15.0, north=3.0, h=5.0)
+        ctx.wayLine = WayLineS(
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
+            end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
+            vdCmd=7.0,
+        )
+        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        y = PosCalcOutputS(selfCmd=ctx.selfCmd)
+
+        RouteInterp().step(u, y)
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 15.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 7.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+
     def test_route_interp_rejects_curve_segment(self) -> None:
         """验证本轮未实现的曲线航段会显式报错，避免静默给出错误目标。"""
 
@@ -157,6 +178,7 @@ class PosCalcTests(unittest.TestCase):
                 formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, -5.0)]],
             )
         )
+        ctx.selfState = _motion(east=70.0, north=220.0, h=995.0, v_east=12.0)
 
         slot.step(
             SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
@@ -167,6 +189,32 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 220.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 995.0)
         self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 12.0)
+
+    def test_slot_geometry_adds_along_track_catchup_speed(self) -> None:
+        """验证僚机落后于前向槽位时，速度指令会沿长机航迹方向增加以收敛待飞距。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=8.0)
+        ctx.selfState = _motion(east=16.0, north=258.0, h=1000.0, v_east=8.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPat=[FormPatE.TRIANGLE],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 58.0, 0.0)]],
+            )
+        )
+
+        slot.step(
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 10.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
 
 
 class PosTrackTests(unittest.TestCase):

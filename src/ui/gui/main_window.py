@@ -44,6 +44,7 @@ from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
 TRAIL_SECONDS = 18.0
+TOP_VIEW_ORIGIN_MARGIN = 40.0
 APP_CONFIG_SECTION = "config"
 APP_CONFIG_KEY_LAST_CONFIG = "last_config"
 APP_CONFIG_FILE_NAME = "config.ini"
@@ -86,6 +87,8 @@ class NodeState:
     altitude: float = 1200.0
     health: str = "normal"
     trail: list[TrailPoint] = field(default_factory=list)
+    cross_track_error: float | None = None
+    distance_to_go: float | None = None
 
 
 @dataclass
@@ -101,6 +104,18 @@ class LinkState:
 
 
 @dataclass
+class ReferenceRoute:
+    """Reference route segment for top and side views."""
+
+    start_x: float
+    start_y: float
+    start_altitude: float
+    end_x: float
+    end_y: float
+    end_altitude: float
+
+
+@dataclass
 class Snapshot:
     """UI-facing simulation snapshot."""
 
@@ -112,6 +127,7 @@ class Snapshot:
     disturbance: str
     nodes: list[NodeState]
     links: list[LinkState]
+    route: ReferenceRoute | None = None
 
 
 class MockSimulation:
@@ -252,6 +268,7 @@ class MockSimulation:
             disturbance=self.disturbance,
             nodes=self.nodes,
             links=self.links,
+            route=ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0),
         )
 
 
@@ -380,6 +397,8 @@ class ControllerSimulationAdapter:
                     altitude=node.altitude_m,
                     health=node.health,
                     trail=list(trail),
+                    cross_track_error=node.cross_track_error_m,
+                    distance_to_go=node.distance_to_go_m,
                 )
             )
 
@@ -396,6 +415,16 @@ class ControllerSimulationAdapter:
                     ok=link.status == "normal",
                 )
             )
+        route = None
+        if snapshot.route is not None:
+            route = ReferenceRoute(
+                start_x=snapshot.route.start_x_m,
+                start_y=snapshot.route.start_y_m,
+                start_altitude=snapshot.route.start_altitude_m,
+                end_x=snapshot.route.end_x_m,
+                end_y=snapshot.route.end_y_m,
+                end_altitude=snapshot.route.end_altitude_m,
+            )
         return Snapshot(
             time=snapshot.time_s,
             duration=snapshot.duration_s,
@@ -405,6 +434,7 @@ class ControllerSimulationAdapter:
             disturbance=self._visible_disturbance(snapshot),
             nodes=nodes,
             links=links,
+            route=route,
         )
 
     def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
@@ -599,9 +629,10 @@ class TopView(QGraphicsView):
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
         self.scale_value = 1.0
-        self.offset = QPointF(0.0, 0.0)
+        self.offset = self._default_offset()
         self.auto_center = False
         self.show_grid = True
+        self._manual_view = False
         self._pan_origin: QPointF | None = None
         self._selection_origin: QPointF | None = None
         self._selection_current: QPointF | None = None
@@ -618,15 +649,23 @@ class TopView(QGraphicsView):
         self.snapshot = snapshot
         if self.auto_center:
             self._apply_auto_center()
+        elif not self._manual_view:
+            self._fit_route_to_view()
         self.viewport().update()
 
     def reset_view(self) -> None:
+        self._manual_view = False
         self.scale_value = 1.0
-        self.offset = QPointF(0.0, 0.0)
+        self.offset = self._default_offset()
+        self._fit_route_to_view()
         self.viewport().update()
         self.viewChanged.emit()
         self.manualViewChanged.emit()
         self.resetViewRequested.emit()
+
+    @staticmethod
+    def _default_offset() -> QPointF:
+        return QPointF(TOP_VIEW_ORIGIN_MARGIN, TOP_VIEW_ORIGIN_MARGIN)
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001
         delta = event.pixelDelta().y() or event.angleDelta().y()
@@ -643,6 +682,7 @@ class TopView(QGraphicsView):
             cursor.x() - before.x() * self.scale_value,
             cursor.y() - before.y() * self.scale_value,
         )
+        self._manual_view = True
         self.viewport().update()
         self.viewChanged.emit()
         self.manualViewChanged.emit()
@@ -664,6 +704,7 @@ class TopView(QGraphicsView):
             delta = event.position() - self._pan_origin
             self.offset += QPointF(delta.x(), delta.y())
             self._pan_origin = event.position()
+            self._manual_view = True
             self.viewport().update()
             self.viewChanged.emit()
             self.manualViewChanged.emit()
@@ -737,6 +778,7 @@ class TopView(QGraphicsView):
             viewport.width() / 2.0 - center_x * self.scale_value,
             viewport.height() / 2.0 - center_y * self.scale_value,
         )
+        self._manual_view = True
         self.viewChanged.emit()
         self.manualViewChanged.emit()
 
@@ -771,6 +813,28 @@ class TopView(QGraphicsView):
         )
         self.viewChanged.emit()
 
+    def _fit_route_to_view(self) -> None:
+        if self.snapshot is None or self.snapshot.route is None:
+            self.offset = self._default_offset()
+            return
+        route = self.snapshot.route
+        rect = self.viewport().rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        min_x = min(route.start_x, route.end_x)
+        max_x = max(route.start_x, route.end_x)
+        min_y = min(route.start_y, route.end_y)
+        max_y = max(route.start_y, route.end_y)
+        span_x = max(1.0, max_x - min_x)
+        span_y = max(1.0, max_y - min_y)
+        scale_x = rect.width() / (span_x + TOP_VIEW_ORIGIN_MARGIN * 2.0)
+        scale_y = rect.height() / (span_y + TOP_VIEW_ORIGIN_MARGIN * 2.0)
+        self.scale_value = min(1.0, max(0.45, min(scale_x, scale_y)))
+        self.offset = QPointF(
+            TOP_VIEW_ORIGIN_MARGIN - min_x * self.scale_value,
+            TOP_VIEW_ORIGIN_MARGIN - min_y * self.scale_value,
+        )
+
     def _draw_grid(self, painter: QPainter) -> None:
         rect = self.viewport().rect()
         left = (rect.left() - self.offset.x()) / self.scale_value
@@ -790,15 +854,19 @@ class TopView(QGraphicsView):
             painter.drawLine(start_x, y, end_x, y)
 
     def _draw_route(self, painter: QPainter) -> None:
+        if self.snapshot is None or self.snapshot.route is None:
+            return
+        route = self.snapshot.route
         pen = QPen(self.theme.route, 2)
         pen.setDashPattern([8, 7])
         painter.setPen(pen)
-        path = QPainterPath(QPointF(40, WORLD_HEIGHT / 2))
-        path.cubicTo(WORLD_WIDTH * 0.35, WORLD_HEIGHT * 0.2, WORLD_WIDTH * 0.66, WORLD_HEIGHT * 0.8, WORLD_WIDTH - 40, WORLD_HEIGHT * 0.46)
-        painter.drawPath(path)
+        start = QPointF(route.start_x, route.start_y)
+        end = QPointF(route.end_x, route.end_y)
+        painter.drawLine(start, end)
         painter.setBrush(self.theme.ink)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(WORLD_WIDTH - 42, WORLD_HEIGHT * 0.46), 5, 5)
+        painter.drawEllipse(start, 5, 5)
+        painter.drawEllipse(end, 5, 5)
 
     def _draw_links(self, painter: QPainter, snapshot: Snapshot) -> None:
         by_id = {node.node_id: node for node in snapshot.nodes}
@@ -1050,12 +1118,16 @@ class SideView(QWidget):
             painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
 
     def _draw_reference(self, painter: QPainter) -> None:
+        if self.snapshot is None or self.snapshot.route is None:
+            return
+        route = self.snapshot.route
         pen = QPen(self.theme.route, 2)
         pen.setDashPattern([7, 6])
         painter.setPen(pen)
-        start_x = max(-40.0, self._map_x(0.0))
-        end_x = min(self.width() + 40.0, self._map_x(WORLD_WIDTH))
-        painter.drawLine(QPointF(start_x, self._map_y(1200.0)), QPointF(end_x, self._map_y(1260.0)))
+        painter.drawLine(
+            QPointF(self._map_x(route.start_x), self._map_y(route.start_altitude)),
+            QPointF(self._map_x(route.end_x), self._map_y(route.end_altitude)),
+        )
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
         for index, node in enumerate(snapshot.nodes):
@@ -1582,8 +1654,12 @@ class MainWindow(QMainWindow):
         self.node_table.setRowCount(len(snapshot.nodes))
         for row, node in enumerate(snapshot.nodes):
             speed = math.hypot(node.vx, node.vy)
-            side_offset = (node.y - WORLD_HEIGHT / 2) * 0.8
-            distance_to_go = max(0.0, (WORLD_WIDTH - node.x) * 4)
+            side_offset = node.cross_track_error
+            if side_offset is None:
+                side_offset = (node.y - WORLD_HEIGHT / 2) * 0.8
+            distance_to_go = node.distance_to_go
+            if distance_to_go is None:
+                distance_to_go = max(0.0, (WORLD_WIDTH - node.x) * 4)
             status = {"normal": "正常", "degraded": "降级", "fault": "故障", "lost": "失联"}.get(node.health, node.health)
             values = [node.node_id, f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{node.altitude:.0f}", f"{speed:.1f}", status]
             for column, value in enumerate(values):

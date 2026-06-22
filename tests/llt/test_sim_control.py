@@ -9,7 +9,9 @@ import time
 import unittest
 from pathlib import Path
 
-from src.runner.sim_control import DisturbanceCommand, SimulationController
+from src.algorithm.context.leaf_types import FormPatE
+from src.environment.model import AircraftState
+from src.runner.sim_control import DisturbanceCommand, SimulationController, _build_formation_comm_init
 
 
 def _write_config(directory: Path, *, duration_s: float = 0.03, step_s: float = 0.005) -> Path:
@@ -28,6 +30,27 @@ def _write_config(directory: Path, *, duration_s: float = 0.03, step_s: float = 
     path = directory / "case.json"
     path.write_text(json.dumps(config), encoding="utf-8")
     return path
+
+
+def _aircraft_state(node_id: str, x_m: float, y_m: float, altitude_m: float = 1200.0) -> AircraftState:
+    return AircraftState(
+        node_id=node_id,
+        x_m=x_m,
+        y_m=y_m,
+        altitude_m=altitude_m,
+        speed_mps=5.0,
+        theta_rad=0.0,
+        psi_rad=0.0,
+        ax_mps2=0.0,
+        ay_mps2=0.0,
+        az_mps2=0.0,
+        ax_rate_mps3=0.0,
+        ay_rate_mps3=0.0,
+        az_rate_mps3=0.0,
+        nx=0.0,
+        nz=1.0,
+        phi_rad=0.0,
+    )
 
 
 class SimulationControllerTests(unittest.TestCase):
@@ -72,7 +95,205 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertGreater(snapshot.nodes[0].x_m, 0.0)
             controller.close()
 
-    def test_stub_algorithm_keeps_aircraft_heading_stable(self) -> None:
+    def test_formation_hold_stage_reports_hold(self) -> None:
+        """The UI-facing report should reflect the Hold formation task, not the old rally placeholder."""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp))))
+
+            start = controller.start()
+            started_snapshot = controller.get_snapshot()
+            controller.pause()
+            controller.step()
+            stepped_snapshot = controller.get_snapshot()
+
+            self.assertEqual(start.code, "OK")
+            self.assertEqual(started_snapshot.control_report, "保持")
+            self.assertEqual(stepped_snapshot.control_report, "保持")
+            controller.close()
+
+    def test_reference_route_uses_algorithm_route_not_leader_position(self) -> None:
+        """UI reference route should keep the designed segment instead of moving it onto the leader."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["nodes"][0].update(
+                {
+                    "x_m": 140.0,
+                    "y_m": 260.0,
+                    "altitude_m": 1200.0,
+                    "psi_v_deg": 0.0,
+                    "cross_track_error_m": 0.0,
+                    "distance_to_go_m": 5840.0,
+                }
+            )
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            snapshot = controller.get_snapshot()
+            route = snapshot.route
+            leader = snapshot.nodes[0]
+
+            self.assertIsNotNone(route)
+            assert route is not None
+            self.assertAlmostEqual(route.start_x_m, 0.0)
+            self.assertAlmostEqual(route.start_y_m, 0.0)
+            self.assertAlmostEqual(route.start_altitude_m, 1000.0)
+            self.assertAlmostEqual(route.end_x_m, 1000.0)
+            self.assertAlmostEqual(route.end_y_m, 0.0)
+            self.assertAlmostEqual(route.end_altitude_m, 1000.0)
+            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 260.0)
+            self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 860.0)
+            controller.close()
+
+    def test_default_triangle_slots_do_not_depend_on_initial_positions(self) -> None:
+        """Default formation geometry should be a fixed wedge, not derived from start positions."""
+        nodes = [
+            {"node_id": "A01", "role": "leader"},
+            {"node_id": "A02", "role": "wingman"},
+            {"node_id": "A03", "role": "wingman"},
+        ]
+        states = {
+            "A01": _aircraft_state("A01", 140.0, 260.0),
+            "A02": _aircraft_state("A02", 999.0, -999.0),
+            "A03": _aircraft_state("A03", -321.0, 777.0),
+        }
+
+        comm_init = _build_formation_comm_init(nodes, [], states)
+        slots = {slot.id: slot for slot in comm_init.formPos[0]}
+
+        self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
+        self.assertAlmostEqual(slots["A01"].x, 0.0)
+        self.assertAlmostEqual(slots["A01"].y, 0.0)
+        self.assertAlmostEqual(slots["A02"].x, -54.0)
+        self.assertAlmostEqual(slots["A02"].y, 58.0)
+        self.assertAlmostEqual(slots["A03"].x, -54.0)
+        self.assertAlmostEqual(slots["A03"].y, -58.0)
+        self.assertTrue(all(slot.z == 0.0 for slot in slots.values()))
+
+    def test_off_route_initial_leader_runs_past_low_speed_guard(self) -> None:
+        """Leader initially off the default route should not stop when descending toward the segment."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp), duration_s=6.0)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["nodes"] = [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1281.0, "speed_mps": 5.0},
+            ]
+            config["links"].append({"link_id": "A01-A03", "direction": "duplex", "latency_ms": 31.0, "loss_rate": 0.04})
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+
+            result = controller.run_until_complete(config)
+            snapshot = controller.get_snapshot()
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(snapshot.run_state, "FINISHED")
+            self.assertAlmostEqual(snapshot.time_s, 6.0)
+            controller.close()
+
+    def test_default_base_scenario_runs_past_route_endpoint(self) -> None:
+        """Default route tracking should continue past the single segment end without low-speed abort."""
+        config = {
+            "duration_s": 220.0,
+            "step_s": 0.02,
+            "nodes": [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1281.0, "speed_mps": 5.0},
+            ],
+            "links": [
+                {"link_id": "A01-A02", "direction": "duplex", "latency_ms": 31.0, "loss_rate": 0.04},
+                {"link_id": "A01-A03", "direction": "duplex", "latency_ms": 31.0, "loss_rate": 0.04},
+            ],
+        }
+        controller = SimulationController()
+
+        result = controller.run_until_complete(config)
+        snapshot = controller.get_snapshot()
+        nodes = {node.node_id: node for node in snapshot.nodes}
+
+        self.assertEqual(result.code, "OK")
+        self.assertEqual(snapshot.run_state, "FINISHED")
+        self.assertAlmostEqual(snapshot.time_s, 220.0)
+        self.assertAlmostEqual(nodes["A01"].altitude_m, 1000.0, delta=0.5)
+        self.assertGreater(nodes["A01"].speed_mps, 3.0)
+        controller.close()
+
+    def test_default_followers_converge_to_same_distance_to_go(self) -> None:
+        """Symmetric fixed wedge slots should make A02/A03 report the same distance-to-go after forming."""
+        config = {
+            "duration_s": 170.0,
+            "step_s": 0.02,
+            "nodes": [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1281.0, "speed_mps": 5.0},
+            ],
+            "links": [
+                {"link_id": "A01-A02", "direction": "duplex", "latency_ms": 31.0, "loss_rate": 0.04},
+                {"link_id": "A01-A03", "direction": "duplex", "latency_ms": 31.0, "loss_rate": 0.04},
+            ],
+        }
+        controller = SimulationController()
+
+        result = controller.run_until_complete(config)
+        nodes = {node.node_id: node for node in controller.get_snapshot().nodes}
+        leader = nodes["A01"]
+        a02 = nodes["A02"]
+        a03 = nodes["A03"]
+
+        self.assertEqual(result.code, "OK")
+        self.assertAlmostEqual(a02.distance_to_go_m or 0.0, a03.distance_to_go_m or 0.0, delta=2.0)
+        self.assertAlmostEqual(a02.x_m - leader.x_m, -54.0, delta=2.0)
+        self.assertAlmostEqual(a03.x_m - leader.x_m, -54.0, delta=2.0)
+        controller.close()
+
+    def test_default_formation_slots_converge_to_leader_altitude(self) -> None:
+        """Default Hold slots should not preserve initial follower altitude offsets."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp), duration_s=120.0)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["nodes"] = [
+                {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
+                {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},
+                {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1281.0, "speed_mps": 5.0},
+            ]
+            config["links"].append({"link_id": "A01-A03", "direction": "duplex", "latency_ms": 31.0, "loss_rate": 0.04})
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+
+            result = controller.run_until_complete(config)
+            nodes = {node.node_id: node for node in controller.get_snapshot().nodes}
+
+            self.assertEqual(result.code, "OK")
+            self.assertAlmostEqual(nodes["A01"].altitude_m, 1000.0, delta=0.5)
+            self.assertAlmostEqual(nodes["A02"].altitude_m, nodes["A01"].altitude_m, delta=0.5)
+            self.assertAlmostEqual(nodes["A03"].altitude_m, nodes["A01"].altitude_m, delta=0.5)
+            controller.close()
+
+    def test_off_route_leader_turns_without_snaking_backward(self) -> None:
+        """Leader should smoothly cut toward the route instead of weaving forward/backward."""
+        controller = SimulationController()
+        controller.load_config("configs/base.json")
+        controller.pause()
+        east_samples: list[float] = []
+
+        for index in range(int(25.0 / 0.005)):
+            result = controller.step()
+            self.assertEqual(result.code, "OK")
+            if index % 100 == 0:
+                east_samples.append(controller.get_snapshot().nodes[0].x_m)
+
+        for before, after in zip(east_samples, east_samples[1:]):
+            self.assertGreaterEqual(after + 0.1, before)
+        controller.close()
+
+    def test_formation_algorithm_generates_finite_controlled_motion(self) -> None:
+        """Controller should drive aircraft through the formation algorithm, not the old velocity stub."""
+
         with tempfile.TemporaryDirectory() as tmp:
             config = {
                 "duration_s": 0.03,
@@ -100,10 +321,12 @@ class SimulationControllerTests(unittest.TestCase):
             controller.step()
             after = {node.node_id: node for node in controller.get_snapshot().nodes}
 
-            self.assertAlmostEqual(after["A02"].psi_v_deg, 30.0)
-            self.assertAlmostEqual(after["A02"].speed_mps, 7.0)
-            self.assertAlmostEqual(after["A02"].x_m, before["A02"].x_m + 7.0 * 0.005 * math.cos(math.radians(30.0)))
-            self.assertAlmostEqual(after["A02"].y_m, before["A02"].y_m + 7.0 * 0.005 * math.sin(math.radians(30.0)))
+            self.assertTrue(math.isfinite(after["A02"].psi_v_deg))
+            self.assertTrue(math.isfinite(after["A02"].speed_mps))
+            self.assertGreater(after["A02"].speed_mps, 0.0)
+            self.assertGreater(after["A02"].x_m, before["A02"].x_m)
+            self.assertGreater(after["A02"].y_m, before["A02"].y_m)
+            self.assertNotEqual(controller._current_controls["A02"].as_vector(), (0.0, 0.0, 0.0))
             controller.close()
 
     def test_run_until_complete_finishes_synchronously(self) -> None:
@@ -360,8 +583,8 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual([event.level for event in controller.get_recent_events(limit=1, min_level="WARN")], ["WARN"])
             controller.close()
 
-    def test_broadcast_reaches_other_nodes_after_comm_latency(self) -> None:
-        """Algorithm outbox broadcasts must pass through CommunicationChannel and arrive in inbox."""
+    def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:
+        """LeaderEntity outbox broadcasts must pass through CommunicationChannel and arrive at followers."""
         config = {
             "duration_s": 0.1,
             "step_s": 0.005,
@@ -382,8 +605,8 @@ class SimulationControllerTests(unittest.TestCase):
             a01_inbox = controller._comm.read_inbox("A01")
             a02_inbox = controller._comm.read_inbox("A02")
 
-            self.assertTrue(any(msg.topic == "node.status" for msg in a01_inbox))
-            self.assertTrue(any(msg.topic == "node.status" for msg in a02_inbox))
+            self.assertEqual(a01_inbox, [])
+            self.assertTrue(any(msg.topic == "formation.leader" for msg in a02_inbox))
             controller.close()
 
 
