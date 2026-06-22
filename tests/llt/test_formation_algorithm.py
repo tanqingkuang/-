@@ -360,6 +360,46 @@ class ProcessUnitTests(unittest.TestCase):
         )
         self.assertEqual(ctx.wayLine.idx, 1)
 
+    def test_leader_route_switch_distance_scales_with_heading_change(self) -> None:
+        """验证非 90deg 转弯按 R*tan(delta_psi/2) 提前切段，避免浅转弯过早切角。"""
+
+        ctx = FormContextS()
+        planner = LeaderRoute()
+        planner.init(
+            LeaderRouteInitS(
+                RouteS(
+                    lines=[
+                        WayLineS(
+                            idx=0,
+                            start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
+                            end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                            vdCmd=10.0,
+                        ),
+                        WayLineS(
+                            idx=1,
+                            start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                            end=WayPointS(idx=2, pos=PosInEarthS(186.6, 50.0, 1000.0)),
+                            vdCmd=10.0,
+                        ),
+                    ]
+                )
+            )
+        )
+
+        ctx.selfState = _motion(east=80.0, h=1000.0)
+        planner.step(
+            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
+            TraPlanOutputS(wayLine=ctx.wayLine),
+        )
+        self.assertEqual(ctx.wayLine.idx, 0)
+
+        ctx.selfState = _motion(east=93.0, h=1000.0)
+        planner.step(
+            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
+            TraPlanOutputS(wayLine=ctx.wayLine),
+        )
+        self.assertEqual(ctx.wayLine.idx, 1)
+
     def test_leader_broadcast_targets_topology_and_inbound_parses_latest(self) -> None:
         """验证长机广播按拓扑生成多播目标，僚机收消息解析长机状态和编队指令。"""
 

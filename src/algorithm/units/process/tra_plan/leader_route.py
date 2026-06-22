@@ -44,7 +44,11 @@ class LeaderRoute(TraPlanBase):
             raise ValueError("route must contain at least one wayLine")
         if self_state is None:
             return lines[self._current_index]
-        while self._current_index < len(lines) - 1 and _should_switch_to_next_line(lines[self._current_index], self_state):
+        while self._current_index < len(lines) - 1 and _should_switch_to_next_line(
+            lines[self._current_index],
+            lines[self._current_index + 1],
+            self_state,
+        ):
             self._current_index += 1
         return lines[self._current_index]
 
@@ -88,13 +92,13 @@ def _line_progress(line: WayLineS, self_state: MotionProfS) -> float:
     return (relx * dx + rely * dy + relz * dz) / length2
 
 
-def _should_switch_to_next_line(line: WayLineS, self_state: MotionProfS) -> bool:
+def _should_switch_to_next_line(line: WayLineS, next_line: WayLineS, self_state: MotionProfS) -> bool:
     if _line_progress(line, self_state) >= 1.0:
         return True
     distance_to_go = _horizontal_distance_to_go(line, self_state)
     if distance_to_go is None:
         return False
-    return distance_to_go <= _turn_radius_m(line)
+    return distance_to_go <= _turn_switch_distance_m(line, next_line)
 
 
 def _horizontal_distance_to_go(line: WayLineS, self_state: MotionProfS) -> float | None:
@@ -113,3 +117,27 @@ def _horizontal_distance_to_go(line: WayLineS, self_state: MotionProfS) -> float
 def _turn_radius_m(line: WayLineS) -> float:
     speed = max(0.0, line.vdCmd)
     return speed * speed / (_GRAVITY_MPS2 * math.tan(math.radians(_TURN_BANK_DEG)))
+
+
+def _turn_switch_distance_m(line: WayLineS, next_line: WayLineS) -> float:
+    delta_psi = _heading_change_rad(line, next_line)
+    return _turn_radius_m(line) * math.tan(delta_psi / 2.0)
+
+
+def _heading_change_rad(line: WayLineS, next_line: WayLineS) -> float:
+    current = _horizontal_unit_vector(line)
+    next_track = _horizontal_unit_vector(next_line)
+    if current is None or next_track is None:
+        return 0.0
+    dot = max(-1.0, min(1.0, current[0] * next_track[0] + current[1] * next_track[1]))
+    cross = current[0] * next_track[1] - current[1] * next_track[0]
+    return abs(math.atan2(cross, dot))
+
+
+def _horizontal_unit_vector(line: WayLineS) -> tuple[float, float] | None:
+    dx = line.end.pos.east - line.start.pos.east
+    dy = line.end.pos.north - line.start.pos.north
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return None
+    return dx / length, dy / length
