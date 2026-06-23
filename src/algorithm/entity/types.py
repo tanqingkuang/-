@@ -8,6 +8,9 @@ from src.algorithm.context.leaf_types import AccInEarthS, FormCommInitS, FormSel
 from src.common.envelope import MessageEnvelope
 
 
+DEFAULT_CONTROL_PERIOD_S = 0.05
+
+
 @dataclass
 class EntityInitS:
     """实体一次性初始化配置。注意：route 仅长机使用，僚机可为空。"""
@@ -15,7 +18,7 @@ class EntityInitS:
     selfInit: FormSelfInitS = field(default_factory=FormSelfInitS)  # 本机标识
     commInit: FormCommInitS = field(default_factory=FormCommInitS)  # 通信拓扑与队形配置
     route: RouteS | None = None  # 预置航线，僚机无需航线时为 None
-    control_period_s: float = 0.1  # 控制算法处理周期，单位 s
+    control_period_s: float = DEFAULT_CONTROL_PERIOD_S  # 控制算法处理周期，单位 s
 
 
 @dataclass

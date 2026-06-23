@@ -189,7 +189,7 @@ def load_config(path: str) -> CommandResult
 语义：
 
 - 读取 `.yaml`、`.yml` 或 `.json` 配置。
-- 校验必填字段、节点列表、链路拓扑、航线 `route`、队形 `formation`、仿真时长、步长、扰动配置。
+- 校验必填字段、节点列表、链路拓扑、航线 `route`、队形 `formation`、仿真时长、步长、算法分频、扰动配置。
 - 初始化模型、通信、算法、加扰和日志对象，但不开始推进仿真时间。
 - 成功后状态进入 `READY`，并通过 `get_snapshot()` 或订阅推送提供初始快照。
 
@@ -432,6 +432,8 @@ def _tick() -> SimulationSnapshot
 - 各 sim-time 频率必须能被基础仿真 tick 整除，避免分数 tick 调度。
 - 显示回显刷新按 wall-clock 节流，不随 `playback_rate` 增大而提高刷新频率。
 - `playback_rate` 只影响 wall-clock 调度间隔，不改变任何 sim-time 频率。
+- 编队算法控制周期由仿真控制统一计算并注入算法实体：`control_period_s = step_s * algorithm_decimation`。默认 `step_s=0.005`、`algorithm_decimation=10`，因此默认控制周期为 `0.05 s`（20 Hz）。
+- `algorithm_decimation` 可配置，必须为正整数；修改它会改变算法控制周期和 PID 积分步长，属于控制动态变化，不是播放倍率或 UI 刷新变化。
 - 若某调度块本次未触发，应复用上一次有效输出，例如控制量保持；消息类输出不重复生成。
 - 频率可配置，但默认值先按上表实现。
 

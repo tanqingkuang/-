@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import RemoteCmdS, copy_motion
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
+from src.algorithm.entity.types import DEFAULT_CONTROL_PERIOD_S, EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInputS
@@ -97,7 +97,7 @@ class LeaderEntity(EntityBase):
         return None
 
 
-def _default_tracker_init(control_period_s: float = 0.1) -> PidComposeInitS:
+def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
     """生成长机默认位置跟踪器配置。注意：仅在外部未注入配置时使用。"""
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
