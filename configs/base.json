@@ -55,6 +55,8 @@
     },
     "limits": {
       "acceleration_command_mps2": 6.0,
+      "max_climb_rate_mps": 3.0,
+      "max_descent_rate_mps": 3.0,
       "nx_min": -1.0,
       "nx_max": 1.0,
       "nz_min": 0.0,

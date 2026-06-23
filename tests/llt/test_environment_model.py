@@ -139,6 +139,19 @@ class TestConfigValidation(unittest.TestCase):
         cfg = ModelIterator._parse_model_config({})
         self.assertEqual(cfg.gravity_mps2, ModelIterator.DEFAULT_GRAVITY_MPS2)
         self.assertEqual(cfg.damping_ratio, ModelIterator.DEFAULT_DAMPING_RATIO)
+        self.assertEqual(cfg.max_climb_rate_mps, ModelIterator.DEFAULT_MAX_CLIMB_RATE_MPS)
+        self.assertEqual(cfg.max_descent_rate_mps, ModelIterator.DEFAULT_MAX_DESCENT_RATE_MPS)
+
+    def test_vertical_rate_limits_must_be_positive(self):
+        cfg = _default_config()
+        with self.assertRaisesRegex(ValueError, "max_climb_rate"):
+            ModelIterator._validate_config(
+                PointMassModelConfig(**{**cfg.__dict__, "max_climb_rate_mps": 0.0})
+            )
+        with self.assertRaisesRegex(ValueError, "max_descent_rate"):
+            ModelIterator._validate_config(
+                PointMassModelConfig(**{**cfg.__dict__, "max_descent_rate_mps": 0.0})
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +231,30 @@ class TestSaturation(unittest.TestCase):
         m = _model()
         inputs = m.acceleration_to_inputs([0.0, 0.0, 100.0], 0.0, 0.0)
         self.assertLessEqual(inputs.nz, m.config.nz_max)
+
+    def test_climb_rate_is_limited_by_config(self):
+        cfg = PointMassModelConfig(
+            **{**_default_config().__dict__, "max_climb_rate_mps": 2.0}
+        )
+        m = PointMass3DoFModel(cfg)
+        state = _level_trim_state(speed_mps=10.0)
+        state[4] = math.radians(45.0)
+
+        stepped = m.step(state, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], dt_s=0.01)
+
+        self.assertLessEqual(stepped[3] * math.sin(stepped[4]), 2.0 + 1e-9)
+
+    def test_descent_rate_is_limited_by_config(self):
+        cfg = PointMassModelConfig(
+            **{**_default_config().__dict__, "max_descent_rate_mps": 3.0}
+        )
+        m = PointMass3DoFModel(cfg)
+        state = _level_trim_state(speed_mps=10.0)
+        state[4] = math.radians(-45.0)
+
+        stepped = m.step(state, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0], dt_s=0.01)
+
+        self.assertGreaterEqual(stepped[3] * math.sin(stepped[4]), -3.0 - 1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +424,21 @@ class TestInitialStateVelocityComponents(unittest.TestCase):
         state = it.read_states()["A"]
         self.assertAlmostEqual(state.theta_rad, 0.0, delta=1e-9)
 
+    def test_initial_vz_is_clamped_by_vertical_rate_limit(self):
+        """初始垂向速度分量超过包线时，应裁剪航迹倾角而不是保留不可飞爬升率。"""
+        it = ModelIterator()
+        it.init(
+            {
+                "model": {"limits": {"max_climb_rate_mps": 2.0}},
+                "nodes": [{"node_id": "A", "speed_mps": 10.0, "vx_mps": 10.0, "vy_mps": 0.0, "vz_mps": 6.0}],
+            },
+            seed=0,
+        )
+
+        state = it.read_states()["A"]
+
+        self.assertLessEqual(state.vz_mps, 2.0 + 1e-9)
+
 
 # ---------------------------------------------------------------------------
 # _parse_model_config: legacy field compatibility
@@ -414,6 +466,14 @@ class TestLegacyConfigFields(unittest.TestCase):
             "acceleration_filter": {"natural_frequency_rad_s": 5.0},
         })
         self.assertAlmostEqual(cfg.natural_frequency_rad_s, 5.0)
+
+    def test_vertical_rate_limits_parse_from_nested_limits(self):
+        cfg = ModelIterator._parse_model_config({
+            "limits": {"max_climb_rate_mps": 4.0, "max_descent_rate_mps": 5.0},
+        })
+
+        self.assertAlmostEqual(cfg.max_climb_rate_mps, 4.0)
+        self.assertAlmostEqual(cfg.max_descent_rate_mps, 5.0)
 
 
 # ---------------------------------------------------------------------------

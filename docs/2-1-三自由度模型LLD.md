@@ -268,6 +268,8 @@ phi in [-70 deg, 70 deg]
     },
     "limits": {
       "acceleration_command_mps2": 6.0,
+      "max_climb_rate_mps": 8.0,
+      "max_descent_rate_mps": 8.0,
       "nx_min": -1.0,
       "nx_max": 1.0,
       "nz_min": 0.0,
@@ -296,6 +298,12 @@ phi in [-70 deg, 70 deg]
 - `natural_frequency_rad_s` -> `acceleration_filter.natural_frequency_rad_s`
 - `damping_ratio` -> `acceleration_filter.damping_ratio`
 - `max_acceleration_mps2` -> `limits.acceleration_command_mps2`
+
+垂向速度包线：
+
+- `limits.max_climb_rate_mps`：最大爬升率，正值，默认 `8.0 m/s`。
+- `limits.max_descent_rate_mps`：最大下沉率，正值，默认 `8.0 m/s`。
+- 模型在积分后裁剪航迹倾角 `theta`，保证 `V * sin(theta)` 落在 `[-max_descent_rate_mps, max_climb_rate_mps]` 内；速度标量 `V` 不因该裁剪被直接改写。
 
 ## 11. 初始条件
 

@@ -45,6 +45,8 @@ class PointMassModelConfig:
     natural_frequency_rad_s: float  # 加速度二阶滤波自然频率 omega
     damping_ratio: float  # 加速度二阶滤波阻尼比 zeta，须在 (0,1)
     acceleration_command_limit_mps2: float  # ENU 加速度指令幅值上限
+    max_climb_rate_mps: float  # 最大爬升率，正值，单位米每秒
+    max_descent_rate_mps: float  # 最大下沉率，正值，单位米每秒
     nx_min: float  # 切向过载下限
     nx_max: float  # 切向过载上限
     nz_min: float  # 法向过载下限（恒非负）
@@ -328,6 +330,7 @@ class PointMass3DoFModel:
         """限制状态向量中的关键物理量。注意：用于防止积分过程产生非法姿态或速度。"""
         vector[3] = max(self.config.min_speed_mps, vector[3])  # 速度不低于最小可飞速度
         vector[4] = self._clamp(vector[4], -_MAX_ABS_THETA_RAD, _MAX_ABS_THETA_RAD)  # 俯仰限幅
+        vector[4] = self._clamp_theta_for_vertical_rate(vector[3], vector[4])  # 爬升/下沉率包线
         vector[5] = math.atan2(math.sin(vector[5]), math.cos(vector[5]))  # 航向归一化到 (-pi, pi]
         # 三轴滤波加速度饱和；一旦触限就把对应变化率清零，避免抗饱和失效后状态持续冲出。
         for acc_idx, rate_idx in ((6, 9), (7, 10), (8, 11)):
@@ -355,6 +358,15 @@ class PointMass3DoFModel:
             return cos_theta
         return _COS_THETA_EPS if cos_theta >= 0.0 else -_COS_THETA_EPS
 
+    def _clamp_theta_for_vertical_rate(self, speed_mps: float, theta_rad: float) -> float:
+        """按最大爬升/下沉率限制航迹倾角。注意：保持速度标量不变，仅裁剪垂向分量。"""
+        speed = max(abs(speed_mps), self.config.min_speed_mps)
+        lower_vz = -min(self.config.max_descent_rate_mps, speed)
+        upper_vz = min(self.config.max_climb_rate_mps, speed)
+        vz_mps = speed * math.sin(theta_rad)
+        clamped_vz = self._clamp(vz_mps, lower_vz, upper_vz)
+        return math.asin(self._clamp(clamped_vz / speed, -1.0, 1.0))
+
     @staticmethod
     def _add_scaled(left: Sequence[float], right: Sequence[float], scale: float) -> list[float]:
         """按比例叠加两个向量。注意：用于 RK4 积分中间状态计算。"""
@@ -370,6 +382,8 @@ class ModelIterator:
     DEFAULT_NATURAL_FREQUENCY_RAD_S = 4.0  # 加速度滤波带宽，越大跟踪越快但越接近裸指令
     DEFAULT_DAMPING_RATIO = 0.65  # 欠阻尼，兼顾响应速度与超调
     DEFAULT_ACCELERATION_COMMAND_LIMIT_MPS2 = 6.0  # 约 0.6g 的指令幅值上限
+    DEFAULT_MAX_CLIMB_RATE_MPS = 8.0  # 最大爬升率，限制垂向速度继续增大
+    DEFAULT_MAX_DESCENT_RATE_MPS = 8.0  # 最大下沉率，限制垂向速度继续增大
     DEFAULT_NX_MIN = -1.0
     DEFAULT_NX_MAX = 1.0
     DEFAULT_NZ_MIN = 0.0
@@ -534,6 +548,7 @@ class ModelIterator:
             # 仅当水平速度足够大时才由分量定航向，避免接近垂直/悬停时 atan2 抖动。
             if "psi_v_deg" not in node and math.hypot(vx_mps, vy_mps) > 1e-9:
                 psi_rad = math.atan2(vy_mps, vx_mps)
+        theta_rad = self._system._clamp_theta_for_vertical_rate(speed_mps, theta_rad)
 
         # 初始加速度优先取显式 ENU 值，否则由过载/滚转配平反算。
         if any(key in node for key in ("ax_mps2", "ay_mps2", "az_mps2")):
@@ -630,6 +645,8 @@ class ModelIterator:
             natural_frequency_rad_s=cls.DEFAULT_NATURAL_FREQUENCY_RAD_S,
             damping_ratio=cls.DEFAULT_DAMPING_RATIO,
             acceleration_command_limit_mps2=cls.DEFAULT_ACCELERATION_COMMAND_LIMIT_MPS2,
+            max_climb_rate_mps=cls.DEFAULT_MAX_CLIMB_RATE_MPS,
+            max_descent_rate_mps=cls.DEFAULT_MAX_DESCENT_RATE_MPS,
             nx_min=cls.DEFAULT_NX_MIN,
             nx_max=cls.DEFAULT_NX_MAX,
             nz_min=cls.DEFAULT_NZ_MIN,
@@ -688,6 +705,8 @@ class ModelIterator:
             natural_frequency_rad_s=natural_frequency,
             damping_ratio=damping_ratio,
             acceleration_command_limit_mps2=acceleration_limit,
+            max_climb_rate_mps=float(limits_config.get("max_climb_rate_mps", cls.DEFAULT_MAX_CLIMB_RATE_MPS)),
+            max_descent_rate_mps=float(limits_config.get("max_descent_rate_mps", cls.DEFAULT_MAX_DESCENT_RATE_MPS)),
             nx_min=float(limits_config.get("nx_min", cls.DEFAULT_NX_MIN)),
             nx_max=float(limits_config.get("nx_max", cls.DEFAULT_NX_MAX)),
             nz_min=float(limits_config.get("nz_min", cls.DEFAULT_NZ_MIN)),
@@ -715,6 +734,10 @@ class ModelIterator:
             )
         if config.acceleration_command_limit_mps2 <= 0.0:
             raise ValueError("model.limits.acceleration_command_mps2 must be positive")
+        if config.max_climb_rate_mps <= 0.0:
+            raise ValueError("model.limits.max_climb_rate_mps must be positive")
+        if config.max_descent_rate_mps <= 0.0:
+            raise ValueError("model.limits.max_descent_rate_mps must be positive")
         if config.nx_min >= config.nx_max:
             raise ValueError("model.limits.nx_min must be less than nx_max")
         # nz 由 hypot 得出恒非负，故下限必须 >=0 且严格小于上限。
