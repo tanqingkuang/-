@@ -6,6 +6,8 @@ from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 
 
 class EntityBase:
+    """编队实体抽象基类。注意：子类须实现 init/step/reset/close 四个生命周期方法。"""
+
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 EntityBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError

@@ -6,6 +6,8 @@ from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS,
 
 
 class Noop(TraPlanBase):
+    """空轨迹规划器：占位用，三个生命周期方法均不做任何事，不写航线输出。注意：僚机航路由长机决定，故此处无需规划。"""
+
     def init(self, cfg: TraPlanInitS) -> None:
         """按配置初始化 Noop。注意：调用方需先准备好必要依赖和输入数据。"""
         del cfg

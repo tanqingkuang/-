@@ -9,21 +9,29 @@ from src.algorithm.context.leaf_types import FormSnapshotS, RemoteCmdS
 
 @dataclass
 class FormationTaskInitS:
+    """编队任务初始化配置基类。注意：当前无字段，预留派生扩展。"""
+
     pass
 
 
 @dataclass
 class FormationTaskInputS:
-    remote: RemoteCmdS | None = None
-    cmd: FormSnapshotS | None = None
+    """编队任务输入端口。注意：remote 为外部期望，cmd 为当前快照。"""
+
+    remote: RemoteCmdS | None = None  # 外部遥控指令
+    cmd: FormSnapshotS | None = None  # 当前编队指令快照（可作输入参考）
 
 
 @dataclass
 class FormationTaskOutputS:
-    cmd: FormSnapshotS | None = None
+    """编队任务输出端口。注意：cmd 承载任务决策出的阶段与队形。"""
+
+    cmd: FormSnapshotS | None = None  # 输出的编队指令
 
 
 class FormationTaskBase:
+    """编队任务编排抽象基类。注意：子类须把决策出的阶段/队形写入 y.cmd。"""
+
     def init(self, cfg: FormationTaskInitS) -> None:
         """按配置初始化 FormationTaskBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError

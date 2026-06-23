@@ -9,22 +9,30 @@ from src.algorithm.context.leaf_types import FormSnapshotS, MotionProfS, WayLine
 
 @dataclass
 class TraPlanInitS:
+    """轨迹规划初始化配置基类。注意：具体规划器可派生扩展字段。"""
+
     pass
 
 
 @dataclass
 class TraPlanInputS:
-    cmd: FormSnapshotS | None = None
-    wayLine: WayLineS | None = None
-    selfState: MotionProfS | None = None
+    """轨迹规划输入端口。注意：selfState 用于按当前位置选择航段。"""
+
+    cmd: FormSnapshotS | None = None  # 当前编队指令快照
+    wayLine: WayLineS | None = None  # 上一帧航段（可作为输入参考）
+    selfState: MotionProfS | None = None  # 本机运动状态
 
 
 @dataclass
 class TraPlanOutputS:
-    wayLine: WayLineS | None = None
+    """轨迹规划输出端口。注意：wayLine 为本帧选定的待跟踪航段。"""
+
+    wayLine: WayLineS | None = None  # 输出的当前航段
 
 
 class TraPlanBase:
+    """轨迹规划单元抽象基类。注意：子类 step 须向 y.wayLine 写入完整起终点的航段。"""
+
     def init(self, cfg: TraPlanInitS) -> None:
         """按配置初始化 TraPlanBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError

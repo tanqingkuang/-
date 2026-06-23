@@ -10,22 +10,30 @@ from src.common.envelope import MessageEnvelope
 
 @dataclass
 class OutboundInitS:
-    selfId: str = ""
-    netWork: list[NetWorkS] = field(default_factory=list)
+    """出站单元初始化配置。注意：netWork 用于解析广播目标。"""
+
+    selfId: str = ""  # 本机标识，用于在拓扑中识别自身链路
+    netWork: list[NetWorkS] = field(default_factory=list)  # 通信拓扑链路集合
 
 
 @dataclass
 class OutboundInputS:
-    cmd: FormSnapshotS | None = None
-    selfState: MotionProfS | None = None
+    """出站单元输入端口。注意：cmd 与 selfState 一并打包进消息载荷。"""
+
+    cmd: FormSnapshotS | None = None  # 待广播的编队指令
+    selfState: MotionProfS | None = None  # 待广播的本机状态
 
 
 @dataclass
 class OutboundOutputS:
-    outbox: list[MessageEnvelope] = field(default_factory=list)
+    """出站单元输出端口。注意：outbox 由 step 填充并被外层取走。"""
+
+    outbox: list[MessageEnvelope] = field(default_factory=list)  # 本帧生成的待发消息
 
 
 class OutboundBase:
+    """出站消息处理抽象基类。注意：子类须自行计算目标列表并按约定格式封装载荷。"""
+
     def init(self, cfg: OutboundInitS) -> None:
         """按配置初始化 OutboundBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError

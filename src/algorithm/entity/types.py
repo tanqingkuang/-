@@ -10,19 +10,25 @@ from src.common.envelope import MessageEnvelope
 
 @dataclass
 class EntityInitS:
-    selfInit: FormSelfInitS = field(default_factory=FormSelfInitS)
-    commInit: FormCommInitS = field(default_factory=FormCommInitS)
-    route: RouteS | None = None
+    """实体一次性初始化配置。注意：route 仅长机使用，僚机可为空。"""
+
+    selfInit: FormSelfInitS = field(default_factory=FormSelfInitS)  # 本机标识
+    commInit: FormCommInitS = field(default_factory=FormCommInitS)  # 通信拓扑与队形配置
+    route: RouteS | None = None  # 预置航线，僚机无需航线时为 None
 
 
 @dataclass
 class EntityInputS:
-    selfState: MotionProfS | None = None
-    inbox: list[MessageEnvelope] = field(default_factory=list)
-    remote: RemoteCmdS | None = None
+    """实体每帧输入。注意：各字段可为空，缺省时沿用上一帧状态。"""
+
+    selfState: MotionProfS | None = None  # 本机最新运动状态反馈
+    inbox: list[MessageEnvelope] = field(default_factory=list)  # 本帧收到的消息
+    remote: RemoteCmdS | None = None  # 外部遥控指令
 
 
 @dataclass
 class EntityOutputS:
-    selfAccCmd: AccInEarthS | None = None
-    outbox: list[MessageEnvelope] = field(default_factory=list)
+    """实体每帧输出。注意：selfAccCmd 给控制器，outbox 待发送。"""
+
+    selfAccCmd: AccInEarthS | None = None  # 本机加速度指令
+    outbox: list[MessageEnvelope] = field(default_factory=list)  # 本帧待发送的消息
