@@ -47,6 +47,7 @@ TRAIL_SECONDS = 18.0
 TOP_VIEW_ORIGIN_MARGIN = 40.0
 VIEW_MIN_SCALE = 0.05
 VIEW_MAX_SCALE = 3.5
+FIT_VIEWPORT_RATIO = 0.80
 WORLD_GRID_SPACING = 48
 GRID_MIN_SCREEN_SPACING = 36.0
 GRID_MAX_SCREEN_SPACING = 96.0
@@ -717,6 +718,17 @@ class TopView(QGraphicsView):
             self._fit_route_to_view()
         self.viewport().update()
 
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        super().resizeEvent(event)
+        if self.snapshot is None or self._manual_view:
+            return
+        if self.auto_center:
+            self._apply_auto_center()
+        else:
+            self._fit_route_to_view()
+        self.viewport().update()
+        self.viewChanged.emit()
+
     def reset_view(self) -> None:
         """重置视图缩放和平移。注意：不修改仿真数据。"""
         self._manual_view = False
@@ -890,31 +902,43 @@ class TopView(QGraphicsView):
         self.viewChanged.emit()
 
     def _fit_route_to_view(self) -> None:
-        """把航线范围适配到当前俯视图。注意：只调整显示缩放和平移。"""
-        if self.snapshot is None or not self._route_segments():
+        """把航线和飞机范围适配到当前俯视图。注意：只调整显示缩放和平移。"""
+        if self.snapshot is None:
             self.offset = self._default_offset()
             return
-        routes = self._route_segments()
+        bounds = self._route_and_node_bounds()
+        if bounds is None:
+            self.offset = self._default_offset()
+            return
+        min_x, max_x, min_y, max_y = bounds
         rect = self.viewport().rect()
         if rect.width() <= 0 or rect.height() <= 0:
             return
-        xs = [value for route in routes for value in (route.start_x, route.end_x)]
-        ys = [value for route in routes for value in (route.start_y, route.end_y)]
-        min_x = min(xs)
-        max_x = max(xs)
-        min_y = min(ys)
-        max_y = max(ys)
         span_x = max(1.0, max_x - min_x)
         span_y = max(1.0, max_y - min_y)
-        available_width = max(1.0, rect.width() - TOP_VIEW_ORIGIN_MARGIN * 2.0)
-        available_height = max(1.0, rect.height() - TOP_VIEW_ORIGIN_MARGIN * 2.0)
+        available_width = max(1.0, rect.width() * FIT_VIEWPORT_RATIO)
+        available_height = max(1.0, rect.height() * FIT_VIEWPORT_RATIO)
         scale_x = available_width / span_x
         scale_y = available_height / span_y
-        self.scale_value = min(1.0, max(VIEW_MIN_SCALE, min(scale_x, scale_y)))
+        self.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, min(scale_x, scale_y)))
+        center_x = (min_x + max_x) / 2.0
+        center_y = (min_y + max_y) / 2.0
         self.offset = QPointF(
-            TOP_VIEW_ORIGIN_MARGIN - min_x * self.scale_value,
-            TOP_VIEW_ORIGIN_MARGIN - min_y * self.scale_value,
+            rect.width() / 2.0 - center_x * self.scale_value,
+            rect.height() / 2.0 - center_y * self.scale_value,
         )
+
+    def _route_and_node_bounds(self) -> tuple[float, float, float, float] | None:
+        if self.snapshot is None:
+            return None
+        xs = [node.x for node in self.snapshot.nodes]
+        ys = [node.y for node in self.snapshot.nodes]
+        for route in self._route_segments():
+            xs.extend([route.start_x, route.end_x])
+            ys.extend([route.start_y, route.end_y])
+        if not xs or not ys:
+            return None
+        return min(xs), max(xs), min(ys), max(ys)
 
     def _draw_grid(self, painter: QPainter) -> None:
         """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -973,7 +997,7 @@ class TopView(QGraphicsView):
             target = by_id[link.target]
             color = QColor(self.theme.link if link.ok else self.theme.warn)
             color.setAlphaF(0.58 if link.ok else 0.75)
-            painter.setPen(QPen(color, 2 if link.ok else 3))
+            painter.setPen(QPen(color, (2 if link.ok else 3) / self.scale_value))
             painter.drawLine(QPointF(source.x, source.y), QPointF(target.x, target.y))
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
@@ -984,12 +1008,13 @@ class TopView(QGraphicsView):
             painter.save()
             painter.translate(node.x, node.y)
             painter.rotate(math.degrees(math.atan2(node.vy, node.vx)))
+            painter.scale(1.0 / self.scale_value, 1.0 / self.scale_value)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
-            path = QPainterPath(QPointF(16, 0))
-            path.lineTo(-12, -9)
-            path.lineTo(-6, 0)
-            path.lineTo(-12, 9)
+            path = QPainterPath(QPointF(12, 0))
+            path.lineTo(-9, -7)
+            path.lineTo(-4.5, 0)
+            path.lineTo(-9, 7)
             path.closeSubpath()
             painter.drawPath(path)
             painter.restore()

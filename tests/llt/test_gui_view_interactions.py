@@ -14,10 +14,18 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPointF, QRect
 from PySide6.QtWidgets import QApplication
 
-from src.ui.gui.main_window import ControllerSimulationAdapter, MainWindow, TOP_VIEW_ORIGIN_MARGIN, default_project_root
+from src.ui.gui.main_window import (
+    ControllerSimulationAdapter,
+    MainWindow,
+    LinkState,
+    NodeState,
+    Snapshot,
+    TOP_VIEW_ORIGIN_MARGIN,
+    default_project_root,
+)
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -94,17 +102,73 @@ class GuiViewInteractionTests(unittest.TestCase):
                 self.window.top_view._grid_world_spacing(),
             )
 
+    def test_top_view_aircraft_marker_keeps_screen_size_during_zoom(self) -> None:
+        small = self._leader_marker_bounds_at_scale(0.45)
+        large = self._leader_marker_bounds_at_scale(3.5)
+
+        self.assertAlmostEqual(small.width(), large.width(), delta=4)
+        self.assertAlmostEqual(small.height(), large.height(), delta=4)
+        self.assertLessEqual(large.width(), 14)
+        self.assertLessEqual(large.height(), 10)
+
+    def test_top_view_link_keeps_screen_width_during_zoom(self) -> None:
+        thin = self._link_stroke_height_at_scale(0.45)
+        thick = self._link_stroke_height_at_scale(3.5)
+
+        self.assertAlmostEqual(thin, thick, delta=2)
+
     def test_top_view_reset_restores_side_altitude_axis(self) -> None:
+        self._load_ui_config()
         self.window.side_view.altitude_min = 1180.0
         self.window.side_view.altitude_max = 1240.0
 
         self.window.top_view.reset_view()
         self.app.processEvents()
 
-        self.assertEqual(self.window.top_view.scale_value, 1.0)
-        self.assertEqual(self.window.top_view.offset, QPointF(TOP_VIEW_ORIGIN_MARGIN, TOP_VIEW_ORIGIN_MARGIN))
+        self.assert_route_and_aircraft_fit_viewport()
         self.assertEqual(self.window.side_view.altitude_min, self.window.side_view.ALTITUDE_MIN_DEFAULT)
         self.assertEqual(self.window.side_view.altitude_max, self.window.side_view.ALTITUDE_MAX_DEFAULT)
+
+    def test_route_and_aircraft_fit_centered_viewport_after_load(self) -> None:
+        self._load_ui_config(
+            nodes=[
+                {"node_id": "A01", "role": "leader", "x_m": 900.0, "y_m": 300.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 880.0, "y_m": 340.0, "altitude_m": 1215.0},
+            ],
+            links=[{"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01}],
+            route={
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0},
+                    {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1200.0},
+                ],
+            },
+        )
+
+        self.assert_route_and_aircraft_fit_viewport()
+
+    def test_reset_view_refits_route_and_aircraft_after_manual_view_change(self) -> None:
+        self._load_ui_config(
+            nodes=[
+                {"node_id": "A01", "role": "leader", "x_m": 900.0, "y_m": 300.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 880.0, "y_m": 340.0, "altitude_m": 1215.0},
+            ],
+            links=[{"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01}],
+            route={
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0},
+                    {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1200.0},
+                ],
+            },
+        )
+        self.window.top_view.scale_value = 3.0
+        self.window.top_view.offset = QPointF(-500.0, -400.0)
+
+        self.window.top_view.reset_view()
+        self.app.processEvents()
+
+        self.assert_route_and_aircraft_fit_viewport()
 
     def test_route_endpoints_are_visible_after_load(self) -> None:
         self._load_ui_config()
@@ -252,6 +316,15 @@ class GuiViewInteractionTests(unittest.TestCase):
                 self.assertEqual(window.sim.controller.get_snapshot().run_state, "READY")
                 self.assertEqual(window.config_name.text(), "configs/startup.json")
                 self.assertEqual(window.node_table.rowCount(), 3)
+                initial_scale = window.top_view.scale_value
+                initial_offset = QPointF(window.top_view.offset)
+
+                window.top_view.reset_view()
+                self.app.processEvents()
+
+                self.assertAlmostEqual(window.top_view.scale_value, initial_scale)
+                self.assertAlmostEqual(window.top_view.offset.x(), initial_offset.x(), delta=1.0)
+                self.assertAlmostEqual(window.top_view.offset.y(), initial_offset.y(), delta=1.0)
             finally:
                 window.close()
                 self.app.processEvents()
@@ -461,6 +534,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         *,
         duration_s: float = 0.05,
         step_s: float = 0.005,
+        nodes: list[dict[str, object]] | None = None,
         links: list[dict[str, object]] | None = None,
         route: dict[str, object] | None = None,
     ) -> None:
@@ -468,7 +542,7 @@ class GuiViewInteractionTests(unittest.TestCase):
             "duration_s": duration_s,
             "step_s": step_s,
             "playback_rate": 10.0,
-            "nodes": [
+            "nodes": nodes or [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
                 {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
@@ -489,6 +563,36 @@ class GuiViewInteractionTests(unittest.TestCase):
             self.app.processEvents()
         finally:
             Path(config_path).unlink(missing_ok=True)
+
+    def assert_route_and_aircraft_fit_viewport(self) -> None:
+        snapshot = self.window.top_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        xs = [node.x for node in snapshot.nodes]
+        ys = [node.y for node in snapshot.nodes]
+        for route in snapshot.route_segments or ([snapshot.route] if snapshot.route is not None else []):
+            xs.extend([route.start_x, route.end_x])
+            ys.extend([route.start_y, route.end_y])
+        self.assertTrue(xs)
+        self.assertTrue(ys)
+
+        view = self.window.top_view
+        rect = view.viewport().rect()
+        left = min(xs) * view.scale_value + view.offset.x()
+        right = max(xs) * view.scale_value + view.offset.x()
+        top = min(ys) * view.scale_value + view.offset.y()
+        bottom = max(ys) * view.scale_value + view.offset.y()
+        fitted_width = right - left
+        fitted_height = bottom - top
+
+        self.assertAlmostEqual((left + right) / 2.0, rect.width() / 2.0, delta=1.0)
+        self.assertAlmostEqual((top + bottom) / 2.0, rect.height() / 2.0, delta=1.0)
+        self.assertLessEqual(fitted_width, rect.width() * 0.80 + 1.0)
+        self.assertLessEqual(fitted_height, rect.height() * 0.80 + 1.0)
+        self.assertTrue(
+            abs(fitted_width - rect.width() * 0.80) <= 1.0
+            or abs(fitted_height - rect.height() * 0.80) <= 1.0
+        )
 
     def _write_config_file(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -516,6 +620,69 @@ class GuiViewInteractionTests(unittest.TestCase):
                 if image.pixelColor(x, y).name() == color_name:
                     count += 1
         return count
+
+    def _leader_marker_bounds_at_scale(self, scale: float) -> QRect:
+        view = self.window.top_view
+        view.show_grid = False
+        view.snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="",
+            disturbance="无",
+            nodes=[NodeState("A01", "leader", 0.0, 0.0, 1.0, 0.0)],
+            links=[],
+        )
+        view.scale_value = scale
+        view.offset = QPointF(180.0, 180.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        marker_color = self.window.theme.leader.name()
+        left = image.width()
+        right = -1
+        top = image.height()
+        bottom = -1
+        for y in range(image.height()):
+            for x in range(image.width()):
+                if image.pixelColor(x, y).name() == marker_color:
+                    left = min(left, x)
+                    right = max(right, x)
+                    top = min(top, y)
+                    bottom = max(bottom, y)
+        self.assertGreaterEqual(right, left)
+        self.assertGreaterEqual(bottom, top)
+        return QRect(left, top, right - left + 1, bottom - top + 1)
+
+    def _link_stroke_height_at_scale(self, scale: float) -> int:
+        view = self.window.top_view
+        view.show_grid = False
+        view.snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="",
+            disturbance="无",
+            nodes=[
+                NodeState("A01", "leader", -80.0, 0.0, 1.0, 0.0),
+                NodeState("A02", "wingman", 80.0, 0.0, 1.0, 0.0),
+            ],
+            links=[LinkState("A01", "A02", "duplex", 18, 0.01)],
+        )
+        view.scale_value = scale
+        view.offset = QPointF(180.0, 180.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        canvas = self.window.theme.canvas.name()
+        x = round(view.offset.x())
+        touched = [y for y in range(image.height()) if image.pixelColor(x, y).name() != canvas]
+        self.assertTrue(touched)
+        return max(touched) - min(touched) + 1
 
     def _wait_for_controller_time(self, timeout_s: float = 1.0):
         deadline = time.monotonic() + timeout_s
