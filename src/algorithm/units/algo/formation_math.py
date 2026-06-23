@@ -40,8 +40,8 @@ def track_to_enu(vector: tuple[float, float, float], state: MotionProfS) -> tupl
 def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
     """计算水平航迹方向单位向量。注意：仅使用水平分量，垂向不参与方向计算。"""
 
-    vx = state.vd.vEast
-    vy = state.vd.vNorth
+    vx = state.v.vEast
+    vy = state.v.vNorth
     ground = math.hypot(vx, vy)
     if ground <= 0.0:
         raise ValueError("horizontal track frame requires non-zero horizontal velocity")
@@ -67,9 +67,9 @@ def horizontal_track_vector_to_enu(vector: tuple[float, float], track: tuple[flo
 
 def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
     """计算完整航迹坐标基。注意：航段长度过小时会返回默认水平基。"""
-    vx = state.vd.vEast
-    vy = state.vd.vNorth
-    vz = state.vd.vUp
+    vx = state.v.vEast
+    vy = state.v.vNorth
+    vz = state.v.vUp
     ground = math.hypot(vx, vy)
     speed = math.sqrt(vx * vx + vy * vy + vz * vz)
     if speed <= 0.0 or ground <= 0.0:

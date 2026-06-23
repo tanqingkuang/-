@@ -75,7 +75,7 @@ class SlotGeometry(PosCalcBase):
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + slot.z
-        copy_velocity(u.leaderState.vd, y.selfCmd.vd)
+        copy_velocity(u.leaderState.v, y.selfCmd.v)
         if u.selfState is None or track is None:
             return None
         track_x, track_y = track
@@ -87,10 +87,10 @@ class SlotGeometry(PosCalcBase):
             -_MAX_ALONG_SLOT_SPEED_CORRECTION,
             min(_MAX_ALONG_SLOT_SPEED_CORRECTION, _ALONG_SLOT_SPEED_GAIN * along_error),
         )
-        y.selfCmd.vd.vEast += speed_correction * track_x
-        y.selfCmd.vd.vNorth += speed_correction * track_y
-        y.selfCmd.vd.vd = math.hypot(y.selfCmd.vd.vEast, y.selfCmd.vd.vNorth)
-        y.selfCmd.vd.vPsi = math.atan2(y.selfCmd.vd.vNorth, y.selfCmd.vd.vEast)
+        y.selfCmd.v.vEast += speed_correction * track_x
+        y.selfCmd.v.vNorth += speed_correction * track_y
+        y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
+        y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
         return None
 
     def reset(self) -> None:

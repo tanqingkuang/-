@@ -99,7 +99,7 @@ class MotionProfS:
     """完整运动状态剖面，聚合位置与速度。注意：算法各环节以此为统一状态载体。"""
 
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 地理系位置
-    vd: VdInEarthS = field(default_factory=VdInEarthS)  # 地理系速度与姿态
+    v: VdInEarthS = field(default_factory=VdInEarthS)  # 地理系速度与姿态
 
 
 @dataclass
@@ -164,7 +164,7 @@ def copy_velocity(src: VdInEarthS, dst: VdInEarthS) -> None:
 def copy_motion(src: MotionProfS, dst: MotionProfS) -> None:
     """复制运动状态对象，包含位置、速度和姿态信息。注意：嵌套对象需要逐层复制。"""
     copy_position(src.pos, dst.pos)
-    copy_velocity(src.vd, dst.vd)
+    copy_velocity(src.v, dst.v)
 
 
 def copy_wayline(src: WayLineS, dst: WayLineS) -> None:

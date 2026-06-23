@@ -210,7 +210,7 @@ def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
         # 位置直接映射 ENU 三轴。
         pos=PosInEarthS(state.x_m, state.y_m, state.altitude_m),
         # 速度含三轴分量、航迹角与地速，供算法做编队/航线解算。
-        vd=VdInEarthS(
+        v=VdInEarthS(
             vEast=state.vx_mps,
             vNorth=state.vy_mps,
             vUp=state.vz_mps,

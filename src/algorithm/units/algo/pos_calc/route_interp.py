@@ -59,12 +59,12 @@ class RouteInterp(PosCalcBase):
         hlen = math.hypot(dx, dy)
         if hlen <= 0.0:
             raise ValueError("wayLine must have non-zero horizontal length")
-        y.selfCmd.vd.vEast = line.vdCmd * dx / hlen
-        y.selfCmd.vd.vNorth = line.vdCmd * dy / hlen
-        y.selfCmd.vd.vUp = line.vdCmd * dz / hlen
-        y.selfCmd.vd.vd = math.hypot(y.selfCmd.vd.vEast, y.selfCmd.vd.vNorth)
-        y.selfCmd.vd.vTheta = math.atan2(y.selfCmd.vd.vUp, y.selfCmd.vd.vd) if line.vdCmd else 0.0
-        y.selfCmd.vd.vPsi = math.atan2(y.selfCmd.vd.vNorth, y.selfCmd.vd.vEast) if line.vdCmd else 0.0
+        y.selfCmd.v.vEast = line.vdCmd * dx / hlen
+        y.selfCmd.v.vNorth = line.vdCmd * dy / hlen
+        y.selfCmd.v.vUp = line.vdCmd * dz / hlen
+        y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
+        y.selfCmd.v.vTheta = math.atan2(y.selfCmd.v.vUp, y.selfCmd.v.vd) if line.vdCmd else 0.0
+        y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast) if line.vdCmd else 0.0
 
     def reset(self) -> None:
         """复位 RouteInterp 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

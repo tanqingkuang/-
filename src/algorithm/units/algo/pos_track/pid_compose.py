@@ -41,8 +41,8 @@ class PidCompose(PosTrackBase):
         """推进 PidCompose 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.selfCmd is None or u.selfState is None or y.accCmd is None:
             raise ValueError("PidCompose ports must be bound")
-        if u.selfState.vd.vd < self._v_min:
-            raise ValueError(f"ground speed below vMin: {u.selfState.vd.vd} < {self._v_min}")
+        if u.selfState.v.vd < self._v_min:
+            raise ValueError(f"ground speed below vMin: {u.selfState.v.vd} < {self._v_min}")
 
         pos_err_enu = (
             u.selfCmd.pos.east - u.selfState.pos.east,
@@ -50,9 +50,9 @@ class PidCompose(PosTrackBase):
             u.selfCmd.pos.h - u.selfState.pos.h,
         )
         vel_err_enu = (
-            u.selfCmd.vd.vEast - u.selfState.vd.vEast,
-            u.selfCmd.vd.vNorth - u.selfState.vd.vNorth,
-            u.selfCmd.vd.vUp - u.selfState.vd.vUp,
+            u.selfCmd.v.vEast - u.selfState.v.vEast,
+            u.selfCmd.v.vNorth - u.selfState.v.vNorth,
+            u.selfCmd.v.vUp - u.selfState.v.vUp,
         )
         pos_err = enu_to_track(pos_err_enu, u.selfState)
         vel_err = enu_to_track(vel_err_enu, u.selfState)

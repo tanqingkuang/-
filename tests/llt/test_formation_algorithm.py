@@ -57,7 +57,7 @@ def _motion(
 ) -> MotionProfS:
     return MotionProfS(
         pos=PosInEarthS(east=east, north=north, h=h),
-        vd=VdInEarthS(vEast=v_east, vNorth=v_north, vUp=v_up, vd=(v_east * v_east + v_north * v_north) ** 0.5),
+        v=VdInEarthS(vEast=v_east, vNorth=v_north, vUp=v_up, vd=(v_east * v_east + v_north * v_north) ** 0.5),
     )
 
 
@@ -120,8 +120,8 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 3.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 0.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 7.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 7.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_route_interp_projects_to_reversed_diagonal_segment(self) -> None:
         """验证反向对角航段投影：selfState=(5,0,5) 应投影到航段中点。"""
@@ -141,8 +141,8 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 2.5)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 2.5)
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, -10.0 / (2.0 ** 0.5))
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, -10.0 / (2.0 ** 0.5))
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, -10.0 / (2.0 ** 0.5))
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -10.0 / (2.0 ** 0.5))
 
     def test_route_interp_extends_after_segment_end(self) -> None:
         """验证单航段过终点后沿切向延拓目标点，避免长机长期追身后的终点。"""
@@ -162,8 +162,8 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 15.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 0.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 7.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 7.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_route_interp_keeps_ground_speed_on_climbing_segment(self) -> None:
         """验证爬升航段上 vdCmd 按地速分解：水平合速度恰为 vdCmd，天向速度由航迹角带出。"""
@@ -182,13 +182,13 @@ class PosCalcTests(unittest.TestCase):
         RouteInterp().step(u, y)
 
         # hlen=50: vEast=50*30/50, vNorth=50*40/50, vUp=50*30/50。
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 30.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 40.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vUp, 30.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 30.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 40.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vUp, 30.0)
         # 核心回归点：地速恒等于 vdCmd，不被爬升角的 cosγ 压小。
-        self.assertAlmostEqual(ctx.selfCmd.vd.vd, 50.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vTheta, math.atan2(30.0, 50.0))
-        self.assertAlmostEqual(ctx.selfCmd.vd.vPsi, math.atan2(40.0, 30.0))
+        self.assertAlmostEqual(ctx.selfCmd.v.vd, 50.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vTheta, math.atan2(30.0, 50.0))
+        self.assertAlmostEqual(ctx.selfCmd.v.vPsi, math.atan2(40.0, 30.0))
 
     def test_route_interp_rejects_pure_vertical_segment(self) -> None:
         """验证纯垂直航段（水平长度为零）被显式拒绝，固定翼地速在该航段无定义。"""
@@ -239,7 +239,7 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 70.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 220.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 995.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 12.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 12.0)
 
     def test_slot_geometry_adds_along_track_catchup_speed(self) -> None:
         """验证僚机落后于前向槽位时，速度指令会沿长机航迹方向增加以收敛待飞距。"""
@@ -264,8 +264,8 @@ class PosCalcTests(unittest.TestCase):
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 10.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 10.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_slot_geometry_rotates_slot_offsets_with_leader_track(self) -> None:
         """验证转弯后槽位随长机航迹旋转，A03 不会继续使用固定 ENU 偏移。"""
@@ -315,8 +315,8 @@ class PosCalcTests(unittest.TestCase):
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 70.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 220.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 0.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_slot_geometry_does_not_add_lateral_position_error_to_velocity(self) -> None:
         """验证槽位单元不把侧向位置误差重复注入速度，侧向收敛交给位置跟踪环。"""
@@ -341,8 +341,8 @@ class PosCalcTests(unittest.TestCase):
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 8.0)
-        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 8.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
 
 class PosTrackTests(unittest.TestCase):

@@ -74,11 +74,11 @@ def _motion_payload(motion: MotionProfS) -> dict[str, dict[str, float]]:
             "h": motion.pos.h,
         },
         "vd": {
-            "vEast": motion.vd.vEast,
-            "vNorth": motion.vd.vNorth,
-            "vUp": motion.vd.vUp,
-            "vTheta": motion.vd.vTheta,
-            "vPsi": motion.vd.vPsi,
-            "vd": motion.vd.vd,
+            "vEast": motion.v.vEast,
+            "vNorth": motion.v.vNorth,
+            "vUp": motion.v.vUp,
+            "vTheta": motion.v.vTheta,
+            "vPsi": motion.v.vPsi,
+            "vd": motion.v.vd,
         },
     }
