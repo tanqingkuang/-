@@ -13,9 +13,10 @@ import math
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 from src.algorithm.context.leaf_types import (
     CommDirE,
@@ -831,36 +832,117 @@ class _DisturbanceEngine:
 
 
 class _DataLogger:
-    """内存日志记录器占位实现。注意：当前不做持久化落盘。"""
+    """关键数据日志记录器。注意：同时保留内存副本并写入 JSONL 文件。"""
+
+    _TIME_KEYS = {"time_s", "duration_s", "step_s"}
+    _SNAPSHOT_OMIT_KEYS = {"step_s", "route", "route_segments"}
+    _LOAD_FACTOR_KEYS = {"nx", "nz"}
+    _ANGLE_SUFFIXES = ("_deg",)
+    _ACCELERATION_SUFFIXES = ("_mps2", "_mps3")
+    _SPEED_SUFFIXES = ("_mps",)
+    _POSITION_SUFFIXES = ("_m",)
 
     def __init__(self) -> None:
         """初始化 _DataLogger 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.snapshots: list[SimulationSnapshot] = []
         self.events: list[SimulationEvent] = []
         self.opened = False
+        self.run_dir: Path | None = None
+        self._snapshot_file = None
+        self._event_file = None
 
     def open(self, run_id: str, config: dict[str, object]) -> None:
-        """打开数据记录器资源。注意：路径为空时保持空操作。"""
-        del run_id, config
+        """打开数据记录器资源。注意：每次运行创建独立日志目录。"""
         self.snapshots.clear()
         self.events.clear()
+        self.close()
+        self.run_dir = self._make_run_dir(run_id)
+        self.run_dir.mkdir(parents=True, exist_ok=False)
+        (self.run_dir / "config.json").write_text(
+            json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        # 使用行缓冲，仿真中断时也尽量保留已记录数据。
+        self._snapshot_file = (self.run_dir / "snapshots.jsonl").open("w", encoding="utf-8", buffering=1)
+        self._event_file = (self.run_dir / "events.jsonl").open("w", encoding="utf-8", buffering=1)
         self.opened = True
 
     def write_snapshot(self, snapshot: SimulationSnapshot) -> None:
         """写入一帧仿真快照。注意：记录器未打开时保持空操作。"""
         self.snapshots.append(snapshot)
+        if self._snapshot_file is not None:
+            record = self._serialize_record(asdict(snapshot), omit_keys=self._SNAPSHOT_OMIT_KEYS)
+            self._snapshot_file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def write_event(self, event: SimulationEvent) -> None:
         """写入一条仿真事件。注意：事件格式需保持可序列化。"""
         self.events.append(event)
+        if self._event_file is not None:
+            self._event_file.write(json.dumps(self._serialize_record(asdict(event)), ensure_ascii=False) + "\n")
 
     def flush(self) -> None:
         """刷新记录缓冲。注意：频繁调用会增加 IO 开销。"""
-        return None
+        for handle in (self._snapshot_file, self._event_file):
+            if handle is not None:
+                handle.flush()
 
     def close(self) -> None:
         """释放 _DataLogger 持有的资源。注意：关闭后不应继续调用运行接口。"""
+        for handle in (self._snapshot_file, self._event_file):
+            if handle is not None:
+                handle.close()
+        self._snapshot_file = None
+        self._event_file = None
         self.opened = False
+
+    @staticmethod
+    def _make_run_dir(run_id: str) -> Path:
+        """生成不冲突的运行日志目录。注意：同一秒多次启动会自动加序号。"""
+        base = Path("logs") / run_id
+        if not base.exists():
+            return base
+        index = 1
+        while True:
+            candidate = Path("logs") / f"{run_id}-{index}"
+            if not candidate.exists():
+                return candidate
+            index += 1
+
+    @classmethod
+    def _serialize_record(cls, record: dict[str, Any], *, omit_keys: set[str] | None = None) -> dict[str, Any]:
+        """按日志精度规则序列化记录。注意：只改变落盘值，不改内存快照。"""
+        ignored = omit_keys or set()
+        return {key: cls._round_log_value(key, value) for key, value in record.items() if key not in ignored}
+
+    @classmethod
+    def _round_log_value(cls, key: str, value: Any) -> Any:
+        """按字段语义四舍五入日志值。注意：嵌套列表和字典递归处理。"""
+        if isinstance(value, dict):
+            return cls._serialize_record(value)
+        if isinstance(value, list):
+            return [cls._round_log_value(key, item) for item in value]
+        if not isinstance(value, float) or not math.isfinite(value):
+            return value
+        decimals = cls._decimals_for_key(key)
+        if decimals is None:
+            return value
+        quant = Decimal("1").scaleb(-decimals)
+        return float(Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP))
+
+    @classmethod
+    def _decimals_for_key(cls, key: str) -> int | None:
+        """返回日志字段小数位规则。注意：未知物理量保持原始精度。"""
+        if key in cls._TIME_KEYS:
+            return 3
+        if key in cls._LOAD_FACTOR_KEYS:
+            return 4
+        if key.endswith(cls._ACCELERATION_SUFFIXES):
+            return 3
+        if key.endswith(cls._ANGLE_SUFFIXES):
+            return 2
+        if key.endswith(cls._SPEED_SUFFIXES) or key.endswith(cls._POSITION_SUFFIXES):
+            return 2
+        return None
 
 
 class SimulationController:
