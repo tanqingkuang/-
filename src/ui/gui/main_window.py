@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QHeaderView,
     QSlider,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -1866,7 +1867,13 @@ class MainWindow(QMainWindow):
         self.segment_lock = QCheckBox("航段锁定")
         self.segment_lock.setChecked(True)
         self.segment_lock.stateChanged.connect(self._on_segment_lock_changed)
-        self.view_angle_label = QLabel("视角 0°")
+        self.view_angle_input = QSpinBox()
+        self.view_angle_input.setRange(0, 360)
+        self.view_angle_input.setPrefix("视角 ")
+        self.view_angle_input.setSuffix("°")
+        self.view_angle_input.setValue(0)
+        self.view_angle_input.setFixedWidth(118)
+        self.view_angle_input.valueChanged.connect(self._on_view_angle_changed)
         self.view_angle_slider = QSlider(Qt.Orientation.Horizontal)
         self.view_angle_slider.setRange(0, 360)
         self.view_angle_slider.setValue(0)
@@ -1877,7 +1884,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.grid_toggle)
         toolbar.addWidget(self.auto_center)
         toolbar.addWidget(self.segment_lock)
-        toolbar.addWidget(self.view_angle_label)
+        toolbar.addWidget(self.view_angle_input)
         toolbar.addWidget(self.view_angle_slider)
         toolbar.addWidget(reset_view)
         layout.addLayout(toolbar)
@@ -2411,7 +2418,10 @@ class MainWindow(QMainWindow):
 
     def _on_view_angle_changed(self, value: int) -> None:
         """处理 view angle changed 信号回调。注意：航段锁定时滑条只显示自动值。"""
-        self.view_angle_label.setText(f"视角 {value}°")
+        with QSignalBlocker(self.view_angle_input):
+            self.view_angle_input.setValue(value)
+        with QSignalBlocker(self.view_angle_slider):
+            self.view_angle_slider.setValue(value)
         if not self.segment_lock.isChecked():
             self.side_view.set_view_angle_deg(float(value))
 
@@ -2427,10 +2437,12 @@ class MainWindow(QMainWindow):
             self.side_view.set_segment_locked(locked)
 
         angle = round(self.side_view.current_view_angle_deg()) % 360
+        with QSignalBlocker(self.view_angle_input):
+            self.view_angle_input.setEnabled(not locked)
+            self.view_angle_input.setValue(angle)
         with QSignalBlocker(self.view_angle_slider):
             self.view_angle_slider.setEnabled(not locked)
             self.view_angle_slider.setValue(angle)
-        self.view_angle_label.setText(f"视角 {angle}°")
 
     def _on_duration_changed(self) -> None:
         """处理 duration changed 信号回调。注意：只在非运行态下更新控制器时长。"""

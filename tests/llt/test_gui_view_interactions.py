@@ -296,14 +296,18 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertTrue(self.window.segment_lock.isChecked())
         self.assertFalse(self.window.view_angle_slider.isEnabled())
+        self.assertFalse(self.window.view_angle_input.isEnabled())
         self.assertEqual(self.window.view_angle_slider.value(), 270)
+        self.assertEqual(self.window.view_angle_input.value(), 270)
         self.assertAlmostEqual(self.window.side_view._horizontal_for_point(1000.0, 300.0), 200.0)
 
         self.window.segment_lock.setChecked(False)
         self.app.processEvents()
 
         self.assertTrue(self.window.view_angle_slider.isEnabled())
+        self.assertTrue(self.window.view_angle_input.isEnabled())
         self.assertEqual(self.window.view_angle_slider.value(), 270)
+        self.assertEqual(self.window.view_angle_input.value(), 270)
         self.assertAlmostEqual(self.window.side_view.view_angle_deg, 270.0)
 
     def test_unlocked_view_angle_slider_projects_by_direction(self) -> None:
@@ -322,10 +326,12 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertFalse(self.window.segment_lock.isEnabled())
         self.assertTrue(self.window.view_angle_slider.isEnabled())
+        self.assertTrue(self.window.view_angle_input.isEnabled())
 
-        self.window.view_angle_slider.setValue(90)
+        self.window.view_angle_input.setValue(90)
         self.app.processEvents()
 
+        self.assertEqual(self.window.view_angle_slider.value(), 90)
         self.assertAlmostEqual(self.window.side_view.view_angle_deg, 90.0)
         self.assertAlmostEqual(self.window.side_view._horizontal_for_point(0.0, 100.0), -100.0)
         self.assertAlmostEqual(self.window.side_view._horizontal_for_point(100.0, 0.0), 0.0, delta=1e-6)
