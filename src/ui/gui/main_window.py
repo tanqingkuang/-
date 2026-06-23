@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from configparser import ConfigParser
+import json
 import math
 import os
 import sys
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QProgressBar,
@@ -452,6 +454,13 @@ class ControllerSimulationAdapter:
         self.speed = speed
         self.controller.set_playback_rate(speed)
 
+    def set_duration(self, duration_s: float) -> Snapshot:
+        """设置仿真总时长。注意：只改变停止边界，不改变步长。"""
+        result = self.controller.set_duration(duration_s)
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        return self.snapshot()
+
     def close(self) -> None:
         """释放 ControllerSimulationAdapter 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self.controller.close()
@@ -722,6 +731,16 @@ class SelectButton(QPushButton):
         self.setText(f"{self._items[index][0]}  ▾")
         if emit:
             self.currentIndexChanged.emit()
+
+    def setCurrentText(self, text: str, *, emit: bool = True) -> None:
+        """按文本设置当前选项。注意：文本不存在时会追加为新选项。"""
+        normalized = str(text)
+        for index, (item_text, _) in enumerate(self._items):
+            if item_text == normalized:
+                self.setCurrentIndex(index, emit=emit)
+                return
+        self._items.append((normalized, normalized))
+        self.setCurrentIndex(len(self._items) - 1, emit=emit)
 
     def currentText(self) -> str:
         """返回当前选项文本。注意：无选项时返回空字符串。"""
@@ -1565,6 +1584,7 @@ class MainWindow(QMainWindow):
         else:
             state_path = Path(config_state_path)
             self.config_state_path = state_path if state_path.is_absolute() else self.project_root / state_path
+        self.current_config_path: Path | None = None
         self.setWindowTitle("编队仿真")
         self.resize(1440, 900)
         self.setMinimumSize(1280, 780)
@@ -1670,18 +1690,22 @@ class MainWindow(QMainWindow):
         self.config_name.setWordWrap(True)
         choose_config = QPushButton("选择文件")
         choose_config.clicked.connect(self._choose_config)
-        # 场景/算法/时长下拉：窄面板内向右弹出菜单避免被裁切。
+        # 场景/算法下拉：窄面板内向右弹出菜单避免被裁切。
         self.scenario_select = SelectButton(132, popup_side="right")
         self.scenario_select.addItems(["三机楔形", "五机纵队", "受限重构"])
         self.algorithm_select = SelectButton(128, popup_side="right")
         self.algorithm_select.addItems(["Follow", "Consensus", "RuleBased"])
-        self.duration_select = SelectButton(96, popup_side="right")
-        self.duration_select.addItems(["120", "180", "300"])
+        self.duration_input = QLineEdit()
+        self.duration_input.setObjectName("durationInput")
+        self.duration_input.setMinimumWidth(96)
+        self.duration_input.setPlaceholderText("秒")
+        self.duration_input.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.duration_input.editingFinished.connect(self._on_duration_changed)
         form.addRow("配置", choose_config)
         form.addRow("", self.config_name)
         form.addRow("场景", self.scenario_select)
         form.addRow("算法", self.algorithm_select)
-        form.addRow("时长(s)", self.duration_select)
+        form.addRow("时长(s)", self.duration_input)
         layout.addWidget(config_group)
 
         # “播放”分组：速度滑块范围 1..100，对应 0.1x..10.0x（见 _on_speed_changed 除以 10）。
@@ -1971,6 +1995,22 @@ class MainWindow(QMainWindow):
                 padding-left: 11px;
                 padding-right: 9px;
             }}
+            QLineEdit {{
+                background: {theme.field.name()};
+                color: {theme.ink.name()};
+                border: 1px solid {theme.line.name()};
+                border-radius: 6px;
+                min-height: 30px;
+                padding: 0 10px;
+            }}
+            QLineEdit:focus {{
+                border-color: {theme.accent.name()};
+            }}
+            QLineEdit:disabled {{
+                color: {theme.muted.name()};
+                background: {theme.line.name()};
+                border-color: {theme.line.name()};
+            }}
             QMenu {{
                 background: {theme.field.name()};
                 color: {theme.ink.name()};
@@ -2038,6 +2078,7 @@ class MainWindow(QMainWindow):
         self.report_label.setText(f"回报：{snapshot.control_report}")
         self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
+        self._sync_duration_input(snapshot)
         # 进度 = time/duration 换算到千分刻度；duration 为 0 时置 0 防除零。
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
         # 依据运行态启停各按钮：未加载配置(UNLOADED)时全部相关操作不可用。
@@ -2168,13 +2209,15 @@ class MainWindow(QMainWindow):
         self._update_snapshot(self.sim.load_config(path), fit_top_view=True)
         if self.sim.last_result_code == "OK":
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。
-            display_path = self._display_config_path(Path(path))
+            config_path = Path(path).resolve()
+            self.current_config_path = config_path
+            display_path = self._display_config_path(config_path)
             self.config_name.setText(display_path)
             self.config_name.setToolTip(display_path)
             self._log("Config", f"加载配置文件 {display_path}")
             # remember=False 用于“自动加载上次配置”场景，避免重复写回。
             if remember:
-                self._save_last_config_path(Path(path))
+                self._save_last_config_path(config_path)
         else:
             # 失败只记录告警，不改动当前已加载配置。
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
@@ -2265,6 +2308,68 @@ class MainWindow(QMainWindow):
         speed = value / 10.0
         self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")
+
+    def _on_duration_changed(self) -> None:
+        """处理 duration changed 信号回调。注意：只在非运行态下更新控制器时长。"""
+        try:
+            duration_s = float(self.duration_input.text())
+        except ValueError:
+            self._log("WARN", f"非法仿真时长：{self.duration_input.text()}")
+            self._sync_duration_input(self.sim.snapshot())
+            return
+        snapshot = self.sim.set_duration(duration_s)
+        self._update_snapshot(snapshot)
+        if self.sim.last_result_code == "OK":
+            try:
+                self._persist_config_duration(duration_s)
+            except Exception as exc:  # noqa: BLE001
+                self._log("WARN", f"写入配置时长失败：{exc}")
+            self._log("Config", f"设置仿真时长 {duration_s:g}s")
+        else:
+            self._log("WARN", f"设置仿真时长失败：{self.sim.last_result_message}")
+            self._sync_duration_input(self.sim.snapshot())
+
+    def _persist_config_duration(self, duration_s: float) -> None:
+        """把当前仿真时长写回配置文件。注意：只更新 duration_s 字段。"""
+        if self.current_config_path is None:
+            raise ValueError("未加载配置文件")
+        path = self.current_config_path
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        if suffix == ".json":
+            config = json.loads(text)
+            if not isinstance(config, dict):
+                raise ValueError("config root must be an object")
+            config["duration_s"] = duration_s
+            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            return
+        if suffix in {".yaml", ".yml"}:
+            try:
+                import yaml
+            except ImportError as exc:  # pragma: no cover - 依赖运行环境
+                raise ValueError("YAML config requires PyYAML") from exc
+            config = yaml.safe_load(text)
+            if not isinstance(config, dict):
+                raise ValueError("config root must be an object")
+            config["duration_s"] = duration_s
+            path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            return
+        raise ValueError("config must be .json, .yaml, or .yml")
+
+    def _sync_duration_input(self, snapshot: Snapshot) -> None:
+        """同步 duration input 显示。注意：加载配置后以控制器快照为准。"""
+        if snapshot.run_state == "UNLOADED":
+            self.duration_input.setEnabled(False)
+            return
+        self.duration_input.setText(self._format_duration_text(snapshot.duration))
+        self.duration_input.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
+
+    @staticmethod
+    def _format_duration_text(duration_s: float) -> str:
+        """格式化仿真时长文本。注意：整数秒不显示小数。"""
+        if math.isfinite(duration_s) and duration_s.is_integer():
+            return str(int(duration_s))
+        return f"{duration_s:.3f}".rstrip("0").rstrip(".")
 
     def _on_theme_changed(self) -> None:
         """处理 theme changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""

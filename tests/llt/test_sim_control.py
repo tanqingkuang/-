@@ -523,8 +523,8 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.05)
             controller.close()
 
-    def test_realtime_logging_records_each_algorithm_frame_with_odd_decimation(self) -> None:
-        """实时 tick 路径下算法分频为奇数时，日志也应记录每个算法更新帧。"""
+    def test_realtime_logging_uses_20_hz_with_odd_algorithm_decimation(self) -> None:
+        """实时 tick 路径下算法分频为奇数时，日志仍应固定按 20Hz 记录。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             config = {
@@ -550,7 +550,7 @@ class SimulationControllerTests(unittest.TestCase):
 
             logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
 
-            self.assertEqual(logged_times, [0.005, 0.02, 0.035, 0.05])
+            self.assertEqual(logged_times, [0.05])
             controller.close()
 
     def test_run_until_complete_finishes_synchronously(self) -> None:
@@ -569,6 +569,59 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(result.code, "OK")
         self.assertEqual(snapshot.run_state, "FINISHED")
         self.assertAlmostEqual(snapshot.time_s, 0.015)
+        controller.close()
+
+    def test_set_duration_updates_snapshot_and_finish_boundary(self) -> None:
+        """界面修改仿真时长后，控制器应使用新时长作为停止边界。"""
+        controller = SimulationController()
+        controller.run_until_complete({"duration_s": 0.005, "step_s": 0.005})
+        controller.reset()
+
+        result = controller.set_duration(0.01)
+        controller.step(2)
+        snapshot = controller.get_snapshot()
+
+        self.assertEqual(result.code, "OK")
+        self.assertAlmostEqual(snapshot.duration_s, 0.01)
+        self.assertEqual(snapshot.run_state, "FINISHED")
+        self.assertAlmostEqual(snapshot.time_s, 0.01)
+        controller.close()
+
+    def test_set_duration_rejects_time_before_current_snapshot(self) -> None:
+        """暂停态修改总时长不能回退仿真时间，否则快照时间会和模型状态不一致。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=1.0, step_s=0.005)))
+            controller.step(100)
+            before = controller.get_snapshot()
+
+            result = controller.set_duration(0.2)
+            after = controller.get_snapshot()
+
+            self.assertEqual(result.code, "ERR_INVALID_ARGUMENT")
+            self.assertAlmostEqual(before.time_s, 0.5)
+            self.assertAlmostEqual(after.time_s, before.time_s)
+            self.assertAlmostEqual(after.duration_s, before.duration_s)
+            self.assertEqual(after.run_state, "PAUSED")
+            self.assertAlmostEqual(after.nodes[0].x_m, before.nodes[0].x_m)
+            controller.close()
+
+    def test_timed_data_logger_records_snapshots_at_20_hz(self) -> None:
+        """关键数据记录应固定为 20Hz，而不是固定每 10 个 tick。"""
+        controller = SimulationController()
+
+        result = controller.run_until_complete(
+            {
+                "duration_s": 0.1,
+                "step_s": 0.01,
+                "nodes": [{"node_id": "A01"}],
+                "links": [],
+            }
+        )
+        logged_times = [round(snapshot.time_s, 6) for snapshot in controller._logger.snapshots]
+
+        self.assertEqual(result.code, "OK")
+        self.assertEqual(logged_times, [0.05, 0.1])
         controller.close()
 
     def test_empty_config_does_not_create_default_aircraft_or_links(self) -> None:

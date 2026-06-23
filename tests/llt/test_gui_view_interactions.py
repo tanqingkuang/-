@@ -553,6 +553,58 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(directions["A02-A03"], "单向")
         self.assertEqual(self.window.link_table.horizontalScrollBar().maximum(), 0)
 
+    def test_duration_input_syncs_loaded_config_duration(self) -> None:
+        self._load_ui_config(duration_s=2400.0)
+
+        self.assertEqual(self.window.duration_input.text(), "2400")
+        self.assertEqual(self.window.timeline_label.text(), "0.0 / 2400s")
+
+    def test_duration_input_updates_controller_duration_on_edit_finished(self) -> None:
+        self._load_ui_config(duration_s=2400.0)
+
+        self.window.duration_input.setText("120")
+        self.window.duration_input.editingFinished.emit()
+        self.app.processEvents()
+        snapshot = self.window.sim.controller.get_snapshot()
+
+        self.assertAlmostEqual(snapshot.duration_s, 120.0)
+        self.assertEqual(self.window.timeline_label.text(), "0.0 / 120s")
+
+    def test_duration_input_persists_json_config_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = self._write_config_file(Path(tmp) / "case.json")
+            self.window._apply_config_path(str(config_path))
+
+            self.window.duration_input.setText("1200")
+            self.window.duration_input.editingFinished.emit()
+            self.app.processEvents()
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertAlmostEqual(config["duration_s"], 1200.0)
+
+    def test_duration_input_rejects_value_before_current_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = self._write_config_file(Path(tmp) / "case.json")
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["duration_s"] = 1.0
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            self.window._apply_config_path(str(config_path))
+            self.window.sim.controller.step(100)
+            self.window._update_snapshot(self.window.sim.snapshot())
+
+            self.window.duration_input.setText("0.2")
+            self.window.duration_input.editingFinished.emit()
+            self.app.processEvents()
+            snapshot = self.window.sim.controller.get_snapshot()
+            saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(self.window.sim.last_result_code, "ERR_INVALID_ARGUMENT")
+            self.assertEqual(self.window.duration_input.text(), "1")
+            self.assertAlmostEqual(saved_config["duration_s"], 1.0)
+            self.assertEqual(snapshot.run_state, "PAUSED")
+            self.assertAlmostEqual(snapshot.time_s, 0.5)
+            self.assertAlmostEqual(snapshot.duration_s, 1.0)
+
     def _load_ui_config(
         self,
         *,

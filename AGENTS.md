@@ -45,6 +45,26 @@ NODE
 git diff --check
 ```
 
+### 注释覆盖率检查
+
+每次 AI 修改 `src/` 下 Python 代码后，必须执行 `.claude/skills/comment-coverage` 对应检查：
+
+```bash
+python -X utf8 scripts/comment_coverage.py \
+  --fail-under-module 100 \
+  --fail-under-class 100 \
+  --fail-under-func 100 \
+  --fail-under-inline 15 \
+  --worst 12
+```
+
+要求：
+
+- 退出码为 `0` 才能交付。
+- 若检查失败，必须先补充必要的模块、类、函数 docstring 或行内注释，再重新运行检查。
+- 若本次修改不涉及 `src/` 下 Python 代码，可以跳过，但最终回复中必须说明“未运行 comment-coverage，因为未修改 src Python 代码”。
+- 最终交付回复必须列出该检查的通过 / 跳过 / 失败状态。
+
 ### PySide6 GUI 自测试
 
 PySide6 窗体至少要做 offscreen 构造测试：
