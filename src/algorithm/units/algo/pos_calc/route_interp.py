@@ -54,10 +54,14 @@ class RouteInterp(PosCalcBase):
         y.selfCmd.pos.north = start.north + t * dy
         y.selfCmd.pos.h = start.h + t * dz
 
-        length = math.sqrt(length2)
-        y.selfCmd.vd.vEast = line.vdCmd * dx / length
-        y.selfCmd.vd.vNorth = line.vdCmd * dy / length
-        y.selfCmd.vd.vUp = line.vdCmd * dz / length
+        # vdCmd 是地速（水平速度），故按水平投影长度分解：hypot(vEast,vNorth) 恰为 vdCmd，
+        # vUp 由航迹角自然带出。固定翼不存在纯垂直航段，水平长度为零视为非法航线。
+        hlen = math.hypot(dx, dy)
+        if hlen <= 0.0:
+            raise ValueError("wayLine must have non-zero horizontal length")
+        y.selfCmd.vd.vEast = line.vdCmd * dx / hlen
+        y.selfCmd.vd.vNorth = line.vdCmd * dy / hlen
+        y.selfCmd.vd.vUp = line.vdCmd * dz / hlen
         y.selfCmd.vd.vd = math.hypot(y.selfCmd.vd.vEast, y.selfCmd.vd.vNorth)
         y.selfCmd.vd.vTheta = math.atan2(y.selfCmd.vd.vUp, y.selfCmd.vd.vd) if line.vdCmd else 0.0
         y.selfCmd.vd.vPsi = math.atan2(y.selfCmd.vd.vNorth, y.selfCmd.vd.vEast) if line.vdCmd else 0.0
