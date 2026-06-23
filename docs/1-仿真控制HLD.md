@@ -301,7 +301,7 @@ def set_playback_rate(rate: float) -> CommandResult
 语义：
 
 - 设置 wall-clock 到 sim-time 的推进倍率。
-- 合法范围 `0.1 <= rate <= 10.0`。
+- 合法范围 `0.1 <= rate <= 20.0`。
 - 不改变 `step_s`，不改变算法输入语义。
 
 ### 5.11 注入扰动

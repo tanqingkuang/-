@@ -1013,7 +1013,8 @@ class SimulationControllerTests(unittest.TestCase):
 
             self.assertEqual(missing.code, "ERR_CONFIG_NOT_FOUND")
             self.assertEqual(invalid.code, "ERR_CONFIG_INVALID")
-            self.assertEqual(controller.set_playback_rate(20.0).code, "ERR_INVALID_ARGUMENT")
+            self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
+            self.assertEqual(controller.set_playback_rate(20.1).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual(controller.step(0).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual(controller.inject_disturbance({"type": "bad"}).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual([event.level for event in controller.get_recent_events(limit=1, min_level="WARN")], ["WARN"])

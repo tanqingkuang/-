@@ -65,6 +65,8 @@ ResultCode = Literal[
 _DEFAULT_ALGORITHM_DECIMATION = 10
 _COMM_DECIMATION = 2
 _SNAPSHOT_DECIMATION = 2
+_MIN_PLAYBACK_RATE = 0.1
+_MAX_PLAYBACK_RATE = 20.0
 
 
 @dataclass(frozen=True)
@@ -541,7 +543,7 @@ class _ConfigLoader:
 
     def validate(self, config: dict[str, object]) -> None:
         """校验配置结构和关键字段。注意：这里只做控制器需要的基础校验。"""
-        # 核心时序参数取值范围校验：时长/步长为正，倍率落在 [0.1,10]。
+        # 核心时序参数取值范围校验：时长/步长为正，倍率落在允许范围内。
         duration_s = float(config.get("duration_s", 120.0))
         step_s = float(config.get("step_s", 0.005))
         playback_rate = float(config.get("playback_rate", 1.0))
@@ -550,8 +552,8 @@ class _ConfigLoader:
             raise ValueError("duration_s must be positive")
         if step_s <= 0:
             raise ValueError("step_s must be positive")
-        if not 0.1 <= playback_rate <= 10.0:
-            raise ValueError("playback_rate must be in [0.1, 10.0]")
+        if not _MIN_PLAYBACK_RATE <= playback_rate <= _MAX_PLAYBACK_RATE:
+            raise ValueError(f"playback_rate must be in [{_MIN_PLAYBACK_RATE}, {_MAX_PLAYBACK_RATE}]")
         if (
             isinstance(algorithm_decimation, bool)
             or not isinstance(algorithm_decimation, int)
@@ -1218,9 +1220,12 @@ class SimulationController:
     def set_playback_rate(self, rate: float) -> CommandResult:
         """设置播放倍率。注意：只影响墙钟调度，不改变仿真步长。"""
 
-        # 倍率限定在 [0.1,10]，仅改墙钟节流，不改仿真步长（结果可复现）。
-        if not 0.1 <= rate <= 10.0:
-            return CommandResult("ERR_INVALID_ARGUMENT", "rate must be in [0.1, 10.0]")
+        # 倍率限定在允许范围内，仅改墙钟节流，不改仿真步长（结果可复现）。
+        if not _MIN_PLAYBACK_RATE <= rate <= _MAX_PLAYBACK_RATE:
+            return CommandResult(
+                "ERR_INVALID_ARGUMENT",
+                f"rate must be in [{_MIN_PLAYBACK_RATE}, {_MAX_PLAYBACK_RATE}]",
+            )
         with self._lock:
             self._playback_rate = float(rate)
         return CommandResult("OK", "playback rate updated")
