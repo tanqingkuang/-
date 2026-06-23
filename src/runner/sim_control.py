@@ -1327,9 +1327,10 @@ class SimulationController:
             return self._latest_snapshot
         step_s = self._step_s
         tick_index = self._tick_index
+        algorithm_tick = tick_index % self._algorithm_decimation == 0
 
         # 分频调度：算法链路按配置分频运行，控制频率低于积分频率以降低算力开销。
-        if tick_index % self._algorithm_decimation == 0:
+        if algorithm_tick:
             self._run_formation_algorithms_unlocked()
         # 通信分频推进，传入累计步长以保持时延计时一致。
         if tick_index % _COMM_DECIMATION == 0:
@@ -1353,13 +1354,18 @@ class SimulationController:
         elif self._run_state == "RUNNING":
             self._control_report = self._derive_control_report_unlocked()
 
-        # 快照生成同样分频：强制、偶数 tick 或结束时才重建，减少对象分配。
+        # 快照生成按显示分频；算法帧额外生成一帧，保证日志不漏记算法更新。
         snapshot: SimulationSnapshot | None = None
-        if force_snapshot or tick_index % _SNAPSHOT_DECIMATION == 0 or self._run_state == "FINISHED":
+        if (
+            force_snapshot
+            or algorithm_tick
+            or tick_index % _SNAPSHOT_DECIMATION == 0
+            or self._run_state == "FINISHED"
+        ):
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
         # 快照落盘频率与算法周期对齐，仅记录算法刚跑过的那一帧。
-        if tick_index % self._algorithm_decimation == 0 and snapshot is not None:
+        if algorithm_tick and snapshot is not None:
             self._logger.write_snapshot(snapshot)
         # 仅当达到显示刷新间隔或仿真结束时才回传快照触发 UI 更新，否则返回 None 抑制刷新。
         if self._should_refresh_display_unlocked() or self._run_state == "FINISHED":
