@@ -61,6 +61,10 @@ ResultCode = Literal[
     "ERR_INTERNAL",
 ]
 
+_DEFAULT_ALGORITHM_DECIMATION = 10
+_COMM_DECIMATION = 2
+_SNAPSHOT_DECIMATION = 2
+
 
 @dataclass(frozen=True)
 class NodeState:
@@ -538,12 +542,19 @@ class _ConfigLoader:
         duration_s = float(config.get("duration_s", 120.0))
         step_s = float(config.get("step_s", 0.005))
         playback_rate = float(config.get("playback_rate", 1.0))
+        algorithm_decimation = config.get("algorithm_decimation", _DEFAULT_ALGORITHM_DECIMATION)
         if duration_s <= 0:
             raise ValueError("duration_s must be positive")
         if step_s <= 0:
             raise ValueError("step_s must be positive")
         if not 0.1 <= playback_rate <= 10.0:
             raise ValueError("playback_rate must be in [0.1, 10.0]")
+        if (
+            isinstance(algorithm_decimation, bool)
+            or not isinstance(algorithm_decimation, int)
+            or algorithm_decimation <= 0
+        ):
+            raise ValueError("algorithm_decimation must be a positive integer")
         nodes = config.get("nodes", [])
         links = config.get("links", [])
         model = config.get("model", {})
@@ -568,6 +579,7 @@ class _NodeAlgorithm:
         comm_init: FormCommInitS,
         initial_leader_state: MotionProfS | None,
         leader_route: RouteS | None,
+        control_period_s: float,
     ) -> None:
         """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
@@ -585,6 +597,7 @@ class _NodeAlgorithm:
                 selfInit=FormSelfInitS(node_id),
                 commInit=comm_init,
                 route=leader_route,
+                control_period_s=control_period_s,
             )
         )
         # 僚机预置：直接进入 HOLD/三角队形并写入长机初态，避免冷启动时无参考。
@@ -872,6 +885,8 @@ class SimulationController:
         self._time_s = 0.0
         self._tick_index = 0
         self._playback_rate = 1.0
+        self._algorithm_decimation = _DEFAULT_ALGORITHM_DECIMATION
+        self._algorithm_period_s = self._step_s * self._algorithm_decimation
         self._run_state: RunState = "UNLOADED"
         self._control_report: ControlReport = "待命"
         self._latest_snapshot = self._make_snapshot_for_empty_controller()
@@ -1244,6 +1259,8 @@ class SimulationController:
         self._duration_s = float(config.get("duration_s", 120.0))
         self._step_s = float(config.get("step_s", 0.005))
         self._playback_rate = float(config.get("playback_rate", 1.0))
+        self._algorithm_decimation = int(config.get("algorithm_decimation", _DEFAULT_ALGORITHM_DECIMATION))
+        self._algorithm_period_s = self._step_s * self._algorithm_decimation
         # 时间与计数归零，保证每次初始化都是干净起点。
         self._time_s = 0.0
         self._tick_index = 0
@@ -1291,6 +1308,7 @@ class SimulationController:
                 formation_comm_init,
                 initial_leader_motion,
                 leader_route,
+                self._algorithm_period_s,
             )
             for node_id in states
         }
@@ -1310,12 +1328,12 @@ class SimulationController:
         step_s = self._step_s
         tick_index = self._tick_index
 
-        # 分频调度：算法链路每 10 个 tick 跑一次（控制频率远低于积分频率，降低算力开销）。
-        if tick_index % 10 == 0:
+        # 分频调度：算法链路按配置分频运行，控制频率低于积分频率以降低算力开销。
+        if tick_index % self._algorithm_decimation == 0:
             self._run_formation_algorithms_unlocked()
-        # 通信每 2 个 tick 推进一次，故传入 2 倍步长以保持时延计时一致。
-        if tick_index % 2 == 0:
-            self._comm.tick(step_s * 2.0)
+        # 通信分频推进，传入累计步长以保持时延计时一致。
+        if tick_index % _COMM_DECIMATION == 0:
+            self._comm.tick(step_s * _COMM_DECIMATION)
 
         # 先把当前控制指令施加到模型（算法分频更新，未更新的 tick 沿用上次控制）。
         self._model.apply_controls(self._current_controls)
@@ -1337,11 +1355,11 @@ class SimulationController:
 
         # 快照生成同样分频：强制、偶数 tick 或结束时才重建，减少对象分配。
         snapshot: SimulationSnapshot | None = None
-        if force_snapshot or tick_index % 2 == 0 or self._run_state == "FINISHED":
+        if force_snapshot or tick_index % _SNAPSHOT_DECIMATION == 0 or self._run_state == "FINISHED":
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
-        # 快照落盘频率更低（每 10 tick），仅记录算法刚跑过的那一帧。
-        if tick_index % 10 == 0 and snapshot is not None:
+        # 快照落盘频率与算法周期对齐，仅记录算法刚跑过的那一帧。
+        if tick_index % self._algorithm_decimation == 0 and snapshot is not None:
             self._logger.write_snapshot(snapshot)
         # 仅当达到显示刷新间隔或仿真结束时才回传快照触发 UI 更新，否则返回 None 抑制刷新。
         if self._should_refresh_display_unlocked() or self._run_state == "FINISHED":

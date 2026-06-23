@@ -493,6 +493,21 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertNotEqual(controller._current_controls["A02"].as_vector(), (0.0, 0.0, 0.0))
             controller.close()
 
+    def test_algorithm_pid_period_follows_simulation_step_and_decimation(self) -> None:
+        """编队 PID 控制周期应由仿真步长和算法分频统一注入，避免修改帧频后仍沿用固定 dt。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp), duration_s=0.02, step_s=0.02)
+            controller = SimulationController()
+            controller.load_config(str(config_path))
+
+            leader = controller._node_algorithms["A01"]._entity
+            follower = controller._node_algorithms["A02"]._entity
+
+            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.2)
+            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.2)
+            controller.close()
+
     def test_run_until_complete_finishes_synchronously(self) -> None:
         controller = SimulationController()
 

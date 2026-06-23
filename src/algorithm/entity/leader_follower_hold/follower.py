@@ -36,7 +36,7 @@ class FollowerEntity(EntityBase):
         self._inbound.init(None)
         self._tra_plan.init(None)
         self._pos_calc.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
-        self._pos_track.init(_default_tracker_init())
+        self._pos_track.init(_default_tracker_init(cfg.control_period_s))
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
         self._inbound_u = InboundInputS(inbox=self._inbox)

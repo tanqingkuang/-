@@ -15,6 +15,7 @@ class EntityInitS:
     selfInit: FormSelfInitS = field(default_factory=FormSelfInitS)  # 本机标识
     commInit: FormCommInitS = field(default_factory=FormCommInitS)  # 通信拓扑与队形配置
     route: RouteS | None = None  # 预置航线，僚机无需航线时为 None
+    control_period_s: float = 0.1  # 控制算法处理周期，单位 s
 
 
 @dataclass
