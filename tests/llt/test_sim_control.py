@@ -523,8 +523,8 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.05)
             controller.close()
 
-    def test_realtime_logging_records_each_algorithm_frame_with_odd_decimation(self) -> None:
-        """实时 tick 路径下算法分频为奇数时，日志也应记录每个算法更新帧。"""
+    def test_realtime_logging_uses_20_hz_with_odd_algorithm_decimation(self) -> None:
+        """实时 tick 路径下算法分频为奇数时，日志仍应固定按 20Hz 记录。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             config = {
@@ -550,7 +550,7 @@ class SimulationControllerTests(unittest.TestCase):
 
             logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
 
-            self.assertEqual(logged_times, [0.005, 0.02, 0.035, 0.05])
+            self.assertEqual(logged_times, [0.05])
             controller.close()
 
     def test_run_until_complete_finishes_synchronously(self) -> None:
