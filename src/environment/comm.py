@@ -1,4 +1,4 @@
-"""Communication channel simulation."""
+"""通信链路仿真模块。注意：负责拓扑、延迟、丢包和故障。"""
 
 import copy
 import dataclasses
@@ -74,7 +74,7 @@ def _check_finite_num(v: object, name: str) -> float:
 
 
 class CommunicationChannel:
-    """Route messages by topology and QoS configuration."""
+    """按拓扑和 QoS 配置路由消息。注意：链路状态会影响消息投递。"""
 
     def __init__(self) -> None:
         """初始化 CommunicationChannel 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -176,7 +176,7 @@ class CommunicationChannel:
             lst.clear()
 
     def update_topology(self, config: dict) -> None:
-        # Phase 1: validate all links and detect duplicates — no mutations yet.
+        # 阶段 1：先校验全部链路并检查重复项，此阶段不修改状态。
         """更新通信拓扑和链路配置。注意：运行中更新会重建链路状态和收件箱。"""
         links_raw = config.get("links", [])
         if not isinstance(links_raw, list):
@@ -196,7 +196,7 @@ class CommunicationChannel:
                 raise ValueError(f"duplicate link in update_topology: {link_id!r}")
             seen_keys.update(keys)
             pending.append((keys, latency_ms, loss_rate))
-        # Phase 2: apply atomically — only reached when all checks pass.
+        # 阶段 2：所有检查通过后再原子应用配置。
         for keys, latency_ms, loss_rate in pending:
             for key in keys:
                 self._links[key].latency_ms = latency_ms

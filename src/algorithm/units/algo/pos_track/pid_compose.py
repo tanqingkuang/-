@@ -1,4 +1,4 @@
-"""PID-composed position tracking."""
+"""PID 组合式位置跟踪。注意：前向速度和侧向/高度位置环分开处理。"""
 
 from __future__ import annotations
 

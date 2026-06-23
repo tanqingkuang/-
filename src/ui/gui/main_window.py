@@ -1,4 +1,4 @@
-"""PySide6 main window for the formation simulation UI."""
+"""编队仿真 PySide6 主窗口。注意：正式 GUI 入口在本模块。"""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def default_project_root() -> Path:
 
 @dataclass
 class TrailPoint:
-    """One sampled position in simulation time."""
+    """仿真时间中的一个轨迹采样点。注意：用于绘制历史尾迹。"""
 
     x: float
     y: float
@@ -78,7 +78,7 @@ class TrailPoint:
 
 @dataclass
 class NodeState:
-    """Display state for one aircraft node."""
+    """单个飞机节点的显示状态。注意：字段用于 GUI 绘图和表格。"""
 
     node_id: str
     role: str
@@ -95,7 +95,7 @@ class NodeState:
 
 @dataclass
 class LinkState:
-    """Display state for one communication link."""
+    """单条通信链路的显示状态。注意：loss 为 0 到 1 的比例。"""
 
     source: str
     target: str
@@ -107,7 +107,7 @@ class LinkState:
 
 @dataclass
 class ReferenceRoute:
-    """Reference route segment for top and side views."""
+    """俯视图和侧视图共用的参考航段。注意：坐标单位为米。"""
 
     start_x: float
     start_y: float
@@ -119,7 +119,7 @@ class ReferenceRoute:
 
 @dataclass
 class Snapshot:
-    """UI-facing simulation snapshot."""
+    """面向 UI 的仿真快照。注意：由真实控制器或 mock 数据适配得到。"""
 
     time: float
     duration: float
@@ -134,7 +134,7 @@ class Snapshot:
 
 
 class MockSimulation:
-    """Small UI-only simulation source until the real controller is connected."""
+    """真实控制器接入前使用的小型 UI 演示数据源。注意：仅作为界面兜底。"""
 
     def __init__(self) -> None:
         """初始化 MockSimulation 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -285,7 +285,7 @@ class MockSimulation:
 
 
 class ControllerSimulationAdapter:
-    """Adapt SimulationController snapshots to the existing UI drawing model."""
+    """把 SimulationController 快照适配为现有 GUI 绘图模型。注意：需要维护尾迹缓存。"""
 
     def __init__(self) -> None:
         """初始化 ControllerSimulationAdapter 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -328,7 +328,7 @@ class ControllerSimulationAdapter:
         if snapshot.run_state == "RUNNING":
             result = self.controller.pause()
         elif snapshot.run_state == "PAUSED":
-            # UI convenience: the pause button becomes "continue" in PAUSED state.
+            # UI 交互便利：暂停态下同一个按钮表示继续。
             result = self.controller.start()
         else:
             result = self.controller.pause()
@@ -523,7 +523,7 @@ def link_direction_label(direction: str) -> str:
 
 
 class Theme:
-    """Centralized colors for one UI theme."""
+    """单个 UI 主题的集中配色。注意：主题切换时画布和控件共用这些颜色。"""
 
     def __init__(
         self,
@@ -597,7 +597,7 @@ THEMES = {
 
 
 class SelectButton(QPushButton):
-    """Push-button backed option selector with a controlled popup position."""
+    """基于按钮的选项选择器。注意：弹出菜单位置由控件主动控制。"""
 
     currentIndexChanged = Signal()
 
@@ -666,7 +666,7 @@ class SelectButton(QPushButton):
 
 
 class TopView(QGraphicsView):
-    """Top-down formation view with pan and zoom."""
+    """支持平移和缩放的俯视编队视图。注意：只负责显示，不修改仿真状态。"""
 
     viewChanged = Signal()
     manualViewChanged = Signal()
@@ -995,7 +995,7 @@ class TopView(QGraphicsView):
 
 
 class SideView(QWidget):
-    """Altitude over distance side view."""
+    """高度随待飞距变化的侧视图。注意：横向视野与俯视图同步。"""
 
     ALTITUDE_MIN_DEFAULT = 1120.0
     ALTITUDE_MAX_DEFAULT = 1320.0
@@ -1279,7 +1279,7 @@ class SideView(QWidget):
 
 
 class LogDialog(QDialog):
-    """Popup dialog for simulation events."""
+    """仿真事件弹窗。注意：只展示日志文本。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化 LogDialog 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -1300,7 +1300,7 @@ class LogDialog(QDialog):
 
 
 class StageFullscreenDialog(QDialog):
-    """Top-level shell used to fullscreen only the realtime display stage."""
+    """只用于全屏实时显示区的顶层外壳。注意：退出时需归还原控件。"""
 
     def __init__(self, owner: "MainWindow") -> None:
         """初始化 StageFullscreenDialog 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -1324,7 +1324,7 @@ class StageFullscreenDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    """Main PySide6 UI shell."""
+    """PySide6 主界面外壳。注意：负责组装控件并绑定控制器操作。"""
 
     def __init__(
         self,

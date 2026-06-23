@@ -1,4 +1,4 @@
-"""PID atomic control law."""
+"""PID 原子控制律。注意：积分和输出限幅由配置决定。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from src.algorithm.units.algo.formation_math import clamp
 
 
 class Pid(CtrlBase):
-    """Single-axis PID using velocity error as the derivative term."""
+    """单轴 PID 控制器，微分项使用速度误差。注意：reset 会清除积分和上一拍误差。"""
 
     def __init__(self) -> None:
         """初始化 Pid 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""

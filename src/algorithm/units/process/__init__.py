@@ -1,1 +1,1 @@
-"""Mode-aware formation process units."""
+"""感知编队模式的流程单元包。注意：流程单元负责任务编排和消息处理。"""

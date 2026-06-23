@@ -1,4 +1,4 @@
-"""Three-degree-of-freedom UAV point-mass model in ENU coordinates."""
+"""ENU 坐标系下的无人机三自由度质点模型。注意：内部角度使用弧度。"""
 
 from __future__ import annotations
 
@@ -21,10 +21,7 @@ _MAX_ABS_THETA_RAD = math.radians(89.0)
 
 @dataclass(frozen=True)
 class AccelerationCommand:
-    """ENU acceleration command produced by the node controller.
-
-    ``ax`` points east, ``ay`` points north, and ``az`` points up.
-    """
+    """说明该类的职责和边界。注意：如需修改字段或接口，需同步调用方和测试。"""
 
     ax_cmd_mps2: float = 0.0
     ay_cmd_mps2: float = 0.0
@@ -37,7 +34,7 @@ class AccelerationCommand:
 
 @dataclass(frozen=True)
 class PointMassModelConfig:
-    """Numerical and physical constants for the 3-DOF point-mass model."""
+    """三自由度质点模型的数值和物理常量。注意：配置需满足基础可飞约束。"""
 
     gravity_mps2: float
     min_speed_mps: float
@@ -54,14 +51,7 @@ class PointMassModelConfig:
 
 @dataclass
 class AircraftState:
-    """Runtime state of one UAV.
-
-    The augmented state vector is ordered as
-    ``[E, N, U, V, theta, psi, aE, aN, aU, aE_dot, aN_dot, aU_dot]``.
-    The last six states are the second-order response to the ENU
-    acceleration command. They are converted to ``N_x / N_z / phi`` before
-    evaluating the point-mass equations.
-    """
+    """说明该类的职责和边界。注意：如需修改字段或接口，需同步调用方和测试。"""
 
     node_id: str
     x_m: float
@@ -147,7 +137,7 @@ class AircraftState:
 
 @dataclass(frozen=True)
 class PointMassInputs:
-    """Inputs to the 3-DOF point-mass equations."""
+    """三自由度质点方程输入。注意：由加速度指令映射得到。"""
 
     nx: float
     nz: float
@@ -155,7 +145,7 @@ class PointMassInputs:
 
 
 class PointMass3DoFModel:
-    """Nonlinear 3-DOF point-mass model with an acceleration input filter."""
+    """带加速度输入滤波的非线性三自由度质点模型。注意：积分前会做指令限幅。"""
 
     def __init__(self, config: PointMassModelConfig) -> None:
         """初始化 PointMass3DoFModel 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -342,7 +332,7 @@ class PointMass3DoFModel:
 
 
 class ModelIterator:
-    """Own and advance all UAV point-mass model instances."""
+    """持有并推进全部无人机质点模型实例。注意：reset 会恢复配置初始状态。"""
 
     DEFAULT_GRAVITY_MPS2 = 9.80665
     DEFAULT_MIN_SPEED_MPS = 1.0

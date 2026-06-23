@@ -1,4 +1,4 @@
-"""Leader entity for the leader-following hold scenario."""
+"""领航跟随保持场景的长机实体。注意：负责规划航线并广播状态。"""
 
 from __future__ import annotations
 

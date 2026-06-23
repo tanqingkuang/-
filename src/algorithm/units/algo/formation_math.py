@@ -1,4 +1,4 @@
-"""Stateless math helpers for formation algorithms."""
+"""编队算法无状态数学工具。注意：函数不应保存跨帧状态。"""
 
 from __future__ import annotations
 

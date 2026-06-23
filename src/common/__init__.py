@@ -1,2 +1,2 @@
-"""Shared clock, state machine, and message envelope utilities."""
+"""共享时钟、状态机和消息信封工具包。注意：供控制器和算法共同使用。"""
 

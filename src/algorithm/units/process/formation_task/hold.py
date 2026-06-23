@@ -1,4 +1,4 @@
-"""Hold-mode placeholder task orchestration."""
+"""保持模式任务编排实现。注意：当前固定输出三角队形保持。"""
 
 from __future__ import annotations
 

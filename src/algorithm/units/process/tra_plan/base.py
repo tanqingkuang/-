@@ -1,4 +1,4 @@
-"""Base API for trajectory planning."""
+"""轨迹规划基础接口。注意：输出航段需保持完整起终点信息。"""
 
 from __future__ import annotations
 

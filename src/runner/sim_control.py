@@ -64,12 +64,12 @@ ResultCode = Literal[
 
 @dataclass(frozen=True)
 class NodeState:
-    """UI/CLI-facing state for one aircraft node."""
+    """面向 UI/CLI 的单个飞机节点状态。注意：字段单位为界面展示契约。"""
 
     node_id: str
     role: str
     health: str
-    # ENU position: x=east, y=north, altitude=up.
+    # ENU 位置：x 为东向，y 为北向，altitude 为天向。
     x_m: float
     y_m: float
     altitude_m: float
@@ -88,7 +88,7 @@ class NodeState:
 
 @dataclass(frozen=True)
 class LinkState:
-    """UI/CLI-facing state for one communication link."""
+    """面向 UI/CLI 的单条通信链路状态。注意：双向链路会折叠为配置链路显示。"""
 
     link_id: str
     direction: str
@@ -99,7 +99,7 @@ class LinkState:
 
 @dataclass(frozen=True)
 class RouteState:
-    """UI-facing reference route segment in ENU coordinates."""
+    """面向 UI 的 ENU 参考航段。注意：只表示单个航段。"""
 
     start_x_m: float
     start_y_m: float
@@ -111,7 +111,7 @@ class RouteState:
 
 @dataclass(frozen=True)
 class SimulationSnapshot:
-    """Complete realtime observation payload."""
+    """完整实时观测快照。注意：供 GUI、CLI 和订阅回调读取。"""
 
     time_s: float
     duration_s: float
@@ -126,7 +126,7 @@ class SimulationSnapshot:
 
 @dataclass(frozen=True)
 class SimulationEvent:
-    """Recent event entry for UI log windows and CLI diagnostics."""
+    """近期事件记录。注意：用于 GUI 日志窗口和 CLI 诊断。"""
 
     time_s: float
     level: EventLevel
@@ -136,7 +136,7 @@ class SimulationEvent:
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Result of an application-layer command."""
+    """应用层命令执行结果。注意：code 用于程序判断，message 用于显示。"""
 
     code: ResultCode
     message: str = ""
@@ -144,7 +144,7 @@ class CommandResult:
 
 @dataclass(frozen=True)
 class DisturbanceCommand:
-    """Dynamic disturbance command accepted by ``inject_disturbance``."""
+    """inject_disturbance 接收的动态扰动命令。注意：params 必须可序列化。"""
 
     type: DisturbanceType
     target: str | None = None
@@ -153,7 +153,7 @@ class DisturbanceCommand:
 
 
 class Subscription:
-    """Handle returned by ``subscribe_snapshot``."""
+    """subscribe_snapshot 返回的订阅句柄。注意：调用 unsubscribe 可取消回调。"""
 
     def __init__(self, unsubscribe: Callable[[], None]) -> None:
         """初始化 Subscription 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -471,7 +471,7 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
 
 
 class _ConfigLoader:
-    """Minimal JSON/YAML loader for the first controller implementation."""
+    """控制器首版使用的轻量 JSON/YAML 加载器。注意：YAML 依赖缺失时只支持 JSON。"""
 
     def load(self, path: str) -> dict[str, object]:
         """加载控制器配置并构造运行所需对象。注意：重复加载会覆盖当前场景。"""
@@ -484,7 +484,7 @@ class _ConfigLoader:
         elif config_path.suffix.lower() in {".yaml", ".yml"}:
             try:
                 import yaml
-            except ImportError as exc:  # pragma: no cover - depends on env
+            except ImportError as exc:  # pragma: no cover - 依赖运行环境
                 raise ValueError("YAML config requires PyYAML") from exc
             data = yaml.safe_load(text)
         else:
@@ -519,7 +519,7 @@ class _ConfigLoader:
 
 
 class _NodeAlgorithm:
-    """Adapter from the portable formation entity API to SimulationController."""
+    """把可移植编队实体 API 适配到 SimulationController。注意：负责端口数据转换。"""
 
     def __init__(
         self,
@@ -609,7 +609,7 @@ class _NodeAlgorithm:
 
 
 class _DisturbanceEngine:
-    """Dynamic disturbance stub."""
+    """动态扰动执行器。注意：当前实现覆盖风场、节点故障和链路扰动。"""
 
     def __init__(self) -> None:
         """初始化 _DisturbanceEngine 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -747,7 +747,7 @@ class _DisturbanceEngine:
 
 
 class _DataLogger:
-    """In-memory logger stub."""
+    """内存日志记录器占位实现。注意：当前不做持久化落盘。"""
 
     def __init__(self) -> None:
         """初始化 _DataLogger 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -778,7 +778,7 @@ class _DataLogger:
 
 
 class SimulationController:
-    """Top-level simulation orchestration facade."""
+    """顶层仿真编排门面。注意：对 GUI/CLI 暴露统一控制接口。"""
 
     _EVENT_BUFFER_SIZE = 1000
     _DISPLAY_REFRESH_S = 0.1
@@ -837,7 +837,7 @@ class SimulationController:
                 return CommandResult("ERR_BUSY", "pause or reset before loading a new config")
             try:
                 self._init_modules_unlocked(config)
-            except Exception as exc:  # noqa: BLE001 - first version maps module init failures.
+            except Exception as exc:  # noqa: BLE001 - 首版统一映射模块初始化失败
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             self._run_state = "READY"
             self._control_report = "待命"

@@ -1,4 +1,4 @@
-"""Base API for atomic control laws."""
+"""原子控制律基础接口。注意：具体控制律需实现统一生命周期。"""
 
 from __future__ import annotations
 

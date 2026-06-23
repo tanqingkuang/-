@@ -1,4 +1,4 @@
-"""C-friendly leaf types for formation algorithms."""
+"""面向 C 风格结构的编队算法叶类型。注意：字段尽量保持简单可序列化。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from enum import IntEnum
 
 
 class FormStageE(IntEnum):
-    """Formation stage used by both commands and per-node state."""
+    """编队指令和节点状态共用的阶段枚举。注意：新增阶段需同步控制器回报。"""
 
     NONE = 0
     RALLY = 1
@@ -16,14 +16,14 @@ class FormStageE(IntEnum):
 
 
 class FormPatE(IntEnum):
-    """Formation pattern."""
+    """编队队形枚举。注意：枚举值需与配置中的队形名称兼容。"""
 
     NONE = 0
     TRIANGLE = 1
 
 
 class CommDirE(IntEnum):
-    """Communication direction."""
+    """通信方向枚举。注意：方向含义需与通信链路配置一致。"""
 
     DUPLEX = 0
     SIMPLEX = 1

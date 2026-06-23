@@ -1,4 +1,4 @@
-"""Base API for outbound message processing."""
+"""出站消息处理基础接口。注意：实现需维护消息目标和载荷格式。"""
 
 from __future__ import annotations
 

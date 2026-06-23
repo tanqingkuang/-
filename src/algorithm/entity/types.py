@@ -1,4 +1,4 @@
-"""Entity boundary types."""
+"""实体边界类型。注意：用于控制器和算法实体之间传递数据。"""
 
 from __future__ import annotations
 

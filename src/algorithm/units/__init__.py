@@ -1,1 +1,1 @@
-"""Formation algorithm L2 units."""
+"""二级编队算法单元包。注意：单元应保持职责单一。"""

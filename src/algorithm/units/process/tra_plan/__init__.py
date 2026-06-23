@@ -1,1 +1,1 @@
-"""Trajectory planning process units."""
+"""轨迹规划流程单元包。注意：负责向黑板写入当前跟踪航段。"""

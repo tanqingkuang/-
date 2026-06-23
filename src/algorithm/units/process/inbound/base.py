@@ -1,4 +1,4 @@
-"""Base API for inbound message processing."""
+"""入站消息处理基础接口。注意：实现需过滤不相关 topic。"""
 
 from __future__ import annotations
 

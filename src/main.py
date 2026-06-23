@@ -1,4 +1,4 @@
-"""Process entry for the formation simulation platform."""
+"""编队仿真平台进程入口。注意：命令行启动从该模块进入。"""
 
 
 def main() -> None:

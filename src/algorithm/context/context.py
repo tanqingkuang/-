@@ -1,4 +1,4 @@
-"""Formation algorithm blackboard."""
+"""编队算法黑板。注意：实体内多单元通过该对象共享状态。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from src.algorithm.context.leaf_types import (
 
 @dataclass
 class FormContextS:
-    """Cross-frame formation state owned by one entity."""
+    """单个实体持有的跨帧编队状态。注意：reset 时需要清理运行期缓存。"""
 
     cmd: FormSnapshotS = field(default_factory=FormSnapshotS)
     state: list[FormSnapshotS] = field(default_factory=list)

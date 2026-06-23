@@ -1,4 +1,4 @@
-"""Base API for target-position calculation."""
+"""目标位置计算基础接口。注意：输出端口需由调用方绑定。"""
 
 from __future__ import annotations
 

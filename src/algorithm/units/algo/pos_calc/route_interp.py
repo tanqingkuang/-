@@ -1,4 +1,4 @@
-"""Route interpolation target calculation for leader entities."""
+"""长机实体的航线插值目标计算。注意：当前按直线航段投影和延拓。"""
 
 from __future__ import annotations
 

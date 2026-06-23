@@ -1,8 +1,8 @@
-"""Simulation clock utilities."""
+"""仿真时钟工具。注意：只记录仿真时间，不依赖墙钟。"""
 
 
 class SimulationClock:
-    """Track simulation time."""
+    """跟踪仿真时间。注意：tick 调用方负责传入正确步长。"""
 
     def __init__(self) -> None:
         """初始化 SimulationClock 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""

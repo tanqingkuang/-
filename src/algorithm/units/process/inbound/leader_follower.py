@@ -1,4 +1,4 @@
-"""Parse leader broadcast messages for follower entities."""
+"""解析长机广播消息供僚机实体使用。注意：只消费领航跟随 topic。"""
 
 from __future__ import annotations
 

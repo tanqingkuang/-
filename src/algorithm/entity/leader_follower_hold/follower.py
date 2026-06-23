@@ -1,4 +1,4 @@
-"""Follower entity for the leader-following hold scenario."""
+"""领航跟随保持场景的僚机实体。注意：依赖长机广播消息更新目标。"""
 
 from __future__ import annotations
 

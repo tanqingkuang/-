@@ -1,1 +1,1 @@
-"""Inbound message process units."""
+"""入站消息流程单元包。注意：负责把通信消息写入黑板。"""

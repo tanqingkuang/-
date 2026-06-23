@@ -1,4 +1,4 @@
-"""Base API for formation entities."""
+"""编队实体基础接口。注意：具体实体需实现 init/step/reset/close。"""
 
 from __future__ import annotations
 

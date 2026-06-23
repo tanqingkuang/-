@@ -1,2 +1,2 @@
-"""Coordination algorithm plugins."""
+"""协同算法插件包。注意：当前仅保留扩展入口。"""
 

@@ -1,4 +1,4 @@
-"""Pack leader state into a multicast formation message."""
+"""把长机状态打包为多播编队消息。注意：目标列表来自通信拓扑。"""
 
 from __future__ import annotations
 

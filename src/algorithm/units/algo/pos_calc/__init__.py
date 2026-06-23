@@ -1,1 +1,1 @@
-"""Target-position calculation strategies."""
+"""目标位置计算策略包。注意：长机航线和僚机槽位分别实现。"""

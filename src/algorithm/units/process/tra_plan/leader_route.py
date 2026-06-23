@@ -1,4 +1,4 @@
-"""Route planner that selects the current segment from an injected route."""
+"""从注入航线中选择当前航段的规划器。注意：多航段切换由待飞距和提前量决定。"""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Base API for formation task orchestration."""
+"""编队任务编排基础接口。注意：具体任务需写入任务输出端口。"""
 
 from __future__ import annotations
 

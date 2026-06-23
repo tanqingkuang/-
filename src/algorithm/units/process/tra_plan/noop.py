@@ -1,4 +1,4 @@
-"""No-op trajectory planner for follower placeholder flow."""
+"""僚机占位流程使用的空轨迹规划器。注意：不写入航线输出。"""
 
 from __future__ import annotations
 

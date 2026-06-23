@@ -1,4 +1,4 @@
-"""Base API for position tracking."""
+"""位置跟踪基础接口。注意：低速奇异情况应显式处理。"""
 
 from __future__ import annotations
 

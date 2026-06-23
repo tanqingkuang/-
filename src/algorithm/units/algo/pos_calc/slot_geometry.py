@@ -1,4 +1,4 @@
-"""Slot geometry target calculation for follower entities."""
+"""僚机实体的槽位几何目标计算。注意：槽位随长机水平航迹旋转。"""
 
 from __future__ import annotations
 

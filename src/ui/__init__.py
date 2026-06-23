@@ -1,2 +1,2 @@
-"""User interaction package."""
+"""用户交互包。注意：包含 CLI 和 GUI 入口。"""
 
