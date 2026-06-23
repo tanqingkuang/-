@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from src.algorithm.context.context import FormContextS
@@ -163,6 +164,45 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
         self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 7.0)
         self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+
+    def test_route_interp_keeps_ground_speed_on_climbing_segment(self) -> None:
+        """验证爬升航段上 vdCmd 按地速分解：水平合速度恰为 vdCmd，天向速度由航迹角带出。"""
+
+        ctx = FormContextS()
+        # 起点放在航段起点，专注校验速度分解；航段水平 3-4-5、爬升 30m。
+        ctx.selfState = _motion(east=0.0, north=0.0, h=1000.0)
+        ctx.wayLine = WayLineS(
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0)),
+            end=WayPointS(pos=PosInEarthS(30.0, 40.0, 1030.0)),
+            vdCmd=50.0,
+        )
+        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        y = PosCalcOutputS(selfCmd=ctx.selfCmd)
+
+        RouteInterp().step(u, y)
+
+        # hlen=50: vEast=50*30/50, vNorth=50*40/50, vUp=50*30/50。
+        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 30.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 40.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vUp, 30.0)
+        # 核心回归点：地速恒等于 vdCmd，不被爬升角的 cosγ 压小。
+        self.assertAlmostEqual(ctx.selfCmd.vd.vd, 50.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vTheta, math.atan2(30.0, 50.0))
+        self.assertAlmostEqual(ctx.selfCmd.vd.vPsi, math.atan2(40.0, 30.0))
+
+    def test_route_interp_rejects_pure_vertical_segment(self) -> None:
+        """验证纯垂直航段（水平长度为零）被显式拒绝，固定翼地速在该航段无定义。"""
+
+        u = RouteInterpInputS(
+            selfState=_motion(h=1000.0),
+            wayLine=WayLineS(
+                start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0)),
+                end=WayPointS(pos=PosInEarthS(0.0, 0.0, 1100.0)),
+                vdCmd=50.0,
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "horizontal"):
+            RouteInterp().step(u, PosCalcOutputS(selfCmd=MotionProfS()))
 
     def test_route_interp_rejects_curve_segment(self) -> None:
         """验证本轮未实现的曲线航段会显式报错，避免静默给出错误目标。"""
