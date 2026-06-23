@@ -47,9 +47,22 @@ TRAIL_SECONDS = 18.0
 TOP_VIEW_ORIGIN_MARGIN = 40.0
 VIEW_MIN_SCALE = 0.05
 VIEW_MAX_SCALE = 3.5
+WORLD_GRID_SPACING = 48
+GRID_MIN_SCREEN_SPACING = 36.0
+GRID_MAX_SCREEN_SPACING = 96.0
 APP_CONFIG_SECTION = "config"
 APP_CONFIG_KEY_LAST_CONFIG = "last_config"
 APP_CONFIG_FILE_NAME = "config.ini"
+
+
+def adaptive_world_grid_spacing(scale_value: float) -> int:
+    spacing = WORLD_GRID_SPACING
+    safe_scale = max(scale_value, 0.001)
+    while spacing * safe_scale < GRID_MIN_SCREEN_SPACING:
+        spacing *= 2
+    while spacing > 1 and spacing * safe_scale > GRID_MAX_SCREEN_SPACING:
+        spacing = max(1, spacing // 2)
+    return spacing
 
 
 def default_project_root() -> Path:
@@ -910,7 +923,7 @@ class TopView(QGraphicsView):
         right = (rect.right() - self.offset.x()) / self.scale_value
         top = (rect.top() - self.offset.y()) / self.scale_value
         bottom = (rect.bottom() - self.offset.y()) / self.scale_value
-        spacing = 48
+        spacing = self._grid_world_spacing()
         start_x = math.floor(left / spacing) * spacing
         end_x = math.ceil(right / spacing) * spacing
         start_y = math.floor(top / spacing) * spacing
@@ -921,6 +934,9 @@ class TopView(QGraphicsView):
             painter.drawLine(x, start_y, x, end_y)
         for y in range(start_y, end_y + spacing, spacing):
             painter.drawLine(start_x, y, end_x, y)
+
+    def _grid_world_spacing(self) -> int:
+        return adaptive_world_grid_spacing(self.scale_value)
 
     def _draw_route(self, painter: QPainter) -> None:
         """绘制 route 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -1001,7 +1017,6 @@ class SideView(QWidget):
     ALTITUDE_MAX_DEFAULT = 1320.0
     PLOT_BOTTOM_MARGIN = 24.0
     PLOT_VERTICAL_MARGINS = 52.0
-    WORLD_GRID_SPACING = 48
     ALTITUDE_GRID_SPACING = 40
 
     def __init__(self, top_view: TopView, parent: QWidget | None = None) -> None:
@@ -1205,7 +1220,7 @@ class SideView(QWidget):
     def _draw_grid(self, painter: QPainter) -> None:
         """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
         painter.setPen(QPen(self.theme.grid, 1))
-        spacing = self.WORLD_GRID_SPACING
+        spacing = self._grid_world_spacing()
         left = self._screen_to_world_x(0.0)
         right = self._screen_to_world_x(float(self.width()))
         start_x = math.floor(left / spacing) * spacing
@@ -1220,6 +1235,9 @@ class SideView(QWidget):
         for altitude in range(start_altitude, end_altitude + altitude_spacing, altitude_spacing):
             y = self._map_y(float(altitude))
             painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
+
+    def _grid_world_spacing(self) -> int:
+        return adaptive_world_grid_spacing(self.top_view.scale_value)
 
     def _draw_reference(self, painter: QPainter) -> None:
         """绘制 reference 画面元素。注意：只做渲染，不修改仿真状态。"""

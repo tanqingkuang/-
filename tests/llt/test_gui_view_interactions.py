@@ -81,6 +81,19 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertLess(grid_x, image.width())
         self.assertNotEqual(image.pixelColor(grid_x, 10).name(), canvas)
 
+    def test_world_grid_keeps_readable_screen_spacing_during_zoom(self) -> None:
+        for scale in (0.45, 1.0, 3.5):
+            self.window.top_view.scale_value = scale
+
+            screen_spacing = self.window.top_view._grid_world_spacing() * scale
+
+            self.assertGreaterEqual(screen_spacing, 36.0)
+            self.assertLessEqual(screen_spacing, 96.0)
+            self.assertEqual(
+                self.window.side_view._grid_world_spacing(),
+                self.window.top_view._grid_world_spacing(),
+            )
+
     def test_top_view_reset_restores_side_altitude_axis(self) -> None:
         self.window.side_view.altitude_min = 1180.0
         self.window.side_view.altitude_max = 1240.0
