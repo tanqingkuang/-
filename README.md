@@ -48,10 +48,26 @@ configs/base.json
 
 Windows exe 需要在 Windows x64 环境构建。PySide6/Qt 依赖目标平台的 Python wheel、Qt DLL 和 platform plugin，不建议在 macOS 上直接交叉打包。
 
-在 Windows PowerShell 中执行：
+开发期快速打包：
 
 ```powershell
-.\scripts\build_windows_exe.ps1
+.\scripts\build_windows_exe_dev.ps1
+```
+
+首次打包或依赖变化后可加 `-InstallDependencies`。
+
+产物路径：
+
+```text
+dist\编队仿真.exe
+```
+
+开发期打包仍会在 `dist\编队仿真\` 放置运行依赖文件，请和 exe 保持在同一目录层级。
+
+发布期完整打包：
+
+```powershell
+.\scripts\build_windows_exe_release.ps1
 ```
 
 产物路径：
