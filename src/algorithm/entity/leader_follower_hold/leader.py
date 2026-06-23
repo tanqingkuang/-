@@ -8,7 +8,7 @@ from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.types import DEFAULT_CONTROL_PERIOD_S, EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInputS
+from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
@@ -17,6 +17,8 @@ from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOu
 from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
+
+_LEADER_L1_DISTANCE_M = 200.0 # 配置为0，则关闭L1前瞻航迹插值，直接按航段起点/终点位置解算航迹。
 
 
 class LeaderEntity(EntityBase):
@@ -39,7 +41,7 @@ class LeaderEntity(EntityBase):
         # 各单元一次性初始化；航路规划注入预置航线，广播注入本机 id 与拓扑
         self._task.init(None)
         self._tra_plan.init(LeaderRouteInitS(cfg.route))
-        self._pos_calc.init(None)
+        self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M))
         self._pos_track.init(_default_tracker_init(cfg.control_period_s))
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
@@ -105,5 +107,4 @@ def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) ->
     gain_forward = CtrlInitS(kp=1.0, ki=0.0, kd=0.0, dt=control_period_s, outMax=6.0)
     gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
     gain_vertical = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=control_period_s, outMax=6.0)
-    # 首参 0.5 为前视/合成系数，与三轴增益一并构成位置跟踪器配置
     return PidComposeInitS(0.5, gain_forward, gain_lateral, gain_vertical)

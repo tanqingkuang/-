@@ -31,7 +31,7 @@ from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
 from src.algorithm.units.algo.formation_math import clamp, enu_to_track, horizontal_track_to_enu, track_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInputS
+from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
@@ -123,6 +123,28 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vEast, 7.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
+
+    def test_route_interp_look_ahead_moves_target_forward_on_line(self) -> None:
+        """验证启用 L1 前视距离时，长机目标点沿当前航段前移。"""
+
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=3.0, north=4.0, h=5.0)
+        ctx.wayLine = WayLineS(
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
+            end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
+            vdCmd=7.0,
+        )
+        route = RouteInterp()
+        route.init(RouteInterpInitS(lookAheadDistance=2.0))
+
+        route.step(
+            RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 5.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.h, 5.0)
 
     def test_route_interp_projects_to_reversed_diagonal_segment(self) -> None:
         """验证反向对角航段投影：selfState=(5,0,5) 应投影到航段中点。"""

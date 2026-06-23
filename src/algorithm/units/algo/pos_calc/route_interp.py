@@ -11,9 +11,9 @@ from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, Po
 
 @dataclass
 class RouteInterpInitS(PosCalcInitS):
-    """航线插值初始化参数。注意：当前实现无额外字段，仅保留统一接口。"""
+    """航线插值初始化参数。注意：lookAheadDistance 用于长机 L1 前视点。"""
 
-    pass
+    lookAheadDistance: float = 0.0
 
 
 @dataclass
@@ -26,9 +26,15 @@ class RouteInterpInputS(PosCalcInputS):
 class RouteInterp(PosCalcBase):
     """长机航线插值目标计算器。注意：当前只支持直线航段，曲线航段会显式报错。"""
 
+    def __init__(self) -> None:
+        """初始化 RouteInterp 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
+        self._look_ahead_distance = 0.0
+
     def init(self, cfg: PosCalcInitS) -> None:
         """按配置初始化 RouteInterp。注意：调用方需先准备好必要依赖和输入数据。"""
-        del cfg
+        self._look_ahead_distance = cfg.lookAheadDistance if isinstance(cfg, RouteInterpInitS) else 0.0
+        if self._look_ahead_distance < 0.0:
+            raise ValueError("lookAheadDistance must be >= 0")
 
     def step(self, u: RouteInterpInputS, y: PosCalcOutputS) -> None:
         """推进 RouteInterp 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
@@ -50,6 +56,8 @@ class RouteInterp(PosCalcBase):
         rely = u.selfState.pos.north - start.north
         relz = u.selfState.pos.h - start.h
         t = max((relx * dx + rely * dy + relz * dz) / length2, 0.0)
+        if self._look_ahead_distance > 0.0:
+            t += self._look_ahead_distance / math.sqrt(length2)
         y.selfCmd.pos.east = start.east + t * dx
         y.selfCmd.pos.north = start.north + t * dy
         y.selfCmd.pos.h = start.h + t * dz
