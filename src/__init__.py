@@ -1,2 +1,2 @@
-"""Formation simulation package."""
+"""编队仿真包。注意：该包是源码根命名空间，导入路径需保持稳定。"""
 

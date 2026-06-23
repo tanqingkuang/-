@@ -1,1 +1,1 @@
-"""Outbound message process units."""
+"""出站消息流程单元包。注意：负责把黑板状态打包为通信消息。"""

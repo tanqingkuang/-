@@ -1,1 +1,1 @@
-"""Formation task orchestration."""
+"""编队任务编排包。注意：输出阶段和队形指令。"""

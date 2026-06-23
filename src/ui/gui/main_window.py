@@ -1,4 +1,4 @@
-"""PySide6 main window for the formation simulation UI."""
+"""编队仿真 PySide6 主窗口。注意：正式 GUI 入口在本模块。"""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ APP_CONFIG_FILE_NAME = "config.ini"
 
 
 def default_project_root() -> Path:
-    """Return the directory used for app-relative user settings."""
+    """返回项目根目录。注意：打包后路径和源码运行路径不同。"""
 
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -68,7 +68,7 @@ def default_project_root() -> Path:
 
 @dataclass
 class TrailPoint:
-    """One sampled position in simulation time."""
+    """仿真时间中的一个轨迹采样点。注意：用于绘制历史尾迹。"""
 
     x: float
     y: float
@@ -78,7 +78,7 @@ class TrailPoint:
 
 @dataclass
 class NodeState:
-    """Display state for one aircraft node."""
+    """单个飞机节点的显示状态。注意：字段用于 GUI 绘图和表格。"""
 
     node_id: str
     role: str
@@ -95,7 +95,7 @@ class NodeState:
 
 @dataclass
 class LinkState:
-    """Display state for one communication link."""
+    """单条通信链路的显示状态。注意：loss 为 0 到 1 的比例。"""
 
     source: str
     target: str
@@ -107,7 +107,7 @@ class LinkState:
 
 @dataclass
 class ReferenceRoute:
-    """Reference route segment for top and side views."""
+    """俯视图和侧视图共用的参考航段。注意：坐标单位为米。"""
 
     start_x: float
     start_y: float
@@ -119,7 +119,7 @@ class ReferenceRoute:
 
 @dataclass
 class Snapshot:
-    """UI-facing simulation snapshot."""
+    """面向 UI 的仿真快照。注意：由真实控制器或 mock 数据适配得到。"""
 
     time: float
     duration: float
@@ -134,9 +134,10 @@ class Snapshot:
 
 
 class MockSimulation:
-    """Small UI-only simulation source until the real controller is connected."""
+    """真实控制器接入前使用的小型 UI 演示数据源。注意：仅作为界面兜底。"""
 
     def __init__(self) -> None:
+        """初始化 MockSimulation 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.duration = 120.0
         self.step = 0.1
         self.speed = 1.0
@@ -152,6 +153,7 @@ class MockSimulation:
         self.reset()
 
     def reset(self) -> Snapshot:
+        """复位 MockSimulation 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self.time = 0.0
         self.running = False
         self.paused = False
@@ -172,22 +174,26 @@ class MockSimulation:
         return self.snapshot()
 
     def start(self) -> Snapshot:
+        """启动或继续 MockSimulation 的运行流程。注意：重复调用应保持状态一致。"""
         self.running = True
         self.paused = False
         return self.snapshot()
 
     def pause(self) -> Snapshot:
+        """暂停 MockSimulation 的运行流程。注意：只暂停调度，不清空当前状态。"""
         if self.running:
             self.paused = not self.paused
         return self.snapshot()
 
     def single_step(self) -> Snapshot:
+        """执行单步推进。注意：仅在暂停或可单步状态下使用。"""
         self.running = True
         self.paused = True
         self.advance()
         return self.snapshot()
 
     def inject_disturbance(self, kind: str) -> Snapshot:
+        """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
         if kind == "wind":
             self.disturbance = "风场"
             self.disturbance_until = self.time + 8.0
@@ -207,6 +213,7 @@ class MockSimulation:
         return self.snapshot()
 
     def advance(self) -> Snapshot:
+        """推进仿真显示或数据状态。注意：步长应与调用方传入时间一致。"""
         if self.time >= self.duration:
             self.running = False
             self.paused = False
@@ -244,6 +251,7 @@ class MockSimulation:
         return self.snapshot()
 
     def snapshot(self) -> Snapshot:
+        """返回当前快照。注意：返回数据用于显示，不应被调用方回写。"""
         if not self.running:
             run_state = "READY"
             report = "待命"
@@ -277,9 +285,10 @@ class MockSimulation:
 
 
 class ControllerSimulationAdapter:
-    """Adapt SimulationController snapshots to the existing UI drawing model."""
+    """把 SimulationController 快照适配为现有 GUI 绘图模型。注意：需要维护尾迹缓存。"""
 
     def __init__(self) -> None:
+        """初始化 ControllerSimulationAdapter 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.controller = SimulationController()
         self.speed = 1.0
         self.disturbance = "无"
@@ -291,9 +300,11 @@ class ControllerSimulationAdapter:
 
     @property
     def time(self) -> float:
+        """返回当前仿真时间。注意：单位为秒。"""
         return self.controller.get_snapshot().time_s
 
     def load_config(self, path: str) -> Snapshot:
+        """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
         result = self.controller.load_config(path)
         self.last_result_code = result.code
         self.last_result_message = result.message
@@ -305,17 +316,19 @@ class ControllerSimulationAdapter:
         return self.snapshot()
 
     def start(self) -> Snapshot:
+        """启动或继续 ControllerSimulationAdapter 的运行流程。注意：重复调用应保持状态一致。"""
         result = self.controller.start()
         self.last_result_code = result.code
         self.last_result_message = result.message
         return self.snapshot()
 
     def pause(self) -> Snapshot:
+        """暂停 ControllerSimulationAdapter 的运行流程。注意：只暂停调度，不清空当前状态。"""
         snapshot = self.controller.get_snapshot()
         if snapshot.run_state == "RUNNING":
             result = self.controller.pause()
         elif snapshot.run_state == "PAUSED":
-            # UI convenience: the pause button becomes "continue" in PAUSED state.
+            # UI 交互便利：暂停态下同一个按钮表示继续。
             result = self.controller.start()
         else:
             result = self.controller.pause()
@@ -324,12 +337,14 @@ class ControllerSimulationAdapter:
         return self.snapshot()
 
     def single_step(self) -> Snapshot:
+        """执行单步推进。注意：仅在暂停或可单步状态下使用。"""
         result = self.controller.step()
         self.last_result_code = result.code
         self.last_result_message = result.message
         return self.snapshot()
 
     def reset(self) -> Snapshot:
+        """复位 ControllerSimulationAdapter 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         result = self.controller.reset()
         self.last_result_code = result.code
         self.last_result_message = result.message
@@ -340,17 +355,20 @@ class ControllerSimulationAdapter:
         return self.snapshot()
 
     def poll(self) -> Snapshot:
-        """Return the latest controller snapshot without advancing simulation time."""
+        """轮询当前快照。注意：该操作不推进仿真。"""
 
         return self.snapshot()
 
     def advance(self) -> Snapshot:
+        """推进仿真显示或数据状态。注意：步长应与调用方传入时间一致。"""
         return self.poll()
 
     def snapshot(self) -> Snapshot:
+        """返回当前快照。注意：返回数据用于显示，不应被调用方回写。"""
         return self._convert_snapshot(self.controller.get_snapshot())
 
     def inject_disturbance(self, kind: str) -> Snapshot:
+        """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
         command = self._disturbance_command(kind)
         result = self.controller.inject_disturbance(command)
         self.last_result_code = result.code
@@ -365,13 +383,16 @@ class ControllerSimulationAdapter:
         return self.snapshot()
 
     def set_speed(self, speed: float) -> None:
+        """设置播放速度。注意：只影响界面或控制器调度倍率。"""
         self.speed = speed
         self.controller.set_playback_rate(speed)
 
     def close(self) -> None:
+        """释放 ControllerSimulationAdapter 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self.controller.close()
 
     def _convert_snapshot(self, snapshot: ControllerSnapshot) -> Snapshot:
+        """把控制器快照转换为 GUI 绘图模型。注意：需要同步维护轨迹缓存和显示字段。"""
         self._sync_disturbance_from_events()
         nodes: list[NodeState] = []
         for node in snapshot.nodes:
@@ -443,6 +464,7 @@ class ControllerSimulationAdapter:
 
     @staticmethod
     def _convert_route(route) -> ReferenceRoute:  # noqa: ANN001
+        """把控制器航线状态转换为 GUI 参考航线。注意：空航线返回空值。"""
         return ReferenceRoute(
             start_x=route.start_x_m,
             start_y=route.start_y_m,
@@ -453,6 +475,7 @@ class ControllerSimulationAdapter:
         )
 
     def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
+        """返回当前界面应显示的扰动名称。注意：已清除或过期扰动显示为无。"""
         if any(node.health != "normal" for node in snapshot.nodes):
             return "节点故障"
         if any(link.status != "normal" for link in snapshot.links):
@@ -462,6 +485,7 @@ class ControllerSimulationAdapter:
         return self.disturbance
 
     def _sync_disturbance_from_events(self) -> None:
+        """根据控制器事件同步扰动显示状态。注意：只处理尚未消费的新事件。"""
         events = self.controller.get_recent_events(limit=1000)
         for event in events[self._processed_event_count:]:
             if event.source != "Disturbance":
@@ -477,6 +501,7 @@ class ControllerSimulationAdapter:
         self._processed_event_count = len(events)
 
     def _disturbance_command(self, kind: str) -> dict[str, object]:
+        """生成 GUI 按钮对应的扰动命令。注意：命令结构需与控制器注入接口一致。"""
         if kind == "wind":
             return {"type": "wind", "duration_s": 8.0, "params": {"speed_mps": 8.0, "direction_deg": 90.0}}
         if kind == "fault":
@@ -486,19 +511,19 @@ class ControllerSimulationAdapter:
         return {"type": "clear"}
 
 def node_altitude(index: int, time_value: float) -> float:
-    """Return a demo altitude for side-view rendering."""
+    """读取节点高度用于侧视图显示。注意：缺省时使用 0 作为兜底。"""
 
     return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
 
 
 def link_direction_label(direction: str) -> str:
-    """Return the user-facing label for a communication link direction."""
+    """生成通信链路方向显示文本。注意：只负责界面文案，不改变链路状态。"""
 
     return {"duplex": "双向", "simplex": "单向"}.get(direction, direction)
 
 
 class Theme:
-    """Centralized colors for one UI theme."""
+    """单个 UI 主题的集中配色。注意：主题切换时画布和控件共用这些颜色。"""
 
     def __init__(
         self,
@@ -518,6 +543,7 @@ class Theme:
         accent: str,
         field: str,
     ) -> None:
+        """初始化 Theme 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.bg = QColor(bg)
         self.panel = QColor(panel)
         self.ink = QColor(ink)
@@ -571,11 +597,12 @@ THEMES = {
 
 
 class SelectButton(QPushButton):
-    """Push-button backed option selector with a controlled popup position."""
+    """基于按钮的选项选择器。注意：弹出菜单位置由控件主动控制。"""
 
     currentIndexChanged = Signal()
 
     def __init__(self, min_width: int, popup_side: str = "below", parent: QWidget | None = None) -> None:
+        """初始化 SelectButton 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
         self._items: list[tuple[str, object | None]] = []
         self._index = -1
@@ -587,15 +614,18 @@ class SelectButton(QPushButton):
         self._menu.aboutToHide.connect(lambda: self.setDown(False))
 
     def addItem(self, text: str, data: object | None = None) -> None:
+        """向控件添加一个选项。注意：选项文本和附加数据需保持对应。"""
         self._items.append((text, data))
         if self._index == -1:
             self.setCurrentIndex(0, emit=False)
 
     def addItems(self, texts: list[str]) -> None:
+        """批量添加控件选项。注意：按输入顺序追加。"""
         for text in texts:
             self.addItem(text, text)
 
     def setCurrentIndex(self, index: int, *, emit: bool = True) -> None:
+        """设置当前选中项。注意：索引越界时不应破坏控件状态。"""
         if index < 0 or index >= len(self._items):
             return
         if index == self._index:
@@ -606,16 +636,19 @@ class SelectButton(QPushButton):
             self.currentIndexChanged.emit()
 
     def currentText(self) -> str:
+        """返回当前选项文本。注意：无选项时返回空字符串。"""
         if self._index < 0:
             return ""
         return self._items[self._index][0]
 
     def currentData(self) -> object | None:
+        """返回当前选项附加数据。注意：无选项时返回空值。"""
         if self._index < 0:
             return None
         return self._items[self._index][1]
 
     def show_menu(self) -> None:
+        """显示下拉菜单。注意：菜单项选择会同步当前索引。"""
         self.setDown(True)
         self._menu.clear()
         self._menu.setMinimumWidth(self.width())
@@ -633,13 +666,14 @@ class SelectButton(QPushButton):
 
 
 class TopView(QGraphicsView):
-    """Top-down formation view with pan and zoom."""
+    """支持平移和缩放的俯视编队视图。注意：只负责显示，不修改仿真状态。"""
 
     viewChanged = Signal()
     manualViewChanged = Signal()
     resetViewRequested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """初始化 TopView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
@@ -657,10 +691,12 @@ class TopView(QGraphicsView):
         self.setMouseTracking(True)
 
     def set_theme(self, theme: Theme) -> None:
+        """设置当前主题。注意：需要同步更新画布和控件颜色。"""
         self.theme = theme
         self.viewport().update()
 
     def set_snapshot(self, snapshot: Snapshot) -> None:
+        """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
         if self.auto_center:
             self._apply_auto_center()
@@ -669,6 +705,7 @@ class TopView(QGraphicsView):
         self.viewport().update()
 
     def reset_view(self) -> None:
+        """重置视图缩放和平移。注意：不修改仿真数据。"""
         self._manual_view = False
         self.scale_value = 1.0
         self.offset = self._default_offset()
@@ -680,9 +717,11 @@ class TopView(QGraphicsView):
 
     @staticmethod
     def _default_offset() -> QPointF:
+        """计算俯视图默认平移量。注意：用于把初始场景放到画布可见区域。"""
         return QPointF(TOP_VIEW_ORIGIN_MARGIN, TOP_VIEW_ORIGIN_MARGIN)
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标滚轮事件。注意：用于缩放视图并保持交互焦点。"""
         delta = event.pixelDelta().y() or event.angleDelta().y()
         if delta == 0:
             return
@@ -704,6 +743,7 @@ class TopView(QGraphicsView):
         event.accept()
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标按下事件。注意：记录拖拽或框选起点。"""
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -715,6 +755,7 @@ class TopView(QGraphicsView):
             event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标移动事件。注意：拖拽过程中只更新视图状态。"""
         if self._pan_origin is not None:
             delta = event.position() - self._pan_origin
             self.offset += QPointF(delta.x(), delta.y())
@@ -730,6 +771,7 @@ class TopView(QGraphicsView):
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标释放事件。注意：结束拖拽或框选操作。"""
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -742,11 +784,13 @@ class TopView(QGraphicsView):
             event.accept()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标双击事件。注意：通常用于快速重置或聚焦视图。"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.reset_view()
             event.accept()
 
     def paintEvent(self, event) -> None:  # noqa: ARG002, ANN001
+        """处理 Qt 绘制事件。注意：只在当前快照基础上渲染画面。"""
         painter = QPainter(self.viewport())
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.theme.canvas)
@@ -763,12 +807,14 @@ class TopView(QGraphicsView):
         self._draw_selection(painter)
 
     def _viewport_to_world(self, point: QPointF) -> QPointF:
+        """把视口坐标转换为世界坐标。注意：依赖当前缩放和平移状态。"""
         return QPointF(
             (point.x() - self.offset.x()) / self.scale_value,
             (point.y() - self.offset.y()) / self.scale_value,
         )
 
     def _zoom_to_selection(self) -> None:
+        """执行 to selection 缩放。注意：保持选区或鼠标焦点附近的世界坐标稳定。"""
         if self._selection_origin is None or self._selection_current is None:
             return
         left = min(self._selection_origin.x(), self._selection_current.x())
@@ -798,6 +844,7 @@ class TopView(QGraphicsView):
         self.manualViewChanged.emit()
 
     def _draw_selection(self, painter: QPainter) -> None:
+        """绘制 selection 画面元素。注意：只做渲染，不修改仿真状态。"""
         if self._selection_origin is None or self._selection_current is None:
             return
         left = min(self._selection_origin.x(), self._selection_current.x())
@@ -814,6 +861,7 @@ class TopView(QGraphicsView):
         painter.drawRect(selection)
 
     def _apply_auto_center(self) -> None:
+        """应用 auto center 设置。注意：只修改对应显示或运行参数。"""
         if not self.snapshot or not self.snapshot.nodes:
             return
         active = [node for node in self.snapshot.nodes if node.health == "normal"]
@@ -829,6 +877,7 @@ class TopView(QGraphicsView):
         self.viewChanged.emit()
 
     def _fit_route_to_view(self) -> None:
+        """把航线范围适配到当前俯视图。注意：只调整显示缩放和平移。"""
         if self.snapshot is None or not self._route_segments():
             self.offset = self._default_offset()
             return
@@ -855,6 +904,7 @@ class TopView(QGraphicsView):
         )
 
     def _draw_grid(self, painter: QPainter) -> None:
+        """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
         rect = self.viewport().rect()
         left = (rect.left() - self.offset.x()) / self.scale_value
         right = (rect.right() - self.offset.x()) / self.scale_value
@@ -873,6 +923,7 @@ class TopView(QGraphicsView):
             painter.drawLine(start_x, y, end_x, y)
 
     def _draw_route(self, painter: QPainter) -> None:
+        """绘制 route 画面元素。注意：只做渲染，不修改仿真状态。"""
         routes = self._route_segments()
         if not routes:
             return
@@ -889,6 +940,7 @@ class TopView(QGraphicsView):
             painter.drawEllipse(QPointF(route.end_x, route.end_y), marker_radius, marker_radius)
 
     def _route_segments(self) -> list[ReferenceRoute]:
+        """返回需要绘制的航段列表。注意：优先使用多航段快照，缺省时退回当前航段。"""
         if self.snapshot is None:
             return []
         if self.snapshot.route_segments:
@@ -898,6 +950,7 @@ class TopView(QGraphicsView):
         return []
 
     def _draw_links(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """绘制 links 画面元素。注意：只做渲染，不修改仿真状态。"""
         by_id = {node.node_id: node for node in snapshot.nodes}
         for link in snapshot.links:
             source = by_id[link.source]
@@ -908,6 +961,7 @@ class TopView(QGraphicsView):
             painter.drawLine(QPointF(source.x, source.y), QPointF(target.x, target.y))
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
         for index, node in enumerate(snapshot.nodes):
             self._draw_trail(painter, node, index, snapshot.time)
             color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
@@ -927,6 +981,7 @@ class TopView(QGraphicsView):
             painter.drawText(QPointF(node.x - 13, node.y - 18), node.node_id)
 
     def _draw_trail(self, painter: QPainter, node: NodeState, index: int, current_time: float) -> None:
+        """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
         if len(node.trail) <= 2:
             return
         base = self.theme.leader if index == 0 else self.theme.wingman
@@ -940,7 +995,7 @@ class TopView(QGraphicsView):
 
 
 class SideView(QWidget):
-    """Altitude over distance side view."""
+    """高度随待飞距变化的侧视图。注意：横向视野与俯视图同步。"""
 
     ALTITUDE_MIN_DEFAULT = 1120.0
     ALTITUDE_MAX_DEFAULT = 1320.0
@@ -950,6 +1005,7 @@ class SideView(QWidget):
     ALTITUDE_GRID_SPACING = 40
 
     def __init__(self, top_view: TopView, parent: QWidget | None = None) -> None:
+        """初始化 SideView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
         self.top_view = top_view
         self.snapshot: Snapshot | None = None
@@ -964,14 +1020,17 @@ class SideView(QWidget):
         self.setMouseTracking(True)
 
     def set_theme(self, theme: Theme) -> None:
+        """设置当前主题。注意：需要同步更新画布和控件颜色。"""
         self.theme = theme
         self.update()
 
     def set_snapshot(self, snapshot: Snapshot) -> None:
+        """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: ARG002, ANN001
+        """处理 Qt 绘制事件。注意：只在当前快照基础上渲染画面。"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.theme.canvas)
@@ -988,6 +1047,7 @@ class SideView(QWidget):
         self._draw_selection(painter)
 
     def wheelEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标滚轮事件。注意：用于缩放视图并保持交互焦点。"""
         delta = event.pixelDelta().y() or event.angleDelta().y()
         if delta == 0:
             return
@@ -1001,6 +1061,7 @@ class SideView(QWidget):
         event.accept()
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标按下事件。注意：记录拖拽或框选起点。"""
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = event.position()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
@@ -1012,6 +1073,7 @@ class SideView(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标移动事件。注意：拖拽过程中只更新视图状态。"""
         if self._pan_origin is not None:
             delta = event.position() - self._pan_origin
             self.top_view.offset.setX(self.top_view.offset.x() + delta.x())
@@ -1025,6 +1087,7 @@ class SideView(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标释放事件。注意：结束拖拽或框选操作。"""
         if event.button() == Qt.MouseButton.MiddleButton:
             self._pan_origin = None
             self.setCursor(Qt.CursorShape.ArrowCursor)
@@ -1037,43 +1100,52 @@ class SideView(QWidget):
             event.accept()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
+        """处理鼠标双击事件。注意：通常用于快速重置或聚焦视图。"""
         if event.button() == Qt.MouseButton.LeftButton:
             self.top_view.reset_view()
             event.accept()
 
     def reset_altitude_view(self) -> None:
+        """重置侧视图高度方向显示范围。注意：保持与俯视图横向视野同步。"""
         self.altitude_min = self.ALTITUDE_MIN_DEFAULT
         self.altitude_max = self.ALTITUDE_MAX_DEFAULT
         self.update()
 
     def _map_x(self, x: float) -> float:
+        """映射 x 坐标。注意：需使用当前缩放和平移参数。"""
         return x * self.top_view.scale_value + self.top_view.offset.x()
 
     def _screen_to_world_x(self, x: float) -> float:
+        """把屏幕坐标转换为 to world x。注意：依赖当前视图缩放和平移。"""
         return (x - self.top_view.offset.x()) / self.top_view.scale_value
 
     def _screen_to_altitude(self, y: float) -> float:
+        """把屏幕坐标转换为 to altitude。注意：依赖当前视图缩放和平移。"""
         plot_height = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS)
         ratio = (self.height() - self.PLOT_BOTTOM_MARGIN - y) / plot_height
         return self.altitude_min + ratio * (self.altitude_max - self.altitude_min)
 
     def _pan_altitude(self, delta_y: float) -> None:
+        """平移 altitude 视图。注意：只改变显示偏移，不改变仿真数据。"""
         plot_height = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS)
         altitude_delta = delta_y / plot_height * (self.altitude_max - self.altitude_min)
         self.altitude_min += altitude_delta
         self.altitude_max += altitude_delta
 
     def _preserve_top_view_vertical_center(self, old_scale: float) -> None:
+        """保持俯视图垂向中心不被侧视图同步改动。注意：只同步横向范围。"""
         viewport = self.top_view.viewport().rect()
         center_y = (viewport.height() / 2.0 - self.top_view.offset.y()) / old_scale
         self.top_view.offset.setY(viewport.height() / 2.0 - center_y * self.top_view.scale_value)
 
     def _emit_shared_view_changed(self) -> None:
+        """发送 shared view changed 信号。注意：避免循环触发视图同步。"""
         self.top_view.viewport().update()
         self.top_view.viewChanged.emit()
         self.top_view.manualViewChanged.emit()
 
     def _zoom_to_selection(self) -> None:
+        """执行 to selection 缩放。注意：保持选区或鼠标焦点附近的世界坐标稳定。"""
         if self._selection_origin is None or self._selection_current is None:
             return
         left = min(self._selection_origin.x(), self._selection_current.x())
@@ -1108,6 +1180,7 @@ class SideView(QWidget):
         self._emit_shared_view_changed()
 
     def _draw_selection(self, painter: QPainter) -> None:
+        """绘制 selection 画面元素。注意：只做渲染，不修改仿真状态。"""
         if self._selection_origin is None or self._selection_current is None:
             return
         left = min(self._selection_origin.x(), self._selection_current.x())
@@ -1124,11 +1197,13 @@ class SideView(QWidget):
         painter.drawRect(selection)
 
     def _map_y(self, altitude: float) -> float:
+        """映射 y 坐标。注意：需使用当前缩放和平移参数。"""
         return self.height() - self.PLOT_BOTTOM_MARGIN - (
             (altitude - self.altitude_min) / (self.altitude_max - self.altitude_min)
         ) * (self.height() - self.PLOT_VERTICAL_MARGINS)
 
     def _draw_grid(self, painter: QPainter) -> None:
+        """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
         painter.setPen(QPen(self.theme.grid, 1))
         spacing = self.WORLD_GRID_SPACING
         left = self._screen_to_world_x(0.0)
@@ -1147,6 +1222,7 @@ class SideView(QWidget):
             painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
 
     def _draw_reference(self, painter: QPainter) -> None:
+        """绘制 reference 画面元素。注意：只做渲染，不修改仿真状态。"""
         routes = self._route_segments()
         if not routes:
             return
@@ -1160,6 +1236,7 @@ class SideView(QWidget):
             )
 
     def _route_segments(self) -> list[ReferenceRoute]:
+        """返回需要绘制的航段列表。注意：优先使用多航段快照，缺省时退回当前航段。"""
         if self.snapshot is None:
             return []
         if self.snapshot.route_segments:
@@ -1169,6 +1246,7 @@ class SideView(QWidget):
         return []
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """绘制 trails 画面元素。注意：只做渲染，不修改仿真状态。"""
         for index, node in enumerate(snapshot.nodes):
             if len(node.trail) <= 2:
                 continue
@@ -1186,6 +1264,7 @@ class SideView(QWidget):
                 painter.drawLine(QPointF(x1, self._map_y(previous.altitude)), QPointF(x2, self._map_y(current.altitude)))
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
         for index, node in enumerate(snapshot.nodes):
             x = self._map_x(node.x)
             if x < -24 or x > self.width() + 24:
@@ -1200,9 +1279,10 @@ class SideView(QWidget):
 
 
 class LogDialog(QDialog):
-    """Popup dialog for simulation events."""
+    """仿真事件弹窗。注意：只展示日志文本。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """初始化 LogDialog 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
         self.setWindowTitle("日志")
         self.resize(720, 360)
@@ -1215,32 +1295,36 @@ class LogDialog(QDialog):
         layout.addWidget(clear_button, alignment=Qt.AlignmentFlag.AlignRight)
 
     def append(self, time_value: float, source: str, message: str) -> None:
+        """追加一条显示内容。注意：超出容量时需要裁剪旧记录。"""
         self.text.append(f"{time_value:05.1f}s  {source:<10} {message}")
 
 
 class StageFullscreenDialog(QDialog):
-    """Top-level shell used to fullscreen only the realtime display stage."""
+    """只用于全屏实时显示区的顶层外壳。注意：退出时需归还原控件。"""
 
     def __init__(self, owner: "MainWindow") -> None:
+        """初始化 StageFullscreenDialog 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(owner)
         self.owner = owner
         self.setWindowTitle("二维实时显示")
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        """处理键盘事件。注意：快捷键只影响窗口交互状态。"""
         if event.key() == Qt.Key.Key_Escape:
             self.owner._exit_stage_fullscreen()
             return
         super().keyPressEvent(event)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        """处理窗口关闭事件。注意：关闭前需要释放控制器资源。"""
         if self.owner._stage_fullscreen_dialog is self:
             self.owner._exit_stage_fullscreen()
         event.accept()
 
 
 class MainWindow(QMainWindow):
-    """Main PySide6 UI shell."""
+    """PySide6 主界面外壳。注意：负责组装控件并绑定控制器操作。"""
 
     def __init__(
         self,
@@ -1249,6 +1333,7 @@ class MainWindow(QMainWindow):
         config_state_path: Path | str | None = None,
         auto_load_config: bool = True,
     ) -> None:
+        """初始化 MainWindow 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__()
         self.project_root = Path(project_root).resolve() if project_root is not None else default_project_root()
         if config_state_path is None:
@@ -1283,6 +1368,7 @@ class MainWindow(QMainWindow):
             self._load_last_config_from_state()
 
     def _build_ui(self) -> None:
+        """构建主窗口全部 UI 区域。注意：控件引用需保存供后续事件更新使用。"""
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
@@ -1301,6 +1387,7 @@ class MainWindow(QMainWindow):
         main.addWidget(self._build_right_panel(), 0)
 
     def _build_header(self) -> QWidget:
+        """构建顶部工具栏。注意：按钮和状态标签需要绑定到窗口槽函数。"""
         header = QFrame()
         header.setFixedHeight(42)
         layout = QHBoxLayout(header)
@@ -1328,6 +1415,7 @@ class MainWindow(QMainWindow):
         return header
 
     def _build_left_panel(self) -> QWidget:
+        """构建左侧日志和配置面板。注意：面板宽度不能挤压主画布。"""
         panel = QFrame()
         panel.setObjectName("panel")
         panel.setFixedWidth(216)
@@ -1389,6 +1477,7 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_stage(self) -> QWidget:
+        """构建中央仿真画布区域。注意：俯视图和侧视图需要共享横向视野。"""
         stage = QFrame()
         stage.setObjectName("panel")
         layout = QVBoxLayout(stage)
@@ -1460,6 +1549,7 @@ class MainWindow(QMainWindow):
         return stage
 
     def _build_right_panel(self) -> QWidget:
+        """构建右侧状态表区域。注意：列宽需避免出现横向滚动条。"""
         panel = QFrame()
         panel.setObjectName("panel")
         panel.setFixedWidth(400)
@@ -1485,6 +1575,7 @@ class MainWindow(QMainWindow):
         return panel
 
     def _configure_table(self, table: QTableWidget, widths: list[int]) -> None:
+        """配置状态表通用样式。注意：表格只读且不显示多余行号。"""
         table.verticalHeader().setVisible(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -1502,10 +1593,12 @@ class MainWindow(QMainWindow):
         table.setFixedHeight(138)
 
     def _install_button_cursors(self) -> None:
+        """为按钮安装手型光标。注意：只影响交互提示，不改变按钮逻辑。"""
         for button in self.findChildren(QPushButton):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _apply_theme(self) -> None:
+        """应用 theme 设置。注意：只修改对应显示或运行参数。"""
         theme = self.theme
         button_hover = theme.line.lighter(108)
         button_pressed = theme.line.darker(108)
@@ -1672,6 +1765,7 @@ class MainWindow(QMainWindow):
         self.side_view.set_theme(theme)
 
     def _update_snapshot(self, snapshot: Snapshot) -> None:
+        """更新 snapshot 状态。注意：保持界面显示和内部数据一致。"""
         self.run_state_label.setText(snapshot.run_state)
         self.report_label.setText(f"回报：{snapshot.control_report}")
         self.step_label.setText(f"步长：{snapshot.step:.3f}s")
@@ -1690,6 +1784,7 @@ class MainWindow(QMainWindow):
         self._update_tables(snapshot)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
+        """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
         self.node_table.setRowCount(len(snapshot.nodes))
         for row, node in enumerate(snapshot.nodes):
             speed = math.hypot(node.vx, node.vy)
@@ -1717,6 +1812,7 @@ class MainWindow(QMainWindow):
                 self.link_table.setItem(row, column, QTableWidgetItem(value))
 
     def _start(self) -> None:
+        """响应开始按钮并启动仿真。注意：需要同步按钮状态和日志。"""
         snapshot = self.sim.start()
         self._update_snapshot(snapshot)
         if self.sim.last_result_code == "OK":
@@ -1724,6 +1820,7 @@ class MainWindow(QMainWindow):
         self._log("UI", f"start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _pause(self) -> None:
+        """响应暂停按钮并切换暂停状态。注意：暂停不清空当前快照。"""
         snapshot = self.sim.pause()
         if snapshot.run_state == "PAUSED":
             self.timer.stop()
@@ -1733,24 +1830,28 @@ class MainWindow(QMainWindow):
         self._log("UI", f"pause/start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _step(self) -> None:
+        """响应单步按钮并推进一拍。注意：单步后界面需要立即刷新。"""
         self.timer.stop()
         snapshot = self.sim.single_step()
         self._update_snapshot(snapshot)
         self._log("UI", f"step -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _reset(self) -> None:
+        """响应重置按钮并恢复初始状态。注意：保留当前配置路径。"""
         self.timer.stop()
         snapshot = self.sim.reset()
         self._update_snapshot(snapshot)
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
+        """处理 tick 信号回调。注意：回调内避免耗时操作阻塞界面。"""
         snapshot = self.sim.poll()
         self._update_snapshot(snapshot)
         if snapshot.run_state in {"READY", "PAUSED", "FINISHED"}:
             self.timer.stop()
 
     def _inject_disturbance(self, kind: str) -> None:
+        """响应扰动按钮并下发扰动命令。注意：失败时需要记录控制器返回信息。"""
         messages = {
             "wind": "注入风场脉冲",
             "fault": "注入 A02 控制效率下降",
@@ -1762,6 +1863,7 @@ class MainWindow(QMainWindow):
         self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _choose_config(self) -> None:
+        """处理 config 选择流程。注意：用户取消时不改变当前配置。"""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择配置文件",
@@ -1773,6 +1875,7 @@ class MainWindow(QMainWindow):
         self._apply_config_path(path)
 
     def _apply_config_path(self, path: str, *, remember: bool = True) -> None:
+        """应用 config path 设置。注意：只修改对应显示或运行参数。"""
         self.timer.stop()
         self._update_snapshot(self.sim.load_config(path))
         if self.sim.last_result_code == "OK":
@@ -1786,6 +1889,7 @@ class MainWindow(QMainWindow):
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
 
     def _config_dialog_start_dir(self) -> Path:
+        """处理 dialog start dir 配置路径。注意：兼容源码运行和打包运行路径。"""
         relative_path = self._read_last_config_path()
         if relative_path is None:
             return self.project_root
@@ -1794,10 +1898,12 @@ class MainWindow(QMainWindow):
         return candidate if candidate.exists() else self.project_root
 
     def _display_config_path(self, path: Path) -> str:
+        """生成 config path 显示文本。注意：仅用于界面展示。"""
         relative_path = self._relative_to_project_root(path)
         return relative_path if relative_path is not None else path.name
 
     def _load_last_config_from_state(self) -> None:
+        """加载上次使用的配置路径。注意：路径不存在时回退到默认配置。"""
         relative_path = self._read_last_config_path()
         if relative_path is None:
             return
@@ -1808,6 +1914,7 @@ class MainWindow(QMainWindow):
         self._apply_config_path(str(config_path), remember=False)
 
     def _read_last_config_path(self) -> str | None:
+        """读取 last config path 数据。注意：缺省或失败时应使用安全兜底。"""
         if not self.config_state_path.exists():
             return None
         parser = ConfigParser()
@@ -1820,6 +1927,7 @@ class MainWindow(QMainWindow):
         return value or None
 
     def _save_last_config_path(self, path: Path) -> None:
+        """保存 last config path 数据。注意：写入失败不应影响主仿真流程。"""
         relative_path = self._relative_to_project_root(path)
         if relative_path is None:
             self._log("WARN", "配置路径无法相对到程序目录，未更新 config.ini")
@@ -1834,6 +1942,7 @@ class MainWindow(QMainWindow):
             self._log("WARN", f"写入 config.ini 失败：{exc}")
 
     def _relative_to_project_root(self, path: Path) -> str | None:
+        """计算 to project root 相对路径。注意：路径不可相对化时返回原始路径。"""
         try:
             relative_path = os.path.relpath(path.resolve(), self.project_root)
         except ValueError:
@@ -1846,21 +1955,25 @@ class MainWindow(QMainWindow):
             return None
 
     def _on_speed_changed(self, value: int) -> None:
+        """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
         speed = value / 10.0
         self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")
 
     def _on_theme_changed(self) -> None:
+        """处理 theme changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
         self.theme_key = self.theme_select.currentData()
         self.theme = THEMES[self.theme_key]
         self._apply_theme()
         self._log("UI", f"切换主题：{self.theme_select.currentText()}")
 
     def _on_auto_center_changed(self) -> None:
+        """处理 auto center changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
         self.top_view.auto_center = self.auto_center.isChecked()
         self.top_view.set_snapshot(self.sim.snapshot())
 
     def _on_grid_changed(self) -> None:
+        """处理 grid changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
         show_grid = self.grid_toggle.isChecked()
         self.top_view.show_grid = show_grid
         self.side_view.show_grid = show_grid
@@ -1868,20 +1981,24 @@ class MainWindow(QMainWindow):
         self.side_view.update()
 
     def _disable_auto_center(self) -> None:
+        """关闭自动居中选项。注意：用户手动平移或缩放后应避免自动抢回视图。"""
         if self.auto_center.isChecked():
             self.auto_center.setChecked(False)
 
     def _reset_view(self) -> None:
+        """响应重置视图按钮。注意：同时重置俯视图和侧视图显示范围。"""
         self.top_view.reset_view()
         self.side_view.update()
 
     def _toggle_fullscreen(self) -> None:
+        """切换仿真画布全屏状态。注意：需要保存并恢复原布局。"""
         if self._stage_fullscreen_dialog is not None:
             self._exit_stage_fullscreen()
         else:
             self._enter_stage_fullscreen()
 
     def _enter_stage_fullscreen(self) -> None:
+        """进入 stage fullscreen 模式。注意：需要保存退出时恢复的界面状态。"""
         if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is not None:
             return
 
@@ -1906,6 +2023,7 @@ class MainWindow(QMainWindow):
         dialog.showFullScreen()
 
     def _exit_stage_fullscreen(self) -> None:
+        """退出 stage fullscreen 模式。注意：需要恢复进入前的布局状态。"""
         if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is None:
             return
 
@@ -1930,6 +2048,7 @@ class MainWindow(QMainWindow):
         self.side_view.update()
 
     def _set_fullscreen_button_state(self, active: bool) -> None:
+        """设置 fullscreen button state 状态。注意：保持控件状态和内部标志同步。"""
         if self.fullscreen_button is None:
             return
         self.fullscreen_button.setText("↙" if active else "⛶")
@@ -1937,16 +2056,18 @@ class MainWindow(QMainWindow):
         self.fullscreen_button.setAccessibleName("退出全屏" if active else "全屏显示")
 
     def _log(self, source: str, message: str) -> None:
+        """追加一条界面日志。注意：日志容量由日志面板负责裁剪。"""
         self.log_dialog.append(self.sim.time, source, message)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        """处理窗口关闭事件。注意：关闭前需要释放控制器资源。"""
         self.timer.stop()
         self.sim.close()
         super().closeEvent(event)
 
 
 def run_gui(argv: list[str] | None = None) -> int:
-    """Run the PySide6 GUI."""
+    """启动 PySide6 GUI。注意：一个进程只能持有一个 QApplication 主循环。"""
 
     app = QApplication(argv or [])
     window = MainWindow()

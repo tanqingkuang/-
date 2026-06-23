@@ -1,1 +1,1 @@
-"""Formation algorithm blackboard and leaf types."""
+"""编队算法黑板和叶类型。注意：字段命名需与文档和测试保持一致。"""

@@ -1,1 +1,1 @@
-"""Leader-following hold scenario entities."""
+"""领航跟随保持场景实体包。注意：长机和僚机实体在这里配套实现。"""

@@ -1,5 +1,2 @@
-"""Algorithm package.
-
-This package contains the code intended to be portable to C simulation.
-"""
+"""说明该模块的职责。注意：模块接口变更需同步相关调用方。"""
 

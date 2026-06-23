@@ -1,4 +1,4 @@
-"""Route interpolation target calculation for leader entities."""
+"""长机实体的航线插值目标计算。注意：当前按直线航段投影和延拓。"""
 
 from __future__ import annotations
 
@@ -21,9 +21,11 @@ class RouteInterpInputS(PosCalcInputS):
 
 class RouteInterp(PosCalcBase):
     def init(self, cfg: PosCalcInitS) -> None:
+        """按配置初始化 RouteInterp。注意：调用方需先准备好必要依赖和输入数据。"""
         del cfg
 
     def step(self, u: RouteInterpInputS, y: PosCalcOutputS) -> None:
+        """推进 RouteInterp 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.selfState is None or u.wayLine is None or y.selfCmd is None:
             raise ValueError("RouteInterp ports must be bound")
         line = u.wayLine
@@ -55,4 +57,5 @@ class RouteInterp(PosCalcBase):
         y.selfCmd.vd.vPsi = math.atan2(y.selfCmd.vd.vNorth, y.selfCmd.vd.vEast) if line.vdCmd else 0.0
 
     def reset(self) -> None:
+        """复位 RouteInterp 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         return None

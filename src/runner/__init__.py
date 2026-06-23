@@ -1,2 +1,2 @@
-"""Simulation orchestration package."""
+"""仿真编排包。注意：控制器在这里协调模型、通信、算法和 GUI。"""
 

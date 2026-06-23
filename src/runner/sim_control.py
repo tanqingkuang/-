@@ -64,12 +64,12 @@ ResultCode = Literal[
 
 @dataclass(frozen=True)
 class NodeState:
-    """UI/CLI-facing state for one aircraft node."""
+    """面向 UI/CLI 的单个飞机节点状态。注意：字段单位为界面展示契约。"""
 
     node_id: str
     role: str
     health: str
-    # ENU position: x=east, y=north, altitude=up.
+    # ENU 位置：x 为东向，y 为北向，altitude 为天向。
     x_m: float
     y_m: float
     altitude_m: float
@@ -88,7 +88,7 @@ class NodeState:
 
 @dataclass(frozen=True)
 class LinkState:
-    """UI/CLI-facing state for one communication link."""
+    """面向 UI/CLI 的单条通信链路状态。注意：双向链路会折叠为配置链路显示。"""
 
     link_id: str
     direction: str
@@ -99,7 +99,7 @@ class LinkState:
 
 @dataclass(frozen=True)
 class RouteState:
-    """UI-facing reference route segment in ENU coordinates."""
+    """面向 UI 的 ENU 参考航段。注意：只表示单个航段。"""
 
     start_x_m: float
     start_y_m: float
@@ -111,7 +111,7 @@ class RouteState:
 
 @dataclass(frozen=True)
 class SimulationSnapshot:
-    """Complete realtime observation payload."""
+    """完整实时观测快照。注意：供 GUI、CLI 和订阅回调读取。"""
 
     time_s: float
     duration_s: float
@@ -126,7 +126,7 @@ class SimulationSnapshot:
 
 @dataclass(frozen=True)
 class SimulationEvent:
-    """Recent event entry for UI log windows and CLI diagnostics."""
+    """近期事件记录。注意：用于 GUI 日志窗口和 CLI 诊断。"""
 
     time_s: float
     level: EventLevel
@@ -136,7 +136,7 @@ class SimulationEvent:
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Result of an application-layer command."""
+    """应用层命令执行结果。注意：code 用于程序判断，message 用于显示。"""
 
     code: ResultCode
     message: str = ""
@@ -144,7 +144,7 @@ class CommandResult:
 
 @dataclass(frozen=True)
 class DisturbanceCommand:
-    """Dynamic disturbance command accepted by ``inject_disturbance``."""
+    """inject_disturbance 接收的动态扰动命令。注意：params 必须可序列化。"""
 
     type: DisturbanceType
     target: str | None = None
@@ -153,14 +153,15 @@ class DisturbanceCommand:
 
 
 class Subscription:
-    """Handle returned by ``subscribe_snapshot``."""
+    """subscribe_snapshot 返回的订阅句柄。注意：调用 unsubscribe 可取消回调。"""
 
     def __init__(self, unsubscribe: Callable[[], None]) -> None:
+        """初始化 Subscription 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._unsubscribe = unsubscribe
         self._active = True
 
     def unsubscribe(self) -> None:
-        """Remove the callback from the controller."""
+        """取消订阅回调。注意：回调不存在时应保持幂等。"""
 
         if self._active:
             self._unsubscribe()
@@ -187,6 +188,7 @@ _DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
 
 
 def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
+    """把环境模型状态转换为算法运动状态。注意：单位和坐标系必须保持一致。"""
     ground_speed = (state.vx_mps * state.vx_mps + state.vy_mps * state.vy_mps) ** 0.5
     return MotionProfS(
         pos=PosInEarthS(state.x_m, state.y_m, state.altitude_m),
@@ -206,6 +208,7 @@ def _build_formation_comm_init(
     links: list[object],
     config: dict[str, object] | None = None,
 ) -> FormCommInitS:
+    """根据配置生成编队通信初始化信息。注意：节点 ID 必须与模型配置一致。"""
     network: list[NetWorkS] = []
     for link in links:
         if not isinstance(link, dict):
@@ -229,6 +232,7 @@ def _build_formation_slots(
     nodes: list[object],
     config: dict[str, object] | None,
 ) -> tuple[FormPatE, list[FormPosS]]:
+    """根据配置生成编队槽位定义。注意：槽位是队形定义，不应依赖飞机初始位置。"""
     formation_config = (config or {}).get("formation")
     if formation_config is None:
         return FormPatE.TRIANGLE, _default_formation_slots(nodes)
@@ -278,6 +282,7 @@ def _build_formation_slots(
 
 
 def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
+    """生成默认三机队形槽位。注意：仅在配置未给出队形时兜底。"""
     leader_id = _leader_id_from_nodes(nodes)
     slots: list[FormPosS] = []
     wing_slot_index = 0
@@ -297,6 +302,7 @@ def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
 
 
 def _formation_pattern_from_config(raw_pattern: object) -> FormPatE:
+    """从配置中读取队形类型。注意：未知类型按默认队形处理。"""
     if isinstance(raw_pattern, str):
         try:
             return FormPatE[raw_pattern.strip().upper()]
@@ -314,6 +320,7 @@ def _float_from_keys(
     index: int,
     keys: tuple[str, str],
 ) -> float:
+    """按候选键读取浮点配置。注意：用于兼容历史字段名。"""
     for key in keys:
         if key in config:
             return float(config[key])
@@ -321,6 +328,7 @@ def _float_from_keys(
 
 
 def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
+    """根据配置生成长机航线。注意：支持多航点并转换为多航段。"""
     route_config = (config or {}).get("route")
     if route_config is None:
         return _default_leader_route()
@@ -345,6 +353,7 @@ def _build_leader_route(config: dict[str, object] | None = None) -> RouteS:
 
 
 def _waylines_from_waypoints(raw_waypoints: object, route_defaults: dict[str, object]) -> list[WayLineS]:
+    """把航点序列转换为航段序列。注意：航点少于两个时不能形成有效航线。"""
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise ValueError("route.waypoints must contain at least two points")
     speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))
@@ -379,6 +388,7 @@ def _wayline_from_config(
     field_name: str,
     route_defaults: dict[str, object] | None = None,
 ) -> WayLineS:
+    """从单段配置构造航段对象。注意：字段单位统一为米和米每秒。"""
     if not isinstance(segment_config, dict):
         raise ValueError(f"{field_name} must be an object")
     defaults = route_defaults or {}
@@ -412,6 +422,7 @@ def _wayline_from_config(
 
 
 def _default_leader_route() -> RouteS:
+    """生成默认长机航线。注意：只作为配置缺省兜底。"""
     return RouteS(
         lines=[
             WayLineS(
@@ -426,6 +437,7 @@ def _default_leader_route() -> RouteS:
 
 
 def _route_point_from_config(raw: object, field_name: str) -> PosInEarthS:
+    """从配置读取航点坐标。注意：兼容数组和对象两种写法。"""
     if not isinstance(raw, dict):
         raise ValueError(f"{field_name} must be an object")
     return PosInEarthS(
@@ -436,6 +448,7 @@ def _route_point_from_config(raw: object, field_name: str) -> PosInEarthS:
 
 
 def _leader_id_from_nodes(nodes: list[object]) -> str:
+    """从节点配置中识别长机 ID。注意：找不到时使用默认长机。"""
     for index, node in enumerate(nodes):
         if isinstance(node, dict) and str(node.get("role") or "") == "leader":
             return node_id_from_config(node, index)
@@ -446,6 +459,7 @@ def _leader_id_from_nodes(nodes: list[object]) -> str:
 
 
 def _route_state_from_wayline(route: WayLineS) -> RouteState:
+    """根据当前航段生成航线状态。注意：用于快照显示和航段跟踪。"""
     return RouteState(
         start_x_m=route.start.pos.east,
         start_y_m=route.start.pos.north,
@@ -457,9 +471,10 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
 
 
 class _ConfigLoader:
-    """Minimal JSON/YAML loader for the first controller implementation."""
+    """控制器首版使用的轻量 JSON/YAML 加载器。注意：YAML 依赖缺失时只支持 JSON。"""
 
     def load(self, path: str) -> dict[str, object]:
+        """加载控制器配置并构造运行所需对象。注意：重复加载会覆盖当前场景。"""
         config_path = Path(path)
         if not config_path.exists():
             raise FileNotFoundError(path)
@@ -469,7 +484,7 @@ class _ConfigLoader:
         elif config_path.suffix.lower() in {".yaml", ".yml"}:
             try:
                 import yaml
-            except ImportError as exc:  # pragma: no cover - depends on env
+            except ImportError as exc:  # pragma: no cover - 依赖运行环境
                 raise ValueError("YAML config requires PyYAML") from exc
             data = yaml.safe_load(text)
         else:
@@ -480,6 +495,7 @@ class _ConfigLoader:
         return dict(data)
 
     def validate(self, config: dict[str, object]) -> None:
+        """校验配置结构和关键字段。注意：这里只做控制器需要的基础校验。"""
         duration_s = float(config.get("duration_s", 120.0))
         step_s = float(config.get("step_s", 0.005))
         playback_rate = float(config.get("playback_rate", 1.0))
@@ -503,7 +519,7 @@ class _ConfigLoader:
 
 
 class _NodeAlgorithm:
-    """Adapter from the portable formation entity API to SimulationController."""
+    """把可移植编队实体 API 适配到 SimulationController。注意：负责端口数据转换。"""
 
     def __init__(
         self,
@@ -513,6 +529,7 @@ class _NodeAlgorithm:
         initial_leader_state: MotionProfS | None,
         leader_route: RouteS | None,
     ) -> None:
+        """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
         self._role = role
         self._leader_route = leader_route
@@ -540,6 +557,7 @@ class _NodeAlgorithm:
         time_s: float,
         health: str = "normal",
     ) -> _NodeAlgorithmOutput:
+        """推进 _NodeAlgorithm 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         entity_output = EntityOutputS()
         self._entity.step(
             EntityInputS(
@@ -565,19 +583,23 @@ class _NodeAlgorithm:
         return _NodeAlgorithmOutput(control, outbox, status)
 
     def reset(self) -> None:
+        """复位 _NodeAlgorithm 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._has_route_step = False
         return None
 
     def close(self) -> None:
+        """释放 _NodeAlgorithm 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self._entity.close()
 
     def current_stage(self) -> FormStageE:
+        """读取当前编队阶段。注意：返回值用于 GUI 回报显示。"""
         cxt = getattr(self._entity, "cxt", None)
         if cxt is None:
             return FormStageE.NONE
         return FormStageE(cxt.cmd.stage)
 
     def current_route(self) -> WayLineS | None:
+        """读取当前航线状态。注意：返回副本避免外部改写内部状态。"""
         cxt = getattr(self._entity, "cxt", None)
         if cxt is None or self._role != "leader":
             return None
@@ -587,9 +609,10 @@ class _NodeAlgorithm:
 
 
 class _DisturbanceEngine:
-    """Dynamic disturbance stub."""
+    """动态扰动执行器。注意：当前实现覆盖风场、节点故障和链路扰动。"""
 
     def __init__(self) -> None:
+        """初始化 _DisturbanceEngine 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._active: list[tuple[DisturbanceCommand, float]] = []
         self._model: ModelIterator | None = None
         self._comm: CommunicationChannel | None = None
@@ -605,6 +628,7 @@ class _DisturbanceEngine:
         model: ModelIterator,
         comm: CommunicationChannel,
     ) -> None:
+        """按配置初始化 _DisturbanceEngine。注意：调用方需先准备好必要依赖和输入数据。"""
         del seed
         self._active = []
         self._faulted_links = set()
@@ -620,9 +644,11 @@ class _DisturbanceEngine:
         self._node_health = dict(self._baseline_health)
 
     def read_health(self) -> dict[str, str]:
+        """读取扰动模块健康状态。注意：用于状态表和回报显示。"""
         return dict(self._node_health)
 
     def inject(self, command: DisturbanceCommand, current_time_s: float) -> SimulationEvent:
+        """注入扰动命令。注意：扰动类型和目标由命令字段决定。"""
         if command.type == "clear":
             self.clear()
             return SimulationEvent(current_time_s, "INFO", "Disturbance", "清除扰动")
@@ -632,6 +658,7 @@ class _DisturbanceEngine:
         return SimulationEvent(current_time_s, "INFO", "Disturbance", f"注入扰动: {command.type}")
 
     def tick(self, time_s: float, dt_s: float) -> list[SimulationEvent]:
+        """推进模块内部时钟或动态状态一个周期。注意：调用频率应与仿真步长一致。"""
         del dt_s
         events: list[SimulationEvent] = []
         remaining: list[tuple[DisturbanceCommand, float]] = []
@@ -650,10 +677,12 @@ class _DisturbanceEngine:
         return events
 
     def clear(self) -> None:
+        """清除动态扰动。注意：只撤销扰动影响，不重置仿真时间。"""
         self._active = []
         self._clear_dynamic_effects()
 
     def _apply(self, command: DisturbanceCommand, until_s: float) -> None:
+        """把扰动命令分发到对应模型或通信模块。注意：新增扰动类型需同步扩展。"""
         if command.type == "wind" and self._model is not None:
             self._model.inject_wind(command)
         elif command.type == "node_fault":
@@ -684,6 +713,7 @@ class _DisturbanceEngine:
                     pass
 
     def _clear_dynamic_effects(self) -> None:
+        """清除已注入的动态影响。注意：需要同时处理模型和通信两类扰动。"""
         if self._model is not None:
             self._model.clear_wind()
         self._node_health = dict(self._baseline_health)
@@ -702,9 +732,11 @@ class _DisturbanceEngine:
         self._degraded_links = {}
 
     def reset(self) -> None:
+        """复位 _DisturbanceEngine 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self.clear()
 
     def close(self) -> None:
+        """释放 _DisturbanceEngine 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self._active = []
         self._faulted_links = set()
         self._degraded_links = {}
@@ -715,37 +747,44 @@ class _DisturbanceEngine:
 
 
 class _DataLogger:
-    """In-memory logger stub."""
+    """内存日志记录器占位实现。注意：当前不做持久化落盘。"""
 
     def __init__(self) -> None:
+        """初始化 _DataLogger 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.snapshots: list[SimulationSnapshot] = []
         self.events: list[SimulationEvent] = []
         self.opened = False
 
     def open(self, run_id: str, config: dict[str, object]) -> None:
+        """打开数据记录器资源。注意：路径为空时保持空操作。"""
         del run_id, config
         self.opened = True
 
     def write_snapshot(self, snapshot: SimulationSnapshot) -> None:
+        """写入一帧仿真快照。注意：记录器未打开时保持空操作。"""
         self.snapshots.append(snapshot)
 
     def write_event(self, event: SimulationEvent) -> None:
+        """写入一条仿真事件。注意：事件格式需保持可序列化。"""
         self.events.append(event)
 
     def flush(self) -> None:
+        """刷新记录缓冲。注意：频繁调用会增加 IO 开销。"""
         return None
 
     def close(self) -> None:
+        """释放 _DataLogger 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self.opened = False
 
 
 class SimulationController:
-    """Top-level simulation orchestration facade."""
+    """顶层仿真编排门面。注意：对 GUI/CLI 暴露统一控制接口。"""
 
     _EVENT_BUFFER_SIZE = 1000
     _DISPLAY_REFRESH_S = 0.1
 
     def __init__(self) -> None:
+        """初始化 SimulationController 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._lock = threading.RLock()
         self._config_loader = _ConfigLoader()
         self._model = ModelIterator()
@@ -777,7 +816,7 @@ class SimulationController:
         self._closed = False
 
     def load_config(self, path: str) -> CommandResult:
-        """Load, validate, and initialize a simulation configuration."""
+        """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
 
         with self._lock:
             if self._closed:
@@ -798,7 +837,7 @@ class SimulationController:
                 return CommandResult("ERR_BUSY", "pause or reset before loading a new config")
             try:
                 self._init_modules_unlocked(config)
-            except Exception as exc:  # noqa: BLE001 - first version maps module init failures.
+            except Exception as exc:  # noqa: BLE001 - 首版统一映射模块初始化失败
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             self._run_state = "READY"
             self._control_report = "待命"
@@ -809,13 +848,13 @@ class SimulationController:
         return CommandResult("OK", "config loaded")
 
     def get_snapshot(self) -> SimulationSnapshot:
-        """Return the latest complete snapshot without advancing simulation time."""
+        """获取当前仿真快照。注意：该操作不推进仿真时间。"""
 
         with self._lock:
             return self._latest_snapshot
 
     def start(self) -> CommandResult:
-        """Start or continue scheduled simulation execution."""
+        """启动或继续 SimulationController 的运行流程。注意：重复调用应保持状态一致。"""
 
         should_stop_worker = False
         with self._lock:
@@ -851,7 +890,7 @@ class SimulationController:
         return CommandResult("OK", "started")
 
     def pause(self) -> CommandResult:
-        """Pause scheduled execution."""
+        """暂停 SimulationController 的运行流程。注意：只暂停调度，不清空当前状态。"""
 
         with self._lock:
             if self._run_state == "RUNNING":
@@ -867,7 +906,7 @@ class SimulationController:
         return CommandResult("OK", "paused")
 
     def step(self, count: int = 1) -> CommandResult:
-        """Advance ``count`` base ticks in READY/PAUSED state."""
+        """推进 SimulationController 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
 
         if count < 1:
             return CommandResult("ERR_INVALID_ARGUMENT", "count must be >= 1")
@@ -898,7 +937,7 @@ class SimulationController:
         return CommandResult("OK", "stepped")
 
     def reset(self) -> CommandResult:
-        """Reset current config and return to READY."""
+        """复位 SimulationController 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
 
         with self._lock:
             if self._config is None:
@@ -919,7 +958,7 @@ class SimulationController:
         return CommandResult("OK", "reset")
 
     def close(self) -> None:
-        """Release resources. The controller instance must not be reused."""
+        """释放 SimulationController 持有的资源。注意：关闭后不应继续调用运行接口。"""
 
         self._stop_worker()
         with self._lock:
@@ -936,7 +975,7 @@ class SimulationController:
             self._closed = True
 
     def set_playback_rate(self, rate: float) -> CommandResult:
-        """Set wall-clock playback rate without changing simulation step size."""
+        """设置播放倍率。注意：只影响墙钟调度，不改变仿真步长。"""
 
         if not 0.1 <= rate <= 10.0:
             return CommandResult("ERR_INVALID_ARGUMENT", "rate must be in [0.1, 10.0]")
@@ -945,7 +984,7 @@ class SimulationController:
         return CommandResult("OK", "playback rate updated")
 
     def inject_disturbance(self, command: DisturbanceCommand | dict[str, object]) -> CommandResult:
-        """Inject a dynamic disturbance command."""
+        """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
 
         try:
             normalized = self._normalize_disturbance(command)
@@ -963,7 +1002,7 @@ class SimulationController:
         return CommandResult("OK", "disturbance injected")
 
     def subscribe_snapshot(self, callback: Callable[[SimulationSnapshot], None]) -> Subscription:
-        """Subscribe to display refresh snapshots."""
+        """订阅快照刷新回调。注意：回调应快速返回，避免阻塞仿真线程。"""
 
         with self._lock:
             subscription_id = self._subscriber_ids_by_callback.get(callback)
@@ -975,6 +1014,7 @@ class SimulationController:
             snapshot = self._latest_snapshot
 
         def unsubscribe() -> None:
+            """取消订阅回调。注意：回调不存在时应保持幂等。"""
             with self._lock:
                 removed = self._subscribers.pop(subscription_id, None)
                 if removed is not None:
@@ -992,7 +1032,7 @@ class SimulationController:
         limit: int = 200,
         min_level: EventLevel | None = None,
     ) -> list[SimulationEvent]:
-        """Return recent in-memory events."""
+        """读取最近事件列表。注意：返回副本供 UI 展示。"""
 
         if limit < 1:
             return []
@@ -1003,7 +1043,7 @@ class SimulationController:
             return events[-limit:]
 
     def run_until_complete(self, config: object | str, *, seed: int | None = None) -> CommandResult:
-        """Run synchronously until FINISHED for CLI/batch usage."""
+        """同步运行到仿真结束。注意：主要供 CLI 或批处理使用。"""
 
         if isinstance(config, str):
             result = self.load_config(config)
@@ -1038,6 +1078,7 @@ class SimulationController:
         return CommandResult("OK", "finished")
 
     def _run_loop(self) -> None:
+        """后台线程主循环。注意：所有共享状态访问必须受锁保护。"""
         current = threading.current_thread()
         try:
             while not self._stop_requested.is_set():
@@ -1063,6 +1104,7 @@ class SimulationController:
                     self._worker = None
 
     def _stop_worker(self) -> None:
+        """停止后台工作线程。注意：调用后需要等待线程退出。"""
         self._stop_requested.set()
         worker = self._worker
         if worker is not None and worker.is_alive() and worker is not threading.current_thread():
@@ -1071,12 +1113,14 @@ class SimulationController:
         self._stop_requested.clear()
 
     def _start_worker_unlocked(self) -> None:
+        """在已持锁状态下启动工作线程。注意：调用方必须先持有控制器锁。"""
         if self._worker is not None and self._worker.is_alive():
             return
         self._worker = threading.Thread(target=self._run_loop, name="SimulationController", daemon=True)
         self._worker.start()
 
     def _init_modules_unlocked(self, config: dict[str, object]) -> None:
+        """在已持锁状态下初始化仿真模块。注意：不得在未加载配置时调用。"""
         self._config = dict(config)
         self._seed = int(config.get("seed", 0))
         self._duration_s = float(config.get("duration_s", 120.0))
@@ -1130,6 +1174,7 @@ class SimulationController:
         self._logger.open(f"run-{int(time.time())}", config)
 
     def _tick_unlocked(self, *, force_snapshot: bool = False) -> SimulationSnapshot | None:
+        """在已持锁状态下推进一个仿真 tick。注意：调用方负责锁和阶段检查。"""
         if self._run_state not in {"RUNNING", "PAUSED"}:
             return self._latest_snapshot
         step_s = self._step_s
@@ -1165,6 +1210,7 @@ class SimulationController:
         return None
 
     def _run_formation_algorithms_unlocked(self) -> None:
+        """运行编队算法链路。注意：算法输入应使用当前模型状态快照。"""
         states = self._model.read_states()
         health_map = self._disturbance.read_health()
         controls: dict[str, AccelerationCommand] = {}
@@ -1185,6 +1231,7 @@ class SimulationController:
             self._control_report = "重构"
 
     def _make_snapshot_unlocked(self) -> SimulationSnapshot:
+        """在已持锁状态下生成完整快照。注意：不得把内部可变对象直接暴露出去。"""
         health_map = self._disturbance.read_health()
         route = self._make_route_snapshot()
         route_segments = self._make_route_segment_snapshots()
@@ -1224,6 +1271,7 @@ class SimulationController:
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
+        """解析配置中的通信链路。注意：链路 ID 需能反向映射双向状态。"""
         configured: list[_ConfiguredLink] = []
         for link in raw_links:
             if not isinstance(link, dict) or not link.get("link_id"):
@@ -1237,6 +1285,7 @@ class SimulationController:
         return configured
 
     def _make_configured_link_snapshots(self) -> list[LinkState]:
+        """生成配置链路快照。注意：需要合并正反向通信状态。"""
         states = {state.link_id: state for state in self._comm.read_link_states()}
         links: list[LinkState] = []
         for configured in self._configured_links:
@@ -1259,6 +1308,7 @@ class SimulationController:
         return links
 
     def _make_route_snapshot(self) -> RouteState | None:
+        """生成当前航线快照。注意：无航线时返回空状态。"""
         for algorithm in self._node_algorithms.values():
             route = algorithm.current_route()
             if route is None:
@@ -1267,12 +1317,14 @@ class SimulationController:
         return None
 
     def _make_route_segment_snapshots(self) -> list[RouteState]:
+        """生成全部航段快照。注意：用于 GUI 绘制多航段轨迹。"""
         if not self._node_algorithms or self._leader_route is None:
             return []
         return [_route_state_from_wayline(line) for line in self._leader_route.lines]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:
+        """计算节点相对当前航段的侧偏。注意：退化航段返回零偏差。"""
         if route is None:
             return None
         dx = route.end_x_m - route.start_x_m
@@ -1286,6 +1338,7 @@ class SimulationController:
 
     @staticmethod
     def _distance_to_go(state: AircraftState, route: RouteState | None) -> float | None:
+        """计算节点到当前航段终点的待飞距。注意：结果不包含后续航段距离。"""
         if route is None:
             return None
         dx = route.end_x_m - route.start_x_m
@@ -1299,12 +1352,14 @@ class SimulationController:
 
     @staticmethod
     def _reverse_link_id(link_id: str) -> str:
+        """生成通信链路反向 ID。注意：仅处理约定格式的双机链路。"""
         src, sep, dst = link_id.partition("-")
         if not sep:
             return link_id
         return f"{dst}-{src}"
 
     def _make_snapshot_for_empty_controller(self) -> SimulationSnapshot:
+        """生成空控制器快照。注意：用于未加载配置时的 GUI 初始显示。"""
         return SimulationSnapshot(
             time_s=0.0,
             duration_s=0.0,
@@ -1316,6 +1371,7 @@ class SimulationController:
         )
 
     def _derive_control_report_unlocked(self) -> ControlReport:
+        """根据当前状态推导控制回报文本。注意：调用方需持锁。"""
         if any(h != "normal" for h in self._disturbance.read_health().values()):
             return "重构"
         stages = [
@@ -1331,6 +1387,7 @@ class SimulationController:
         return "保持" if self._node_algorithms else "待命"
 
     def _should_refresh_display_unlocked(self) -> bool:
+        """判断本 tick 是否需要刷新显示。注意：用于降低 GUI 刷新频率。"""
         now_s = time.monotonic()
         if self._last_display_wall_s == 0.0 or now_s - self._last_display_wall_s >= self._DISPLAY_REFRESH_S:
             self._last_display_wall_s = now_s
@@ -1338,6 +1395,7 @@ class SimulationController:
         return False
 
     def _notify_subscribers(self, snapshot: SimulationSnapshot) -> None:
+        """通知所有快照订阅者。注意：回调异常不应破坏控制器状态。"""
         with self._lock:
             subscribers = list(self._subscribers.values())
         for callback in subscribers:
@@ -1348,14 +1406,17 @@ class SimulationController:
                     self._append_event_unlocked("WARN", "SimControl", f"snapshot callback failed: {exc}")
 
     def _append_event_unlocked(self, level: EventLevel, source: str, message: str) -> None:
+        """在已持锁状态下追加事件文本。注意：事件列表会按容量裁剪。"""
         event = SimulationEvent(self._time_s, level, source, message)
         self._append_event_object_unlocked(event)
         self._logger.write_event(event)
 
     def _append_event_object_unlocked(self, event: SimulationEvent) -> None:
+        """在已持锁状态下追加事件对象。注意：时间戳使用当前仿真时间。"""
         self._events.append(event)
 
     def _normalize_disturbance(self, command: DisturbanceCommand | dict[str, object]) -> DisturbanceCommand:
+        """规范化扰动命令。注意：兼容 GUI 和脚本的不同字段写法。"""
         if isinstance(command, DisturbanceCommand):
             return command
         if not isinstance(command, dict):

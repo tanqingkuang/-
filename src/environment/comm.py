@@ -1,4 +1,4 @@
-"""Communication channel simulation."""
+"""通信链路仿真模块。注意：负责拓扑、延迟、丢包和故障。"""
 
 import copy
 import dataclasses
@@ -34,6 +34,7 @@ class LinkState:
 
 
 def _validate_qos(latency_ms: float | None, loss_rate: float | None) -> None:
+    """校验通信链路 QoS 配置。注意：非法配置应在初始化阶段尽早暴露。"""
     if latency_ms is not None:
         if not math.isfinite(latency_ms) or latency_ms < 0:
             raise ValueError(f"latency_ms must be a finite number >= 0, got {latency_ms}")
@@ -43,6 +44,7 @@ def _validate_qos(latency_ms: float | None, loss_rate: float | None) -> None:
 
 
 def _req_str(d: dict, key: str, where: str) -> str:
+    """读取必填字符串字段。注意：缺失或类型错误会抛出配置异常。"""
     if key not in d:
         raise ValueError(f"{where}: missing required field {key!r}")
     v = d[key]
@@ -52,6 +54,7 @@ def _req_str(d: dict, key: str, where: str) -> str:
 
 
 def _req_num(d: dict, key: str, where: str) -> float:
+    """读取必填数值字段。注意：布尔值不视为合法数值。"""
     if key not in d:
         raise ValueError(f"{where}: missing required field {key!r}")
     v = d[key]
@@ -61,7 +64,7 @@ def _req_num(d: dict, key: str, where: str) -> float:
 
 
 def _check_finite_num(v: object, name: str) -> float:
-    """Validate v is a non-bool, finite numeric value; return as float."""
+    """校验数值是有限实数并转换为浮点数。注意：NaN 和无穷大不允许进入仿真。"""
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise ValueError(f"{name} must be a number, got {type(v).__name__!r}")
     f = float(v)
@@ -71,9 +74,10 @@ def _check_finite_num(v: object, name: str) -> float:
 
 
 class CommunicationChannel:
-    """Route messages by topology and QoS configuration."""
+    """按拓扑和 QoS 配置路由消息。注意：链路状态会影响消息投递。"""
 
     def __init__(self) -> None:
+        """初始化 CommunicationChannel 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._nodes: list[str] = []
         self._links: dict[tuple[str, str], _LinkConfig] = {}
         self._link_index: dict[str, list[tuple[str, str]]] = {}
@@ -85,6 +89,7 @@ class CommunicationChannel:
         self._base_links: dict[tuple[str, str], _LinkConfig] = {}
 
     def init(self, config: dict, seed: int) -> None:
+        """按配置初始化 CommunicationChannel。注意：调用方需先准备好必要依赖和输入数据。"""
         nodes_raw = config.get("nodes")
         if not isinstance(nodes_raw, list):
             raise ValueError("config: 'nodes' must be a list")
@@ -154,6 +159,7 @@ class CommunicationChannel:
         self._base_links: dict[tuple[str, str], _LinkConfig] = copy.deepcopy(links)
 
     def reset(self) -> None:
+        """复位 CommunicationChannel 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._in_flight.clear()
         for lst in self._inbox.values():
             lst.clear()
@@ -162,6 +168,7 @@ class CommunicationChannel:
         self._time_s = 0.0
 
     def close(self) -> None:
+        """释放 CommunicationChannel 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self._links.clear()
         self._link_index.clear()
         self._in_flight.clear()
@@ -169,7 +176,8 @@ class CommunicationChannel:
             lst.clear()
 
     def update_topology(self, config: dict) -> None:
-        # Phase 1: validate all links and detect duplicates — no mutations yet.
+        # 阶段 1：先校验全部链路并检查重复项，此阶段不修改状态。
+        """更新通信拓扑和链路配置。注意：运行中更新会重建链路状态和收件箱。"""
         links_raw = config.get("links", [])
         if not isinstance(links_raw, list):
             raise ValueError("config: 'links' must be a list")
@@ -188,13 +196,14 @@ class CommunicationChannel:
                 raise ValueError(f"duplicate link in update_topology: {link_id!r}")
             seen_keys.update(keys)
             pending.append((keys, latency_ms, loss_rate))
-        # Phase 2: apply atomically — only reached when all checks pass.
+        # 阶段 2：所有检查通过后再原子应用配置。
         for keys, latency_ms, loss_rate in pending:
             for key in keys:
                 self._links[key].latency_ms = latency_ms
                 self._links[key].loss_rate = loss_rate
 
     def send(self, messages: list[MessageEnvelope]) -> None:
+        """发送一批通信消息。注意：链路丢失或丢包时消息可能被丢弃。"""
         for msg in messages:
             if msg.source not in self._inbox:
                 continue
@@ -227,6 +236,7 @@ class CommunicationChannel:
                 )
 
     def tick(self, dt_s: float) -> None:
+        """推进模块内部时钟或动态状态一个周期。注意：调用频率应与仿真步长一致。"""
         dt_s = _check_finite_num(dt_s, "dt_s")
         if dt_s <= 0:
             raise ValueError(f"dt_s must be > 0, got {dt_s}")
@@ -252,6 +262,7 @@ class CommunicationChannel:
                 del self._in_flight[key]
 
     def read_inbox(self, node_id: str) -> list[MessageEnvelope]:
+        """读取指定节点的收件箱消息。注意：读取后会清空该节点当前缓存。"""
         if node_id not in self._inbox:
             raise KeyError(node_id)
         messages = self._inbox[node_id]
@@ -259,6 +270,7 @@ class CommunicationChannel:
         return messages
 
     def read_link_states(self) -> list[LinkState]:
+        """读取全部方向链路状态。注意：返回的是快照副本，供显示和控制器折叠使用。"""
         states = [
             LinkState(
                 link_id=f"{src}-{dst}",
@@ -274,6 +286,7 @@ class CommunicationChannel:
     def inject_link_fault(
         self, link_id: str, status: str, duration_s: float | None = None
     ) -> None:
+        """注入链路故障或恢复链路。注意：目标链路会按单向链路 ID 解析。"""
         if status not in ("normal", "lost"):
             raise ValueError(f"invalid status {status!r}; must be 'normal' or 'lost'")
         if status == "normal" and duration_s is not None:
@@ -295,6 +308,7 @@ class CommunicationChannel:
         latency_ms: float | None,
         loss_rate: float | None,
     ) -> None:
+        """注入链路 QoS 变化。注意：延迟和丢包率会覆盖该方向链路的运行参数。"""
         if latency_ms is None and loss_rate is None:
             return
         if latency_ms is not None:
@@ -312,6 +326,7 @@ class CommunicationChannel:
     def _resolve_pair(
         self, link_id: str, *, key_error: bool
     ) -> list[tuple[str, str]]:
+        """解析链路 ID 对应的源节点和目标节点。注意：只支持当前链路命名约定。"""
         if link_id.count("-") != 1:
             raise ValueError(f"link_id must contain exactly one '-': {link_id!r}")
         a, b = link_id.split("-")

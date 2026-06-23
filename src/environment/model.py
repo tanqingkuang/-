@@ -1,4 +1,4 @@
-"""Three-degree-of-freedom UAV point-mass model in ENU coordinates."""
+"""ENU 坐标系下的无人机三自由度质点模型。注意：内部角度使用弧度。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ STATE_SIZE = 12
 
 
 def node_id_from_config(node: dict[str, object], index: int) -> str:
-    """Derive a node's ID from its config dict and zero-based index."""
+    """从节点配置推导节点 ID。注意：配置缺省时使用序号生成稳定 ID。"""
     return str(node.get("node_id") or node.get("id") or f"A{index + 1:02d}")
 
 
@@ -21,22 +21,20 @@ _MAX_ABS_THETA_RAD = math.radians(89.0)
 
 @dataclass(frozen=True)
 class AccelerationCommand:
-    """ENU acceleration command produced by the node controller.
-
-    ``ax`` points east, ``ay`` points north, and ``az`` points up.
-    """
+    """说明该类的职责和边界。注意：如需修改字段或接口，需同步调用方和测试。"""
 
     ax_cmd_mps2: float = 0.0
     ay_cmd_mps2: float = 0.0
     az_cmd_mps2: float = 0.0
 
     def as_vector(self) -> tuple[float, float, float]:
+        """把状态对象转换为数值向量。注意：向量顺序必须与模型积分约定一致。"""
         return (self.ax_cmd_mps2, self.ay_cmd_mps2, self.az_cmd_mps2)
 
 
 @dataclass(frozen=True)
 class PointMassModelConfig:
-    """Numerical and physical constants for the 3-DOF point-mass model."""
+    """三自由度质点模型的数值和物理常量。注意：配置需满足基础可飞约束。"""
 
     gravity_mps2: float
     min_speed_mps: float
@@ -53,14 +51,7 @@ class PointMassModelConfig:
 
 @dataclass
 class AircraftState:
-    """Runtime state of one UAV.
-
-    The augmented state vector is ordered as
-    ``[E, N, U, V, theta, psi, aE, aN, aU, aE_dot, aN_dot, aU_dot]``.
-    The last six states are the second-order response to the ENU
-    acceleration command. They are converted to ``N_x / N_z / phi`` before
-    evaluating the point-mass equations.
-    """
+    """说明该类的职责和边界。注意：如需修改字段或接口，需同步调用方和测试。"""
 
     node_id: str
     x_m: float
@@ -81,29 +72,36 @@ class AircraftState:
 
     @property
     def theta_deg(self) -> float:
+        """返回俯仰角的角度值。注意：内部状态仍以弧度保存。"""
         return math.degrees(self.theta_rad)
 
     @property
     def psi_v_deg(self) -> float:
+        """返回航迹偏角的角度值。注意：内部状态仍以弧度保存。"""
         return math.degrees(self.psi_rad)
 
     @property
     def phi_deg(self) -> float:
+        """返回滚转角的角度值。注意：内部状态仍以弧度保存。"""
         return math.degrees(self.phi_rad)
 
     @property
     def vx_mps(self) -> float:
+        """返回东向速度分量。注意：单位为米每秒。"""
         return self.speed_mps * math.cos(self.theta_rad) * math.cos(self.psi_rad)
 
     @property
     def vy_mps(self) -> float:
+        """返回北向速度分量。注意：单位为米每秒。"""
         return self.speed_mps * math.cos(self.theta_rad) * math.sin(self.psi_rad)
 
     @property
     def vz_mps(self) -> float:
+        """返回天向速度分量。注意：单位为米每秒。"""
         return self.speed_mps * math.sin(self.theta_rad)
 
     def as_vector(self) -> list[float]:
+        """把状态对象转换为数值向量。注意：向量顺序必须与模型积分约定一致。"""
         return [
             self.x_m,
             self.y_m,
@@ -120,6 +118,7 @@ class AircraftState:
         ]
 
     def update_from_vector(self, vector: Sequence[float]) -> None:
+        """用数值向量更新状态对象。注意：调用前应保证向量长度和单位正确。"""
         (
             self.x_m,
             self.y_m,
@@ -138,7 +137,7 @@ class AircraftState:
 
 @dataclass(frozen=True)
 class PointMassInputs:
-    """Inputs to the 3-DOF point-mass equations."""
+    """三自由度质点方程输入。注意：由加速度指令映射得到。"""
 
     nx: float
     nz: float
@@ -146,9 +145,10 @@ class PointMassInputs:
 
 
 class PointMass3DoFModel:
-    """Nonlinear 3-DOF point-mass model with an acceleration input filter."""
+    """带加速度输入滤波的非线性三自由度质点模型。注意：积分前会做指令限幅。"""
 
     def __init__(self, config: PointMassModelConfig) -> None:
+        """初始化 PointMass3DoFModel 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.config = config
 
     def acceleration_to_inputs(
@@ -157,7 +157,7 @@ class PointMass3DoFModel:
         theta_rad: float,
         psi_rad: float,
     ) -> PointMassInputs:
-        """Convert filtered ENU acceleration into ``N_x / N_z / phi``."""
+        """把 ENU 加速度指令转换为模型输入量。注意：输出会受载荷和滚转限制约束。"""
 
         ax, ay, az = (
             self.clamp_acceleration(filtered_accel_mps2[0]),
@@ -205,7 +205,7 @@ class PointMass3DoFModel:
         control: Sequence[float],
         wind_velocity_mps: Sequence[float],
     ) -> list[float]:
-        """Evaluate the augmented nonlinear state derivative."""
+        """计算三自由度模型状态导数。注意：输入单位必须与模型内部约定一致。"""
 
         (
             _x_m,
@@ -282,7 +282,7 @@ class PointMass3DoFModel:
         wind_velocity_mps: Sequence[float],
         dt_s: float,
     ) -> list[float]:
-        """Advance one zero-order-hold input interval using RK4."""
+        """推进 PointMass3DoFModel 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
 
         if dt_s <= 0.0:
             raise ValueError("dt_s must be positive")
@@ -297,6 +297,7 @@ class PointMass3DoFModel:
         return self._clamp_state_vector(stepped)
 
     def _clamp_state_vector(self, vector: list[float]) -> list[float]:
+        """限制状态向量中的关键物理量。注意：用于防止积分过程产生非法姿态或速度。"""
         vector[3] = max(self.config.min_speed_mps, vector[3])
         vector[4] = self._clamp(vector[4], -_MAX_ABS_THETA_RAD, _MAX_ABS_THETA_RAD)
         vector[5] = math.atan2(math.sin(vector[5]), math.cos(vector[5]))
@@ -308,26 +309,30 @@ class PointMass3DoFModel:
         return vector
 
     def clamp_acceleration(self, value: float) -> float:
+        """限制 ENU 加速度指令幅值。注意：饱和后可能改变跟踪误差收敛速度。"""
         limit = self.config.acceleration_command_limit_mps2
         return self._clamp(float(value), -limit, limit)
 
     @staticmethod
     def _clamp(value: float, lower: float, upper: float) -> float:
+        """按上下限裁剪单个数值。注意：作为模型内部工具函数使用。"""
         return max(lower, min(upper, value))
 
     @staticmethod
     def _safe_cos_theta(cos_theta: float) -> float:
+        """计算安全的俯仰角余弦值。注意：避免接近零导致除法放大。"""
         if abs(cos_theta) >= _COS_THETA_EPS:
             return cos_theta
         return _COS_THETA_EPS if cos_theta >= 0.0 else -_COS_THETA_EPS
 
     @staticmethod
     def _add_scaled(left: Sequence[float], right: Sequence[float], scale: float) -> list[float]:
+        """按比例叠加两个向量。注意：用于 RK4 积分中间状态计算。"""
         return [left_value + right_value * scale for left_value, right_value in zip(left, right)]
 
 
 class ModelIterator:
-    """Own and advance all UAV point-mass model instances."""
+    """持有并推进全部无人机质点模型实例。注意：reset 会恢复配置初始状态。"""
 
     DEFAULT_GRAVITY_MPS2 = 9.80665
     DEFAULT_MIN_SPEED_MPS = 1.0
@@ -342,6 +347,7 @@ class ModelIterator:
     DEFAULT_PHI_MAX_DEG = 70.0
 
     def __init__(self) -> None:
+        """初始化 ModelIterator 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._config = self._default_config()
         self._system = PointMass3DoFModel(self._config)
         self._states: dict[str, AircraftState] = {}
@@ -351,7 +357,7 @@ class ModelIterator:
         self._time_s = 0.0
 
     def init(self, config: dict[str, object], seed: int) -> None:
-        """Initialize all aircraft from the simulation configuration."""
+        """按配置初始化 ModelIterator。注意：调用方需先准备好必要依赖和输入数据。"""
 
         del seed
         self._config = self._parse_model_config(config.get("model", {}))
@@ -383,7 +389,7 @@ class ModelIterator:
         }
 
     def read_states(self) -> dict[str, AircraftState]:
-        """Return detached state copies for algorithms and snapshots."""
+        """读取所有飞机的状态副本。注意：返回值供外部读取，不能作为内部状态引用使用。"""
 
         return {
             node_id: replace(state)
@@ -391,7 +397,7 @@ class ModelIterator:
         }
 
     def apply_controls(self, controls: Mapping[str, AccelerationCommand]) -> None:
-        """Apply and saturate the latest ENU acceleration commands."""
+        """应用各节点控制指令。注意：缺省节点会保持上一拍或零指令。"""
 
         for node_id, control in controls.items():
             if node_id not in self._states:
@@ -403,7 +409,7 @@ class ModelIterator:
             )
 
     def step(self, dt_s: float) -> None:
-        """Advance all aircraft by one simulation step."""
+        """推进 ModelIterator 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
 
         for node_id, state in self._states.items():
             control = self._controls.get(node_id, AccelerationCommand())
@@ -418,12 +424,12 @@ class ModelIterator:
         self._time_s += dt_s
 
     def tick(self, dt_s: float) -> None:
-        """Compatibility alias for the HLD tick interface."""
+        """推进模块内部时钟或动态状态一个周期。注意：调用频率应与仿真步长一致。"""
 
         self.step(dt_s)
 
     def inject_wind(self, command: object) -> None:
-        """Set a constant wind velocity from a disturbance command."""
+        """注入恒定风场扰动。注意：风速单位为米每秒。"""
 
         params = self._command_params(command)
         speed_mps = float(params.get("speed_mps", 0.0))
@@ -436,12 +442,12 @@ class ModelIterator:
         )
 
     def clear_wind(self) -> None:
-        """Clear wind disturbance."""
+        """清除当前风场扰动。注意：不会重置飞机运动状态。"""
 
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
 
     def reset(self) -> None:
-        """Restore configured initial states without rereading configuration."""
+        """复位 ModelIterator 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
 
         self._time_s = 0.0
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
@@ -455,11 +461,13 @@ class ModelIterator:
         }
 
     def close(self) -> None:
+        """释放 ModelIterator 持有的资源。注意：关闭后不应继续调用运行接口。"""
         self._states.clear()
         self._initial_states.clear()
         self._controls.clear()
 
     def _make_initial_state(self, node: dict[str, object], index: int) -> AircraftState:
+        """根据节点配置构造初始飞机状态。注意：配置缺省值需与 base.json 约定一致。"""
         node_id = node_id_from_config(node, index)
 
         speed_mps = max(self._config.min_speed_mps, float(node.get("speed_mps", 5.0)))
@@ -522,6 +530,7 @@ class ModelIterator:
         return state
 
     def _update_inputs_from_filtered_acceleration(self, state: AircraftState) -> None:
+        """根据滤波后的加速度更新模型输入。注意：保持输入与状态量同步。"""
         inputs = self._system.acceleration_to_inputs(
             (state.ax_mps2, state.ay_mps2, state.az_mps2),
             state.theta_rad,
@@ -539,6 +548,7 @@ class ModelIterator:
         theta_rad: float,
         psi_rad: float,
     ) -> tuple[float, float, float]:
+        """把模型输入反算为 ENU 加速度。注意：用于快照和调试显示。"""
         gravity = self._config.gravity_mps2
         a_v = gravity * nx
         a_theta = gravity * nz * math.cos(phi_rad)
@@ -564,6 +574,7 @@ class ModelIterator:
 
     @classmethod
     def _default_config(cls) -> PointMassModelConfig:
+        """生成模型默认配置。注意：只在外部配置缺省时兜底使用。"""
         return PointMassModelConfig(
             gravity_mps2=cls.DEFAULT_GRAVITY_MPS2,
             min_speed_mps=cls.DEFAULT_MIN_SPEED_MPS,
@@ -580,6 +591,7 @@ class ModelIterator:
 
     @classmethod
     def _parse_model_config(cls, raw_config: object) -> PointMassModelConfig:
+        """解析模型配置并合并默认值。注意：字段单位需与配置文档一致。"""
         if raw_config is None:
             raw_config = {}
         if not isinstance(raw_config, Mapping):
@@ -636,6 +648,7 @@ class ModelIterator:
 
     @staticmethod
     def _validate_config(config: PointMassModelConfig) -> None:
+        """校验模型配置合法性。注意：失败应阻止仿真继续运行。"""
         if config.gravity_mps2 <= 0.0:
             raise ValueError("model.gravity_mps2 must be positive")
         if config.min_speed_mps <= 0.0:
@@ -666,11 +679,13 @@ class ModelIterator:
 
     @staticmethod
     def _command_params(command: object) -> Mapping[str, object]:
+        """读取指令限制参数。注意：缺省值来自模型配置。"""
         params = ModelIterator._command_value(command, "params")
         return params if isinstance(params, Mapping) else {}
 
     @staticmethod
     def _command_value(command: object, name: str) -> object:
+        """读取单个指令参数值。注意：非法数值会回退或抛错取决于调用场景。"""
         if isinstance(command, Mapping):
             return command.get(name)
         return getattr(command, name, None)

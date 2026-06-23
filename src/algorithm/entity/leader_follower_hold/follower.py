@@ -1,4 +1,4 @@
-"""Follower entity for the leader-following hold scenario."""
+"""领航跟随保持场景的僚机实体。注意：依赖长机广播消息更新目标。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from src.algorithm.units.process.tra_plan.noop import Noop
 
 class FollowerEntity(EntityBase):
     def init(self, cfg: EntityInitS) -> None:
+        """按配置初始化 FollowerEntity。注意：调用方需先准备好必要依赖和输入数据。"""
         self.cxt = FormContextS()
         self._inbox = []
 
@@ -46,6 +47,7 @@ class FollowerEntity(EntityBase):
         self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd)
 
     def step(self, u: EntityInputS, y: EntityOutputS) -> None:
+        """推进 FollowerEntity 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.selfState is not None:
             copy_motion(u.selfState, self.cxt.selfState)
         self._inbox.clear()
@@ -63,6 +65,7 @@ class FollowerEntity(EntityBase):
         y.outbox.clear()
 
     def reset(self) -> None:
+        """复位 FollowerEntity 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         reset_context(self.cxt)
         self._inbound.reset()
         self._tra_plan.reset()
@@ -71,4 +74,5 @@ class FollowerEntity(EntityBase):
         self._inbox.clear()
 
     def close(self) -> None:
+        """释放 FollowerEntity 持有的资源。注意：关闭后不应继续调用运行接口。"""
         return None

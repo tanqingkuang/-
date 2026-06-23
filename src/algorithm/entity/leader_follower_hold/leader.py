@@ -1,4 +1,4 @@
-"""Leader entity for the leader-following hold scenario."""
+"""领航跟随保持场景的长机实体。注意：负责规划航线并广播状态。"""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, Leade
 
 class LeaderEntity(EntityBase):
     def init(self, cfg: EntityInitS) -> None:
+        """按配置初始化 LeaderEntity。注意：调用方需先准备好必要依赖和输入数据。"""
         self.cxt = FormContextS()
         self._remote = RemoteCmdS()
         self._outbox = []
@@ -49,6 +50,7 @@ class LeaderEntity(EntityBase):
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
     def step(self, u: EntityInputS, y: EntityOutputS) -> None:
+        """推进 LeaderEntity 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.selfState is not None:
             copy_motion(u.selfState, self.cxt.selfState)
         if u.remote is not None:
@@ -68,6 +70,7 @@ class LeaderEntity(EntityBase):
         y.outbox.extend(self._outbox)
 
     def reset(self) -> None:
+        """复位 LeaderEntity 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         reset_context(self.cxt)
         self._remote.stage = RemoteCmdS().stage
         self._task.reset()
@@ -78,10 +81,12 @@ class LeaderEntity(EntityBase):
         self._outbox.clear()
 
     def close(self) -> None:
+        """释放 LeaderEntity 持有的资源。注意：关闭后不应继续调用运行接口。"""
         return None
 
 
 def _default_tracker_init() -> PidComposeInitS:
+    """生成长机默认位置跟踪器配置。注意：仅在外部未注入配置时使用。"""
     gain_forward = CtrlInitS(kp=0.0, ki=0.0, kd=1.0, dt=0.1, outMax=6.0)
     gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=0.1, outMax=1.0)
     gain_vertical = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=0.1, outMax=6.0)

@@ -1,2 +1,2 @@
-"""GUI control panel and real-time display."""
+"""GUI 控制面板和实时显示包。注意：正式运行时使用 PySide6。"""
 

@@ -1,1 +1,1 @@
-"""Mode-independent formation algorithm units."""
+"""与模式无关的编队算法单元。注意：可被不同流程编排复用。"""

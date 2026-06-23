@@ -1,1 +1,1 @@
-"""Position tracking strategies."""
+"""位置跟踪策略包。注意：将目标位置和速度转换为加速度指令。"""

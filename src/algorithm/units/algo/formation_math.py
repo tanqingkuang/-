@@ -1,4 +1,4 @@
-"""Stateless math helpers for formation algorithms."""
+"""编队算法无状态数学工具。注意：函数不应保存跨帧状态。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from src.algorithm.context.leaf_types import MotionProfS
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
-    """Clamp ``value`` to the closed interval [lower, upper]."""
+    """将数值限制在闭区间内。注意：调用方需保证上下界顺序正确。"""
 
     if lower > upper:
         raise ValueError("lower must be <= upper")
@@ -16,7 +16,7 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 
 def enu_to_track(vector: tuple[float, float, float], state: MotionProfS) -> tuple[float, float, float]:
-    """Transform an ENU vector to local track axes: forward, lateral, vertical."""
+    """把 ENU 向量转换到航迹坐标系。注意：航段退化时基向量可能不可用。"""
 
     forward, lateral, vertical = _track_basis(state)
     return (
@@ -27,7 +27,7 @@ def enu_to_track(vector: tuple[float, float, float], state: MotionProfS) -> tupl
 
 
 def track_to_enu(vector: tuple[float, float, float], state: MotionProfS) -> tuple[float, float, float]:
-    """Transform a local track vector to ENU."""
+    """把航迹坐标向量转换回 ENU 坐标。注意：输入分量应与 forward/lateral/up 约定一致。"""
 
     forward, lateral, vertical = _track_basis(state)
     return (
@@ -38,7 +38,7 @@ def track_to_enu(vector: tuple[float, float, float], state: MotionProfS) -> tupl
 
 
 def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
-    """Return the leader horizontal track unit vector in ENU."""
+    """计算水平航迹方向单位向量。注意：仅使用水平分量，垂向不参与方向计算。"""
 
     vx = state.vd.vEast
     vy = state.vd.vNorth
@@ -49,13 +49,14 @@ def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
 
 
 def horizontal_track_to_enu(vector: tuple[float, float], state: MotionProfS) -> tuple[float, float]:
-    """Transform a horizontal track vector to ENU without coupling vertical velocity."""
+    """把水平航迹坐标点转换为 ENU 点。注意：高度由调用方显式给出。"""
 
+    # 队形槽位只按水平航迹旋转，不把长机爬升/下降角耦合进平面偏移。
     return horizontal_track_vector_to_enu(vector, horizontal_track_basis(state))
 
 
 def horizontal_track_vector_to_enu(vector: tuple[float, float], track: tuple[float, float]) -> tuple[float, float]:
-    """Transform a horizontal track vector to ENU using a precomputed track basis."""
+    """用预先计算的水平基向量转换航迹向量。注意：适合批量计算槽位偏移。"""
 
     track_x, track_y = track
     return (
@@ -65,6 +66,7 @@ def horizontal_track_vector_to_enu(vector: tuple[float, float], track: tuple[flo
 
 
 def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
+    """计算完整航迹坐标基。注意：航段长度过小时会返回默认水平基。"""
     vx = state.vd.vEast
     vy = state.vd.vNorth
     vz = state.vd.vUp
@@ -84,4 +86,5 @@ def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[
 
 
 def _dot(left: tuple[float, float, float], right: tuple[float, float, float]) -> float:
+    """计算三维向量点积。注意：仅用于本模块的小型几何运算。"""
     return left[0] * right[0] + left[1] * right[1] + left[2] * right[2]

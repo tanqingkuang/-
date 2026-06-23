@@ -1,2 +1,2 @@
-"""Configuration, logging, and aircraft model data package."""
+"""配置、日志和飞机模型数据包。注意：只放数据层能力。"""
 

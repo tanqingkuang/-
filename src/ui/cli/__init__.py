@@ -1,2 +1,2 @@
-"""Command-line entry package."""
+"""命令行入口包。注意：后续 CLI 命令从这里扩展。"""
 
