@@ -2327,6 +2327,7 @@ class MainWindow(QMainWindow):
             self._log("Config", f"设置仿真时长 {duration_s:g}s")
         else:
             self._log("WARN", f"设置仿真时长失败：{self.sim.last_result_message}")
+            self._sync_duration_input(self.sim.snapshot())
 
     def _persist_config_duration(self, duration_s: float) -> None:
         """把当前仿真时长写回配置文件。注意：只更新 duration_s 字段。"""

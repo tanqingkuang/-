@@ -582,6 +582,29 @@ class GuiViewInteractionTests(unittest.TestCase):
 
             self.assertAlmostEqual(config["duration_s"], 1200.0)
 
+    def test_duration_input_rejects_value_before_current_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = self._write_config_file(Path(tmp) / "case.json")
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["duration_s"] = 1.0
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            self.window._apply_config_path(str(config_path))
+            self.window.sim.controller.step(100)
+            self.window._update_snapshot(self.window.sim.snapshot())
+
+            self.window.duration_input.setText("0.2")
+            self.window.duration_input.editingFinished.emit()
+            self.app.processEvents()
+            snapshot = self.window.sim.controller.get_snapshot()
+            saved_config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            self.assertEqual(self.window.sim.last_result_code, "ERR_INVALID_ARGUMENT")
+            self.assertEqual(self.window.duration_input.text(), "1")
+            self.assertAlmostEqual(saved_config["duration_s"], 1.0)
+            self.assertEqual(snapshot.run_state, "PAUSED")
+            self.assertAlmostEqual(snapshot.time_s, 0.5)
+            self.assertAlmostEqual(snapshot.duration_s, 1.0)
+
     def _load_ui_config(
         self,
         *,

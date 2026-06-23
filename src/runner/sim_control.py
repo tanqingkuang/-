@@ -1111,9 +1111,12 @@ class SimulationController:
                 return CommandResult("ERR_INVALID_STATE", "pause before setting duration")
             if self._run_state == "FINISHED":
                 return CommandResult("ERR_INVALID_STATE", "reset before setting duration")
+            # 缩短到当前时间之前会制造“时间回退但模型未回滚”的不一致快照，必须拒绝。
+            if duration_s + _TIME_EPSILON_S < self._time_s:
+                return CommandResult("ERR_INVALID_ARGUMENT", "duration_s must not be before current time")
             self._duration_s = float(duration_s)
             self._config["duration_s"] = self._duration_s
-            # 若暂停态下把总时长缩短到当前时间之前，应立即按新的边界结束。
+            # 若总时长刚好等于当前时间，应立即按新的边界结束。
             if self._time_s >= self._duration_s:
                 self._time_s = self._duration_s
                 self._run_state = "FINISHED"

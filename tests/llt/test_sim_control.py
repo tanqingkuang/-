@@ -587,6 +587,25 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.time_s, 0.01)
         controller.close()
 
+    def test_set_duration_rejects_time_before_current_snapshot(self) -> None:
+        """暂停态修改总时长不能回退仿真时间，否则快照时间会和模型状态不一致。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=1.0, step_s=0.005)))
+            controller.step(100)
+            before = controller.get_snapshot()
+
+            result = controller.set_duration(0.2)
+            after = controller.get_snapshot()
+
+            self.assertEqual(result.code, "ERR_INVALID_ARGUMENT")
+            self.assertAlmostEqual(before.time_s, 0.5)
+            self.assertAlmostEqual(after.time_s, before.time_s)
+            self.assertAlmostEqual(after.duration_s, before.duration_s)
+            self.assertEqual(after.run_state, "PAUSED")
+            self.assertAlmostEqual(after.nodes[0].x_m, before.nodes[0].x_m)
+            controller.close()
+
     def test_timed_data_logger_records_snapshots_at_20_hz(self) -> None:
         """关键数据记录应固定为 20Hz，而不是固定每 10 个 tick。"""
         controller = SimulationController()
