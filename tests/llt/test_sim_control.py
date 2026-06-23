@@ -53,6 +53,16 @@ def _aircraft_state(node_id: str, x_m: float, y_m: float, altitude_m: float = 12
     )
 
 
+def _straight_route(speed_mps: float = 35.0) -> dict[str, object]:
+    return {
+        "speed_mps": speed_mps,
+        "waypoints": [
+            {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+            {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+        ],
+    }
+
+
 class SimulationControllerTests(unittest.TestCase):
     """Exercise the HLD-level application contract."""
 
@@ -350,6 +360,7 @@ class SimulationControllerTests(unittest.TestCase):
         config = {
             "duration_s": 220.0,
             "step_s": 0.02,
+            "route": _straight_route(),
             "nodes": [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},
@@ -378,6 +389,7 @@ class SimulationControllerTests(unittest.TestCase):
         config = {
             "duration_s": 170.0,
             "step_s": 0.02,
+            "route": _straight_route(),
             "nodes": [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},
@@ -398,8 +410,8 @@ class SimulationControllerTests(unittest.TestCase):
 
         self.assertEqual(result.code, "OK")
         self.assertAlmostEqual(a02.distance_to_go_m or 0.0, a03.distance_to_go_m or 0.0, delta=2.0)
-        self.assertAlmostEqual(a02.x_m - leader.x_m, -54.0, delta=2.0)
-        self.assertAlmostEqual(a03.x_m - leader.x_m, -54.0, delta=2.0)
+        self.assertAlmostEqual(a02.y_m - leader.y_m, 58.0, delta=2.0)
+        self.assertAlmostEqual(a03.y_m - leader.y_m, -58.0, delta=2.0)
         controller.close()
 
     def test_default_formation_slots_converge_to_leader_altitude(self) -> None:
@@ -407,6 +419,7 @@ class SimulationControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = _write_config(Path(tmp), duration_s=120.0)
             config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["route"] = _straight_route()
             config["nodes"] = [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0, "speed_mps": 5.2},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1245.0, "speed_mps": 5.0},

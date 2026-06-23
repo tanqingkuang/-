@@ -217,6 +217,31 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 10.0)
         self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
 
+    def test_slot_geometry_rotates_slot_offsets_with_leader_track(self) -> None:
+        """验证转弯后槽位随长机航迹旋转，A03 不会继续使用固定 ENU 偏移。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=6000.0, north=200.0, h=1000.0, v_east=0.0, v_north=35.0)
+        ctx.selfState = _motion(east=6058.0, north=146.0, h=1000.0, v_east=0.0, v_north=35.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A03",
+                formPat=[FormPatE.TRIANGLE],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A03", -54.0, -58.0, 0.0)]],
+            )
+        )
+
+        slot.step(
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 6058.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 146.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.h, 1000.0)
+
 
 class PosTrackTests(unittest.TestCase):
     def test_pid_compose_ignores_forward_position_and_uses_velocity_error(self) -> None:
