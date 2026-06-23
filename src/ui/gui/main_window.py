@@ -9,7 +9,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -105,8 +105,8 @@ def default_project_root() -> Path:
 class TrailPoint:
     """仿真时间中的一个轨迹采样点。注意：用于绘制历史尾迹。"""
 
-    x: float  # 采样时刻的世界 x（待飞距方向）
-    y: float  # 采样时刻的世界 y（横向）
+    x: float  # 采样时刻的世界 east 坐标
+    y: float  # 采样时刻的世界 north 坐标
     altitude: float  # 采样时刻高度
     time: float  # 采样仿真时刻，用于按 TRAIL_SECONDS 老化淡出
 
@@ -144,8 +144,8 @@ class LinkState:
 class ReferenceRoute:
     """俯视图和侧视图共用的参考航段。注意：坐标单位为米。"""
 
-    start_x: float  # 航段起点待飞距方向坐标
-    start_y: float  # 航段起点横向坐标（俯视图用）
+    start_x: float  # 航段起点 east 坐标
+    start_y: float  # 航段起点 north 坐标
     start_altitude: float  # 航段起点高度（侧视图用）
     end_x: float
     end_y: float
@@ -1198,7 +1198,7 @@ class TopView(QGraphicsView):
 
 
 class SideView(QWidget):
-    """高度随待飞距变化的侧视图。注意：横向视野与俯视图同步。"""
+    """高度侧视图。注意：横轴可按当前航段里程或用户视角投影显示。"""
 
     ALTITUDE_MIN_DEFAULT = 1120.0
     ALTITUDE_MAX_DEFAULT = 1320.0
@@ -1209,12 +1209,16 @@ class SideView(QWidget):
     def __init__(self, top_view: TopView, parent: QWidget | None = None) -> None:
         """初始化 SideView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
-        # 持有俯视图引用：横向缩放/平移完全复用俯视图，二者横轴始终同步。
         self.top_view = top_view
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
         self.show_grid = True
-        # 纵轴（高度）视野由本视图独立维护：[altitude_min, altitude_max]。
+        self.segment_locked = True
+        self.view_angle_deg = 0.0
+        self.horizontal_scale = 1.0
+        self.horizontal_offset = 0.0
+        # 用户手动缩放/拖动侧视图后，运行期刷新不再强行重排横轴。
+        self._manual_horizontal_view = False
         self.altitude_min = self.ALTITUDE_MIN_DEFAULT
         self.altitude_max = self.ALTITUDE_MAX_DEFAULT
         self._pan_origin: QPointF | None = None
@@ -1231,25 +1235,50 @@ class SideView(QWidget):
     def set_snapshot(self, snapshot: Snapshot) -> None:
         """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
+        if not self._manual_horizontal_view:
+            self._fit_horizontal_view()
         self.update()
+
+    def set_segment_locked(self, locked: bool) -> None:
+        """设置是否锁定当前航段。注意：无当前航段时内部会退回手动视角投影。"""
+        self.segment_locked = locked
+        self._manual_horizontal_view = False
+        self._fit_horizontal_view()
+        self.update()
+
+    def set_view_angle_deg(self, angle_deg: float) -> None:
+        """设置手动视角。注意：0 表示面朝正北，90 表示面朝正东。"""
+        self.view_angle_deg = angle_deg % 360.0
+        if not self._locked_route():
+            self._manual_horizontal_view = False
+            self._fit_horizontal_view()
+        self.update()
+
+    def lock_available(self) -> bool:
+        """返回当前快照是否有可锁定航段。注意：零长度航段不算可锁定。"""
+        return self._route_unit(self.snapshot.route if self.snapshot else None) is not None
+
+    def current_view_angle_deg(self) -> float:
+        """返回侧视图当前视角角度。注意：航段锁定时由当前航段自动计算。"""
+        route = self._locked_route()
+        if route is None:
+            return self.view_angle_deg
+        return self._route_view_angle_deg(route)
 
     def paintEvent(self, event) -> None:  # noqa: ARG002, ANN001
         """处理 Qt 绘制事件。注意：只在当前快照基础上渲染画面。"""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.fillRect(self.rect(), self.theme.canvas)
-        # 侧视图不使用画家级变换，所有坐标经 _map_x/_map_y 手动换算后绘制。
         if self.show_grid:
             self._draw_grid(painter)
         if self.snapshot:
-            # 同样先参考航线、再尾迹、最后节点。
             if self.snapshot.nodes:
                 self._draw_reference(painter)
             self._draw_trails(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
-        # 轴向文字标注：右下角“待飞距”（横轴），左上角“高度”（纵轴）。
         painter.setPen(self.theme.muted)
-        painter.drawText(QPointF(self.width() - 76, self.height() - 8), "待飞距")
+        painter.drawText(QPointF(self.width() - 86, self.height() - 8), self._axis_label())
         painter.drawText(QPointF(12, 20), "高度")
         self._draw_selection(painter)
 
@@ -1258,17 +1287,13 @@ class SideView(QWidget):
         delta = event.pixelDelta().y() or event.angleDelta().y()
         if delta == 0:
             return
-        # 在侧视图滚轮只缩放横向（待飞距）：以光标横向世界坐标为锚点。
         before_x = self._screen_to_world_x(event.position().x())
-        old_scale = self.top_view.scale_value
         factor = math.pow(1.001, delta)
-        # 直接改写俯视图的缩放，从而两图横轴同步缩放。
-        self.top_view.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, old_scale * factor))
-        # 反解俯视图 offset.x，使锚点横坐标缩放后仍在光标处。
-        self.top_view.offset.setX(event.position().x() - before_x * self.top_view.scale_value)
-        # 缩放会改变俯视图纵向映射，这里补偿 offset.y 以保持其垂向中心不漂移。
-        self._preserve_top_view_vertical_center(old_scale)
-        self._emit_shared_view_changed()
+        self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.horizontal_scale * factor))
+        self.horizontal_offset = event.position().x() - before_x * self.horizontal_scale
+        self._manual_horizontal_view = True
+        self.update()
+        self.top_view.manualViewChanged.emit()
         event.accept()
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
@@ -1287,12 +1312,12 @@ class SideView(QWidget):
         """处理鼠标移动事件。注意：拖拽过程中只更新视图状态。"""
         if self._pan_origin is not None:
             delta = event.position() - self._pan_origin
-            # 横向拖动平移俯视图 offset.x（与俯视图联动）。
-            self.top_view.offset.setX(self.top_view.offset.x() + delta.x())
-            # 纵向拖动只平移本视图的高度区间，不影响俯视图。
+            self.horizontal_offset += delta.x()
             self._pan_altitude(delta.y())
+            self._manual_horizontal_view = True
             self._pan_origin = event.position()
-            self._emit_shared_view_changed()
+            self.update()
+            self.top_view.manualViewChanged.emit()
             event.accept()
         elif self._selection_origin is not None:
             self._selection_current = event.position()
@@ -1313,60 +1338,48 @@ class SideView(QWidget):
             event.accept()
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: ANN001
-        """处理鼠标双击事件。注意：通常用于快速重置或聚焦视图。"""
+        """处理鼠标双击事件。注意：快速重置侧视图横轴和高度轴。"""
         if event.button() == Qt.MouseButton.LeftButton:
-            self.top_view.reset_view()
+            self.reset_view()
             event.accept()
 
+    def reset_view(self) -> None:
+        """重置侧视图显示范围。注意：同时恢复横轴自适应和默认高度轴。"""
+        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
+        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
+        self._manual_horizontal_view = False
+        self._fit_horizontal_view()
+        self.update()
+
     def reset_altitude_view(self) -> None:
-        """重置侧视图高度方向显示范围。注意：保持与俯视图横向视野同步。"""
-        # 仅复位纵轴高度区间，横轴仍跟随俯视图。
+        """重置侧视图高度方向显示范围。注意：保持当前横轴视野。"""
         self.altitude_min = self.ALTITUDE_MIN_DEFAULT
         self.altitude_max = self.ALTITUDE_MAX_DEFAULT
         self.update()
 
     def _map_x(self, x: float) -> float:
-        """映射 x 坐标。注意：需使用当前缩放和平移参数。"""
-        # 横向换算复用俯视图缩放/平移，确保两图同一世界 x 落在同一屏幕列。
-        return x * self.top_view.scale_value + self.top_view.offset.x()
+        """映射侧视图横轴坐标。注意：横轴含义由当前模式决定。"""
+        return x * self.horizontal_scale + self.horizontal_offset
 
     def _screen_to_world_x(self, x: float) -> float:
-        """把屏幕坐标转换为 to world x。注意：依赖当前视图缩放和平移。"""
-        # _map_x 的逆变换。
-        return (x - self.top_view.offset.x()) / self.top_view.scale_value
+        """把屏幕坐标转换为侧视图横轴坐标。注意：保留旧名称兼容测试。"""
+        return (x - self.horizontal_offset) / self.horizontal_scale
 
     def _screen_to_altitude(self, y: float) -> float:
-        """把屏幕坐标转换为 to altitude。注意：依赖当前视图缩放和平移。"""
-        # 绘图高度区域 = 控件高减去上下边距；ratio 为从底部向上的归一化比例。
+        """把屏幕坐标转换为 altitude。注意：依赖当前高度视野。"""
         plot_height = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS)
         ratio = (self.height() - self.PLOT_BOTTOM_MARGIN - y) / plot_height
-        # 比例映射回 [altitude_min, altitude_max] 区间。
         return self.altitude_min + ratio * (self.altitude_max - self.altitude_min)
 
     def _pan_altitude(self, delta_y: float) -> None:
         """平移 altitude 视图。注意：只改变显示偏移，不改变仿真数据。"""
-        # 把屏幕纵向位移按当前高度跨度换算成高度增量，整体平移上下界。
         plot_height = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS)
         altitude_delta = delta_y / plot_height * (self.altitude_max - self.altitude_min)
         self.altitude_min += altitude_delta
         self.altitude_max += altitude_delta
 
-    def _preserve_top_view_vertical_center(self, old_scale: float) -> None:
-        """保持俯视图垂向中心不被侧视图同步改动。注意：只同步横向范围。"""
-        # 侧视图只该影响横轴；缩放改变后用旧 scale 求出原垂向中心，再用新 scale 还原 offset.y。
-        viewport = self.top_view.viewport().rect()
-        center_y = (viewport.height() / 2.0 - self.top_view.offset.y()) / old_scale
-        self.top_view.offset.setY(viewport.height() / 2.0 - center_y * self.top_view.scale_value)
-
-    def _emit_shared_view_changed(self) -> None:
-        """发送 shared view changed 信号。注意：避免循环触发视图同步。"""
-        # 侧视图改动了俯视图的横向视野，需主动刷新俯视图并广播视图变更。
-        self.top_view.viewport().update()
-        self.top_view.viewChanged.emit()
-        self.top_view.manualViewChanged.emit()
-
     def _zoom_to_selection(self) -> None:
-        """执行 to selection 缩放。注意：保持选区或鼠标焦点附近的世界坐标稳定。"""
+        """执行 to selection 缩放。注意：选区可分别影响横轴和高度轴。"""
         if self._selection_origin is None or self._selection_current is None:
             return
         left = min(self._selection_origin.x(), self._selection_current.x())
@@ -1375,26 +1388,21 @@ class SideView(QWidget):
         bottom = max(self._selection_origin.y(), self._selection_current.y())
         selection_width = right - left
         selection_height = bottom - top
-        # 框选可分别影响横/纵两轴：明显偏宽的框缩放横轴，足够高的框缩放纵轴（高度）。
-        # has_width 要求框够宽且宽显著大于高，避免竖条误触横向缩放。
         has_width = selection_width >= 80 and selection_width >= selection_height * 1.25
         has_height = selection_height >= 8
         if not has_width and not has_height:
             return
 
         if has_width:
-            # 横向：把选框对应的世界宽度放大铺满控件宽（0.94 留边距），并同步俯视图。
             start_x = self._screen_to_world_x(left)
             end_x = self._screen_to_world_x(right)
             world_width = max(1.0, abs(end_x - start_x))
-            old_scale = self.top_view.scale_value
-            self.top_view.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.width() / world_width * 0.94))
+            self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.width() / world_width * 0.94))
             center_x = (start_x + end_x) / 2.0
-            self.top_view.offset.setX(self.width() / 2.0 - center_x * self.top_view.scale_value)
-            self._preserve_top_view_vertical_center(old_scale)
+            self.horizontal_offset = self.width() / 2.0 - center_x * self.horizontal_scale
+            self._manual_horizontal_view = True
 
         if has_height:
-            # 纵向：把选框对应高度范围放大铺满（除 0.94 略放宽），span 设 8m 下限防过窄。
             altitude_top = self._screen_to_altitude(top)
             altitude_bottom = self._screen_to_altitude(bottom)
             center = (altitude_top + altitude_bottom) / 2.0
@@ -1402,7 +1410,8 @@ class SideView(QWidget):
             self.altitude_min = center - span / 2.0
             self.altitude_max = center + span / 2.0
 
-        self._emit_shared_view_changed()
+        self.update()
+        self.top_view.manualViewChanged.emit()
 
     def _draw_selection(self, painter: QPainter) -> None:
         """绘制 selection 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -1422,8 +1431,7 @@ class SideView(QWidget):
         painter.drawRect(selection)
 
     def _map_y(self, altitude: float) -> float:
-        """映射 y 坐标。注意：需使用当前缩放和平移参数。"""
-        # 高度越高 y 越小（屏幕向上）：底部对齐 PLOT_BOTTOM_MARGIN，按高度归一化反向映射。
+        """映射 y 坐标。注意：高度越高屏幕 y 越小。"""
         return self.height() - self.PLOT_BOTTOM_MARGIN - (
             (altitude - self.altitude_min) / (self.altitude_max - self.altitude_min)
         ) * (self.height() - self.PLOT_VERTICAL_MARGINS)
@@ -1432,7 +1440,6 @@ class SideView(QWidget):
         """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
         painter.setPen(QPen(self.theme.grid, 1))
         spacing = self._grid_world_spacing()
-        # 竖线：与俯视图同一套横向间距，对齐可见世界 x 范围后逐条绘制。
         left = self._screen_to_world_x(0.0)
         right = self._screen_to_world_x(float(self.width()))
         start_x = math.floor(left / spacing) * spacing
@@ -1441,7 +1448,6 @@ class SideView(QWidget):
             x = self._map_x(float(world_x))
             painter.drawLine(QPointF(x, 0.0), QPointF(x, float(self.height())))
 
-        # 横线：按固定高度间距（米）画等高线，覆盖当前高度可见区间。
         altitude_spacing = self.ALTITUDE_GRID_SPACING
         start_altitude = math.floor(self.altitude_min / altitude_spacing) * altitude_spacing
         end_altitude = math.ceil(self.altitude_max / altitude_spacing) * altitude_spacing
@@ -1450,31 +1456,31 @@ class SideView(QWidget):
             painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
 
     def _grid_world_spacing(self) -> int:
-        """返回侧视图当前应使用的网格世界间距。
-
-        刻意复用俯视图的缩放值，使两图横向网格线一一对齐。
-        """
-        return adaptive_world_grid_spacing(self.top_view.scale_value)
+        """返回侧视图当前应使用的横轴网格间距。"""
+        return adaptive_world_grid_spacing(self.horizontal_scale)
 
     def _draw_reference(self, painter: QPainter) -> None:
         """绘制 reference 画面元素。注意：只做渲染，不修改仿真状态。"""
         routes = self._route_segments()
         if not routes:
             return
-        # 参考航线（侧视）：横用待飞距(x)，纵用高度，逐段画虚线。
         pen = QPen(self.theme.route, 2)
         pen.setDashPattern([7, 6])
         painter.setPen(pen)
         for route in routes:
+            start_x = self._horizontal_for_point(route.start_x, route.start_y)
+            end_x = self._horizontal_for_point(route.end_x, route.end_y)
             painter.drawLine(
-                QPointF(self._map_x(route.start_x), self._map_y(route.start_altitude)),
-                QPointF(self._map_x(route.end_x), self._map_y(route.end_altitude)),
+                QPointF(self._map_x(start_x), self._map_y(route.start_altitude)),
+                QPointF(self._map_x(end_x), self._map_y(route.end_altitude)),
             )
 
     def _route_segments(self) -> list[ReferenceRoute]:
-        """返回需要绘制的航段列表。注意：优先使用多航段快照，缺省时退回当前航段。"""
+        """返回侧视图需要绘制的航段列表。注意：锁定时只画当前航段。"""
         if self.snapshot is None:
             return []
+        if self._locked_route() is not None:
+            return [self.snapshot.route] if self.snapshot.route is not None else []
         if self.snapshot.route_segments:
             return self.snapshot.route_segments
         if self.snapshot.route is not None:
@@ -1488,12 +1494,10 @@ class SideView(QWidget):
                 continue
             base = self.theme.leader if index == 0 else self.theme.wingman
             for previous, current in zip(node.trail, node.trail[1:]):
-                x1 = self._map_x(previous.x)
-                x2 = self._map_x(current.x)
-                # 整段都在视口左/右外侧(留 24px 容差)则裁剪，省去无用绘制。
+                x1 = self._map_x(self._horizontal_for_point(previous.x, previous.y))
+                x2 = self._map_x(self._horizontal_for_point(current.x, current.y))
                 if (x1 < -24 and x2 < -24) or (x1 > self.width() + 24 and x2 > self.width() + 24):
                     continue
-                # 同俯视图尾迹的淡出策略，纵向用高度映射。
                 age = max(0.0, snapshot.time - current.time)
                 alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
                 color = QColor(base)
@@ -1504,19 +1508,90 @@ class SideView(QWidget):
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
         for index, node in enumerate(snapshot.nodes):
-            x = self._map_x(node.x)
-            # 节点横向出界即不绘制。
+            x = self._map_x(self._horizontal_for_point(node.x, node.y))
             if x < -24 or x > self.width() + 24:
                 continue
-            # 颜色规则与俯视图一致；侧视图用固定半径小圆表示飞机。
             color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
             y = self._map_y(node.altitude)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
             painter.drawEllipse(QPointF(x, y), 8, 8)
-            # 在圆点右侧标注节点 ID。
             painter.setPen(self.theme.ink)
             painter.drawText(QPointF(x + 10, y + 4), node.node_id)
+
+    def _axis_label(self) -> str:
+        """返回横轴标签。注意：标签需反映当前横轴语义。"""
+        return "航段里程" if self._locked_route() is not None else "投影距离"
+
+    def _locked_route(self) -> ReferenceRoute | None:
+        """返回当前锁定航段。注意：仅使用快照中的当前航段，不做人工选择。"""
+        if not self.segment_locked or self.snapshot is None:
+            return None
+        route = self.snapshot.route
+        return route if self._route_unit(route) is not None else None
+
+    def _route_unit(self, route: ReferenceRoute | None) -> tuple[float, float] | None:
+        """返回航段单位方向。注意：零长度航段无法定义锁定横轴。"""
+        if route is None:
+            return None
+        dx = route.end_x - route.start_x
+        dy = route.end_y - route.start_y
+        length = math.hypot(dx, dy)
+        if length <= 1e-6:
+            return None
+        return dx / length, dy / length
+
+    def _route_view_angle_deg(self, route: ReferenceRoute) -> float:
+        """把航段方向换算成视角。注意：0 为面朝正北，90 为面朝正东。"""
+        unit = self._route_unit(route)
+        if unit is None:
+            return self.view_angle_deg
+        ux, uy = unit
+        return math.degrees(math.atan2(-uy, ux)) % 360.0
+
+    def _horizontal_for_point(self, x: float, y: float) -> float:
+        """计算侧视图横轴坐标。注意：锁定时为当前航段里程，非锁定时为视角投影。"""
+        route = self._locked_route()
+        if route is not None:
+            unit = self._route_unit(route)
+            if unit is not None:
+                ux, uy = unit
+                return (x - route.start_x) * ux + (y - route.start_y) * uy
+        angle = math.radians(self.view_angle_deg)
+        return x * math.cos(angle) - y * math.sin(angle)
+
+    def _horizontal_bounds(self) -> tuple[float, float] | None:
+        """计算侧视图横向包围盒。注意：同时纳入航段、节点与尾迹。"""
+        if self.snapshot is None:
+            return None
+        values: list[float] = []
+        for route in self._route_segments():
+            values.append(self._horizontal_for_point(route.start_x, route.start_y))
+            values.append(self._horizontal_for_point(route.end_x, route.end_y))
+        for node in self.snapshot.nodes:
+            values.append(self._horizontal_for_point(node.x, node.y))
+            for point in node.trail:
+                values.append(self._horizontal_for_point(point.x, point.y))
+        if not values:
+            return None
+        return min(values), max(values)
+
+    def _fit_horizontal_view(self) -> None:
+        """自适应侧视图横轴范围。注意：不改变高度轴。"""
+        bounds = self._horizontal_bounds()
+        if bounds is None:
+            self.horizontal_scale = 1.0
+            self.horizontal_offset = self.width() / 2.0
+            return
+        left, right = bounds
+        if math.isclose(left, right, abs_tol=1e-6):
+            left -= 50.0
+            right += 50.0
+        span = max(1.0, right - left)
+        width = max(1.0, float(self.width()))
+        self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, width / span * 0.86))
+        center = (left + right) / 2.0
+        self.horizontal_offset = width / 2.0 - center * self.horizontal_scale
 
 
 class LogDialog(QDialog):
@@ -1607,6 +1682,7 @@ class MainWindow(QMainWindow):
         self._stage_layout_index = 1
         self._stage_layout_stretch = 1
         self.disturbance_buttons: list[QPushButton] = []
+        self._segment_lock_preferred = True
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()
         self._install_button_cursors()
@@ -1787,20 +1863,32 @@ class MainWindow(QMainWindow):
         self.grid_toggle.stateChanged.connect(self._on_grid_changed)
         self.auto_center = QCheckBox("自动居中")
         self.auto_center.stateChanged.connect(self._on_auto_center_changed)
+        self.segment_lock = QCheckBox("航段锁定")
+        self.segment_lock.setChecked(True)
+        self.segment_lock.stateChanged.connect(self._on_segment_lock_changed)
+        self.view_angle_label = QLabel("视角 0°")
+        self.view_angle_slider = QSlider(Qt.Orientation.Horizontal)
+        self.view_angle_slider.setRange(0, 360)
+        self.view_angle_slider.setValue(0)
+        self.view_angle_slider.setFixedWidth(116)
+        self.view_angle_slider.valueChanged.connect(self._on_view_angle_changed)
         reset_view = QPushButton("重置视图")
         reset_view.clicked.connect(self._reset_view)
         toolbar.addWidget(self.grid_toggle)
         toolbar.addWidget(self.auto_center)
+        toolbar.addWidget(self.segment_lock)
+        toolbar.addWidget(self.view_angle_label)
+        toolbar.addWidget(self.view_angle_slider)
         toolbar.addWidget(reset_view)
         layout.addLayout(toolbar)
 
-        # 创建俯视图与侧视图；侧视图持有俯视图引用以共享横向视野。
+        # 创建俯视图与侧视图；侧视图独立维护高度轴和横向投影轴。
         self.top_view = TopView()
         self.side_view = SideView(self.top_view)
-        # 信号联动：俯视图变化 -> 重绘侧视图；手动操作 -> 关闭自动居中；重置 -> 侧视图高度也重置。
+        # 信号联动：俯视图手动操作 -> 关闭自动居中；重置 -> 侧视图也恢复默认显示范围。
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
-        self.top_view.resetViewRequested.connect(self.side_view.reset_altitude_view)
+        self.top_view.resetViewRequested.connect(self.side_view.reset_view)
         # 俯视图占主要高度(stretch=1)，侧视图固定附在下方。
         layout.addWidget(self.top_view, 1)
         layout.addWidget(self.side_view, 0)
@@ -2095,6 +2183,7 @@ class MainWindow(QMainWindow):
         # 把快照下发给两视图与状态表；仅在需要时让俯视图自适应铺满。
         self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
+        self._sync_side_view_controls()
         self._update_tables(snapshot)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
@@ -2308,6 +2397,40 @@ class MainWindow(QMainWindow):
         speed = value / 10.0
         self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")
+
+    def _on_segment_lock_changed(self) -> None:
+        """处理 segment lock changed 信号回调。注意：只改变侧视图显示方式。"""
+        checked = self.segment_lock.isChecked()
+        previous_angle = self.side_view.current_view_angle_deg()
+        if self.segment_lock.isEnabled():
+            self._segment_lock_preferred = checked
+        if not checked:
+            self.side_view.view_angle_deg = previous_angle
+        self.side_view.set_segment_locked(checked)
+        self._sync_side_view_controls()
+
+    def _on_view_angle_changed(self, value: int) -> None:
+        """处理 view angle changed 信号回调。注意：航段锁定时滑条只显示自动值。"""
+        self.view_angle_label.setText(f"视角 {value}°")
+        if not self.segment_lock.isChecked():
+            self.side_view.set_view_angle_deg(float(value))
+
+    def _sync_side_view_controls(self) -> None:
+        """同步侧视图控制状态。注意：程序刷新控件时不触发用户回调。"""
+        lock_available = self.side_view.lock_available()
+        locked = lock_available and self._segment_lock_preferred
+
+        with QSignalBlocker(self.segment_lock):
+            self.segment_lock.setEnabled(lock_available)
+            self.segment_lock.setChecked(locked)
+        if self.side_view.segment_locked != locked:
+            self.side_view.set_segment_locked(locked)
+
+        angle = round(self.side_view.current_view_angle_deg()) % 360
+        with QSignalBlocker(self.view_angle_slider):
+            self.view_angle_slider.setEnabled(not locked)
+            self.view_angle_slider.setValue(angle)
+        self.view_angle_label.setText(f"视角 {angle}°")
 
     def _on_duration_changed(self) -> None:
         """处理 duration changed 信号回调。注意：只在非运行态下更新控制器时长。"""

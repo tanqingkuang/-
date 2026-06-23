@@ -23,6 +23,7 @@ from src.ui.gui.main_window import (
     MainWindow,
     LinkState,
     NodeState,
+    ReferenceRoute,
     Snapshot,
     TOP_VIEW_ORIGIN_MARGIN,
     default_project_root,
@@ -84,10 +85,10 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.speed_label.text(), "20.0x")
         self.assertAlmostEqual(self.window.sim.speed, 20.0)
 
-    def test_side_grid_uses_shared_world_x_mapping(self) -> None:
+    def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
-        self.window.top_view.offset = QPointF(73.0, 0.0)
-        self.window.top_view.scale_value = 1.0
+        self.window.side_view.horizontal_offset = 73.0
+        self.window.side_view.horizontal_scale = 1.0
         self.window.side_view.update()
         self.app.processEvents()
 
@@ -102,15 +103,15 @@ class GuiViewInteractionTests(unittest.TestCase):
     def test_world_grid_keeps_readable_screen_spacing_during_zoom(self) -> None:
         for scale in (0.45, 1.0, 3.5):
             self.window.top_view.scale_value = scale
+            self.window.side_view.horizontal_scale = scale
 
             screen_spacing = self.window.top_view._grid_world_spacing() * scale
+            side_screen_spacing = self.window.side_view._grid_world_spacing() * scale
 
             self.assertGreaterEqual(screen_spacing, 36.0)
             self.assertLessEqual(screen_spacing, 96.0)
-            self.assertEqual(
-                self.window.side_view._grid_world_spacing(),
-                self.window.top_view._grid_world_spacing(),
-            )
+            self.assertGreaterEqual(side_screen_spacing, 36.0)
+            self.assertLessEqual(side_screen_spacing, 96.0)
 
     def test_top_view_aircraft_marker_keeps_screen_size_during_zoom(self) -> None:
         small = self._leader_marker_bounds_at_scale(0.45)
@@ -261,22 +262,73 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.top_view.scale_value, old_scale)
         self.assertLess(new_span, old_span)
 
-    def test_side_horizontal_selection_updates_shared_x_view_only(self) -> None:
-        old_scale = self.window.top_view.scale_value
-        old_center_y = (
-            self.window.top_view.viewport().height() / 2.0 - self.window.top_view.offset.y()
-        ) / old_scale
+    def test_side_horizontal_selection_updates_side_axis_only(self) -> None:
+        old_top_scale = self.window.top_view.scale_value
+        old_top_offset = QPointF(self.window.top_view.offset)
+        old_side_scale = self.window.side_view.horizontal_scale
 
         self.window.side_view._selection_origin = QPointF(100.0, 44.0)
         self.window.side_view._selection_current = QPointF(520.0, 84.0)
         self.window.side_view._zoom_to_selection()
         self.app.processEvents()
 
-        new_center_y = (
-            self.window.top_view.viewport().height() / 2.0 - self.window.top_view.offset.y()
-        ) / self.window.top_view.scale_value
-        self.assertGreater(self.window.top_view.scale_value, old_scale)
-        self.assertAlmostEqual(new_center_y, old_center_y)
+        self.assertEqual(self.window.top_view.offset, old_top_offset)
+        self.assertEqual(self.window.top_view.scale_value, old_top_scale)
+        self.assertGreater(self.window.side_view.horizontal_scale, old_side_scale)
+
+    def test_segment_lock_projects_current_north_south_route_to_station_axis(self) -> None:
+        route = ReferenceRoute(1000.0, 100.0, 1200.0, 1000.0, 500.0, 1200.0)
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[NodeState("A01", "leader", 1000.0, 300.0, 0.0, 20.0, 1200.0)],
+            links=[],
+            route=route,
+            route_segments=[route],
+        )
+
+        self.window._update_snapshot(snapshot, fit_top_view=True)
+        self.app.processEvents()
+
+        self.assertTrue(self.window.segment_lock.isChecked())
+        self.assertFalse(self.window.view_angle_slider.isEnabled())
+        self.assertEqual(self.window.view_angle_slider.value(), 270)
+        self.assertAlmostEqual(self.window.side_view._horizontal_for_point(1000.0, 300.0), 200.0)
+
+        self.window.segment_lock.setChecked(False)
+        self.app.processEvents()
+
+        self.assertTrue(self.window.view_angle_slider.isEnabled())
+        self.assertEqual(self.window.view_angle_slider.value(), 270)
+        self.assertAlmostEqual(self.window.side_view.view_angle_deg, 270.0)
+
+    def test_unlocked_view_angle_slider_projects_by_direction(self) -> None:
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[NodeState("A01", "leader", 100.0, 100.0, 0.0, 20.0, 1200.0)],
+            links=[],
+        )
+        self.window._update_snapshot(snapshot, fit_top_view=True)
+        self.app.processEvents()
+
+        self.assertFalse(self.window.segment_lock.isEnabled())
+        self.assertTrue(self.window.view_angle_slider.isEnabled())
+
+        self.window.view_angle_slider.setValue(90)
+        self.app.processEvents()
+
+        self.assertAlmostEqual(self.window.side_view.view_angle_deg, 90.0)
+        self.assertAlmostEqual(self.window.side_view._horizontal_for_point(0.0, 100.0), -100.0)
+        self.assertAlmostEqual(self.window.side_view._horizontal_for_point(100.0, 0.0), 0.0, delta=1e-6)
 
     def test_main_window_uses_simulation_controller_adapter(self) -> None:
         self.assertIsInstance(self.window.sim, ControllerSimulationAdapter)
