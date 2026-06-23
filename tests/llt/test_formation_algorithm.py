@@ -68,12 +68,13 @@ class FormationMathTests(unittest.TestCase):
         self.assertEqual(clamp(3.0, -1.0, 2.0), 2.0)
 
         state = _motion(v_east=10.0, v_north=0.0)
-        self.assertEqual(enu_to_track((1.0, 2.0, 3.0), state), (1.0, 2.0, 3.0))
-        self.assertEqual(track_to_enu((1.0, 2.0, 3.0), state), (1.0, 2.0, 3.0))
+        self.assertEqual(enu_to_track((1.0, 2.0, 3.0), state), (1.0, 3.0, -2.0))
+        self.assertEqual(track_to_enu((1.0, 3.0, -2.0), state), (1.0, 2.0, 3.0))
 
         northbound = _motion(v_east=0.0, v_north=10.0)
         self.assertAlmostEqual(enu_to_track((0.0, 2.0, 3.0), northbound)[0], 2.0)
-        self.assertAlmostEqual(track_to_enu((2.0, 0.0, 3.0), northbound)[1], 2.0)
+        self.assertAlmostEqual(enu_to_track((0.0, 2.0, 3.0), northbound)[1], 3.0)
+        self.assertAlmostEqual(track_to_enu((2.0, 3.0, 0.0), northbound)[1], 2.0)
 
     def test_horizontal_track_to_enu_ignores_vertical_velocity(self) -> None:
         """验证水平队形槽位只随水平航迹旋转，不被长机爬升/下降角耦合。"""
@@ -82,7 +83,7 @@ class FormationMathTests(unittest.TestCase):
 
         east, north = horizontal_track_to_enu((-54.0, -58.0), northbound_climb)
 
-        self.assertAlmostEqual(east, 58.0)
+        self.assertAlmostEqual(east, -58.0)
         self.assertAlmostEqual(north, -54.0)
 
 
@@ -347,7 +348,7 @@ class PosCalcTests(unittest.TestCase):
 
 class PosTrackTests(unittest.TestCase):
     def test_pid_compose_ignores_forward_position_and_uses_velocity_error(self) -> None:
-        """验证 PID 组合跟踪中前向只控速度，侧向和高度按位置误差生成加速度。"""
+        """验证 PID 组合跟踪中前向只控速度，法向/侧向按苏联系轴序生成加速度。"""
 
         tracker = PidCompose()
         tracker.init(

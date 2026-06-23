@@ -71,7 +71,8 @@ class SlotGeometry(PosCalcBase):
             # 长机水平航迹未定义时保持旧行为：槽位按 ENU 固定偏移解释，避免起步/悬停首拍崩溃。
             slot_east, slot_north = slot.x, slot.y
         else:
-            slot_east, slot_north = horizontal_track_vector_to_enu((slot.x, slot.y), track)
+            # formPos.y 沿用既有队形配置的左侧为正；苏联式水平航迹系侧向右为正，传入前需取反。
+            slot_east, slot_north = horizontal_track_vector_to_enu((slot.x, -slot.y), track)
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + slot.z

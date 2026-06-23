@@ -16,24 +16,24 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 
 def enu_to_track(vector: tuple[float, float, float], state: MotionProfS) -> tuple[float, float, float]:
-    """把 ENU 向量转换到航迹坐标系。注意：航段退化时基向量可能不可用。"""
+    """把 ENU 向量转换到苏联式航迹系。注意：输出轴序为前向、法向/上向、侧向右。"""
 
-    forward, lateral, vertical = _track_basis(state)
+    forward, normal, lateral_right = _track_basis(state)
     return (
         _dot(vector, forward),
-        _dot(vector, lateral),
-        _dot(vector, vertical),
+        _dot(vector, normal),
+        _dot(vector, lateral_right),
     )
 
 
 def track_to_enu(vector: tuple[float, float, float], state: MotionProfS) -> tuple[float, float, float]:
-    """把航迹坐标向量转换回 ENU 坐标。注意：输入分量应与 forward/lateral/up 约定一致。"""
+    """把苏联式航迹系向量转换回 ENU 坐标。注意：输入轴序为前向、法向/上向、侧向右。"""
 
-    forward, lateral, vertical = _track_basis(state)
+    forward, normal, lateral_right = _track_basis(state)
     return (
-        vector[0] * forward[0] + vector[1] * lateral[0] + vector[2] * vertical[0],
-        vector[0] * forward[1] + vector[1] * lateral[1] + vector[2] * vertical[1],
-        vector[0] * forward[2] + vector[1] * lateral[2] + vector[2] * vertical[2],
+        vector[0] * forward[0] + vector[1] * normal[0] + vector[2] * lateral_right[0],
+        vector[0] * forward[1] + vector[1] * normal[1] + vector[2] * lateral_right[1],
+        vector[0] * forward[2] + vector[1] * normal[2] + vector[2] * lateral_right[2],
     )
 
 
@@ -49,24 +49,24 @@ def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
 
 
 def horizontal_track_to_enu(vector: tuple[float, float], state: MotionProfS) -> tuple[float, float]:
-    """把水平航迹坐标点转换为 ENU 点。注意：高度由调用方显式给出。"""
+    """把水平航迹坐标点转换为 ENU 点。注意：轴序为前向、侧向右，高度由调用方显式给出。"""
 
     # 队形槽位只按水平航迹旋转，不把长机爬升/下降角耦合进平面偏移。
     return horizontal_track_vector_to_enu(vector, horizontal_track_basis(state))
 
 
 def horizontal_track_vector_to_enu(vector: tuple[float, float], track: tuple[float, float]) -> tuple[float, float]:
-    """用预先计算的水平基向量转换航迹向量。注意：适合批量计算槽位偏移。"""
+    """用预先计算的水平基向量转换航迹向量。注意：水平第二轴为侧向右。"""
 
     track_x, track_y = track
     return (
-        vector[0] * track_x - vector[1] * track_y,
-        vector[0] * track_y + vector[1] * track_x,
+        vector[0] * track_x + vector[1] * track_y,
+        vector[0] * track_y - vector[1] * track_x,
     )
 
 
 def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
-    """计算完整航迹坐标基。注意：航段长度过小时会返回默认水平基。"""
+    """计算苏联式航迹坐标基。注意：轴序为前向、法向/上向、侧向右。"""
     vx = state.v.vEast
     vy = state.v.vNorth
     vz = state.v.vUp
@@ -80,9 +80,9 @@ def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[
     cos_psi = vx / ground
     sin_psi = vy / ground
     forward = (cos_theta * cos_psi, cos_theta * sin_psi, sin_theta)
-    lateral = (-sin_psi, cos_psi, 0.0)
-    vertical = (-sin_theta * cos_psi, -sin_theta * sin_psi, cos_theta)
-    return forward, lateral, vertical
+    normal = (-sin_theta * cos_psi, -sin_theta * sin_psi, cos_theta)
+    lateral_right = (sin_psi, -cos_psi, 0.0)
+    return forward, normal, lateral_right
 
 
 def _dot(left: tuple[float, float, float], right: tuple[float, float, float]) -> float:

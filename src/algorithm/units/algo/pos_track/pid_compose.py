@@ -1,4 +1,4 @@
-"""PID 组合式位置跟踪。注意：前向速度和侧向/高度位置环分开处理。"""
+"""PID 组合式位置跟踪。注意：前向速度和苏联式法向/侧向位置环分开处理。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class PidComposeInitS(PosTrackInitS):
 
 
 class PidCompose(PosTrackBase):
-    """组合式 PID 位置跟踪器。注意：前向只控速度，侧向和高度按位置误差闭环。"""
+    """组合式 PID 位置跟踪器。注意：前向只控速度，法向和侧向右按位置误差闭环。"""
 
     def __init__(self) -> None:
         """初始化 PidCompose 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -59,8 +59,8 @@ class PidCompose(PosTrackBase):
 
         acc_track = (
             self._forward.step(0.0, vel_err[0]),
-            self._lateral.step(pos_err[1], vel_err[1]),
-            self._vertical.step(pos_err[2], vel_err[2]),
+            self._vertical.step(pos_err[1], vel_err[1]),
+            self._lateral.step(pos_err[2], vel_err[2]),
         )
         acc_enu = track_to_enu(acc_track, u.selfState)
         y.accCmd.accEast = acc_enu[0]
