@@ -1096,6 +1096,31 @@ class SimulationController:
             self._playback_rate = float(rate)
         return CommandResult("OK", "playback rate updated")
 
+    def set_duration(self, duration_s: float) -> CommandResult:
+        """设置仿真总时长。注意：只允许在未自动运行时修改。"""
+
+        # 总时长必须是正有限值，避免进度条和结束条件进入不可判定状态。
+        if not math.isfinite(duration_s) or duration_s <= 0.0:
+            return CommandResult("ERR_INVALID_ARGUMENT", "duration_s must be positive")
+        with self._lock:
+            if self._closed:
+                return CommandResult("ERR_INVALID_STATE", "controller is closed")
+            if self._config is None:
+                return CommandResult("ERR_NO_CONFIG", "load config before setting duration")
+            if self._run_state == "RUNNING":
+                return CommandResult("ERR_INVALID_STATE", "pause before setting duration")
+            if self._run_state == "FINISHED":
+                return CommandResult("ERR_INVALID_STATE", "reset before setting duration")
+            self._duration_s = float(duration_s)
+            self._config["duration_s"] = self._duration_s
+            # 若暂停态下把总时长缩短到当前时间之前，应立即按新的边界结束。
+            if self._time_s >= self._duration_s:
+                self._time_s = self._duration_s
+                self._run_state = "FINISHED"
+                self._control_report = "保持"
+            self._latest_snapshot = self._make_snapshot_unlocked()
+        return CommandResult("OK", "duration updated")
+
     def inject_disturbance(self, command: DisturbanceCommand | dict[str, object]) -> CommandResult:
         """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
 

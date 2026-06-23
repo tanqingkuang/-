@@ -571,6 +571,22 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.time_s, 0.015)
         controller.close()
 
+    def test_set_duration_updates_snapshot_and_finish_boundary(self) -> None:
+        """界面修改仿真时长后，控制器应使用新时长作为停止边界。"""
+        controller = SimulationController()
+        controller.run_until_complete({"duration_s": 0.005, "step_s": 0.005})
+        controller.reset()
+
+        result = controller.set_duration(0.01)
+        controller.step(2)
+        snapshot = controller.get_snapshot()
+
+        self.assertEqual(result.code, "OK")
+        self.assertAlmostEqual(snapshot.duration_s, 0.01)
+        self.assertEqual(snapshot.run_state, "FINISHED")
+        self.assertAlmostEqual(snapshot.time_s, 0.01)
+        controller.close()
+
     def test_timed_data_logger_records_snapshots_at_20_hz(self) -> None:
         """关键数据记录应固定为 20Hz，而不是固定每 10 个 tick。"""
         controller = SimulationController()
