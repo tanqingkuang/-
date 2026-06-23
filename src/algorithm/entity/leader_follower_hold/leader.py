@@ -103,7 +103,7 @@ def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) ->
         raise ValueError("control_period_s must be positive")
     # 三轴 PID 增益分别整定：纵向(前向)、横向(侧偏)、垂向(高度)，dt 使用上层注入的控制周期。
     gain_forward = CtrlInitS(kp=1.0, ki=0.0, kd=0.0, dt=control_period_s, outMax=6.0)
-    gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=1.0)
+    gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
     gain_vertical = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=control_period_s, outMax=6.0)
     # 首参 0.5 为前视/合成系数，与三轴增益一并构成位置跟踪器配置
     return PidComposeInitS(0.5, gain_forward, gain_lateral, gain_vertical)

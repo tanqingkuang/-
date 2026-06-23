@@ -59,7 +59,7 @@ class PidCompose(PosTrackBase):
             u.selfState,
         )
         vel_err = (
-            trim_vel[0] - self_vel[0],
+            u.selfCmd.v.vd - u.selfState.v.vd,
             trim_vel[1] - self_vel[1],
             trim_vel[2] - self_vel[2],
         )

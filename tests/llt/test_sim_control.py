@@ -532,6 +532,8 @@ class SimulationControllerTests(unittest.TestCase):
 
             self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.05)
             self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.05)
+            self.assertAlmostEqual(leader._pos_track._lateral._cfg.outMax, 4.0)
+            self.assertAlmostEqual(follower._pos_track._lateral._cfg.outMax, 4.0)
             controller.close()
 
     def test_realtime_logging_uses_20_hz_with_odd_algorithm_decimation(self) -> None:

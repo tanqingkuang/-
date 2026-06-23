@@ -372,6 +372,29 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 2.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 2.0)
 
+    def test_pid_compose_forward_speed_pi_uses_scalar_speed_error(self) -> None:
+        """验证前向速度环按地速标量误差控制，不把目标速度投影到当前航向后再相减。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainForward=CtrlInitS(kp=1.0, ki=0.0, kd=0.0, dt=0.1, outMax=20.0),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(v_east=0.0, v_north=10.0)
+        ctx.selfCmd = _motion(v_east=20.0, v_north=0.0)
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 0.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 10.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
+
     def test_pid_compose_rejects_low_speed_without_overwriting_output(self) -> None:
         """验证低于 vMin 时航迹系奇异状态会 fail-fast，且不会覆盖已有输出。"""
 
