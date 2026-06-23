@@ -423,13 +423,13 @@ def _tick() -> SimulationSnapshot
 | 1 | 编队算法 | `20 Hz` | sim-time | 每 10 个基础 tick | 读取当前模型状态；<br />从通信功能读取各节点 Inbox；<br />运行各节点编队算法；<br />生成控制量和 Outbox；<br />未触发时沿用上一帧控制量，不产生新的 Outbox |
 | 2 | 通信功能 | `100 Hz` | sim-time | 每 2 个基础 tick | 接收编队算法新产生的 Outbox；<br />调用通信功能 `tick(dt_s)`；<br />推进在途消息、延迟和丢包；<br />更新各节点 Inbox |
 | 3 | 模型功能 | `200 Hz` | sim-time | 每个基础 tick | 将当前有效控制量写入模型；<br />调用加扰 `tick(time_s, dt_s)` 并把动态扰动写入模型 / 通信；<br />调用模型迭代 `step(step_s)` 推进动力学；<br />更新时间、运行状态和控制回报 |
-| 4 | 关键数据落盘 | `20 Hz` | sim-time | 每 10 个基础 tick | 写关键数据 |
+| 4 | 关键数据记录 | `20 Hz` | sim-time | 每 `0.05 s` 采样点，默认每 10 个 `0.005 s` 基础 tick | 写定时关键数据快照 |
 | 5 | 快照生成 | `100 Hz` | sim-time | 每 2 个基础 tick | 生成最新 `SimulationSnapshot`，供 `get_snapshot()` 返回 |
 | 6 | 显示回显刷新 | `10 Hz` | wall-clock | wall-clock 节流命中时 | 更新可供 UI 读取的最近快照；若启用订阅，则通知订阅者 |
 
 频率约束：
 
-- 各 sim-time 频率必须能被基础仿真 tick 整除，避免分数 tick 调度。
+- 各 sim-time 频率优先选取能被基础仿真 tick 整除的值，避免分数 tick 调度；本版关键数据记录固定以 `0.05 s` 采样点为准，若配置步长不能整除 `0.05 s`，则在跨过采样点后的第一个基础 tick 记录。
 - 显示回显刷新按 wall-clock 节流，不随 `playback_rate` 增大而提高刷新频率。
 - `playback_rate` 只影响 wall-clock 调度间隔，不改变任何 sim-time 频率。
 - 编队算法控制周期由仿真控制统一计算并注入算法实体：`control_period_s = step_s * algorithm_decimation`。默认 `step_s=0.005`、`algorithm_decimation=10`，因此默认控制周期为 `0.05 s`（20 Hz）。
@@ -538,6 +538,13 @@ class DataLogger:
     def flush() -> None: ...
     def close() -> None: ...
 ```
+
+关键数据日志与 UI 事件日志分开：
+
+- 关键数据日志是定时记录的仿真数据，首版固定 `20 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`。
+- 记录对象为 `SimulationSnapshot`，至少包含 `time_s`、`run_state`、节点状态、链路状态和当前航线视图；事件对象只通过 `write_event()` 作为诊断信息记录，不参与 20Hz 定时采样。
+- GUI 顶部“日志”窗口只展示 `SimulationEvent` 最近事件，不读取关键数据日志文件，也不决定关键数据日志频率。
+- 当前实现可以先以内存记录器验证 20Hz 调度；文件持久化记录器后续替换 `DataLogger` 实现时，不应改变仿真控制的调度语义。
 
 日志写入失败策略：
 

@@ -571,6 +571,24 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(snapshot.time_s, 0.015)
         controller.close()
 
+    def test_timed_data_logger_records_snapshots_at_20_hz(self) -> None:
+        """关键数据记录应固定为 20Hz，而不是固定每 10 个 tick。"""
+        controller = SimulationController()
+
+        result = controller.run_until_complete(
+            {
+                "duration_s": 0.1,
+                "step_s": 0.01,
+                "nodes": [{"node_id": "A01"}],
+                "links": [],
+            }
+        )
+        logged_times = [round(snapshot.time_s, 6) for snapshot in controller._logger.snapshots]
+
+        self.assertEqual(result.code, "OK")
+        self.assertEqual(logged_times, [0.05, 0.1])
+        controller.close()
+
     def test_empty_config_does_not_create_default_aircraft_or_links(self) -> None:
         controller = SimulationController()
 

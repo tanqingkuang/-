@@ -195,6 +195,8 @@ _DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
     (-54.0, 58.0, 0.0),
     (-54.0, -58.0, 0.0),
 )
+_LOG_SAMPLE_PERIOD_S = 0.05
+_TIME_EPSILON_S = 1e-9
 
 
 def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
@@ -840,6 +842,8 @@ class _DataLogger:
     def open(self, run_id: str, config: dict[str, object]) -> None:
         """打开数据记录器资源。注意：路径为空时保持空操作。"""
         del run_id, config
+        self.snapshots.clear()
+        self.events.clear()
         self.opened = True
 
     def write_snapshot(self, snapshot: SimulationSnapshot) -> None:
@@ -884,6 +888,7 @@ class SimulationController:
         self._step_s = 0.005
         self._time_s = 0.0
         self._tick_index = 0
+        self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._playback_rate = 1.0
         self._algorithm_decimation = _DEFAULT_ALGORITHM_DECIMATION
         self._algorithm_period_s = self._step_s * self._algorithm_decimation
@@ -1264,6 +1269,7 @@ class SimulationController:
         # 时间与计数归零，保证每次初始化都是干净起点。
         self._time_s = 0.0
         self._tick_index = 0
+        self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._last_display_wall_s = 0.0
         # 按依赖顺序初始化各子系统：先模型（提供初始状态），再通信，再扰动（依赖前两者）。
         self._model.init(config, self._seed)
@@ -1354,19 +1360,24 @@ class SimulationController:
         elif self._run_state == "RUNNING":
             self._control_report = self._derive_control_report_unlocked()
 
-        # 快照生成按显示分频；算法帧额外生成一帧，保证日志不漏记算法更新。
+        # 关键数据记录按 sim-time 20Hz 采样点触发，不依赖算法周期或显示刷新频率。
+        should_log_snapshot = self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s
+        # 快照生成按显示分频；算法帧和日志采样点额外生成，避免漏记关键状态。
         snapshot: SimulationSnapshot | None = None
         if (
             force_snapshot
             or algorithm_tick
             or tick_index % _SNAPSHOT_DECIMATION == 0
+            or should_log_snapshot
             or self._run_state == "FINISHED"
         ):
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
-        # 快照落盘频率与算法周期对齐，仅记录算法刚跑过的那一帧。
-        if algorithm_tick and snapshot is not None:
+        # 关键数据定时记录固定 20Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
+        if should_log_snapshot and snapshot is not None:
             self._logger.write_snapshot(snapshot)
+            while self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s:
+                self._next_log_sample_time_s += _LOG_SAMPLE_PERIOD_S
         # 仅当达到显示刷新间隔或仿真结束时才回传快照触发 UI 更新，否则返回 None 抑制刷新。
         if self._should_refresh_display_unlocked() or self._run_state == "FINISHED":
             return self._latest_snapshot
