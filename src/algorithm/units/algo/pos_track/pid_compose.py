@@ -12,6 +12,8 @@ from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS,
 
 @dataclass
 class PidComposeInitS(PosTrackInitS):
+    """PID 组合跟踪初始化参数。注意：vMin 用于避免低速航迹系奇异。"""
+
     vMin: float = 0.5
     gainForward: CtrlInitS | None = None
     gainLateral: CtrlInitS | None = None
@@ -19,6 +21,8 @@ class PidComposeInitS(PosTrackInitS):
 
 
 class PidCompose(PosTrackBase):
+    """组合式 PID 位置跟踪器。注意：前向只控速度，侧向和高度按位置误差闭环。"""
+
     def __init__(self) -> None:
         """初始化 PidCompose 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._v_min = PidComposeInitS.vMin

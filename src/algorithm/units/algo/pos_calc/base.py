@@ -9,20 +9,28 @@ from src.algorithm.context.leaf_types import MotionProfS
 
 @dataclass
 class PosCalcInitS:
+    """目标位置计算初始化基类。注意：具体算法可继承后追加配置字段。"""
+
     pass
 
 
 @dataclass
 class PosCalcInputS:
+    """目标位置计算输入端口。注意：selfState 需要由实体边界在每拍写入。"""
+
     selfState: MotionProfS | None = None
 
 
 @dataclass
 class PosCalcOutputS:
+    """目标位置计算输出端口。注意：selfCmd 由调用方预先绑定可写对象。"""
+
     selfCmd: MotionProfS | None = None
 
 
 class PosCalcBase:
+    """目标位置计算算法基类。注意：子类只负责生成目标运动剖面，不直接输出加速度。"""
+
     def init(self, cfg: PosCalcInitS) -> None:
         """按配置初始化 PosCalcBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError

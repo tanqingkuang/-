@@ -9,21 +9,29 @@ from src.algorithm.context.leaf_types import AccInEarthS, MotionProfS
 
 @dataclass
 class PosTrackInitS:
+    """位置跟踪初始化基类。注意：具体跟踪器可继承后追加控制参数。"""
+
     pass
 
 
 @dataclass
 class PosTrackInputS:
+    """位置跟踪输入端口。注意：selfCmd 和 selfState 必须同时绑定。"""
+
     selfCmd: MotionProfS | None = None
     selfState: MotionProfS | None = None
 
 
 @dataclass
 class PosTrackOutputS:
+    """位置跟踪输出端口。注意：accCmd 由调用方预先绑定可写对象。"""
+
     accCmd: AccInEarthS | None = None
 
 
 class PosTrackBase:
+    """位置跟踪算法基类。注意：子类负责把目标运动剖面转换为加速度命令。"""
+
     def init(self, cfg: PosTrackInitS) -> None:
         """按配置初始化 PosTrackBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError

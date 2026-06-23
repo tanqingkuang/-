@@ -21,6 +21,8 @@ _MAX_ALONG_SLOT_SPEED_CORRECTION = 2.0
 
 @dataclass
 class SlotGeometryInitS(PosCalcInitS):
+    """槽位几何初始化参数。注意：formPat 和 formPos 需要按队形行一一对应。"""
+
     selfId: str = ""
     formPat: list[FormPatE] = field(default_factory=list)
     formPos: list[list[FormPosS]] = field(default_factory=list)
@@ -28,11 +30,15 @@ class SlotGeometryInitS(PosCalcInitS):
 
 @dataclass
 class SlotGeometryInputS(PosCalcInputS):
+    """槽位几何输入端口。注意：leaderState 和 cmd 都需要在僚机每拍计算前写入。"""
+
     leaderState: MotionProfS | None = None
     cmd: FormSnapshotS | None = None
 
 
 class SlotGeometry(PosCalcBase):
+    """僚机槽位目标计算器。注意：槽位按长机水平航迹旋转，前向误差只转为速度修正。"""
+
     def __init__(self) -> None:
         """初始化 SlotGeometry 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._self_id = ""

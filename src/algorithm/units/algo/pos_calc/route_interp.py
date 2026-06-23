@@ -11,15 +11,21 @@ from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, Po
 
 @dataclass
 class RouteInterpInitS(PosCalcInitS):
+    """航线插值初始化参数。注意：当前实现无额外字段，仅保留统一接口。"""
+
     pass
 
 
 @dataclass
 class RouteInterpInputS(PosCalcInputS):
+    """航线插值输入端口。注意：wayLine 必须绑定当前需要跟踪的航段。"""
+
     wayLine: WayLineS | None = None
 
 
 class RouteInterp(PosCalcBase):
+    """长机航线插值目标计算器。注意：当前只支持直线航段，曲线航段会显式报错。"""
+
     def init(self, cfg: PosCalcInitS) -> None:
         """按配置初始化 RouteInterp。注意：调用方需先准备好必要依赖和输入数据。"""
         del cfg
