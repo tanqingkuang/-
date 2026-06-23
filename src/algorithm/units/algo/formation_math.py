@@ -37,6 +37,33 @@ def track_to_enu(vector: tuple[float, float, float], state: MotionProfS) -> tupl
     )
 
 
+def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
+    """Return the leader horizontal track unit vector in ENU."""
+
+    vx = state.vd.vEast
+    vy = state.vd.vNorth
+    ground = math.hypot(vx, vy)
+    if ground <= 0.0:
+        raise ValueError("horizontal track frame requires non-zero horizontal velocity")
+    return vx / ground, vy / ground
+
+
+def horizontal_track_to_enu(vector: tuple[float, float], state: MotionProfS) -> tuple[float, float]:
+    """Transform a horizontal track vector to ENU without coupling vertical velocity."""
+
+    return horizontal_track_vector_to_enu(vector, horizontal_track_basis(state))
+
+
+def horizontal_track_vector_to_enu(vector: tuple[float, float], track: tuple[float, float]) -> tuple[float, float]:
+    """Transform a horizontal track vector to ENU using a precomputed track basis."""
+
+    track_x, track_y = track
+    return (
+        vector[0] * track_x - vector[1] * track_y,
+        vector[0] * track_y + vector[1] * track_x,
+    )
+
+
 def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
     vx = state.vd.vEast
     vy = state.vd.vNorth

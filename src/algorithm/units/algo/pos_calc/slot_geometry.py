@@ -12,6 +12,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     copy_velocity,
 )
+from src.algorithm.units.algo.formation_math import horizontal_track_basis, horizontal_track_vector_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
 
 _ALONG_SLOT_SPEED_GAIN = 0.08
@@ -56,18 +57,18 @@ class SlotGeometry(PosCalcBase):
         if slot is None:
             raise ValueError(f"missing slot for selfId: {self._self_id}")
 
-        y.selfCmd.pos.east = u.leaderState.pos.east + slot.x
-        y.selfCmd.pos.north = u.leaderState.pos.north + slot.y
+        track = _horizontal_track_or_none(u.leaderState)
+        if track is None:
+            slot_east, slot_north = slot.x, slot.y
+        else:
+            slot_east, slot_north = horizontal_track_vector_to_enu((slot.x, slot.y), track)
+        y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
+        y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + slot.z
         copy_velocity(u.leaderState.vd, y.selfCmd.vd)
-        if u.selfState is None:
+        if u.selfState is None or track is None:
             return None
-
-        ground_speed = math.hypot(u.leaderState.vd.vEast, u.leaderState.vd.vNorth)
-        if ground_speed <= 1e-9:
-            return None
-        track_x = u.leaderState.vd.vEast / ground_speed
-        track_y = u.leaderState.vd.vNorth / ground_speed
+        track_x, track_y = track
         err_x = y.selfCmd.pos.east - u.selfState.pos.east
         err_y = y.selfCmd.pos.north - u.selfState.pos.north
         along_error = err_x * track_x + err_y * track_y
@@ -82,4 +83,11 @@ class SlotGeometry(PosCalcBase):
         return None
 
     def reset(self) -> None:
+        return None
+
+
+def _horizontal_track_or_none(state: MotionProfS) -> tuple[float, float] | None:
+    try:
+        return horizontal_track_basis(state)
+    except ValueError:
         return None

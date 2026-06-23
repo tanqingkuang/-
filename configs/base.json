@@ -1,10 +1,10 @@
 {
-  "duration_s": 240.0,
+  "duration_s": 2400.0,
   "step_s": 0.005,
   "playback_rate": 1.0,
   "seed": 1,
   "route": {
-    "speed_mps": 35.0,
+    "speed_mps": 20.0,
     "waypoints": [
       {
         "x_m": 0.0,
@@ -12,12 +12,12 @@
         "altitude_m": 1000.0
       },
       {
-        "x_m": 6000.0,
+        "x_m": 3000.0,
         "y_m": 0.0,
         "altitude_m": 1000.0
       },
       {
-        "x_m": 6000.0,
+        "x_m": 3000.0,
         "y_m": 3000.0,
         "altitude_m": 1000.0
       }
@@ -71,7 +71,7 @@
       "y_m": 260.0,
       "altitude_m": 1200.0,
       "psi_v_deg": 0.0,
-      "speed_mps": 41,
+      "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
       "distance_to_go_m": 5840.0
     },
@@ -82,7 +82,7 @@
       "y_m": 318.0,
       "altitude_m": 1245.0,
       "psi_v_deg": 0.0,
-      "speed_mps": 40.0,
+      "speed_mps": 20.0,
       "cross_track_error_m": 46.0,
       "distance_to_go_m": 6032.0
     },
@@ -93,7 +93,7 @@
       "y_m": 202.0,
       "altitude_m": 1281.0,
       "psi_v_deg": 0.0,
-      "speed_mps": 38,
+      "speed_mps": 20.0,
       "cross_track_error_m": -46.0,
       "distance_to_go_m": 6048.0
     }

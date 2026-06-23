@@ -28,7 +28,7 @@ from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
-from src.algorithm.units.algo.formation_math import clamp, enu_to_track, track_to_enu
+from src.algorithm.units.algo.formation_math import clamp, enu_to_track, horizontal_track_to_enu, track_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
@@ -73,6 +73,16 @@ class FormationMathTests(unittest.TestCase):
         northbound = _motion(v_east=0.0, v_north=10.0)
         self.assertAlmostEqual(enu_to_track((0.0, 2.0, 3.0), northbound)[0], 2.0)
         self.assertAlmostEqual(track_to_enu((2.0, 0.0, 3.0), northbound)[1], 2.0)
+
+    def test_horizontal_track_to_enu_ignores_vertical_velocity(self) -> None:
+        """验证水平队形槽位只随水平航迹旋转，不被长机爬升/下降角耦合。"""
+
+        northbound_climb = _motion(v_east=0.0, v_north=10.0, v_up=10.0)
+
+        east, north = horizontal_track_to_enu((-54.0, -58.0), northbound_climb)
+
+        self.assertAlmostEqual(east, 58.0)
+        self.assertAlmostEqual(north, -54.0)
 
 
 class CtrlPidTests(unittest.TestCase):
@@ -215,6 +225,83 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
         self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 10.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+
+    def test_slot_geometry_rotates_slot_offsets_with_leader_track(self) -> None:
+        """验证转弯后槽位随长机航迹旋转，A03 不会继续使用固定 ENU 偏移。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=6000.0, north=200.0, h=1000.0, v_east=0.0, v_north=35.0)
+        ctx.selfState = _motion(east=6058.0, north=146.0, h=1000.0, v_east=0.0, v_north=35.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A03",
+                formPat=[FormPatE.TRIANGLE],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A03", -54.0, -58.0, 0.0)]],
+            )
+        )
+
+        slot.step(
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 6058.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 146.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.h, 1000.0)
+
+    def test_slot_geometry_falls_back_to_enu_offset_when_leader_track_is_undefined(self) -> None:
+        """验证长机水平速度为 0 时槽位回退固定 ENU 偏移，不因航迹未定义而崩溃。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0)
+        ctx.selfState = _motion(east=70.0, north=220.0, h=1000.0, v_east=5.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPat=[FormPatE.TRIANGLE],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, 0.0)]],
+            )
+        )
+
+        slot.step(
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 70.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 220.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 0.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
+
+    def test_slot_geometry_does_not_add_lateral_position_error_to_velocity(self) -> None:
+        """验证槽位单元不把侧向位置误差重复注入速度，侧向收敛交给位置跟踪环。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=8.0)
+        ctx.selfState = _motion(east=46.0, north=250.0, h=1000.0, v_east=8.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPat=[FormPatE.TRIANGLE],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 58.0, 0.0)]],
+            )
+        )
+
+        slot.step(
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
+        self.assertAlmostEqual(ctx.selfCmd.vd.vEast, 8.0)
         self.assertAlmostEqual(ctx.selfCmd.vd.vNorth, 0.0)
 
 
