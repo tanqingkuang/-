@@ -474,11 +474,15 @@ class ControllerSimulationAdapter:
                 vx = node.vx_mps
                 vy = node.vy_mps
             else:
-                # 有历史则用位移差分估速：dt 取下限 1e-6 防止除零。
+                # 只有仿真时间推进时才用位移差分；暂停同帧刷新时保留控制器速度，避免机头归零朝东。
                 previous_x, previous_y, previous_time = previous
-                dt = max(1e-6, snapshot.time_s - previous_time)
-                vx = (node.x_m - previous_x) / dt
-                vy = (node.y_m - previous_y) / dt
+                dt = snapshot.time_s - previous_time
+                if dt > 1e-9:
+                    vx = (node.x_m - previous_x) / dt
+                    vy = (node.y_m - previous_y) / dt
+                else:
+                    vx = node.vx_mps
+                    vy = node.vy_mps
             self._last_xy_by_node[node.node_id] = (node.x_m, node.y_m, snapshot.time_s)
 
             # 取出该节点尾迹缓存；仅当时间戳推进时追加新点，避免同一帧重复入栈。

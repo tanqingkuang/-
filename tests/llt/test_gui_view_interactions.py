@@ -18,6 +18,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QSplitter
 
+from src.runner.sim_control import (
+    NodeState as ControllerNodeState,
+    SimulationSnapshot as ControllerSnapshot,
+)
 from src.ui.gui.main_window import (
     ControllerSimulationAdapter,
     MainWindow,
@@ -136,6 +140,44 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(paused.run_state, "PAUSED")
         self.assertEqual(paused_again.run_state, "PAUSED")
+
+    def test_repeated_snapshot_time_keeps_controller_velocity(self) -> None:
+        snapshot = ControllerSnapshot(
+            time_s=1.0,
+            duration_s=10.0,
+            step_s=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            nodes=[
+                ControllerNodeState(
+                    node_id="A01",
+                    role="leader",
+                    health="normal",
+                    x_m=100.0,
+                    y_m=200.0,
+                    altitude_m=1200.0,
+                    psi_v_deg=90.0,
+                    theta_deg=0.0,
+                    speed_mps=8.0,
+                    vx_mps=0.0,
+                    vy_mps=8.0,
+                    vz_mps=0.0,
+                    nx=0.0,
+                    nz=1.0,
+                    phi_deg=0.0,
+                    psi_dot_deg_s=0.0,
+                )
+            ],
+            links=[],
+        )
+
+        first = self.window.sim._convert_snapshot(snapshot)
+        repeated = self.window.sim._convert_snapshot(replace(snapshot, run_state="PAUSED"))
+
+        self.assertAlmostEqual(first.nodes[0].vx, 0.0)
+        self.assertAlmostEqual(first.nodes[0].vy, 8.0)
+        self.assertAlmostEqual(repeated.nodes[0].vx, 0.0)
+        self.assertAlmostEqual(repeated.nodes[0].vy, 8.0)
 
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
