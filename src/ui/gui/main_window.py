@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QHeaderView,
     QSlider,
+    QSplitter,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -840,7 +841,7 @@ class TopView(QGraphicsView):
         self.offset = self._default_offset()
         self._fit_route_to_view()
         self.viewport().update()
-        # 依次通知：视图已变、来自“重置”动作、请求侧视图也重置高度范围。
+        # 依次通知：视图已变、来自“重置”动作、请求侧视图也自适应显示范围。
         self.viewChanged.emit()
         self.manualViewChanged.emit()
         self.resetViewRequested.emit()
@@ -1340,17 +1341,10 @@ class SideView(QWidget):
             event.accept()
 
     def reset_view(self) -> None:
-        """重置侧视图显示范围。注意：同时恢复横轴自适应和默认高度轴。"""
-        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
-        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
+        """重置侧视图显示范围。注意：同时自适应横轴和高度轴。"""
         self._manual_horizontal_view = False
         self._fit_horizontal_view()
-        self.update()
-
-    def reset_altitude_view(self) -> None:
-        """重置侧视图高度方向显示范围。注意：保持当前横轴视野。"""
-        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
-        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
+        self._fit_altitude_view()
         self.update()
 
     def _map_x(self, x: float) -> float:
@@ -1572,6 +1566,21 @@ class SideView(QWidget):
             return None
         return min(values), max(values)
 
+    def _altitude_bounds(self) -> tuple[float, float] | None:
+        """计算侧视图高度包围盒。注意：同时纳入航段、节点与尾迹。"""
+        if self.snapshot is None:
+            return None
+        values: list[float] = []
+        for route in self._route_segments():
+            values.append(route.start_altitude)
+            values.append(route.end_altitude)
+        for node in self.snapshot.nodes:
+            values.append(node.altitude)
+            values.extend(point.altitude for point in node.trail)
+        if not values:
+            return None
+        return min(values), max(values)
+
     def _fit_horizontal_view(self) -> None:
         """自适应侧视图横轴范围。注意：不改变高度轴。"""
         bounds = self._horizontal_bounds()
@@ -1588,6 +1597,22 @@ class SideView(QWidget):
         self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, width / span * 0.86))
         center = (left + right) / 2.0
         self.horizontal_offset = width / 2.0 - center * self.horizontal_scale
+
+    def _fit_altitude_view(self) -> None:
+        """自适应侧视图高度范围。注意：不改变横轴缩放和平移。"""
+        bounds = self._altitude_bounds()
+        if bounds is None:
+            self.altitude_min = self.ALTITUDE_MIN_DEFAULT
+            self.altitude_max = self.ALTITUDE_MAX_DEFAULT
+            return
+        bottom, top = bounds
+        if math.isclose(bottom, top, abs_tol=1e-6):
+            bottom -= 50.0
+            top += 50.0
+        span = max(80.0, (top - bottom) / 0.86)
+        center = (bottom + top) / 2.0
+        self.altitude_min = center - span / 2.0
+        self.altitude_max = center + span / 2.0
 
 
 class LogDialog(QDialog):
@@ -1891,9 +1916,17 @@ class MainWindow(QMainWindow):
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
         self.top_view.resetViewRequested.connect(self.side_view.reset_view)
-        # 俯视图占主要高度(stretch=1)，侧视图固定附在下方。
-        layout.addWidget(self.top_view, 1)
-        layout.addWidget(self.side_view, 0)
+        # 俯视图/侧视图之间用细分隔线承载拖动调整，不额外占用明显空间。
+        self.view_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.view_splitter.setObjectName("viewSplitter")
+        self.view_splitter.setChildrenCollapsible(False)
+        self.view_splitter.setHandleWidth(7)
+        self.view_splitter.addWidget(self.top_view)
+        self.view_splitter.addWidget(self.side_view)
+        self.view_splitter.setStretchFactor(0, 4)
+        self.view_splitter.setStretchFactor(1, 1)
+        self.view_splitter.setSizes([620, 180])
+        layout.addWidget(self.view_splitter, 1)
 
         # 底部时间轴：时间文本 + 控制按钮 + 进度条。
         timeline = QHBoxLayout()
@@ -2125,6 +2158,16 @@ class MainWindow(QMainWindow):
                 padding: 6px 4px;
                 font-weight: 700;
             }}
+            QSplitter#viewSplitter {{
+                background: transparent;
+            }}
+            QSplitter#viewSplitter::handle:vertical {{
+                background: transparent;
+                border-top: 1px solid {theme.line.name()};
+            }}
+            QSplitter#viewSplitter::handle:vertical:hover {{
+                border-top-color: {theme.accent.name()};
+            }}
             QSlider::groove:horizontal {{
                 background: {theme.line.name()};
                 height: 6px;
@@ -2159,7 +2202,7 @@ class MainWindow(QMainWindow):
         self.top_view.set_theme(theme)
         self.side_view.set_theme(theme)
 
-    def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False) -> None:
+    def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False, fit_side_view: bool = False) -> None:
         """更新 snapshot 状态。注意：保持界面显示和内部数据一致。"""
         # 顶部状态文本与时间轴。
         self.run_state_label.setText(snapshot.run_state)
@@ -2179,9 +2222,11 @@ class MainWindow(QMainWindow):
             button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         # 单个播放控制按钮始终显示“点下去会发生什么”。
         self.play_button.setText({"RUNNING": "暂停", "PAUSED": "继续"}.get(snapshot.run_state, "开始"))
-        # 把快照下发给两视图与状态表；仅在需要时让俯视图自适应铺满。
+        # 把快照下发给两视图与状态表；仅在需要时让视图自适应铺满。
         self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
+        if fit_side_view:
+            self.side_view.reset_view()
         self._sync_side_view_controls()
         self._update_tables(snapshot)
 
@@ -2259,8 +2304,8 @@ class MainWindow(QMainWindow):
         """响应重置按钮并恢复初始状态。注意：保留当前配置路径。"""
         self.timer.stop()
         snapshot = self.sim.reset()
-        # 重置后队形回到初值，请求俯视图重新自适应铺满。
-        self._update_snapshot(snapshot, fit_top_view=True)
+        # 重置后队形回到初值，请求俯视图与侧视图重新自适应铺满。
+        self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
@@ -2305,7 +2350,7 @@ class MainWindow(QMainWindow):
         snapshot = self.sim.load_config(path)
         if self.sim.last_result_code == "OK":
             self._sync_speed_controls(self.sim.speed)
-        self._update_snapshot(snapshot, fit_top_view=True)
+        self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
         if self.sim.last_result_code == "OK":
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。
             config_path = Path(path).resolve()
@@ -2548,7 +2593,7 @@ class MainWindow(QMainWindow):
 
     def _reset_view(self) -> None:
         """响应重置视图按钮。注意：同时重置俯视图和侧视图显示范围。"""
-        # 俯视图重置会经信号链触发侧视图高度复位，这里再补一次重绘保证及时刷新。
+        # 俯视图重置会经信号链触发侧视图自适应，这里再补一次重绘保证及时刷新。
         self.top_view.reset_view()
         self.side_view.update()
 

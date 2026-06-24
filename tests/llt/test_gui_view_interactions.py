@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, QRect
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPointF, QRect, Qt
+from PySide6.QtWidgets import QApplication, QSplitter
 
 from src.ui.gui.main_window import (
     ControllerSimulationAdapter,
@@ -75,6 +75,24 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertFalse(self.window.top_view.show_grid)
         self.assertFalse(self.window.side_view.show_grid)
+
+    def test_top_and_side_views_are_resizable_with_splitter(self) -> None:
+        splitter = self.window.view_splitter
+
+        self.assertIsInstance(splitter, QSplitter)
+        self.assertEqual(splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertEqual(splitter.count(), 2)
+        self.assertFalse(splitter.childrenCollapsible())
+        self.assertIs(splitter.widget(0), self.window.top_view)
+        self.assertIs(splitter.widget(1), self.window.side_view)
+
+        splitter.setSizes([460, 260])
+        self.app.processEvents()
+        sizes = splitter.sizes()
+
+        self.assertGreater(sizes[0], sizes[1])
+        self.assertGreaterEqual(self.window.top_view.height(), 360)
+        self.assertGreaterEqual(self.window.side_view.height(), 150)
 
     def test_playback_slider_supports_twenty_times_rate(self) -> None:
         self.assertEqual(self.window.speed_slider.maximum(), 200)
@@ -162,7 +180,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(thin, thick, delta=2)
 
-    def test_top_view_reset_restores_side_altitude_axis(self) -> None:
+    def test_top_view_reset_refits_side_altitude_axis(self) -> None:
         self._load_ui_config()
         self.window.side_view.altitude_min = 1180.0
         self.window.side_view.altitude_max = 1240.0
@@ -171,8 +189,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assert_route_and_aircraft_fit_viewport()
-        self.assertEqual(self.window.side_view.altitude_min, self.window.side_view.ALTITUDE_MIN_DEFAULT)
-        self.assertEqual(self.window.side_view.altitude_max, self.window.side_view.ALTITUDE_MAX_DEFAULT)
+        snapshot = self.window.side_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        altitudes = [node.altitude for node in snapshot.nodes]
+        for route in snapshot.route_segments:
+            altitudes.extend([route.start_altitude, route.end_altitude])
+        self.assertLessEqual(self.window.side_view.altitude_min, min(altitudes))
+        self.assertGreaterEqual(self.window.side_view.altitude_max, max(altitudes))
 
     def test_route_and_aircraft_fit_centered_viewport_after_load(self) -> None:
         self._load_ui_config(
@@ -237,6 +261,38 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assert_route_and_aircraft_fit_viewport()
+
+    def test_side_reset_view_refits_route_altitude_and_aircraft(self) -> None:
+        self._load_ui_config(
+            nodes=[
+                {"node_id": "A01", "role": "leader", "x_m": 900.0, "y_m": 300.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 880.0, "y_m": 340.0, "altitude_m": 1215.0},
+            ],
+            links=[{"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01}],
+            route={
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                ],
+            },
+        )
+        self.window.side_view.altitude_min = 1180.0
+        self.window.side_view.altitude_max = 1220.0
+
+        self.window.side_view.reset_view()
+        self.app.processEvents()
+
+        snapshot = self.window.side_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertLessEqual(self.window.side_view.altitude_min, 1000.0)
+        self.assertGreaterEqual(self.window.side_view.altitude_max, 1215.0)
+        for route in snapshot.route_segments:
+            for altitude in (route.start_altitude, route.end_altitude):
+                y = self.window.side_view._map_y(altitude)
+                self.assertGreaterEqual(y, 5.0)
+                self.assertLessEqual(y, self.window.side_view.height() - 5.0)
 
     def test_route_endpoints_are_visible_after_load(self) -> None:
         self._load_ui_config()
@@ -387,7 +443,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self._count_pixels(self.window.side_view, route_color), 0)
 
     def test_play_pause_button_toggles_real_controller_snapshot(self) -> None:
-        self._load_ui_config()
+        self._load_ui_config(duration_s=1.0)
         self.assertEqual(self.window.play_button.text(), "开始")
 
         self.window.play_button.click()
@@ -461,6 +517,34 @@ class GuiViewInteractionTests(unittest.TestCase):
                 self.assertAlmostEqual(window.top_view.scale_value, initial_scale)
                 self.assertAlmostEqual(window.top_view.offset.x(), initial_offset.x(), delta=1.0)
                 self.assertAlmostEqual(window.top_view.offset.y(), initial_offset.y(), delta=1.0)
+            finally:
+                window.close()
+                self.app.processEvents()
+
+    def test_startup_load_refits_side_view_route_altitude(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            config_path = self._write_config_file(project_root / "configs" / "startup.json")
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["route"] = {
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                ],
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            state_path = project_root / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/startup.json\n", encoding="utf-8")
+
+            window = MainWindow(project_root=project_root, config_state_path=state_path)
+            window.show()
+            self.app.processEvents()
+            try:
+                self.assertLessEqual(window.side_view.altitude_min, 1000.0)
+                self.assertGreaterEqual(window.side_view.altitude_max, 1215.0)
+                self.assertGreaterEqual(window.side_view._map_y(1000.0), 5.0)
+                self.assertLessEqual(window.side_view._map_y(1000.0), window.side_view.height() - 5.0)
             finally:
                 window.close()
                 self.app.processEvents()
