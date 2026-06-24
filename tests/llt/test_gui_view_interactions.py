@@ -356,7 +356,6 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.node_table.rowCount(), 0)
         self.assertEqual(self.window.link_table.rowCount(), 0)
         self.assertFalse(self.window.start_button.isEnabled())
-        self.assertFalse(self.window.pause_button.isEnabled())
         self.assertFalse(self.window.step_button.isEnabled())
         self.assertFalse(self.window.reset_button.isEnabled())
         self.assertTrue(all(not button.isEnabled() for button in self.window.disturbance_buttons))
@@ -367,19 +366,31 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self._count_pixels(self.window.top_view, route_color), 0)
         self.assertEqual(self._count_pixels(self.window.side_view, route_color), 0)
 
-    def test_start_pause_drives_real_controller_snapshot(self) -> None:
+    def test_play_pause_button_toggles_real_controller_snapshot(self) -> None:
         self._load_ui_config()
+        self.assertEqual(self.window.start_button.text(), "开始")
 
-        self.window._start()
+        self.window.start_button.click()
+        self.app.processEvents()
         running_snapshot = self._wait_for_controller_time()
 
         self.assertEqual(running_snapshot.run_state, "RUNNING")
         self.assertGreater(running_snapshot.time_s, 0.0)
+        self.assertEqual(self.window.start_button.text(), "暂停")
 
-        self.window._pause()
+        self.window.start_button.click()
+        self.app.processEvents()
         paused_snapshot = self.window.sim.controller.get_snapshot()
 
         self.assertEqual(paused_snapshot.run_state, "PAUSED")
+        self.assertEqual(self.window.start_button.text(), "继续")
+
+        self.window.start_button.click()
+        self.app.processEvents()
+        resumed_snapshot = self.window.sim.controller.get_snapshot()
+
+        self.assertEqual(resumed_snapshot.run_state, "RUNNING")
+        self.assertEqual(self.window.start_button.text(), "暂停")
 
     def test_disturbance_label_clears_after_duration(self) -> None:
         self._load_ui_config()

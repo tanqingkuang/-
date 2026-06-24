@@ -1907,7 +1907,6 @@ class MainWindow(QMainWindow):
         timeline.setContentsMargins(12, 6, 12, 6)
         self.timeline_label = QLabel("0.0 / 120s")
         self.start_button = QPushButton("开始")
-        self.pause_button = QPushButton("暂停")
         self.step_button = QPushButton("单步")
         self.reset_button = QPushButton("重置")
         # 进度条用 0..1000 的千分刻度承载 time/duration 比例，便于平滑显示。
@@ -1915,12 +1914,11 @@ class MainWindow(QMainWindow):
         self.progress.setObjectName("progress")
         self.progress.setRange(0, 1000)
         self.progress.setTextVisible(False)
-        # 四个控制按钮分别绑定开始/暂停/单步/重置槽。
-        self.start_button.clicked.connect(self._start)
-        self.pause_button.clicked.connect(self._pause)
+        # 播放/暂停合并为一个按钮，文案随运行态切换为当前可执行动作。
+        self.start_button.clicked.connect(self._toggle_play_pause)
         self.step_button.clicked.connect(self._step)
         self.reset_button.clicked.connect(self._reset)
-        for widget in [self.timeline_label, self.start_button, self.pause_button, self.step_button, self.reset_button, self.progress]:
+        for widget in [self.timeline_label, self.start_button, self.step_button, self.reset_button, self.progress]:
             timeline.addWidget(widget)
         # 让进度条吃掉剩余横向空间。
         timeline.setStretchFactor(self.progress, 1)
@@ -2181,14 +2179,13 @@ class MainWindow(QMainWindow):
         # 依据运行态启停各按钮：未加载配置(UNLOADED)时全部相关操作不可用。
         config_loaded = snapshot.run_state != "UNLOADED"
         self.start_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
-        self.pause_button.setEnabled(snapshot.run_state in {"RUNNING", "PAUSED"})
         self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
         self.reset_button.setEnabled(config_loaded)
         # 仿真结束后禁止再注入扰动。
         for button in self.disturbance_buttons:
             button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
-        # 暂停态下“开始”按钮文案改为“继续”。
-        self.start_button.setText("继续" if snapshot.run_state == "PAUSED" else "开始")
+        # 单个播放控制按钮始终显示“点下去会发生什么”。
+        self.start_button.setText({"RUNNING": "暂停", "PAUSED": "继续"}.get(snapshot.run_state, "开始"))
         # 把快照下发给两视图与状态表；仅在需要时让俯视图自适应铺满。
         self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
@@ -2228,6 +2225,14 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 self.link_table.setItem(row, column, QTableWidgetItem(value))
+
+    def _toggle_play_pause(self) -> None:
+        """响应播放/暂停按钮。注意：按钮文案显示下一步动作。"""
+        # RUNNING 下执行暂停，其余可用状态执行开始/继续；禁用态不会触发此槽。
+        if self.sim.snapshot().run_state == "RUNNING":
+            self._pause()
+        else:
+            self._start()
 
     def _start(self) -> None:
         """响应开始按钮并启动仿真。注意：需要同步按钮状态和日志。"""
