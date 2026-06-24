@@ -85,6 +85,18 @@ ResultCode = Literal[
 | `vx_mps/vy_mps/vz_mps` | `float` | 由 `V/theta/psi` 派生的东北天速度，供 UI 和日志使用 |
 | `nx/nz/phi_deg` | `float` | 由二阶滤波后的东北天加速度转换得到的质点模型输入 |
 | `psi_dot_deg_s` | `float` | 航迹偏航角速率，单位 deg/s；左转（逆时针）为正 |
+| `cmd_pos_east_m/cmd_pos_north_m/cmd_pos_h_m` | `float` | 位置解算得到的目标位置，东北天坐标系 |
+| `cmd_vel_east_mps/cmd_vel_north_mps/cmd_vel_up_mps` | `float` | 位置解算得到的目标速度，东北天坐标系 |
+| `pos_err_east_m/pos_err_north_m/pos_err_h_m` | `float` | 控制过程中的位置误差，东北天坐标系 |
+| `vel_err_east_mps/vel_err_north_mps/vel_err_up_mps` | `float` | 控制过程中的速度误差，东北天坐标系 |
+| `track_pos_err_x_m/track_pos_err_y_m/track_pos_err_z_m` | `float` | 控制过程中的位置误差，航迹坐标系；`x/y/z` 分别为前向、垂向、右侧向 |
+| `track_vel_err_x_mps/track_vel_err_y_mps/track_vel_err_z_mps` | `float` | 控制过程中的速度误差，航迹坐标系；`x/y/z` 分别为前向、垂向、右侧向 |
+
+坐标命名约定：
+
+- 东北天坐标系：位置字段使用 `east/north/h`，速度和加速度字段使用 `east/north/up`。
+- 航迹坐标系：位置、速度和加速度字段都使用 `x/y/z`，其中 `x` 为前向，`y` 为垂向，`z` 为右侧向。
+- 仿真控制不从对象组内部 `Context` 抓取诊断量；对象组必须通过 `EntityOutputS` 显式交出位置/速度指令和误差，仿真控制再写入 `NodeState`。
 
 ### 4.3 链路状态
 
@@ -512,6 +524,8 @@ class FormationAlgorithm:
 `FormationAlgorithmOutput` 字段：
 
 - `control`: 本实体控制量；**`entity_type == coordination`（非飞行）时此字段为空**，仿真控制按 `entity_type` 判定，只对飞行实体写模型。
+- `selfCmd`: 本实体目标运动状态，来自对象组位置解算结果，仿真控制转写为 `NodeState` 的目标位置/目标速度字段。
+- `controlDiag`: 本实体本拍控制诊断量，来自对象组汇总的小模块 `diag` 输出，仿真控制转写为 `NodeState` 的误差字段。
 - `outbox`: 本实体要发送的消息（含协调单元广播的任务 / 队形指令）。
 - `status`: 算法状态摘要，供日志和控制回报使用。
 
@@ -543,7 +557,7 @@ class DataLogger:
 关键数据日志与 UI 事件日志分开：
 
 - 关键数据日志是定时记录的仿真数据，首版固定 `20 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`。
-- 记录对象为 `SimulationSnapshot` 的关键数据子集，至少包含 `time_s`、`run_state`、节点状态和链路状态；`step_s`、`route`、`route_segments` 不写入关键数据日志。事件对象只通过 `write_event()` 作为诊断信息记录，不参与 20Hz 定时采样。
+- 记录对象为 `SimulationSnapshot` 的关键数据子集，至少包含 `time_s`、`run_state`、节点状态和链路状态；节点状态包含位置/速度指令与控制误差，供后处理和未来 UI 使用；`step_s`、`route`、`route_segments` 不写入关键数据日志。事件对象只通过 `write_event()` 作为诊断信息记录，不参与 20Hz 定时采样。
 - GUI 顶部“日志”窗口只展示 `SimulationEvent` 最近事件，不读取关键数据日志文件，也不决定关键数据日志频率。
 - 当前实现会在首次实际推进仿真时在工作目录下创建 `logs/<run-id>/`，其中 `snapshots.jsonl` 记录 20Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存本次运行配置；内存列表仅用于测试和运行期查询。
 - 日志落盘时按字段语义做十进制四舍五入：时间类字段保留 `3` 位小数，位置/距离和速度类字段保留 `2` 位小数，加速度类字段保留 `3` 位小数，过载类字段保留 `4` 位小数，角度类字段保留 `2` 位小数；仿真内部状态不因日志格式截断。

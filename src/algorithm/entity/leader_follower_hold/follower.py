@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.algorithm.context.context import FormContextS, reset_context
-from src.algorithm.context.leaf_types import copy_motion
+from src.algorithm.context.leaf_types import PosTrackDiagS, copy_motion, copy_pos_track_diag
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
@@ -51,7 +51,8 @@ class FollowerEntity(EntityBase):
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
-        self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd)
+        self._pos_track_diag = PosTrackDiagS()
+        self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
 
     def step(self, u: EntityInputS, y: EntityOutputS) -> None:
         """推进 FollowerEntity 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
@@ -73,6 +74,14 @@ class FollowerEntity(EntityBase):
             y.selfAccCmd.accEast = self.cxt.selfAccCmd.accEast
             y.selfAccCmd.accNorth = self.cxt.selfAccCmd.accNorth
             y.selfAccCmd.accUp = self.cxt.selfAccCmd.accUp
+        if y.selfCmd is None:
+            y.selfCmd = self.cxt.selfCmd
+        else:
+            copy_motion(self.cxt.selfCmd, y.selfCmd)
+        if y.controlDiag is None:
+            y.controlDiag = self._pos_track_diag
+        else:
+            copy_pos_track_diag(self._pos_track_diag, y.controlDiag)
         y.outbox.clear()  # 僚机不发消息，输出固定清空
 
     def reset(self) -> None:
@@ -83,6 +92,7 @@ class FollowerEntity(EntityBase):
         self._tra_plan.reset()
         self._pos_calc.reset()
         self._pos_track.reset()
+        copy_pos_track_diag(PosTrackDiagS(), self._pos_track_diag)
         self._inbox.clear()
 
     def close(self) -> None:

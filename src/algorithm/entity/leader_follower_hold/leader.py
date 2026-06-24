@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.algorithm.context.context import FormContextS, reset_context
-from src.algorithm.context.leaf_types import RemoteCmdS, copy_motion
+from src.algorithm.context.leaf_types import PosTrackDiagS, RemoteCmdS, copy_motion, copy_pos_track_diag
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.types import DEFAULT_CONTROL_PERIOD_S, EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
@@ -54,7 +54,8 @@ class LeaderEntity(EntityBase):
         self._pos_calc_u = RouteInterpInputS(selfState=self.cxt.selfState, wayLine=self.cxt.wayLine)
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
-        self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd)
+        self._pos_track_diag = PosTrackDiagS()
+        self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
         self._outbound_u = OutboundInputS(cmd=self.cxt.cmd, selfState=self.cxt.selfState)
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
@@ -78,6 +79,14 @@ class LeaderEntity(EntityBase):
             y.selfAccCmd.accEast = self.cxt.selfAccCmd.accEast
             y.selfAccCmd.accNorth = self.cxt.selfAccCmd.accNorth
             y.selfAccCmd.accUp = self.cxt.selfAccCmd.accUp
+        if y.selfCmd is None:
+            y.selfCmd = self.cxt.selfCmd
+        else:
+            copy_motion(self.cxt.selfCmd, y.selfCmd)
+        if y.controlDiag is None:
+            y.controlDiag = self._pos_track_diag
+        else:
+            copy_pos_track_diag(self._pos_track_diag, y.controlDiag)
         # 把本帧广播消息搬运到输出（先清空避免残留上一帧）
         y.outbox.clear()
         y.outbox.extend(self._outbox)
@@ -92,6 +101,7 @@ class LeaderEntity(EntityBase):
         self._pos_calc.reset()
         self._pos_track.reset()
         self._outbound.reset()
+        copy_pos_track_diag(PosTrackDiagS(), self._pos_track_diag)
         self._outbox.clear()
 
     def close(self) -> None:

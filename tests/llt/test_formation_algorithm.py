@@ -18,6 +18,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     NetWorkS,
     PosInEarthS,
+    PosTrackDiagS,
     RemoteCmdS,
     RouteS,
     VdInEarthS,
@@ -417,6 +418,34 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 10.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
 
+    def test_pid_compose_writes_control_diagnostics(self) -> None:
+        """验证 PosTrack 通过 diag 输出目标指令和控制误差，不把诊断量写入 Context。"""
+
+        tracker = PidCompose()
+        tracker.init(PidComposeInitS(vMin=3.0))
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=1000.0, v_east=10.0)
+        ctx.selfCmd = _motion(east=50.0, north=4.0, h=1008.0, v_east=12.0)
+        diag = PosTrackDiagS()
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
+        )
+
+        self.assertAlmostEqual(diag.cmd_pos_east_m, 50.0)
+        self.assertAlmostEqual(diag.cmd_pos_north_m, 4.0)
+        self.assertAlmostEqual(diag.cmd_pos_h_m, 1008.0)
+        self.assertAlmostEqual(diag.cmd_vel_east_mps, 12.0)
+        self.assertAlmostEqual(diag.pos_err_east_m, 50.0)
+        self.assertAlmostEqual(diag.pos_err_north_m, 4.0)
+        self.assertAlmostEqual(diag.pos_err_h_m, 8.0)
+        self.assertAlmostEqual(diag.vel_err_east_mps, 2.0)
+        self.assertAlmostEqual(diag.track_pos_err_x_m, 50.0)
+        self.assertAlmostEqual(diag.track_pos_err_y_m, 8.0)
+        self.assertAlmostEqual(diag.track_pos_err_z_m, -4.0)
+        self.assertAlmostEqual(diag.track_vel_err_x_mps, 2.0)
+
     def test_pid_compose_rejects_low_speed_without_overwriting_output(self) -> None:
         """验证低于 vMin 时航迹系奇异状态会 fail-fast，且不会覆盖已有输出。"""
 
@@ -640,6 +669,12 @@ class EntityTests(unittest.TestCase):
 
         self.assertIs(leader._pos_calc_y.selfCmd, leader.cxt.selfCmd)
         self.assertEqual(len(leader_out.outbox), 1)
+        self.assertIsNotNone(leader_out.selfCmd)
+        self.assertIsNotNone(leader_out.controlDiag)
+        assert leader_out.selfCmd is not None
+        assert leader_out.controlDiag is not None
+        self.assertAlmostEqual(leader_out.selfCmd.pos.h, leader.cxt.selfCmd.pos.h)
+        self.assertAlmostEqual(leader_out.controlDiag.cmd_pos_h_m, leader.cxt.selfCmd.pos.h)
 
         follower_out = EntityOutputS()
         follower.step(
@@ -652,6 +687,8 @@ class EntityTests(unittest.TestCase):
 
         self.assertIs(follower._inbound_y.leaderState, follower.cxt.leaderState)
         self.assertEqual(follower_out.outbox, [])
+        self.assertIsNotNone(follower_out.selfCmd)
+        self.assertIsNotNone(follower_out.controlDiag)
         self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -25.0)
         self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 20.0)
 

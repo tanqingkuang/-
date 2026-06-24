@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import AccInEarthS, MotionProfS
+from src.algorithm.context.leaf_types import AccInEarthS, MotionProfS, PosTrackDiagS
 
 
 @dataclass
@@ -24,9 +24,10 @@ class PosTrackInputS:
 
 @dataclass
 class PosTrackOutputS:
-    """位置跟踪输出端口。注意：accCmd 由调用方预先绑定可写对象。"""
+    """位置跟踪输出端口。注意：accCmd 和 diag 由调用方预先绑定可写对象。"""
 
     accCmd: AccInEarthS | None = None
+    diag: PosTrackDiagS | None = None
 
 
 class PosTrackBase:

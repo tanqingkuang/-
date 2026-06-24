@@ -665,6 +665,53 @@ class SimulationControllerTests(unittest.TestCase):
             snapshot_lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual([round(json.loads(line)["time_s"], 6) for line in snapshot_lines], [0.05, 0.1])
 
+    def test_snapshot_log_contains_control_command_and_errors(self) -> None:
+        """关键数据日志应包含控制目标指令和位置/速度误差，供后处理与 UI 复用。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.06,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            run_dirs = list((Path(tmp) / "logs").glob("run-*"))
+            payload = json.loads((run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            node = payload["nodes"][0]
+
+            self.assertEqual(result.code, "OK")
+            for key in (
+                "cmd_pos_east_m",
+                "cmd_pos_north_m",
+                "cmd_pos_h_m",
+                "cmd_vel_east_mps",
+                "cmd_vel_north_mps",
+                "cmd_vel_up_mps",
+                "pos_err_east_m",
+                "pos_err_north_m",
+                "pos_err_h_m",
+                "vel_err_east_mps",
+                "vel_err_north_mps",
+                "vel_err_up_mps",
+                "track_pos_err_x_m",
+                "track_pos_err_y_m",
+                "track_pos_err_z_m",
+                "track_vel_err_x_mps",
+                "track_vel_err_y_mps",
+                "track_vel_err_z_mps",
+            ):
+                self.assertIn(key, node)
+                self.assertIsInstance(node[key], (int, float))
+
     def test_data_logger_opens_files_only_after_first_tick(self) -> None:
         """加载配置和 reset 不应创建空 run 目录，首次推进仿真时才创建日志目录。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -750,6 +797,24 @@ class SimulationControllerTests(unittest.TestCase):
                         nz=1.23456,
                         phi_deg=6.785,
                         psi_dot_deg_s=3.456,
+                        cmd_pos_east_m=10.005,
+                        cmd_pos_north_m=20.005,
+                        cmd_pos_h_m=1235.005,
+                        cmd_vel_east_mps=4.445,
+                        cmd_vel_north_mps=5.555,
+                        cmd_vel_up_mps=6.665,
+                        pos_err_east_m=7.775,
+                        pos_err_north_m=8.885,
+                        pos_err_h_m=9.995,
+                        vel_err_east_mps=1.115,
+                        vel_err_north_mps=2.225,
+                        vel_err_up_mps=3.335,
+                        track_pos_err_x_m=4.445,
+                        track_pos_err_y_m=5.555,
+                        track_pos_err_z_m=6.665,
+                        track_vel_err_x_mps=7.775,
+                        track_vel_err_y_mps=8.885,
+                        track_vel_err_z_mps=9.995,
                         cross_track_error_m=7.895,
                         distance_to_go_m=99.995,
                     )
@@ -784,6 +849,9 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(node["psi_v_deg"], 12.35)
             self.assertEqual(node["phi_deg"], 6.79)
             self.assertEqual(node["psi_dot_deg_s"], 3.46)
+            self.assertEqual(node["cmd_pos_east_m"], 10.01)
+            self.assertEqual(node["cmd_vel_up_mps"], 6.67)
+            self.assertEqual(node["track_vel_err_z_mps"], 10.0)
             self.assertEqual(node["cross_track_error_m"], 7.9)
             self.assertEqual(logger.snapshots[0].time_s, 1.23456)
             self.assertEqual(_DataLogger._round_log_value("ax_mps2", 1.2345), 1.235)

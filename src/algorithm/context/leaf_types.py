@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import IntEnum
 
 
@@ -47,12 +47,12 @@ class NetWorkS:
 
 @dataclass
 class FormPosS:
-    """队形中单个槽位的相对坐标。注意：坐标为相对长机的机体/编队系偏移。"""
+    """队形中单个槽位的相对坐标。注意：沿长机航迹 x 前向、y 左向、z 天向。"""
 
     id: str = ""  # 占据该槽位的机号
-    x: float = 0.0  # 纵向偏移，单位米
-    y: float = 0.0  # 横向偏移，单位米
-    z: float = 0.0  # 垂向偏移，单位米
+    x: float = 0.0  # 沿长机航迹前向偏移，单位米
+    y: float = 0.0  # 沿长机左向偏移，单位米
+    z: float = 0.0  # 沿天向偏移，单位米
 
 
 @dataclass
@@ -101,6 +101,30 @@ class MotionProfS:
 
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 地理系位置
     v: VdInEarthS = field(default_factory=VdInEarthS)  # 地理系速度与姿态
+
+
+@dataclass
+class PosTrackDiagS:
+    """位置跟踪诊断量。注意：仅作为输出快照，不写入算法 Context。"""
+
+    cmd_pos_east_m: float = 0.0  # 位置指令东向分量，单位米
+    cmd_pos_north_m: float = 0.0  # 位置指令北向分量，单位米
+    cmd_pos_h_m: float = 0.0  # 位置指令高度分量，单位米
+    cmd_vel_east_mps: float = 0.0  # 速度指令东向分量，单位米每秒
+    cmd_vel_north_mps: float = 0.0  # 速度指令北向分量，单位米每秒
+    cmd_vel_up_mps: float = 0.0  # 速度指令天向分量，单位米每秒
+    pos_err_east_m: float = 0.0  # 位置误差东向分量，单位米
+    pos_err_north_m: float = 0.0  # 位置误差北向分量，单位米
+    pos_err_h_m: float = 0.0  # 位置误差高度分量，单位米
+    vel_err_east_mps: float = 0.0  # 速度误差东向分量，单位米每秒
+    vel_err_north_mps: float = 0.0  # 速度误差北向分量，单位米每秒
+    vel_err_up_mps: float = 0.0  # 速度误差天向分量，单位米每秒
+    track_pos_err_x_m: float = 0.0  # 航迹系位置误差 x 分量，单位米
+    track_pos_err_y_m: float = 0.0  # 航迹系位置误差 y 分量，单位米
+    track_pos_err_z_m: float = 0.0  # 航迹系位置误差 z 分量，单位米
+    track_vel_err_x_mps: float = 0.0  # 航迹系速度误差 x 分量，单位米每秒
+    track_vel_err_y_mps: float = 0.0  # 航迹系速度误差 y 分量，单位米每秒
+    track_vel_err_z_mps: float = 0.0  # 航迹系速度误差 z 分量，单位米每秒
 
 
 @dataclass
@@ -167,6 +191,12 @@ def copy_motion(src: MotionProfS, dst: MotionProfS) -> None:
     """复制运动状态对象，包含位置、速度和姿态信息。注意：嵌套对象需要逐层复制。"""
     copy_position(src.pos, dst.pos)
     copy_velocity(src.v, dst.v)
+
+
+def copy_pos_track_diag(src: PosTrackDiagS, dst: PosTrackDiagS) -> None:
+    """复制位置跟踪诊断量。注意：新增字段时通过 dataclass 字段表自动覆盖。"""
+    for item in fields(PosTrackDiagS):
+        setattr(dst, item.name, getattr(src, item.name))
 
 
 def copy_wayline(src: WayLineS, dst: WayLineS) -> None:

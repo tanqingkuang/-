@@ -63,6 +63,25 @@ class PidCompose(PosTrackBase):
             trim_vel[1] - self_vel[1],
             trim_vel[2] - self_vel[2],
         )
+        if y.diag is not None:
+            y.diag.cmd_pos_east_m = u.selfCmd.pos.east
+            y.diag.cmd_pos_north_m = u.selfCmd.pos.north
+            y.diag.cmd_pos_h_m = u.selfCmd.pos.h
+            y.diag.cmd_vel_east_mps = u.selfCmd.v.vEast
+            y.diag.cmd_vel_north_mps = u.selfCmd.v.vNorth
+            y.diag.cmd_vel_up_mps = u.selfCmd.v.vUp
+            y.diag.pos_err_east_m = pos_err_enu[0]
+            y.diag.pos_err_north_m = pos_err_enu[1]
+            y.diag.pos_err_h_m = pos_err_enu[2]
+            y.diag.vel_err_east_mps = u.selfCmd.v.vEast - u.selfState.v.vEast
+            y.diag.vel_err_north_mps = u.selfCmd.v.vNorth - u.selfState.v.vNorth
+            y.diag.vel_err_up_mps = u.selfCmd.v.vUp - u.selfState.v.vUp
+            y.diag.track_pos_err_x_m = pos_err[0]
+            y.diag.track_pos_err_y_m = pos_err[1]
+            y.diag.track_pos_err_z_m = pos_err[2]
+            y.diag.track_vel_err_x_mps = vel_err[0]
+            y.diag.track_vel_err_y_mps = vel_err[1]
+            y.diag.track_vel_err_z_mps = vel_err[2]
 
         # 航迹偏航角速率前馈(向心加速度)：在航迹系侧向直接补出维持转弯所需的 vd·dVPsi。
         # 本机航迹系第三轴(lateral_right)以右为正，而 dVPsi>0 为左转，故取负号；

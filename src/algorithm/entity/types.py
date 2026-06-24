@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.algorithm.context.leaf_types import AccInEarthS, FormCommInitS, FormSelfInitS, MotionProfS, RemoteCmdS, RouteS
+from src.algorithm.context.leaf_types import (
+    AccInEarthS,
+    FormCommInitS,
+    FormSelfInitS,
+    MotionProfS,
+    PosTrackDiagS,
+    RemoteCmdS,
+    RouteS,
+)
 from src.common.envelope import MessageEnvelope
 
 
@@ -32,7 +40,9 @@ class EntityInputS:
 
 @dataclass
 class EntityOutputS:
-    """实体每帧输出。注意：selfAccCmd 给控制器，outbox 待发送。"""
+    """实体每帧输出。注意：控制器只从该边界读取算法结果。"""
 
     selfAccCmd: AccInEarthS | None = None  # 本机加速度指令
+    selfCmd: MotionProfS | None = None  # 本机位置/速度指令快照
+    controlDiag: PosTrackDiagS | None = None  # 位置跟踪诊断快照
     outbox: list[MessageEnvelope] = field(default_factory=list)  # 本帧待发送的消息

@@ -28,6 +28,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     NetWorkS,
     PosInEarthS,
+    PosTrackDiagS,
     RemoteCmdS,
     RouteS,
     VdInEarthS,
@@ -91,6 +92,27 @@ class NodeState:
     nz: float  # 法向过载。
     phi_deg: float  # 滚转角（度）。
     psi_dot_deg_s: float  # 航迹偏航角速率（度/秒）。
+    # 位置/速度指令，采用 ENU 命名。
+    cmd_pos_east_m: float = 0.0
+    cmd_pos_north_m: float = 0.0
+    cmd_pos_h_m: float = 0.0
+    cmd_vel_east_mps: float = 0.0
+    cmd_vel_north_mps: float = 0.0
+    cmd_vel_up_mps: float = 0.0
+    # 位置/速度误差，采用 ENU 命名。
+    pos_err_east_m: float = 0.0
+    pos_err_north_m: float = 0.0
+    pos_err_h_m: float = 0.0
+    vel_err_east_mps: float = 0.0
+    vel_err_north_mps: float = 0.0
+    vel_err_up_mps: float = 0.0
+    # 航迹坐标系误差，采用 x/y/z 命名。
+    track_pos_err_x_m: float = 0.0
+    track_pos_err_y_m: float = 0.0
+    track_pos_err_z_m: float = 0.0
+    track_vel_err_x_mps: float = 0.0
+    track_vel_err_y_mps: float = 0.0
+    track_vel_err_z_mps: float = 0.0
     # 相对当前航段的侧偏与待飞距，无航线时为 None。
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
@@ -185,6 +207,7 @@ class _NodeAlgorithmOutput:
     control: AccelerationCommand  # 该节点本步算出的加速度控制指令，喂给模型。
     outbox: list[MessageEnvelope]  # 该节点本步要广播/发送的消息，统一交给通信模块。
     status: str  # 算法运行态文本（如 "forming"/"reconfiguring"），用于推导控制回报。
+    control_diag: PosTrackDiagS  # 该节点本步位置跟踪诊断，供快照和日志记录。
 
 
 @dataclass(frozen=True)
@@ -649,7 +672,8 @@ class _NodeAlgorithm:
         ]
         # 节点非健康时上报"重构"，否则"组队"，供控制回报聚合。
         status = "reconfiguring" if health != "normal" else "forming"
-        return _NodeAlgorithmOutput(control, outbox, status)
+        control_diag = entity_output.controlDiag or PosTrackDiagS()
+        return _NodeAlgorithmOutput(control, outbox, status, control_diag)
 
     def reset(self) -> None:
         """复位 _NodeAlgorithm 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -1016,6 +1040,7 @@ class SimulationController:
         self._configured_links: list[_ConfiguredLink] = []
         self._leader_route: RouteS | None = None
         self._current_controls: dict[str, AccelerationCommand] = {}
+        self._control_diagnostics: dict[str, PosTrackDiagS] = {}
         self._config: dict[str, object] | None = None
         self._seed = 0
         self._duration_s = 0.0
@@ -1495,6 +1520,10 @@ class SimulationController:
             node_id: AccelerationCommand()
             for node_id in states
         }
+        self._control_diagnostics = {
+            node_id: PosTrackDiagS()
+            for node_id in states
+        }
         # 仅重置内存日志；文件目录延迟到首次实际 tick 时创建，避免空 run 目录。
         self._logger.reset()
 
@@ -1570,6 +1599,7 @@ class SimulationController:
         states = self._model.read_states()
         health_map = self._disturbance.read_health()
         controls: dict[str, AccelerationCommand] = {}
+        diagnostics: dict[str, PosTrackDiagS] = {}
         outbox: list[MessageEnvelope] = []
         status_values: list[str] = []
         for node_id, state in states.items():
@@ -1579,11 +1609,13 @@ class SimulationController:
                 state, inbox, self._time_s, health_map.get(node_id, "normal")
             )
             controls[node_id] = output.control
+            diagnostics[node_id] = replace(output.control_diag)
             # 汇总各节点待发消息，统一在本轮末尾交给通信模块。
             outbox.extend(output.outbox)
             status_values.append(output.status)
         # 缓存本轮控制，供后续未跑算法的 tick 继续施加（保持-上次值语义）。
         self._current_controls = controls
+        self._control_diagnostics = diagnostics
         self._model.apply_controls(controls)
         # 集中发送：消息在通信模块内按时延/丢包规则投递。
         self._comm.send(outbox)
@@ -1597,30 +1629,50 @@ class SimulationController:
         health_map = self._disturbance.read_health()
         route = self._make_route_snapshot()
         route_segments = self._make_route_segment_snapshots()
-        nodes = [
-            NodeState(
-                node_id=state.node_id,
-                role=self._node_roles.get(state.node_id, "unknown"),
-                health=health_map.get(state.node_id, "normal"),
-                x_m=state.x_m,
-                y_m=state.y_m,
-                altitude_m=state.altitude_m,
-                psi_v_deg=state.psi_v_deg,
-                theta_deg=state.theta_deg,
-                speed_mps=state.speed_mps,
-                vx_mps=state.vx_mps,
-                vy_mps=state.vy_mps,
-                vz_mps=state.vz_mps,
-                nx=state.nx,
-                nz=state.nz,
-                phi_deg=state.phi_deg,
-                psi_dot_deg_s=state.psi_dot_deg_s,
-                # 侧偏与待飞距相对"当前航段"计算，供 UI 显示跟踪误差。
-                cross_track_error_m=self._cross_track_error(state, route),
-                distance_to_go_m=self._distance_to_go(state, route),
+        nodes: list[NodeState] = []
+        for state in self._model.read_states().values():
+            diag = self._control_diagnostics.get(state.node_id, PosTrackDiagS())
+            nodes.append(
+                NodeState(
+                    node_id=state.node_id,
+                    role=self._node_roles.get(state.node_id, "unknown"),
+                    health=health_map.get(state.node_id, "normal"),
+                    x_m=state.x_m,
+                    y_m=state.y_m,
+                    altitude_m=state.altitude_m,
+                    psi_v_deg=state.psi_v_deg,
+                    theta_deg=state.theta_deg,
+                    speed_mps=state.speed_mps,
+                    vx_mps=state.vx_mps,
+                    vy_mps=state.vy_mps,
+                    vz_mps=state.vz_mps,
+                    nx=state.nx,
+                    nz=state.nz,
+                    phi_deg=state.phi_deg,
+                    psi_dot_deg_s=state.psi_dot_deg_s,
+                    cmd_pos_east_m=diag.cmd_pos_east_m,
+                    cmd_pos_north_m=diag.cmd_pos_north_m,
+                    cmd_pos_h_m=diag.cmd_pos_h_m,
+                    cmd_vel_east_mps=diag.cmd_vel_east_mps,
+                    cmd_vel_north_mps=diag.cmd_vel_north_mps,
+                    cmd_vel_up_mps=diag.cmd_vel_up_mps,
+                    pos_err_east_m=diag.pos_err_east_m,
+                    pos_err_north_m=diag.pos_err_north_m,
+                    pos_err_h_m=diag.pos_err_h_m,
+                    vel_err_east_mps=diag.vel_err_east_mps,
+                    vel_err_north_mps=diag.vel_err_north_mps,
+                    vel_err_up_mps=diag.vel_err_up_mps,
+                    track_pos_err_x_m=diag.track_pos_err_x_m,
+                    track_pos_err_y_m=diag.track_pos_err_y_m,
+                    track_pos_err_z_m=diag.track_pos_err_z_m,
+                    track_vel_err_x_mps=diag.track_vel_err_x_mps,
+                    track_vel_err_y_mps=diag.track_vel_err_y_mps,
+                    track_vel_err_z_mps=diag.track_vel_err_z_mps,
+                    # 侧偏与待飞距相对"当前航段"计算，供 UI 显示跟踪误差。
+                    cross_track_error_m=self._cross_track_error(state, route),
+                    distance_to_go_m=self._distance_to_go(state, route),
+                )
             )
-            for state in self._model.read_states().values()
-        ]
         # 链路快照已折叠双向状态。
         links = self._make_configured_link_snapshots()
         return SimulationSnapshot(
