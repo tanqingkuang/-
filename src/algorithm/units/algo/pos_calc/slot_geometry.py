@@ -68,26 +68,26 @@ class SlotGeometry(PosCalcBase):
 
         track = _horizontal_track_or_none(u.leaderState)
         if track is None:
-            # 长机水平航迹未定义时保持旧行为：槽位按 ENU 固定偏移解释，避免起步/悬停首拍崩溃。
-            slot_east, slot_north = slot.x, slot.y
+            # 长机水平航迹未定义时按东向航迹兜底，避免起步/悬停首拍崩溃。
+            slot_east, slot_north = slot.x, -slot.z
         else:
-            # formPos.y 沿用既有队形配置的左侧为正；苏联式水平航迹系侧向右为正，传入前需取反。
-            slot_east, slot_north = horizontal_track_vector_to_enu((slot.x, -slot.y), track)
+            # FormPosS 使用 x 前向、z 右侧向，与水平航迹转换函数的轴序一致。
+            slot_east, slot_north = horizontal_track_vector_to_enu((slot.x, slot.z), track)
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
-        y.selfCmd.pos.h = u.leaderState.pos.h + slot.z
+        y.selfCmd.pos.h = u.leaderState.pos.h + slot.y
         copy_velocity(u.leaderState.v, y.selfCmd.v)
         # 槽位随长机刚性旋转，僚机航迹偏航角速率即长机的(刚体绕同一瞬心，各点航向角速率相同)。
         y.selfCmd.v.dVPsi = u.leaderState.v.dVPsi
         if u.selfState is None or track is None:
             return None
         track_x, track_y = track
-        # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V - c·ω)·t̂ + (a·ω)·n̂，
-        # 其中 a=slot.x(前向)、c=slot.y(左向)、ω=长机偏航角速率、n̂=左单位向量。
-        # 沿航迹分量按 -c·ω 增减(对某一转向，外侧半径大加速、内侧减速；某槽位是外/内侧由 c 与 ω 符号共定)；a·ω 补后方槽位转弯时的横扫。
+        # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V + b·ω)·t̂ + (a·ω)·n̂，
+        # 其中 a=slot.x(前向)、b=slot.z(右向)、ω=长机偏航角速率、n̂=左单位向量。
+        # 沿航迹分量按 b·ω 增减(对某一转向，外侧半径大加速、内侧减速；某槽位是外/内侧由 b 与 ω 符号共定)；a·ω 补后方槽位转弯时的横扫。
         # 直接覆盖 copy_velocity 写入的长机速度——ω=0(直线)时二者相等，行为不变。
         omega = u.leaderState.v.dVPsi
-        v_along = u.leaderState.v.vd - slot.y * omega
+        v_along = u.leaderState.v.vd + slot.z * omega
         v_swing = slot.x * omega
         left_x, left_y = -track_y, track_x
         y.selfCmd.v.vEast = v_along * track_x + v_swing * left_x

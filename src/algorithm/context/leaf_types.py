@@ -47,12 +47,12 @@ class NetWorkS:
 
 @dataclass
 class FormPosS:
-    """队形中单个槽位的相对坐标。注意：沿长机航迹 x 前向、y 左向、z 天向。"""
+    """队形中单个槽位的相对坐标。注意：沿长机航迹 x 前向、y 上向、z 右向。"""
 
     id: str = ""  # 占据该槽位的机号
     x: float = 0.0  # 沿长机航迹前向偏移，单位米
-    y: float = 0.0  # 沿长机左向偏移，单位米
-    z: float = 0.0  # 沿天向偏移，单位米
+    y: float = 0.0  # 沿天向偏移，单位米
+    z: float = 0.0  # 沿长机右向偏移，单位米
 
 
 @dataclass

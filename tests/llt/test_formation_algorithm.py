@@ -281,7 +281,7 @@ class PosCalcTests(unittest.TestCase):
             SlotGeometryInitS(
                 selfId="A02",
                 formPat=[FormPatE.TRIANGLE],
-                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, -5.0)]],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, -5.0, -20.0)]],
             )
         )
         ctx.selfState = _motion(east=70.0, north=220.0, h=995.0, v_east=12.0)
@@ -308,7 +308,7 @@ class PosCalcTests(unittest.TestCase):
             SlotGeometryInitS(
                 selfId="A02",
                 formPat=[FormPatE.TRIANGLE],
-                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 58.0, 0.0)]],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 0.0, -58.0)]],
             )
         )
 
@@ -334,7 +334,7 @@ class PosCalcTests(unittest.TestCase):
             SlotGeometryInitS(
                 selfId="A03",
                 formPat=[FormPatE.TRIANGLE],
-                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A03", -54.0, -58.0, 0.0)]],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A03", -54.0, 0.0, 58.0)]],
             )
         )
 
@@ -359,7 +359,7 @@ class PosCalcTests(unittest.TestCase):
             SlotGeometryInitS(
                 selfId="A02",
                 formPat=[FormPatE.TRIANGLE],
-                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, 0.0)]],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
             )
         )
 
@@ -385,7 +385,7 @@ class PosCalcTests(unittest.TestCase):
             SlotGeometryInitS(
                 selfId="A02",
                 formPat=[FormPatE.TRIANGLE],
-                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 58.0, 0.0)]],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 0.0, -58.0)]],
             )
         )
 
@@ -400,11 +400,11 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_slot_geometry_feeds_forward_turn_speed(self) -> None:
-        """验证转弯时槽位速度前馈：沿航迹分量按 -c·ω 增减(外/内侧由 c 与 ω 符号共定)，并补后方槽位的横扫分量。"""
+        """验证转弯时槽位速度前馈：沿航迹分量按 b·ω 增减(外/内侧由 b 与 ω 符号共定)，并补后方槽位横扫。"""
 
         # 长机向东 vd=30，左转 ω=+0.1 rad/s；僚机恰在槽位上(无待飞距 trim)。
         omega = 0.1
-        for self_id, lateral, expect_along in (("A02", 58.0, 30.0 - 58.0 * omega), ("A03", -58.0, 30.0 + 58.0 * omega)):
+        for self_id, right_offset, expect_along in (("A02", -58.0, 30.0 - 58.0 * omega), ("A03", 58.0, 30.0 + 58.0 * omega)):
             ctx = FormContextS()
             ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=30.0, d_vpsi=omega)
             ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
@@ -413,18 +413,18 @@ class PosCalcTests(unittest.TestCase):
                 SlotGeometryInitS(
                     selfId=self_id,
                     formPat=[FormPatE.TRIANGLE],
-                    formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS(self_id, -54.0, lateral, 0.0)]],
+                    formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS(self_id, -54.0, 0.0, right_offset)]],
                 )
             )
-            # 槽位偏移按东向航迹旋转：东=前向，左(北)为正侧偏。
-            ctx.selfState = _motion(east=46.0, north=200.0 + lateral, h=1000.0, v_east=30.0)
+            # 槽位偏移按东向航迹旋转：东=前向，南=右侧向。
+            ctx.selfState = _motion(east=46.0, north=200.0 - right_offset, h=1000.0, v_east=30.0)
 
             slot.step(
                 SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
                 PosCalcOutputS(selfCmd=ctx.selfCmd),
             )
 
-            # 沿航迹速度 = vd - c·ω；本例左转 ω>0，故 c>0(左/内侧)减速、c<0(右/外侧)加速。横扫 = a·ω 投到左向(此处为北向分量)。
+            # 沿航迹速度 = vd + b·ω；本例左转 ω>0，故 b<0(左/内侧)减速、b>0(右/外侧)加速。横扫 = a·ω 投到左向(此处为北向分量)。
             self.assertAlmostEqual(ctx.selfCmd.v.vEast, expect_along)
             self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -54.0 * omega)
 
@@ -716,7 +716,7 @@ class EntityTests(unittest.TestCase):
         comm = FormCommInitS(
             netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
             formPat=[FormPatE.TRIANGLE],
-            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, 0.0)]],
+            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
         )
         leader = LeaderEntity()
         follower = FollowerEntity()
@@ -758,7 +758,7 @@ class EntityTests(unittest.TestCase):
         comm = FormCommInitS(
             netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
             formPat=[FormPatE.TRIANGLE],
-            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 20.0, 0.0)]],
+            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
         )
         leader = LeaderEntity()
         follower = FollowerEntity()

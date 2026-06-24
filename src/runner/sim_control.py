@@ -226,8 +226,8 @@ class _ConfiguredLink:
 
 
 _DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
-    (-54.0, 58.0, 0.0),
-    (-54.0, -58.0, 0.0),
+    (-54.0, 0.0, -58.0),
+    (-54.0, 0.0, 58.0),
 )
 _LOG_SAMPLE_PERIOD_S = 0.05
 _TIME_EPSILON_S = 1e-9

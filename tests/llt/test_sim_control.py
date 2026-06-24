@@ -440,10 +440,11 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(slots["A01"].x, 0.0)
         self.assertAlmostEqual(slots["A01"].y, 0.0)
         self.assertAlmostEqual(slots["A02"].x, -54.0)
-        self.assertAlmostEqual(slots["A02"].y, 58.0)
+        self.assertAlmostEqual(slots["A02"].y, 0.0)
+        self.assertAlmostEqual(slots["A02"].z, -58.0)
         self.assertAlmostEqual(slots["A03"].x, -54.0)
-        self.assertAlmostEqual(slots["A03"].y, -58.0)
-        self.assertTrue(all(slot.z == 0.0 for slot in slots.values()))
+        self.assertAlmostEqual(slots["A03"].y, 0.0)
+        self.assertAlmostEqual(slots["A03"].z, 58.0)
 
     def test_configured_formation_slots_are_injected_into_comm_init(self) -> None:
         """Formation slots from config should replace the default wedge geometry."""
@@ -457,8 +458,8 @@ class SimulationControllerTests(unittest.TestCase):
                 "pattern": "TRIANGLE",
                 "slots": [
                     {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
-                    {"node_id": "A02", "x_m": -70.0, "y_m": 40.0, "z_m": 5.0},
-                    {"node_id": "A03", "x_m": -70.0, "y_m": -40.0, "z_m": -5.0},
+                    {"node_id": "A02", "x_m": -70.0, "y_m": 5.0, "z_m": -40.0},
+                    {"node_id": "A03", "x_m": -70.0, "y_m": -5.0, "z_m": 40.0},
                 ],
             }
         }
@@ -468,11 +469,11 @@ class SimulationControllerTests(unittest.TestCase):
 
         self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
         self.assertAlmostEqual(slots["A02"].x, -70.0)
-        self.assertAlmostEqual(slots["A02"].y, 40.0)
-        self.assertAlmostEqual(slots["A02"].z, 5.0)
+        self.assertAlmostEqual(slots["A02"].y, 5.0)
+        self.assertAlmostEqual(slots["A02"].z, -40.0)
         self.assertAlmostEqual(slots["A03"].x, -70.0)
-        self.assertAlmostEqual(slots["A03"].y, -40.0)
-        self.assertAlmostEqual(slots["A03"].z, -5.0)
+        self.assertAlmostEqual(slots["A03"].y, -5.0)
+        self.assertAlmostEqual(slots["A03"].z, 40.0)
 
     def test_default_triangle_slots_reject_extra_wingmen(self) -> None:
         """Default wedge geometry should fail fast when more wingmen need explicit slots."""
