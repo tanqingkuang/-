@@ -83,6 +83,7 @@ class VdInEarthS:
     vTheta: float = 0.0  # 俯仰角，弧度
     vPsi: float = 0.0  # 航向角，弧度
     vd: float = 0.0  # 地速标量，米每秒
+    dVPsi: float = 0.0  # 航迹偏航角速率(水平航向角变化率)，弧度每秒
 
 
 @dataclass
@@ -159,6 +160,7 @@ def copy_velocity(src: VdInEarthS, dst: VdInEarthS) -> None:
     dst.vTheta = src.vTheta
     dst.vPsi = src.vPsi
     dst.vd = src.vd
+    dst.dVPsi = src.dVPsi
 
 
 def copy_motion(src: MotionProfS, dst: MotionProfS) -> None:

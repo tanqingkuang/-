@@ -58,3 +58,4 @@ def _write_motion_from_payload(payload: dict[str, object], dst: object) -> None:
     dst.v.vTheta = float(vd.get("vTheta", 0.0))
     dst.v.vPsi = float(vd.get("vPsi", 0.0))
     dst.v.vd = float(vd.get("vd", 0.0))
+    dst.v.dVPsi = float(vd.get("dVPsi", 0.0))

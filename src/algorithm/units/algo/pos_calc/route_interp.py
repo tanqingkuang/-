@@ -74,6 +74,11 @@ class RouteInterp(PosCalcBase):
         y.selfCmd.v.vTheta = math.atan2(y.selfCmd.v.vUp, y.selfCmd.v.vd) if line.vdCmd else 0.0
         y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast) if line.vdCmd else 0.0
 
+        # 航迹偏航角速率前馈：dVPsi = 地速 × 航段曲率。当前仅支持直线航段(radius=0)，曲率恒为 0；
+        # 待圆弧航段实现后，curvature 改为按 line.radius 推出的带符号曲率(1/radius，左转为正)。
+        curvature = 0.0  # TODO: 圆弧航段启用后由 line.radius 给出带符号曲率
+        y.selfCmd.v.dVPsi = u.selfState.v.vd * curvature
+
     def reset(self) -> None:
         """复位 RouteInterp 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         return None

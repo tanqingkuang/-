@@ -64,10 +64,14 @@ class PidCompose(PosTrackBase):
             trim_vel[2] - self_vel[2],
         )
 
+        # 航迹偏航角速率前馈(向心加速度)：在航迹系侧向直接补出维持转弯所需的 vd·dVPsi。
+        # 本机航迹系第三轴(lateral_right)以右为正，而 dVPsi>0 为左转，故取负号；
+        # 配合本机自身 vd，外/内侧僚机的半径与速度差异被自动吸收(v_S/R_S = dVPsi)。
+        lateral_ff = -u.selfCmd.v.dVPsi * u.selfState.v.vd
         acc_track = (
             self._forward.step(vel_err[0], 0.0),
             self._vertical.step(pos_err[1], vel_err[1]),
-            self._lateral.step(pos_err[2], vel_err[2]),
+            self._lateral.step(pos_err[2], vel_err[2]) + lateral_ff,
         )
         acc_enu = track_to_enu(acc_track, u.selfState)
         y.accCmd.accEast = acc_enu[0]

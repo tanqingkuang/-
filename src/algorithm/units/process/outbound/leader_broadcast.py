@@ -80,5 +80,6 @@ def _motion_payload(motion: MotionProfS) -> dict[str, dict[str, float]]:
             "vTheta": motion.v.vTheta,
             "vPsi": motion.v.vPsi,
             "vd": motion.v.vd,
+            "dVPsi": motion.v.dVPsi,
         },
     }

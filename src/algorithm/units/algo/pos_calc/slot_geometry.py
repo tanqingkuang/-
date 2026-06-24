@@ -77,6 +77,8 @@ class SlotGeometry(PosCalcBase):
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + slot.z
         copy_velocity(u.leaderState.v, y.selfCmd.v)
+        # 槽位随长机刚性旋转，僚机航迹偏航角速率即长机的(刚体绕同一瞬心，各点航向角速率相同)。
+        y.selfCmd.v.dVPsi = u.leaderState.v.dVPsi
         if u.selfState is None or track is None:
             return None
         track_x, track_y = track
