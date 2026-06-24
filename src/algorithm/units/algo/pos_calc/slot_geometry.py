@@ -82,9 +82,19 @@ class SlotGeometry(PosCalcBase):
         if u.selfState is None or track is None:
             return None
         track_x, track_y = track
+        # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V - c·ω)·t̂ + (a·ω)·n̂，
+        # 其中 a=slot.x(前向)、c=slot.y(左向)、ω=长机偏航角速率、n̂=左单位向量。
+        # 沿航迹分量按 -c·ω 增减(对某一转向，外侧半径大加速、内侧减速；某槽位是外/内侧由 c 与 ω 符号共定)；a·ω 补后方槽位转弯时的横扫。
+        # 直接覆盖 copy_velocity 写入的长机速度——ω=0(直线)时二者相等，行为不变。
+        omega = u.leaderState.v.dVPsi
+        v_along = u.leaderState.v.vd - slot.y * omega
+        v_swing = slot.x * omega
+        left_x, left_y = -track_y, track_x
+        y.selfCmd.v.vEast = v_along * track_x + v_swing * left_x
+        y.selfCmd.v.vNorth = v_along * track_y + v_swing * left_y
         err_x = y.selfCmd.pos.east - u.selfState.pos.east
         err_y = y.selfCmd.pos.north - u.selfState.pos.north
-        # 前向位置不由 PidCompose 控制，因此只把待飞距误差转成沿航迹速度修正。
+        # 前向位置不由 PidCompose 控制，剩余待飞距误差只做小幅沿航迹 trim(前馈担主项，不触限)。
         along_error = err_x * track_x + err_y * track_y
         speed_correction = max(
             -_MAX_ALONG_SLOT_SPEED_CORRECTION,
