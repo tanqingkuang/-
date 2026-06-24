@@ -84,7 +84,7 @@ class SlotGeometry(PosCalcBase):
         track_x, track_y = track
         # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V - c·ω)·t̂ + (a·ω)·n̂，
         # 其中 a=slot.x(前向)、c=slot.y(左向)、ω=长机偏航角速率、n̂=左单位向量。
-        # 沿航迹分量 (V - c·ω) 让外侧槽位(c>0)加速、内侧减速；a·ω 补后方槽位转弯时的横扫。
+        # 沿航迹分量按 -c·ω 增减(对某一转向，外侧半径大加速、内侧减速；某槽位是外/内侧由 c 与 ω 符号共定)；a·ω 补后方槽位转弯时的横扫。
         # 直接覆盖 copy_velocity 写入的长机速度——ω=0(直线)时二者相等，行为不变。
         omega = u.leaderState.v.dVPsi
         v_along = u.leaderState.v.vd - slot.y * omega

@@ -375,7 +375,7 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_slot_geometry_feeds_forward_turn_speed(self) -> None:
-        """验证转弯时槽位速度前馈：外侧槽位沿航迹加速、内侧减速，并补后方槽位的横扫分量。"""
+        """验证转弯时槽位速度前馈：沿航迹分量按 -c·ω 增减(外/内侧由 c 与 ω 符号共定)，并补后方槽位的横扫分量。"""
 
         # 长机向东 vd=30，左转 ω=+0.1 rad/s；僚机恰在槽位上(无待飞距 trim)。
         omega = 0.1
@@ -399,7 +399,7 @@ class PosCalcTests(unittest.TestCase):
                 PosCalcOutputS(selfCmd=ctx.selfCmd),
             )
 
-            # 沿航迹速度 = vd - c·ω(外侧加速、内侧减速)；横扫 = a·ω 投到左向(此处为北向分量)。
+            # 沿航迹速度 = vd - c·ω；本例左转 ω>0，故 c>0(左/内侧)减速、c<0(右/外侧)加速。横扫 = a·ω 投到左向(此处为北向分量)。
             self.assertAlmostEqual(ctx.selfCmd.v.vEast, expect_along)
             self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -54.0 * omega)
 
