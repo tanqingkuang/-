@@ -15,8 +15,8 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, QRect
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QPointF, QRect, Qt
+from PySide6.QtWidgets import QApplication, QSplitter
 
 from src.ui.gui.main_window import (
     ControllerSimulationAdapter,
@@ -75,6 +75,24 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertFalse(self.window.top_view.show_grid)
         self.assertFalse(self.window.side_view.show_grid)
+
+    def test_top_and_side_views_are_resizable_with_splitter(self) -> None:
+        splitter = self.window.view_splitter
+
+        self.assertIsInstance(splitter, QSplitter)
+        self.assertEqual(splitter.orientation(), Qt.Orientation.Vertical)
+        self.assertEqual(splitter.count(), 2)
+        self.assertFalse(splitter.childrenCollapsible())
+        self.assertIs(splitter.widget(0), self.window.top_view)
+        self.assertIs(splitter.widget(1), self.window.side_view)
+
+        splitter.setSizes([460, 260])
+        self.app.processEvents()
+        sizes = splitter.sizes()
+
+        self.assertGreater(sizes[0], sizes[1])
+        self.assertGreaterEqual(self.window.top_view.height(), 360)
+        self.assertGreaterEqual(self.window.side_view.height(), 150)
 
     def test_playback_slider_supports_twenty_times_rate(self) -> None:
         self.assertEqual(self.window.speed_slider.maximum(), 200)
@@ -387,7 +405,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self._count_pixels(self.window.side_view, route_color), 0)
 
     def test_play_pause_button_toggles_real_controller_snapshot(self) -> None:
-        self._load_ui_config()
+        self._load_ui_config(duration_s=1.0)
         self.assertEqual(self.window.play_button.text(), "开始")
 
         self.window.play_button.click()

@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QHeaderView,
     QSlider,
+    QSplitter,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -1891,9 +1892,17 @@ class MainWindow(QMainWindow):
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
         self.top_view.resetViewRequested.connect(self.side_view.reset_view)
-        # 俯视图占主要高度(stretch=1)，侧视图固定附在下方。
-        layout.addWidget(self.top_view, 1)
-        layout.addWidget(self.side_view, 0)
+        # 俯视图/侧视图之间用细分隔线承载拖动调整，不额外占用明显空间。
+        self.view_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.view_splitter.setObjectName("viewSplitter")
+        self.view_splitter.setChildrenCollapsible(False)
+        self.view_splitter.setHandleWidth(7)
+        self.view_splitter.addWidget(self.top_view)
+        self.view_splitter.addWidget(self.side_view)
+        self.view_splitter.setStretchFactor(0, 4)
+        self.view_splitter.setStretchFactor(1, 1)
+        self.view_splitter.setSizes([620, 180])
+        layout.addWidget(self.view_splitter, 1)
 
         # 底部时间轴：时间文本 + 控制按钮 + 进度条。
         timeline = QHBoxLayout()
@@ -2124,6 +2133,16 @@ class MainWindow(QMainWindow):
                 border-bottom: 1px solid {theme.line.name()};
                 padding: 6px 4px;
                 font-weight: 700;
+            }}
+            QSplitter#viewSplitter {{
+                background: transparent;
+            }}
+            QSplitter#viewSplitter::handle:vertical {{
+                background: transparent;
+                border-top: 1px solid {theme.line.name()};
+            }}
+            QSplitter#viewSplitter::handle:vertical:hover {{
+                border-top-color: {theme.accent.name()};
             }}
             QSlider::groove:horizontal {{
                 background: {theme.line.name()};
