@@ -38,7 +38,7 @@
 | Actor | 用户 | 操作人员，下发配置与运行指令、查看实时显示 |
 | Boundary | 控制界面 | 接收用户输入（算法选择、航线、扰动设置等）（GUI 模式启用；批量模式不启） |
 | Boundary | 实时显示 | 向用户推送仿真过程状态（GUI 模式启用；批量模式不启） |
-| Boundary | CLI 入口 | 接收 CLI 参数（`--config` `--seed` `--output` `--headless` 等）；加载配置文件、CLI 覆盖、调用 `仿真控制.run_until_complete(config)`（headless 模式启用；GUI 模式不启） |
+| Boundary | CLI 入口 | 目标职责是接收 CLI 参数（`--config` `--seed` `--output` `--headless` 等）、加载配置文件、应用 CLI 覆盖并调用 `仿真控制.run_until_complete(config)`；当前 CLI 入口尚未落地，headless 能力仅由 `SimulationController.run_until_complete(config)` API 提供 |
 | Control | 仿真控制 | ① 基于配置和界面初始化各算法和模型，并将拓扑/QoS 等参数下发给通信功能；<br />② 任务调度（编队算法、模型迭代、加扰）；<br />③ 把扰动配置 + 不确定性索引整体下发给加扰；节拍触发加扰 tick；转发 UI 经控制界面下发的动态扰动注入命令；<br />④ 关键数据定时落盘；<br />⑤ 实时数据推送 |
 | Control | 模型迭代 | 统一推进所有飞机的动力学积分；内部按 init 配置 + seed 实施传感器噪声 / 定位漂移 / 控制滞后；通过 inject_wind / inject_fault 接受加扰 push 的动态扰动 |
 | Control | 编队算法 | 飞行实体 ×N（N≥1，含编队、制导、控制律，产出 control）+ 非飞行协调实体 ×0/1（只调度、不产 control）。协调能力或以单元寄宿在某飞行实体内（领航-跟随寄宿长机），或独立成非飞行协调实体（地面站 / 虚拟节点 / 参考节点）；分布式方法无协调实体（见 3.3） |
@@ -159,8 +159,8 @@ src/
 │   ├── comm.py             # 通信功能
 │   └── disturb.py          # 加扰
 ├── data/                   # 数据组
-│   ├── config_loader.py    # 配置文件读写
-│   ├── logger.py           # 关键数据落盘（HDF5）
+│   ├── config_loader.py    # 配置文件读写占位；当前可运行实现内嵌在 runner/sim_control.py
+│   ├── logger.py           # 关键数据落盘占位；当前可运行实现内嵌在 runner/sim_control.py，格式为 JSONL
 │   └── aircraft_models/    # 飞行模型库
 ├── common/                 # 时钟、状态机、消息 envelope
 └── main.py                 # 进程入口
@@ -169,7 +169,7 @@ tests/
 ├── llt/                    # Low-Level Test
 └── st/                     # System Test
 
-configs/                    # yaml 配置模板
+configs/                    # JSON/YAML 配置模板
 scripts/                    # bat/sh 批量脚本 + 离线分析工具
 docs/
 ```
@@ -178,12 +178,12 @@ docs/
 
 | 类别 | 选型 | 备注 |
 | --- | --- | --- |
-| 数值 | numpy、scipy.integrate | 矩阵/向量、积分器 |
-| 配置 | PyYAML | 简单够用 |
+| 数值 | numpy | 通信丢包随机数等数值能力；后续复杂积分器可再引入 scipy |
+| 配置 | JSON 内置；PyYAML 可选 | JSON 为当前示例配置格式；读取 `.yaml/.yml` 时需要 PyYAML |
 | GUI | PySide6 | LGPL，官方 Qt for Python；headless 模式按需 import |
 | 三维可视化（可选） | matplotlib / vispy | PA 标注为"可选" |
 | 测试 | pytest + pytest-cov | |
-| 日志格式 | **HDF5**（h5py） | 二进制时序原生、增量写、自带 dataset/dtype schema；跨语言成熟（C 仿真用 libhdf5）；hdfview 可直接打开查看 |
+| 日志格式 | JSONL | 当前实现写入 `logs/<run-id>/snapshots.jsonl`、`events.jsonl` 和 `config.json`；后续若需要跨语言二进制时序格式再另行设计 |
 
 ### 4.3.3 测试分级
 
@@ -198,7 +198,7 @@ python 仿真为**单进程 tick 循环**。运行模式分两种（UI 模式与
 
 ### 4.4.1 带 UI 的独立仿真
 
-启动方式：`python sim.py --config base.yaml`
+启动方式：当前正式 GUI 入口为 `python src/ui/gui/main_window.py`，启动后在界面中选择 `configs/base.json` 或其他配置文件。
 
 - 启动 → 启 UI → UI 加载配置文件并显示
 - 用户在 UI 调参（修改的就是配置对象本身）
@@ -232,7 +232,7 @@ sequenceDiagram
 
 ### 4.4.2 不带 UI 的批量仿真
 
-启动方式：`python sim.py --headless --config base.yaml --seed N --output run_N.log`
+启动方式：正式 CLI 尚未实现；当前 headless 批量能力可在 Python 代码中直接调用 `SimulationController.run_until_complete(config)`。
 
 - 外层 bat / shell 循环起 N 个进程（不同不确定性索引），多进程并发由 OS 层调度（`xargs -P` / GNU parallel / Win task scheduler）
 - 单进程内：CLI 解析参数并应用配置覆盖 → 调 `run_until_complete(config)` → 跑完落盘 → 退出
@@ -251,7 +251,7 @@ sequenceDiagram
     User->>Bat: ① 执行 sweep.bat（指定不确定性索引集合）
 
     loop 每个不确定性索引 N
-        Bat->>CLI: ② 起进程 (--headless --config base.yaml --seed N)
+        Bat->>CLI: ② 起进程（目标形态：--headless --config configs/base.json --seed N）
         CLI->>Cfg: ③ 读基础配置
         Cfg-->>CLI: ④ 配置对象
         Note over CLI: CLI 参数覆盖（不确定性索引等）
@@ -324,7 +324,7 @@ sequenceDiagram
 
 机理与 C 仿真一致：每次 tick 循环结束后**追加可控延迟**实现可控倍频；不追加延迟即全速跑（最大倍频）。
 
-- **配置**：仿真控制 接受 `speedup_factor`（N 倍实时）；N=1 实时，N=∞ 全速，N 为有限值时按 `dt/N - tick_runtime` 延迟
+- **配置**：当前仿真控制接受 `playback_rate`（范围 `0.1` 到 `20.0`），影响 wall-clock 到 sim-time 的推进倍率；同步 headless `run_until_complete` 不依赖 GUI 事件循环
 - **倍频上限**：受单次 tick 固有运行时间限制——若 `dt/N < tick_runtime`，按全速跑并标记 warning
 - **固定延迟扣减**：sleep 时长必须扣掉本次 tick 实际运行时间
 - **实时显示推送频率与倍频解耦**（对应 C 仿真的"通信保证"）：推送恒按 wall-clock 节流（5–10 Hz），避免 UI 被淹 + 避免推送占用 tick 算力

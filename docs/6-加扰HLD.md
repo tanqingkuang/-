@@ -29,5 +29,6 @@
 
 ## 5. 关联代码
 
-- `src/environment/disturb.py`
+- `src/runner/sim_control.py`：当前首版 `_DisturbanceEngine` 可运行实现所在位置。
+- `src/environment/disturb.py`：加扰模块占位文件，当前运行路径未使用。
 

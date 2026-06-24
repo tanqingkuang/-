@@ -4,7 +4,11 @@
 
 CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层批量仿真。CLI 负责解析命令行参数、加载配置、应用 CLI 覆盖，并调用仿真控制运行到结束。
 
+当前实现状态：CLI 入口尚未落地，`src/main.py` 仍为未实现占位，`src/ui/cli/` 仅保留包结构。headless 同步运行能力已在 `SimulationController.run_until_complete(config)` 中实现，当前只能由 Python 代码直接调用；本 HLD 描述的是待实现的命令行入口目标。
+
 ## 2. 职责
+
+目标职责：
 
 - 解析 `--config`、`--seed`、`--output`、`--headless` 等命令行参数。
 - 加载基础配置文件。
@@ -29,6 +33,6 @@ CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层
 
 ## 5. 关联代码
 
-- `src/ui/cli/`
-- `src/main.py`
-- `src/runner/sim_control.py`
+- `src/ui/cli/`：CLI 包结构，当前未实现具体命令。
+- `src/main.py`：进程入口占位，当前未实现。
+- `src/runner/sim_control.py`：已实现 `SimulationController.run_until_complete(config)` 同步运行入口。

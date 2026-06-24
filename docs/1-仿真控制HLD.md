@@ -384,7 +384,7 @@ def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> 
 语义：
 
 - 给 UI “日志”窗口使用。
-- 返回内存环形缓冲中的最近事件，不直接扫描 HDF5 或大日志文件。
+- 返回内存环形缓冲中的最近事件，不直接扫描 JSONL 关键数据日志或其他大日志文件。
 - UI 可以自己缓存已经收到的事件，但不能作为唯一事件源；仿真控制仍需维护最近事件，覆盖 UI 面板晚打开、UI 刷新丢帧、headless 运行和内部错误追踪等场景。
 
 ### 5.14 headless 运行
@@ -463,6 +463,8 @@ def _tick() -> SimulationSnapshot
 
 ### 8.1 配置加载
 
+当前实现状态：首版可运行配置加载器内嵌在 `src/runner/sim_control.py` 的 `_ConfigLoader` 中；`src/data/config_loader.py` 仍是占位文件，不参与运行路径。后续若抽出数据组实现，应保持下列接口语义。
+
 ```python
 class ConfigLoader:
     def load(path: str) -> dict[str, object]: ...
@@ -490,6 +492,8 @@ def inject_wind(command: object) -> None: ...
 节点健康状态由加扰模块自行管理，不再下发给模型层。
 
 ### 8.3 通信功能
+
+当前实现类名为 `src.environment.comm.CommunicationChannel`，首版直接接收包含 `nodes` / `links` 的通信配置；下列 `CommunicationEngine` 是 HLD 级抽象名称。
 
 ```python
 class CommunicationEngine:
@@ -533,6 +537,8 @@ class FormationAlgorithm:
 
 ### 8.5 加扰
 
+当前实现状态：首版动态扰动执行器内嵌在 `src/runner/sim_control.py` 的 `_DisturbanceEngine` 中；`src/environment/disturb.py` 仍是占位文件，不参与运行路径。当前已覆盖风场、节点健康状态、链路中断和链路丢包率动态注入。
+
 ```python
 class DisturbanceEngine:
     def init(config: dict[str, object], seed: int, model: ModelIterator, comm: CommunicationEngine) -> None: ...
@@ -544,6 +550,8 @@ class DisturbanceEngine:
 ```
 
 ### 8.6 关键数据日志
+
+当前实现状态：首版关键数据日志器内嵌在 `src/runner/sim_control.py` 的 `_DataLogger` 中；`src/data/logger.py` 仍是占位文件，不参与运行路径。
 
 ```python
 class DataLogger:
@@ -603,17 +611,14 @@ class DataLogger:
 
 ## 12. 后续实现顺序
 
-1. 实现 `SimulationController` 状态机和 `CommandResult` / `SimulationSnapshot` 数据结构。
-2. 接入配置加载，完成 `load_config()` 到 `READY` 的闭环。
-3. 先用最小模型迭代和 SimpleFollow 编队算法打通 `start()` / `step()` / `reset()`。
-4. 将 PySide6 UI 的 `MockSimulation` 替换为 `SimulationController` 适配器。
-5. 接入通信功能、加扰和关键数据日志。
+以下条目为历史落地路线，当前已完成 `SimulationController` 状态机、配置加载、模型迭代、通信功能、领航-跟随编队算法、PySide6 GUI 适配、动态扰动和 JSONL 关键数据日志的首版闭环。后续主要工作是把当前内嵌在 `sim_control.py` 中的配置加载、加扰和日志实现按数据组 / 环境组边界拆出，并补齐正式 CLI 入口。
 
 ## 13. 关联代码
 
 - `src/runner/sim_control.py`
 - `src/ui/gui/main_window.py`
-- `src/data/config_loader.py`
 - `src/environment/model.py`
 - `src/environment/comm.py`
-- `src/environment/disturb.py`
+- `src/data/config_loader.py`：占位，当前运行路径未使用。
+- `src/data/logger.py`：占位，当前运行路径未使用。
+- `src/environment/disturb.py`：占位，当前运行路径未使用。
