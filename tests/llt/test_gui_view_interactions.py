@@ -472,6 +472,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsInstance(self.window.sim, ControllerSimulationAdapter)
         self.assertEqual(self.window.sim.controller.get_snapshot().run_state, "UNLOADED")
         self.assertEqual(self.window.node_table.rowCount(), 0)
+        self.assertEqual(self.window.overall_table.rowCount(), 0)
         self.assertEqual(self.window.link_table.rowCount(), 0)
         self.assertFalse(self.window.play_button.isEnabled())
         self.assertFalse(self.window.step_button.isEnabled())
@@ -550,6 +551,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                 self.assertEqual(window.sim.controller.get_snapshot().run_state, "READY")
                 self.assertEqual(window.config_name.text(), "configs/startup.json")
                 self.assertEqual(window.node_table.rowCount(), 3)
+                self.assertEqual(window.overall_table.rowCount(), 1)
                 initial_scale = window.top_view.scale_value
                 initial_offset = QPointF(window.top_view.offset)
 
@@ -765,12 +767,70 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window._update_snapshot(self.window.sim.snapshot())
 
         statuses = {
-            self.window.node_table.item(row, 0).text(): self.window.node_table.item(row, 5).text()
+            self.window.node_table.item(row, 0).text(): self.window.node_table.item(row, 4).text()
             for row in range(self.window.node_table.rowCount())
         }
 
         self.assertEqual(statuses["A03"], "故障")
         self.assertEqual(statuses["A02"], "正常")
+
+    def test_node_table_shows_track_errors_and_overall_table_uses_leader_route_metrics(self) -> None:
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[
+                NodeState(
+                    "A01",
+                    "leader",
+                    100.0,
+                    120.0,
+                    20.0,
+                    0.0,
+                    1200.0,
+                    cross_track_error=12.4,
+                    distance_to_go=345.6,
+                    track_pos_err_x=1.2,
+                    track_pos_err_y=-3.4,
+                    track_pos_err_z=5.6,
+                ),
+                NodeState(
+                    "A02",
+                    "wingman",
+                    80.0,
+                    90.0,
+                    20.0,
+                    0.0,
+                    1210.0,
+                    track_pos_err_x=-7.8,
+                    track_pos_err_y=9.1,
+                    track_pos_err_z=-2.3,
+                ),
+            ],
+            links=[],
+        )
+
+        self.window._update_snapshot(snapshot)
+
+        self.assertEqual(self.window.node_table.columnCount(), 5)
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(1).text(), "前向误差(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(2).text(), "垂向误差(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(3).text(), "侧向误差(m)")
+        self.assertEqual(self.window.node_table.item(0, 1).text(), "1.2")
+        self.assertEqual(self.window.node_table.item(0, 2).text(), "-3.4")
+        self.assertEqual(self.window.node_table.item(0, 3).text(), "5.6")
+        self.assertEqual(self.window.node_table.item(1, 1).text(), "-7.8")
+        self.assertEqual(self.window.node_table.item(1, 2).text(), "9.1")
+        self.assertEqual(self.window.node_table.item(1, 3).text(), "-2.3")
+        self.assertEqual(self.window.overall_table.rowCount(), 1)
+        self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
+        self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
+        self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
+        self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
+        self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
 
     def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
         self._load_ui_config(
