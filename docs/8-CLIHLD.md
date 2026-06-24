@@ -2,18 +2,14 @@
 
 ## 1. 定位
 
-CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层批量仿真。CLI 负责解析命令行参数、加载配置、应用 CLI 覆盖，并调用仿真控制运行到结束。
-
-当前实现状态：CLI 入口尚未落地，`src/main.py` 仍为未实现占位，`src/ui/cli/` 仅保留包结构。headless 同步运行能力已在 `SimulationController.run_until_complete(config)` 中实现，当前只能由 Python 代码直接调用；本 HLD 描述的是待实现的命令行入口目标。
+CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层批量仿真。headless 运行以 `SimulationController.run_until_complete(config)` 为同步执行入口；命令行包装负责把外部参数转换为配置对象和运行参数，再调用该入口运行到结束。
 
 ## 2. 职责
-
-目标职责：
 
 - 解析 `--config`、`--seed`、`--output`、`--headless` 等命令行参数。
 - 加载基础配置文件。
 - 将命令行参数覆盖到配置对象。
-- 调用 `仿真控制.run_until_complete(config)`。
+- 调用 `SimulationController.run_until_complete(config)`。
 - 将进程退出码反馈给外层脚本。
 - 支持 bat / shell / GNU parallel / xargs 等脚本层批量启动。
 
@@ -33,6 +29,6 @@ CLI 是人机交互组的 Boundary，面向 headless 单进程仿真和脚本层
 
 ## 5. 关联代码
 
-- `src/ui/cli/`：CLI 包结构，当前未实现具体命令。
-- `src/main.py`：进程入口占位，当前未实现。
-- `src/runner/sim_control.py`：已实现 `SimulationController.run_until_complete(config)` 同步运行入口。
+- `src/ui/cli/`
+- `src/main.py`
+- `src/runner/sim_control.py`

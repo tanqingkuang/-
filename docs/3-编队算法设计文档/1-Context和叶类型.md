@@ -33,7 +33,7 @@ class CommDirE(IntEnum):     # 通信方向
 - 东北天坐标系字段使用 `east/north/h` 表示位置，使用 `east/north/up` 表示速度和加速度。
 - 航迹坐标系字段使用 `x/y/z`，其中 `x` 为前向，`y` 为垂向，`z` 为右侧向；该约定主要用于控制诊断量和航迹系中间量。
 - `FormPosS.x/y/z` 是队形槽位相对长机的局部坐标：`x` 为沿长机航迹前向，`y` 为垂向/上向，`z` 为右侧向。它与控制诊断中的航迹坐标系 `x/y/z` 保持同一轴序，但不表示东北天坐标。
-- 配置文件显式声明 `formation.slots` 时必须同时声明 `formation.coordinate_system = "x_forward_y_up_z_right"`，避免旧版 `y` 侧向、`z` 高度配置被静默按新轴序解释。
+- 配置文件显式声明 `formation.slots` 时必须同时声明 `formation.coordinate_system = "x_forward_y_up_z_right"`，避免轴序不一致的槽位配置被静默解释。
 
 ```python
 from dataclasses import dataclass, field
