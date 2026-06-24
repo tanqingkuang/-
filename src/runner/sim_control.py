@@ -226,9 +226,10 @@ class _ConfiguredLink:
 
 
 _DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
-    (-54.0, 58.0, 0.0),
-    (-54.0, -58.0, 0.0),
+    (-54.0, 0.0, -58.0),
+    (-54.0, 0.0, 58.0),
 )
+_FORMATION_COORDINATE_SYSTEM = "x_forward_y_up_z_right"
 _LOG_SAMPLE_PERIOD_S = 0.05
 _TIME_EPSILON_S = 1e-9
 
@@ -301,6 +302,7 @@ def _build_formation_slots(
         return pattern, _default_formation_slots(nodes)
     if not isinstance(slot_config, list) or not slot_config:
         raise ValueError("formation.slots must be a non-empty list")
+    _validate_formation_coordinate_system(formation_config)
 
     # 收集已知节点 ID，用于校验槽位引用的节点是否存在。
     known_node_ids = {
@@ -340,6 +342,21 @@ def _build_formation_slots(
             continue
         ordered_slots.append(slots_by_id[node_id_from_config(node, index)])
     return pattern, ordered_slots
+
+
+def _validate_formation_coordinate_system(formation_config: dict[str, object]) -> None:
+    """校验显式槽位的坐标轴声明。注意：用于阻止旧 y 侧向配置被新轴序静默解释。"""
+    raw_value = formation_config.get("coordinate_system")
+    if raw_value is None:
+        raise ValueError(
+            "formation.coordinate_system is required when formation.slots is configured; "
+            f"use {_FORMATION_COORDINATE_SYSTEM!r}"
+        )
+    if str(raw_value).strip() != _FORMATION_COORDINATE_SYSTEM:
+        raise ValueError(
+            "formation.coordinate_system must be "
+            f"{_FORMATION_COORDINATE_SYSTEM!r}; x=forward, y=up, z=right"
+        )
 
 
 def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
