@@ -69,6 +69,8 @@ _COMM_DECIMATION = 2
 _SNAPSHOT_DECIMATION = 2
 _MIN_PLAYBACK_RATE = 0.1
 _MAX_PLAYBACK_RATE = 20.0
+_RUN_LOOP_SLEEP_SLICE_S = 0.005
+_MAX_RUN_LOOP_BATCH_TICKS = 100
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,10 @@ class RouteState:
     end_x_m: float
     end_y_m: float
     end_altitude_m: float
+    radius_m: float = 0.0
+    center_x_m: float = 0.0
+    center_y_m: float = 0.0
+    turn_sign: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -601,6 +607,10 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
         end_x_m=route.end.pos.east,
         end_y_m=route.end.pos.north,
         end_altitude_m=route.end.pos.h,
+        radius_m=route.radius,
+        center_x_m=route.center.east,
+        center_y_m=route.center.north,
+        turn_sign=route.turnSign,
     )
 
 
@@ -1466,30 +1476,51 @@ class SimulationController:
     def _run_loop(self) -> None:
         """后台线程主循环。注意：所有共享状态访问必须受锁保护。"""
         current = threading.current_thread()
+        last_wall_s = time.perf_counter()
+        sim_budget_s = 0.0
+        force_first_tick = True
         try:
-            # 直到收到停止请求；每圈推进一个 tick 并按墙钟节流以贴近实时倍率。
+            # 直到收到停止请求；按累计墙钟时间批量补拍，避免高倍率下依赖亚毫秒 sleep。
             while not self._stop_requested.is_set():
-                start_wall_s = time.monotonic()
+                now_wall_s = time.perf_counter()
+                wall_delta_s = max(0.0, now_wall_s - last_wall_s)
+                last_wall_s = now_wall_s
+                snapshots_to_notify: list[SimulationSnapshot] = []
+                should_sleep = False
                 with self._lock:
                     # 运行态被外部改为非 RUNNING（暂停/结束）时退出循环。
                     if self._run_state != "RUNNING":
                         break
-                    try:
-                        snapshot = self._tick_unlocked()
-                    except Exception as exc:  # noqa: BLE001
-                        # tick 出错不崩线程：记录错误、转入暂停并产出一帧快照便于排查。
-                        self._append_event_unlocked("ERROR", "SimControl", f"tick failed: {exc}")
-                        self._run_state = "PAUSED"
-                        snapshot = self._make_snapshot_unlocked()
+                    step_s = self._step_s
+                    playback_rate = self._playback_rate
+                    sim_budget_s += wall_delta_s * playback_rate
+                    if force_first_tick and sim_budget_s < step_s:
+                        sim_budget_s = step_s
+                    force_first_tick = False
+
+                    ticks_due = min(int(sim_budget_s / step_s), _MAX_RUN_LOOP_BATCH_TICKS)
+                    if ticks_due <= 0:
+                        should_sleep = True
+                    for _ in range(ticks_due):
+                        try:
+                            snapshot = self._tick_unlocked()
+                        except Exception as exc:  # noqa: BLE001
+                            # tick 出错不崩线程：记录错误、转入暂停并产出一帧快照便于排查。
+                            self._append_event_unlocked("ERROR", "SimControl", f"tick failed: {exc}")
+                            self._run_state = "PAUSED"
+                            snapshot = self._make_snapshot_unlocked()
+                        sim_budget_s = max(0.0, sim_budget_s - step_s)
+                        if snapshot is not None:
+                            snapshots_to_notify.append(snapshot)
+                        if self._run_state != "RUNNING":
+                            break
+                    if self._run_state == "RUNNING" and sim_budget_s < step_s:
+                        should_sleep = True
                 # 在锁外通知订阅者，避免回调阻塞持锁路径。
-                if snapshot is not None:
+                for snapshot in snapshots_to_notify:
                     self._notify_subscribers(snapshot)
-                with self._lock:
-                    # 目标墙钟间隔 = 仿真步长 / 倍率：倍率越大睡得越短，仿真越快。
-                    interval_s = self._step_s / self._playback_rate
-                # 扣除本圈实际耗时后再睡，使每圈节奏稳定贴近 interval_s。
-                elapsed_s = time.monotonic() - start_wall_s
-                time.sleep(max(0.0, interval_s - elapsed_s))
+                if should_sleep:
+                    time.sleep(_RUN_LOOP_SLEEP_SLICE_S)
         finally:
             with self._lock:
                 # 仅当自己仍是登记的工作线程时才清空引用，避免误清新线程。
@@ -1818,6 +1849,11 @@ class SimulationController:
         """计算节点相对当前航段的侧偏。注意：退化航段返回零偏差。"""
         if route is None:
             return None
+        if route.radius_m > 0.0:
+            # 圆弧段侧偏应取径向误差；按转向符号定号，保持左右偏差语义稳定。
+            radial_distance = math.hypot(state.x_m - route.center_x_m, state.y_m - route.center_y_m)
+            turn_sign = 1.0 if route.turn_sign >= 0.0 else -1.0
+            return (radial_distance - route.radius_m) * turn_sign
         # 航段方向向量（ENU 平面，x 东 y 北）。
         dx = route.end_x_m - route.start_x_m
         dy = route.end_y_m - route.start_y_m
@@ -1825,10 +1861,10 @@ class SimulationController:
         # 退化航段（首尾重合）无法定义法向，返回 None。
         if length <= 1e-9:
             return None
-        # 单位法向量（航段方向逆时针旋转 90°）。
-        normal_x = -dy / length
-        normal_y = dx / length
-        # 侧偏 = 起点->节点向量在法向上的投影；正负表示位于航段哪一侧。
+        # 单位右法向量（航段方向顺时针旋转 90°），与航迹系 z 右侧向为正保持一致。
+        normal_x = dy / length
+        normal_y = -dx / length
+        # 侧偏 = 起点->节点向量在右法向上的投影；正值表示位于航迹右侧。
         return (state.x_m - route.start_x_m) * normal_x + (state.y_m - route.start_y_m) * normal_y
 
     @staticmethod

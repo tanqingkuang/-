@@ -9,6 +9,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.algorithm.context.leaf_types import FormPatE
 from src.environment.model import AircraftState
@@ -22,6 +23,7 @@ from src.runner.sim_control import (
     _DataLogger,
     _build_formation_comm_init,
     _build_leader_route,
+    _route_state_from_wayline,
 )
 
 
@@ -165,7 +167,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(route.end_x_m, 1000.0)
             self.assertAlmostEqual(route.end_y_m, 0.0)
             self.assertAlmostEqual(route.end_altitude_m, 1000.0)
-            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 260.0)
+            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, -260.0)
             self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 860.0)
             controller.close()
 
@@ -197,7 +199,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(route.end_x_m, 210.0)
             self.assertAlmostEqual(route.end_y_m, 20.0)
             self.assertAlmostEqual(route.end_altitude_m, 1100.0)
-            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, 50.0)
+            self.assertAlmostEqual(leader.cross_track_error_m or 0.0, -50.0)
             self.assertAlmostEqual(leader.distance_to_go_m or 0.0, 150.0)
             controller.close()
 
@@ -256,6 +258,124 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(leg_out.radius, 0.0)
         self.assertAlmostEqual(leg_out.start.pos.north, 400.0)
         self.assertAlmostEqual(leg_out.end.pos.north, 2000.0)
+
+    def test_arc_route_cross_track_error_uses_radial_distance_not_chord(self) -> None:
+        """圆弧当前航段的侧偏应按到圆弧的径向偏差计算，而不是到弦线的距离。"""
+
+        route = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": 2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        )
+        arc = route.lines[1]
+        current_route = _route_state_from_wayline(arc)
+        on_arc_midpoint = _aircraft_state(
+            "A01",
+            arc.center.east + arc.radius / math.sqrt(2.0),
+            arc.center.north - arc.radius / math.sqrt(2.0),
+            1000.0,
+        )
+
+        self.assertAlmostEqual(
+            SimulationController._cross_track_error(on_arc_midpoint, current_route) or 0.0,
+            0.0,
+            delta=1e-9,
+        )
+
+    def test_cross_track_error_positive_to_track_right_side(self) -> None:
+        """整体侧偏沿用航迹坐标系右侧向为正的符号约定。"""
+
+        eastbound_route = RouteState(
+            start_x_m=0.0,
+            start_y_m=0.0,
+            start_altitude_m=1000.0,
+            end_x_m=100.0,
+            end_y_m=0.0,
+            end_altitude_m=1000.0,
+        )
+        northbound_route = RouteState(
+            start_x_m=0.0,
+            start_y_m=0.0,
+            start_altitude_m=1000.0,
+            end_x_m=0.0,
+            end_y_m=100.0,
+            end_altitude_m=1000.0,
+        )
+
+        self.assertAlmostEqual(
+            SimulationController._cross_track_error(_aircraft_state("A01", 0.0, -10.0, 1000.0), eastbound_route) or 0.0,
+            10.0,
+        )
+        self.assertAlmostEqual(
+            SimulationController._cross_track_error(_aircraft_state("A01", 10.0, 0.0, 1000.0), northbound_route) or 0.0,
+            10.0,
+        )
+
+    def test_arc_route_cross_track_error_positive_to_track_right_side(self) -> None:
+        """圆弧段侧偏也应保持右侧向为正，避免转弯段和直线段反号。"""
+
+        left_arc = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": 2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        ).lines[1]
+        right_arc = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": -2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        ).lines[1]
+        left_route = _route_state_from_wayline(left_arc)
+        right_route = _route_state_from_wayline(right_arc)
+        left_outside = _aircraft_state(
+            "A01",
+            left_arc.center.east + (left_arc.radius + 10.0) / math.sqrt(2.0),
+            left_arc.center.north - (left_arc.radius + 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+        left_inside = _aircraft_state(
+            "A01",
+            left_arc.center.east + (left_arc.radius - 10.0) / math.sqrt(2.0),
+            left_arc.center.north - (left_arc.radius - 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+        right_inside = _aircraft_state(
+            "A01",
+            right_arc.center.east + (right_arc.radius - 10.0) / math.sqrt(2.0),
+            right_arc.center.north + (right_arc.radius - 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+        right_outside = _aircraft_state(
+            "A01",
+            right_arc.center.east + (right_arc.radius + 10.0) / math.sqrt(2.0),
+            right_arc.center.north + (right_arc.radius + 10.0) / math.sqrt(2.0),
+            1000.0,
+        )
+
+        self.assertAlmostEqual(SimulationController._cross_track_error(left_outside, left_route) or 0.0, 10.0)
+        self.assertAlmostEqual(SimulationController._cross_track_error(left_inside, left_route) or 0.0, -10.0)
+        self.assertAlmostEqual(SimulationController._cross_track_error(right_inside, right_route) or 0.0, 10.0)
+        self.assertAlmostEqual(SimulationController._cross_track_error(right_outside, right_route) or 0.0, -10.0)
 
     def test_display_route_keeps_original_segments_without_arc(self) -> None:
         """显示用航线(insert_arcs=False)应保留 base 原始航点折线、不插圆弧(界面只画原始航段)。"""
@@ -1157,6 +1277,41 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(controller.playback_rate, 10.0)
             self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
             self.assertAlmostEqual(controller.playback_rate, 20.0)
+            controller.close()
+
+    def test_run_loop_batches_ticks_after_wall_clock_delay(self) -> None:
+        """后台调度晚醒后应按累计墙钟时间批量补拍，而不是逐拍亚毫秒睡眠。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=0.1, step_s=0.005)))
+            controller.set_playback_rate(20.0)
+            # 本测试只验证调度节奏，关闭文件落盘避免临时日志影响断言。
+            controller._logger._file_logging_disabled = True
+            fake_now_s = 0.0
+            sleeps: list[float] = []
+
+            def fake_clock() -> float:
+                return fake_now_s
+
+            def fake_sleep(seconds: float) -> None:
+                nonlocal fake_now_s
+                sleeps.append(seconds)
+                fake_now_s += seconds
+
+            with patch("src.runner.sim_control.time.perf_counter", fake_clock), patch(
+                "src.runner.sim_control.time.monotonic",
+                fake_clock,
+            ), patch("src.runner.sim_control.time.sleep", fake_sleep):
+                with controller._lock:
+                    controller._run_state = "RUNNING"
+                    controller._control_report = controller._derive_control_report_unlocked()
+                controller._run_loop()
+
+            snapshot = controller.get_snapshot()
+            self.assertEqual(snapshot.run_state, "FINISHED")
+            self.assertAlmostEqual(snapshot.time_s, 0.1)
+            self.assertLess(len(sleeps), 10)
+            self.assertGreater(max(sleeps), 0.001)
             controller.close()
 
     def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:

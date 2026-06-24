@@ -128,6 +128,9 @@ class NodeState:
     trail: list[TrailPoint] = field(default_factory=list)  # 历史尾迹采样
     cross_track_error: float | None = None  # 侧偏，None 时由表格兜底估算
     distance_to_go: float | None = None  # 待飞距，None 时由表格兜底估算
+    track_pos_err_x: float = 0.0  # 航迹系前向位置误差
+    track_pos_err_y: float = 0.0  # 航迹系垂向位置误差
+    track_pos_err_z: float = 0.0  # 航迹系侧向位置误差
 
 
 @dataclass
@@ -504,6 +507,9 @@ class ControllerSimulationAdapter:
                     trail=list(trail),
                     cross_track_error=node.cross_track_error_m,
                     distance_to_go=node.distance_to_go_m,
+                    track_pos_err_x=node.track_pos_err_x_m,
+                    track_pos_err_y=node.track_pos_err_y_m,
+                    track_pos_err_z=node.track_pos_err_z_m,
                 )
             )
 
@@ -1963,17 +1969,25 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 12, 10, 10)
         layout.setSpacing(8)
-        # 节点表 6 列、链路表 5 列；列宽数组与表头列一一对应，刻意收窄以免横向滚动。
-        self.node_table = QTableWidget(0, 6)
-        self.node_table.setHorizontalHeaderLabels(["ID", "侧偏(m)", "待飞距(m)", "高度(m)", "速度(m/s)", "状态"])
+        # 节点误差表、整体跟踪表和链路表分开显示，避免把全局航线指标误认为单机误差。
+        self.node_table = QTableWidget(0, 5)
+        self.node_table.setHorizontalHeaderLabels(["ID", "前向误差(m)", "垂向误差(m)", "侧向误差(m)", "状态"])
+        self.overall_table = QTableWidget(0, 3)
+        self.overall_table.setHorizontalHeaderLabels(["侧偏(m)", "待飞距(m)", "高度(m)"])
         self.link_table = QTableWidget(0, 5)
         self.link_table.setHorizontalHeaderLabels(["链路", "方向", "延迟", "丢包", "状态"])
-        self._configure_table(self.node_table, [48, 58, 74, 58, 76, 50])
+        self._configure_table(self.node_table, [48, 88, 88, 88, 50])
+        self._configure_table(self.overall_table, [82, 94, 82], height=78)
         self._configure_table(self.link_table, [86, 52, 58, 50, 54])
-        node_title = QLabel("节点状态")
+        node_title = QLabel("节点跟踪误差")
         node_title.setObjectName("sectionTitle")
+        overall_title = QLabel("整体跟踪情况")
+        overall_title.setObjectName("sectionTitle")
         link_title = QLabel("链路状态")
         link_title.setObjectName("sectionTitle")
+        layout.addWidget(overall_title)
+        layout.addWidget(self.overall_table)
+        layout.addSpacing(8)
         layout.addWidget(node_title)
         layout.addWidget(self.node_table)
         layout.addSpacing(8)
@@ -1982,7 +1996,7 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return panel
 
-    def _configure_table(self, table: QTableWidget, widths: list[int]) -> None:
+    def _configure_table(self, table: QTableWidget, widths: list[int], *, height: int = 138) -> None:
         """配置状态表通用样式。注意：表格只读且不显示多余行号。"""
         # 隐藏行号列；横向滚动条永远关闭（靠固定列宽控制），纵向按需出现。
         table.verticalHeader().setVisible(False)
@@ -2003,7 +2017,7 @@ class MainWindow(QMainWindow):
         # 固定行高与表高，保证两张表布局稳定。
         table.verticalHeader().setDefaultSectionSize(30)
         table.verticalHeader().setMinimumSectionSize(30)
-        table.setFixedHeight(138)
+        table.setFixedHeight(height)
 
     def _install_button_cursors(self) -> None:
         """为按钮安装手型光标。注意：只影响交互提示，不改变按钮逻辑。"""
@@ -2236,24 +2250,34 @@ class MainWindow(QMainWindow):
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
-        # 节点表：先按节点数设置行数，再逐行填充。
+        # 节点表：逐机显示航迹系三轴位置误差，整体航线指标拆到单独表格。
         self.node_table.setRowCount(len(snapshot.nodes))
         for row, node in enumerate(snapshot.nodes):
-            # 速度取 vx/vy 的模长。
-            speed = math.hypot(node.vx, node.vy)
-            # 侧偏优先用控制器给的真值；缺省时按相对世界中线的偏移近似估算。
-            side_offset = node.cross_track_error
-            if side_offset is None:
-                side_offset = (node.y - WORLD_HEIGHT / 2) * 0.8
-            # 待飞距同理：缺省时用到右边界的剩余距离粗估（×4 仅为量纲演示）。
-            distance_to_go = node.distance_to_go
-            if distance_to_go is None:
-                distance_to_go = max(0.0, (WORLD_WIDTH - node.x) * 4)
             # 健康枚举翻译成中文；未知值原样显示。
             status = {"normal": "正常", "degraded": "降级", "fault": "故障", "lost": "失联"}.get(node.health, node.health)
-            values = [node.node_id, f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{node.altitude:.0f}", f"{speed:.1f}", status]
+            values = [
+                node.node_id,
+                f"{node.track_pos_err_x:.1f}",
+                f"{node.track_pos_err_y:.1f}",
+                f"{node.track_pos_err_z:.1f}",
+                status,
+            ]
             for column, value in enumerate(values):
                 self.node_table.setItem(row, column, QTableWidgetItem(value))
+
+        # 整体跟踪表：用长机/首节点代表当前全局航线跟踪情况。
+        self.overall_table.setRowCount(1 if snapshot.nodes else 0)
+        if snapshot.nodes:
+            leader = snapshot.nodes[0]
+            side_offset = leader.cross_track_error
+            if side_offset is None:
+                side_offset = (leader.y - WORLD_HEIGHT / 2) * 0.8
+            distance_to_go = leader.distance_to_go
+            if distance_to_go is None:
+                distance_to_go = max(0.0, (WORLD_WIDTH - leader.x) * 4)
+            values = [f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{leader.altitude:.0f}"]
+            for column, value in enumerate(values):
+                self.overall_table.setItem(0, column, QTableWidgetItem(value))
 
         # 链路表：丢包率换算成百分比，ok 标志映射为正常/丢包文案。
         self.link_table.setRowCount(len(snapshot.links))
