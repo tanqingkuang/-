@@ -85,6 +85,20 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.speed_label.text(), "20.0x")
         self.assertAlmostEqual(self.window.sim.speed, 20.0)
 
+    def test_reset_keeps_current_playback_rate_after_slider_change(self) -> None:
+        self._load_ui_config()
+        self.window.speed_slider.setValue(200)
+        self.app.processEvents()
+
+        self.window._start()
+        self._wait_for_controller_time()
+        self.window._reset()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.speed_label.text(), "20.0x")
+        self.assertAlmostEqual(self.window.sim.speed, 20.0)
+        self.assertAlmostEqual(self.window.sim.controller._playback_rate, 20.0)
+
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
         self.window.side_view.horizontal_offset = 73.0

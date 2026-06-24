@@ -415,6 +415,8 @@ class ControllerSimulationAdapter:
         self.last_result_code = result.code
         self.last_result_message = result.message
         if result.code == "OK":
+            # 控制器 reset 会按配置重建模块，需要把 UI 当前倍率重新下发给墙钟调度。
+            self.controller.set_playback_rate(self.speed)
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
             self.disturbance = "无"
