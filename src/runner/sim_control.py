@@ -90,6 +90,7 @@ class NodeState:
     nx: float  # 切向过载。
     nz: float  # 法向过载。
     phi_deg: float  # 滚转角（度）。
+    psi_dot_deg_s: float  # 航迹偏航角速率（度/秒）。
     # 相对当前航段的侧偏与待飞距，无航线时为 None。
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
@@ -839,7 +840,7 @@ class _DataLogger:
     _TIME_KEYS = {"time_s", "duration_s", "step_s"}
     _SNAPSHOT_OMIT_KEYS = {"step_s", "route", "route_segments"}
     _LOAD_FACTOR_KEYS = {"nx", "nz"}
-    _ANGLE_SUFFIXES = ("_deg",)
+    _ANGLE_SUFFIXES = ("_deg", "_deg_s")
     _ACCELERATION_SUFFIXES = ("_mps2", "_mps3")
     _SPEED_SUFFIXES = ("_mps",)
     _POSITION_SUFFIXES = ("_m",)
@@ -1611,6 +1612,7 @@ class SimulationController:
                 nx=state.nx,
                 nz=state.nz,
                 phi_deg=state.phi_deg,
+                psi_dot_deg_s=state.psi_dot_deg_s,
                 # 侧偏与待飞距相对"当前航段"计算，供 UI 显示跟踪误差。
                 cross_track_error_m=self._cross_track_error(state, route),
                 distance_to_go_m=self._distance_to_go(state, route),

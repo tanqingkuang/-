@@ -61,6 +61,7 @@ def _aircraft_state(node_id: str, x_m: float, y_m: float, altitude_m: float = 12
         nx=0.0,
         nz=1.0,
         phi_rad=0.0,
+        psi_dot_deg_s=0.0,
     )
 
 
@@ -748,6 +749,7 @@ class SimulationControllerTests(unittest.TestCase):
                         nx=0.12345,
                         nz=1.23456,
                         phi_deg=6.785,
+                        psi_dot_deg_s=3.456,
                         cross_track_error_m=7.895,
                         distance_to_go_m=99.995,
                     )
@@ -781,6 +783,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(node["nz"], 1.2346)
             self.assertEqual(node["psi_v_deg"], 12.35)
             self.assertEqual(node["phi_deg"], 6.79)
+            self.assertEqual(node["psi_dot_deg_s"], 3.46)
             self.assertEqual(node["cross_track_error_m"], 7.9)
             self.assertEqual(logger.snapshots[0].time_s, 1.23456)
             self.assertEqual(_DataLogger._round_log_value("ax_mps2", 1.2345), 1.235)

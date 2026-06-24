@@ -352,6 +352,7 @@ AircraftState(
     ax_mps2, ay_mps2, az_mps2,     # 滤波后的东北天加速度
     ax_rate_mps3, ay_rate_mps3, az_rate_mps3,  # 加速度变化率
     nx, nz, phi_rad,  # 转换后的质点模型输入
+    psi_dot_deg_s,    # 航迹偏航角速率（度/秒），左转为正
 )
 ```
 

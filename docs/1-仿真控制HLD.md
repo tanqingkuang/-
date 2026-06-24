@@ -84,6 +84,7 @@ ResultCode = Literal[
 | `speed_mps` | `float` | 速度 |
 | `vx_mps/vy_mps/vz_mps` | `float` | 由 `V/theta/psi` 派生的东北天速度，供 UI 和日志使用 |
 | `nx/nz/phi_deg` | `float` | 由二阶滤波后的东北天加速度转换得到的质点模型输入 |
+| `psi_dot_deg_s` | `float` | 航迹偏航角速率，单位 deg/s；左转（逆时针）为正 |
 
 ### 4.3 链路状态
 

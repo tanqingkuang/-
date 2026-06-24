@@ -481,6 +481,82 @@ class TestLegacyConfigFields(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestPsiNormalization(unittest.TestCase):
+    def test_compute_psi_dot_rad_s_fixed_values(self):
+        """固定数值验证公式幅值和单位：g=10, nz=2, phi=30°, V=20, cos_theta=0.5 → 精确 1 rad/s。"""
+        # 手算：10 × 2 × sin(30°) / (20 × 0.5) = 10 × 2 × 0.5 / 10 = 1.0 rad/s
+        result = PointMass3DoFModel.compute_psi_dot_rad_s(
+            gravity=10.0,
+            nz=2.0,
+            phi_rad=math.radians(30.0),
+            speed=20.0,
+            cos_theta=0.5,
+        )
+        self.assertAlmostEqual(result, 1.0, delta=1e-12)
+
+    def test_psi_dot_deg_s_level_flight_is_zero(self):
+        """水平飞行零滚转时偏航角速率应为零。"""
+        it = ModelIterator()
+        it.init({"nodes": [{"node_id": "A", "speed_mps": 50.0}]}, seed=0)
+        state = it.read_states()["A"]
+        self.assertAlmostEqual(state.psi_dot_deg_s, 0.0, delta=1e-6)
+
+    def test_psi_dot_deg_s_positive_roll_positive_turn(self):
+        """正滚转角（左倾）应产生正偏航角速率（左转/逆时针）。"""
+        it = ModelIterator()
+        it.init({"nodes": [{"node_id": "A", "speed_mps": 50.0}]}, seed=0)
+        limit = ModelIterator.DEFAULT_ACCELERATION_COMMAND_LIMIT_MPS2
+        it.apply_controls({"A": AccelerationCommand(0.0, limit, 0.0)})
+        for _ in range(20):
+            it.step(0.005)
+        state = it.read_states()["A"]
+        self.assertGreater(state.phi_rad, 0.0)
+        self.assertGreater(state.psi_dot_deg_s, 0.0)
+
+    def test_psi_dot_deg_s_uses_config_min_speed(self):
+        """偏航角速率应使用配置最低速度而非硬编码 1.0；初速等于 min_speed 以触发分母保护分支。"""
+        min_speed = 0.5
+        it = ModelIterator()
+        # 初速设为 min_speed，积分后速度被夹在 0.5；旧硬编码 1.0 会使分母翻倍导致结果差 2 倍。
+        it.init({"nodes": [{"node_id": "A", "speed_mps": min_speed}],
+                 "model": {"min_speed_mps": min_speed}}, seed=0)
+        limit = ModelIterator.DEFAULT_ACCELERATION_COMMAND_LIMIT_MPS2
+        it.apply_controls({"A": AccelerationCommand(0.0, limit, 0.0)})
+        for _ in range(20):
+            it.step(0.005)
+        state = it.read_states()["A"]
+        import math as _math
+        cos_theta = PointMass3DoFModel._safe_cos_theta(_math.cos(state.theta_rad))
+        speed = max(min_speed, state.speed_mps)
+        expected = _math.degrees(
+            PointMass3DoFModel.compute_psi_dot_rad_s(
+                it._config.gravity_mps2, state.nz, state.phi_rad, speed, cos_theta
+            )
+        )
+        self.assertAlmostEqual(state.psi_dot_deg_s, expected, delta=1e-6)
+        # 旧硬编码 1.0 时结果为 expected/2，确保差异大到足以被检出。
+        self.assertGreater(abs(state.psi_dot_deg_s), 1.0)
+
+    def test_psi_dot_deg_s_uses_config_gravity(self):
+        """偏航角速率应使用配置重力而非硬编码值。"""
+        gravity = 4.0
+        it = ModelIterator()
+        it.init({"nodes": [{"node_id": "A", "speed_mps": 50.0}],
+                 "model": {"gravity_mps2": gravity}}, seed=0)
+        limit = ModelIterator.DEFAULT_ACCELERATION_COMMAND_LIMIT_MPS2
+        it.apply_controls({"A": AccelerationCommand(0.0, limit, 0.0)})
+        for _ in range(20):
+            it.step(0.005)
+        state = it.read_states()["A"]
+        import math as _math
+        cos_theta = PointMass3DoFModel._safe_cos_theta(_math.cos(state.theta_rad))
+        speed = max(it._config.min_speed_mps, state.speed_mps)
+        expected = _math.degrees(
+            PointMass3DoFModel.compute_psi_dot_rad_s(
+                gravity, state.nz, state.phi_rad, speed, cos_theta
+            )
+        )
+        self.assertAlmostEqual(state.psi_dot_deg_s, expected, delta=1e-6)
+
     def test_psi_stays_within_pi_after_full_circle(self):
         """After a sustained hard turn, psi_rad must remain in (-pi, pi]."""
         it = ModelIterator()

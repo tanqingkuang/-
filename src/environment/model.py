@@ -59,7 +59,7 @@ class PointMassModelConfig:
 class AircraftState:
     """单架飞行器完整状态：ENU 位置/高度、速度、航迹角(弧度)及三轴滤波加速度与变化率。
 
-    nx/nz/phi 为由滤波加速度反算出的载荷与滚转输入，仅作展示，不参与积分。
+    nx/nz/phi_rad/psi_dot_deg_s 为由滤波加速度反算出的展示派生量，不进入 12 维积分状态向量。
     """
 
     node_id: str
@@ -78,6 +78,7 @@ class AircraftState:
     nx: float  # 反算展示量：切向过载
     nz: float  # 反算展示量：法向过载
     phi_rad: float  # 反算展示量：滚转角
+    psi_dot_deg_s: float  # 反算展示量：航迹偏航角速率（度/秒），左转为正
 
     @property
     def theta_deg(self) -> float:
@@ -131,7 +132,7 @@ class AircraftState:
 
     def update_from_vector(self, vector: Sequence[float]) -> None:
         """用数值向量更新状态对象。注意：调用前应保证向量长度和单位正确。"""
-        # 解包顺序须与 as_vector 完全镜像；nx/nz/phi 不在向量中，由后续单独刷新。
+        # 解包顺序须与 as_vector 完全镜像；nx/nz/phi_rad/psi_dot_deg_s 不在向量中，由后续单独刷新。
         (
             self.x_m,
             self.y_m,
@@ -269,11 +270,8 @@ class PointMass3DoFModel:
             * (inputs.nz * math.cos(inputs.phi_rad) - cos_theta)
         )
         # 航向率：法向力水平分量 nz·sin(phi) 转弯，除以水平速度 (speed·cos_theta)。
-        psi_dot = (
-            gravity
-            * inputs.nz
-            * math.sin(inputs.phi_rad)
-            / (speed_for_denom * cos_theta_for_denom)
+        psi_dot = self.compute_psi_dot_rad_s(
+            gravity, inputs.nz, inputs.phi_rad, speed_for_denom, cos_theta_for_denom
         )
 
         # 加速度滤波建模为二阶环节(omega 自然频率, zeta 阻尼)，把阶跃指令平滑成可飞过载。
@@ -357,6 +355,17 @@ class PointMass3DoFModel:
         if abs(cos_theta) >= _COS_THETA_EPS:
             return cos_theta
         return _COS_THETA_EPS if cos_theta >= 0.0 else -_COS_THETA_EPS
+
+    @staticmethod
+    def compute_psi_dot_rad_s(
+        gravity: float,
+        nz: float,
+        phi_rad: float,
+        speed: float,
+        cos_theta: float,
+    ) -> float:
+        """计算航向角速率（弧度/秒）。注意：speed 和 cos_theta 须已完成奇异点保护。"""
+        return gravity * nz * math.sin(phi_rad) / (speed * cos_theta)
 
     def _clamp_theta_for_vertical_rate(self, speed_mps: float, theta_rad: float) -> float:
         """按最大爬升/下沉率限制航迹倾角。注意：保持速度标量不变，仅裁剪垂向分量。"""
@@ -469,7 +478,7 @@ class ModelIterator:
                 dt_s,
             )
             state.update_from_vector(vector)
-            # 积分后刷新展示用过载/滚转，保持与新加速度同步。
+            # 积分后刷新展示用过载/滚转/偏航角速率，保持与新加速度同步。
             self._update_inputs_from_filtered_acceleration(state)
         self._time_s += dt_s
 
@@ -586,6 +595,7 @@ class ModelIterator:
             nx=0.0,
             nz=0.0,
             phi_rad=0.0,
+            psi_dot_deg_s=0.0,
         )
         self._update_inputs_from_filtered_acceleration(state)
         return state
@@ -601,6 +611,14 @@ class ModelIterator:
         state.nx = inputs.nx
         state.nz = inputs.nz
         state.phi_rad = inputs.phi_rad
+        cos_theta_safe = PointMass3DoFModel._safe_cos_theta(math.cos(state.theta_rad))
+        speed_safe = max(self._config.min_speed_mps, state.speed_mps)
+        state.psi_dot_deg_s = math.degrees(
+            PointMass3DoFModel.compute_psi_dot_rad_s(
+                self._config.gravity_mps2, inputs.nz, inputs.phi_rad,
+                speed_safe, cos_theta_safe,
+            )
+        )
 
     def _inputs_to_enu_acceleration(
         self,
