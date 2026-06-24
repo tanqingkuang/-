@@ -2208,7 +2208,7 @@ class MainWindow(QMainWindow):
         self.top_view.set_theme(theme)
         self.side_view.set_theme(theme)
 
-    def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False) -> None:
+    def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False, fit_side_view: bool = False) -> None:
         """更新 snapshot 状态。注意：保持界面显示和内部数据一致。"""
         # 顶部状态文本与时间轴。
         self.run_state_label.setText(snapshot.run_state)
@@ -2228,9 +2228,11 @@ class MainWindow(QMainWindow):
             button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
         # 单个播放控制按钮始终显示“点下去会发生什么”。
         self.play_button.setText({"RUNNING": "暂停", "PAUSED": "继续"}.get(snapshot.run_state, "开始"))
-        # 把快照下发给两视图与状态表；仅在需要时让俯视图自适应铺满。
+        # 把快照下发给两视图与状态表；仅在需要时让视图自适应铺满。
         self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
+        if fit_side_view:
+            self.side_view.reset_view()
         self._sync_side_view_controls()
         self._update_tables(snapshot)
 
@@ -2308,8 +2310,8 @@ class MainWindow(QMainWindow):
         """响应重置按钮并恢复初始状态。注意：保留当前配置路径。"""
         self.timer.stop()
         snapshot = self.sim.reset()
-        # 重置后队形回到初值，请求俯视图重新自适应铺满。
-        self._update_snapshot(snapshot, fit_top_view=True)
+        # 重置后队形回到初值，请求俯视图与侧视图重新自适应铺满。
+        self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
@@ -2354,7 +2356,7 @@ class MainWindow(QMainWindow):
         snapshot = self.sim.load_config(path)
         if self.sim.last_result_code == "OK":
             self._sync_speed_controls(self.sim.speed)
-        self._update_snapshot(snapshot, fit_top_view=True)
+        self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
         if self.sim.last_result_code == "OK":
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。
             config_path = Path(path).resolve()

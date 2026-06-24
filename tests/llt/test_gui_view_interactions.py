@@ -521,6 +521,34 @@ class GuiViewInteractionTests(unittest.TestCase):
                 window.close()
                 self.app.processEvents()
 
+    def test_startup_load_refits_side_view_route_altitude(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            config_path = self._write_config_file(project_root / "configs" / "startup.json")
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["route"] = {
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                ],
+            }
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            state_path = project_root / "config.ini"
+            state_path.write_text("[config]\nlast_config = configs/startup.json\n", encoding="utf-8")
+
+            window = MainWindow(project_root=project_root, config_state_path=state_path)
+            window.show()
+            self.app.processEvents()
+            try:
+                self.assertLessEqual(window.side_view.altitude_min, 1000.0)
+                self.assertGreaterEqual(window.side_view.altitude_max, 1215.0)
+                self.assertGreaterEqual(window.side_view._map_y(1000.0), 5.0)
+                self.assertLessEqual(window.side_view._map_y(1000.0), window.side_view.height() - 5.0)
+            finally:
+                window.close()
+                self.app.processEvents()
+
     def test_packaged_startup_loads_config_ini_next_to_exe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app_dir = Path(tmp)
