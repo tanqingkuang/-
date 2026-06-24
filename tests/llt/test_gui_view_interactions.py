@@ -180,7 +180,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(thin, thick, delta=2)
 
-    def test_top_view_reset_restores_side_altitude_axis(self) -> None:
+    def test_top_view_reset_refits_side_altitude_axis(self) -> None:
         self._load_ui_config()
         self.window.side_view.altitude_min = 1180.0
         self.window.side_view.altitude_max = 1240.0
@@ -189,8 +189,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assert_route_and_aircraft_fit_viewport()
-        self.assertEqual(self.window.side_view.altitude_min, self.window.side_view.ALTITUDE_MIN_DEFAULT)
-        self.assertEqual(self.window.side_view.altitude_max, self.window.side_view.ALTITUDE_MAX_DEFAULT)
+        snapshot = self.window.side_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        altitudes = [node.altitude for node in snapshot.nodes]
+        for route in snapshot.route_segments:
+            altitudes.extend([route.start_altitude, route.end_altitude])
+        self.assertLessEqual(self.window.side_view.altitude_min, min(altitudes))
+        self.assertGreaterEqual(self.window.side_view.altitude_max, max(altitudes))
 
     def test_route_and_aircraft_fit_centered_viewport_after_load(self) -> None:
         self._load_ui_config(
@@ -255,6 +261,38 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assert_route_and_aircraft_fit_viewport()
+
+    def test_side_reset_view_refits_route_altitude_and_aircraft(self) -> None:
+        self._load_ui_config(
+            nodes=[
+                {"node_id": "A01", "role": "leader", "x_m": 900.0, "y_m": 300.0, "altitude_m": 1200.0},
+                {"node_id": "A02", "role": "wingman", "x_m": 880.0, "y_m": 340.0, "altitude_m": 1215.0},
+            ],
+            links=[{"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01}],
+            route={
+                "speed_mps": 12.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                ],
+            },
+        )
+        self.window.side_view.altitude_min = 1180.0
+        self.window.side_view.altitude_max = 1220.0
+
+        self.window.side_view.reset_view()
+        self.app.processEvents()
+
+        snapshot = self.window.side_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertLessEqual(self.window.side_view.altitude_min, 1000.0)
+        self.assertGreaterEqual(self.window.side_view.altitude_max, 1215.0)
+        for route in snapshot.route_segments:
+            for altitude in (route.start_altitude, route.end_altitude):
+                y = self.window.side_view._map_y(altitude)
+                self.assertGreaterEqual(y, 5.0)
+                self.assertLessEqual(y, self.window.side_view.height() - 5.0)
 
     def test_route_endpoints_are_visible_after_load(self) -> None:
         self._load_ui_config()

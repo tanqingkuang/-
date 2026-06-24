@@ -1341,11 +1341,10 @@ class SideView(QWidget):
             event.accept()
 
     def reset_view(self) -> None:
-        """重置侧视图显示范围。注意：同时恢复横轴自适应和默认高度轴。"""
-        self.altitude_min = self.ALTITUDE_MIN_DEFAULT
-        self.altitude_max = self.ALTITUDE_MAX_DEFAULT
+        """重置侧视图显示范围。注意：同时自适应横轴和高度轴。"""
         self._manual_horizontal_view = False
         self._fit_horizontal_view()
+        self._fit_altitude_view()
         self.update()
 
     def reset_altitude_view(self) -> None:
@@ -1573,6 +1572,21 @@ class SideView(QWidget):
             return None
         return min(values), max(values)
 
+    def _altitude_bounds(self) -> tuple[float, float] | None:
+        """计算侧视图高度包围盒。注意：同时纳入航段、节点与尾迹。"""
+        if self.snapshot is None:
+            return None
+        values: list[float] = []
+        for route in self._route_segments():
+            values.append(route.start_altitude)
+            values.append(route.end_altitude)
+        for node in self.snapshot.nodes:
+            values.append(node.altitude)
+            values.extend(point.altitude for point in node.trail)
+        if not values:
+            return None
+        return min(values), max(values)
+
     def _fit_horizontal_view(self) -> None:
         """自适应侧视图横轴范围。注意：不改变高度轴。"""
         bounds = self._horizontal_bounds()
@@ -1589,6 +1603,22 @@ class SideView(QWidget):
         self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, width / span * 0.86))
         center = (left + right) / 2.0
         self.horizontal_offset = width / 2.0 - center * self.horizontal_scale
+
+    def _fit_altitude_view(self) -> None:
+        """自适应侧视图高度范围。注意：不改变横轴缩放和平移。"""
+        bounds = self._altitude_bounds()
+        if bounds is None:
+            self.altitude_min = self.ALTITUDE_MIN_DEFAULT
+            self.altitude_max = self.ALTITUDE_MAX_DEFAULT
+            return
+        bottom, top = bounds
+        if math.isclose(bottom, top, abs_tol=1e-6):
+            bottom -= 50.0
+            top += 50.0
+        span = max(80.0, (top - bottom) / 0.86)
+        center = (bottom + top) / 2.0
+        self.altitude_min = center - span / 2.0
+        self.altitude_max = center + span / 2.0
 
 
 class LogDialog(QDialog):
