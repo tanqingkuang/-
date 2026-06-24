@@ -218,8 +218,8 @@ def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
             vTheta=state.theta_rad,
             vPsi=state.psi_rad,
             vd=ground_speed,
-            # TODO: 航迹偏航角速率应由模型(psi_dot)提供，当前模型尚未输出，暂置 0。
-            dVPsi=0.0,
+            # 航迹偏航角速率：模型以 deg/s 输出(俯视图左偏为正)，与算法 vPsi(自东向逆时针)同向，转 rad/s。
+            dVPsi=math.radians(state.psi_dot_deg_s),
         ),
     )
 
