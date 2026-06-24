@@ -23,6 +23,7 @@ from src.runner.sim_control import (
     _DataLogger,
     _build_formation_comm_init,
     _build_leader_route,
+    _route_state_from_wayline,
 )
 
 
@@ -257,6 +258,36 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(leg_out.radius, 0.0)
         self.assertAlmostEqual(leg_out.start.pos.north, 400.0)
         self.assertAlmostEqual(leg_out.end.pos.north, 2000.0)
+
+    def test_arc_route_cross_track_error_uses_radial_distance_not_chord(self) -> None:
+        """圆弧当前航段的侧偏应按到圆弧的径向偏差计算，而不是到弦线的距离。"""
+
+        route = _build_leader_route(
+            {
+                "route": {
+                    "speed_mps": 20.0,
+                    "waypoints": [
+                        {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 0.0},
+                        {"x_m": 2000.0, "y_m": 0.0, "altitude_m": 1000.0, "R": 400.0},
+                        {"x_m": 2000.0, "y_m": 2000.0, "altitude_m": 1000.0, "R": 0.0},
+                    ],
+                }
+            }
+        )
+        arc = route.lines[1]
+        current_route = _route_state_from_wayline(arc)
+        on_arc_midpoint = _aircraft_state(
+            "A01",
+            arc.center.east + arc.radius / math.sqrt(2.0),
+            arc.center.north - arc.radius / math.sqrt(2.0),
+            1000.0,
+        )
+
+        self.assertAlmostEqual(
+            SimulationController._cross_track_error(on_arc_midpoint, current_route) or 0.0,
+            0.0,
+            delta=1e-9,
+        )
 
     def test_display_route_keeps_original_segments_without_arc(self) -> None:
         """显示用航线(insert_arcs=False)应保留 base 原始航点折线、不插圆弧(界面只画原始航段)。"""

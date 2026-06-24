@@ -142,6 +142,10 @@ class RouteState:
     end_x_m: float
     end_y_m: float
     end_altitude_m: float
+    radius_m: float = 0.0
+    center_x_m: float = 0.0
+    center_y_m: float = 0.0
+    turn_sign: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -603,6 +607,10 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
         end_x_m=route.end.pos.east,
         end_y_m=route.end.pos.north,
         end_altitude_m=route.end.pos.h,
+        radius_m=route.radius,
+        center_x_m=route.center.east,
+        center_y_m=route.center.north,
+        turn_sign=route.turnSign,
     )
 
 
@@ -1841,6 +1849,11 @@ class SimulationController:
         """计算节点相对当前航段的侧偏。注意：退化航段返回零偏差。"""
         if route is None:
             return None
+        if route.radius_m > 0.0:
+            # 圆弧段侧偏应取径向误差；按转向符号定号，保持左右偏差语义稳定。
+            radial_distance = math.hypot(state.x_m - route.center_x_m, state.y_m - route.center_y_m)
+            turn_sign = 1.0 if route.turn_sign >= 0.0 else -1.0
+            return (radial_distance - route.radius_m) * turn_sign
         # 航段方向向量（ENU 平面，x 东 y 北）。
         dx = route.end_x_m - route.start_x_m
         dy = route.end_y_m - route.start_y_m
