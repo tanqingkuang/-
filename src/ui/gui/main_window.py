@@ -2406,6 +2406,8 @@ class MainWindow(QMainWindow):
         snapshot = self.sim.single_step()
         self._update_snapshot(snapshot)
         self._log("UI", f"step -> {self.sim.last_result_code}, state={snapshot.run_state}")
+        if self.sim.last_result_code == "OK" and self._live_monitor is not None:
+            self._live_monitor.follow(self.sim.controller)
 
     def _reset(self) -> None:
         """响应重置按钮并恢复初始状态。注意：保留当前配置路径。"""
@@ -2794,7 +2796,7 @@ class MainWindow(QMainWindow):
         from src.ui.gui.live_monitor import LiveMonitorWindow
         if self._live_monitor is None:
             self._live_monitor = LiveMonitorWindow(self)
-        if self.sim.snapshot().run_state not in ("UNLOADED", "READY"):
+        if self.sim.snapshot().run_state != "UNLOADED":
             self._live_monitor.follow(self.sim.controller)
         self._live_monitor.show()
         self._live_monitor.raise_()
