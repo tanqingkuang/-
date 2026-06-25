@@ -15,10 +15,6 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.units.algo.formation_math import horizontal_track_basis, horizontal_track_vector_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
 
-_ALONG_SLOT_SPEED_GAIN = 0.08
-_MAX_ALONG_SLOT_SPEED_CORRECTION = 2.0
-
-
 @dataclass
 class SlotGeometryInitS(PosCalcInitS):
     """槽位几何初始化参数。注意：formPat 和 formPos 需要按队形行一一对应。"""
@@ -37,7 +33,7 @@ class SlotGeometryInputS(PosCalcInputS):
 
 
 class SlotGeometry(PosCalcBase):
-    """僚机槽位目标计算器。注意：槽位按长机水平航迹旋转，前向误差只转为速度修正。"""
+    """僚机槽位目标计算器。注意：只产出随长机水平航迹旋转的槽位目标位与速度前馈，前向待飞距闭环交给 PidCompose。"""
 
     def __init__(self) -> None:
         """初始化 SlotGeometry 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -79,7 +75,7 @@ class SlotGeometry(PosCalcBase):
         copy_velocity(u.leaderState.v, y.selfCmd.v)
         # 槽位随长机刚性旋转，僚机航迹偏航角速率即长机的(刚体绕同一瞬心，各点航向角速率相同)。
         y.selfCmd.v.dVPsi = u.leaderState.v.dVPsi
-        if u.selfState is None or track is None:
+        if track is None:
             return None
         track_x, track_y = track
         # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V + b·ω)·t̂ + (a·ω)·n̂，
@@ -92,16 +88,7 @@ class SlotGeometry(PosCalcBase):
         left_x, left_y = -track_y, track_x
         y.selfCmd.v.vEast = v_along * track_x + v_swing * left_x
         y.selfCmd.v.vNorth = v_along * track_y + v_swing * left_y
-        err_x = y.selfCmd.pos.east - u.selfState.pos.east
-        err_y = y.selfCmd.pos.north - u.selfState.pos.north
-        # 前向位置不由 PidCompose 控制，剩余待飞距误差只做小幅沿航迹 trim(前馈担主项，不触限)。
-        along_error = err_x * track_x + err_y * track_y
-        speed_correction = max(
-            -_MAX_ALONG_SLOT_SPEED_CORRECTION,
-            min(_MAX_ALONG_SLOT_SPEED_CORRECTION, _ALONG_SLOT_SPEED_GAIN * along_error),
-        )
-        y.selfCmd.v.vEast += speed_correction * track_x
-        y.selfCmd.v.vNorth += speed_correction * track_y
+        # 前向待飞距闭环已下沉到 PidCompose 的前向位置环，这里只产出纯几何目标与速度前馈，不再读本机状态。
         y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
         y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
         return None

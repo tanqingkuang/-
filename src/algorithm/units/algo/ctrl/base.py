@@ -7,13 +7,15 @@ from dataclasses import dataclass
 
 @dataclass
 class CtrlInitS:
-    """单轴控制律初始化参数。注意：dt、限幅和增益需由上层按控制周期配置。"""
+    """单轴控制律初始化参数。注意：位置通道(kp/ki)与速度通道(kd/kiv)各自独立，dt、限幅和增益需由上层按控制周期配置。"""
 
-    kp: float = 0.0
-    ki: float = 0.0
-    kd: float = 0.0
+    kp: float = 0.0  # 位置误差比例
+    ki: float = 0.0  # 位置误差积分
+    kd: float = 0.0  # 速度误差比例(阻尼)
+    kiv: float = 0.0  # 速度误差积分；与 ki 互斥，二者不可同时非零
     dt: float = 0.0
-    iMax: float = 0.0
+    iMax: float = 0.0  # 位置积分限幅(<=0 表示不限)
+    iMaxVel: float = 0.0  # 速度积分限幅(<=0 表示不限)
     outMax: float = 0.0
 
 

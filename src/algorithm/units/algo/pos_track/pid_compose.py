@@ -1,4 +1,4 @@
-"""PID 组合式位置跟踪。注意：前向速度和苏联式法向/侧向位置环分开处理。"""
+"""PID 组合式位置跟踪。注意：三轴共用双通道 PID，前向速度/位置环由增益切换，苏联式法向/侧向恒为位置环。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class PidComposeInitS(PosTrackInitS):
 
 
 class PidCompose(PosTrackBase):
-    """组合式 PID 位置跟踪器。注意：前向只控速度，法向和侧向右按位置误差闭环。"""
+    """组合式 PID 位置跟踪器。注意：三轴统一用双通道 PID，前向走速度环(长机)或位置环(僚机)由增益决定，法向/侧向恒按位置误差闭环。"""
 
     def __init__(self) -> None:
         """初始化 PidCompose 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -87,8 +87,10 @@ class PidCompose(PosTrackBase):
         # 本机航迹系第三轴(lateral_right)以右为正，而 dVPsi>0 为左转，故取负号；
         # 配合本机自身 vd，外/内侧僚机的半径与速度差异被自动吸收(v_S/R_S = dVPsi)。
         lateral_ff = -u.selfCmd.v.dVPsi * u.selfState.v.vd
+        # 三轴统一调用 step(位置误差, 速度误差)：前向由增益决定是速度环(长机)还是位置环(僚机)，
+        # 法向/侧向恒为位置环。长机 gainForward 置 kp=ki=0 时前向退化为 kd/kiv 的速度 PI，前向位置误差被忽略。
         acc_track = (
-            self._forward.step(vel_err[0], 0.0),
+            self._forward.step(pos_err[0], vel_err[0]),
             self._vertical.step(pos_err[1], vel_err[1]),
             self._lateral.step(pos_err[2], vel_err[2]) + lateral_ff,
         )
