@@ -10,7 +10,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -1786,16 +1786,13 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         """构建主窗口全部 UI 区域。注意：控件引用需保存供后续事件更新使用。"""
-        monitor_menu = self.menuBar().addMenu("控制监控(&V)")
-        monitor_menu.addAction("数据监控(&M)").triggered.connect(self._open_live_monitor)
-        monitor_menu.addAction("离线分析(&A)").triggered.connect(self._open_offline_plot)
+        self._build_menus()
         root = QWidget()
         self.setCentralWidget(root)
-        # 整体竖向：顶部 header + 下方主区。
+        # 整体竖向：中央区域只保留主区，顶部入口交给菜单栏。
         outer = QVBoxLayout(root)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
-        outer.addWidget(self._build_header())
 
         # 主区横向三栏：左面板(固定) + 中央画布(可伸展，stretch=1) + 右面板(固定)。
         main = QHBoxLayout()
@@ -1809,37 +1806,46 @@ class MainWindow(QMainWindow):
         main.addWidget(self.stage, 1)
         main.addWidget(self._build_right_panel(), 0)
 
-    def _build_header(self) -> QWidget:
-        """构建顶部工具栏。注意：按钮和状态标签需要绑定到窗口槽函数。"""
-        header = QFrame()
-        header.setFixedHeight(42)
-        layout = QHBoxLayout(header)
-        layout.setContentsMargins(14, 6, 14, 6)
-        layout.setSpacing(10)
-        title = QLabel("编队仿真")
-        title.setObjectName("title")
-        title.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        layout.addWidget(title)
-        # 弹性占位把标题推到最左、其余信息推到最右。
-        layout.addStretch(1)
-        # 状态标签：场景/步长/运行态/控制回报，后续由 _update_snapshot 刷新文本。
-        self.scenario_label = QLabel("场景：三机楔形队形")
-        self.step_label = QLabel("步长：0.1s")
+    def _build_menus(self) -> None:
+        """构建菜单栏入口。注意：常驻控制集中到菜单，避免占用主界面高度。"""
+        # 菜单对象保存为成员，避免 PySide 包装对象被回收后测试或后续逻辑取回失效。
+        self.monitor_menu = self.menuBar().addMenu("控制监控(&V)")
+        self.monitor_menu.addAction("数据监控(&M)").triggered.connect(self._open_live_monitor)
+        self.monitor_menu.addAction("离线分析(&A)").triggered.connect(self._open_offline_plot)
+
+        self.help_menu = self.menuBar().addMenu("帮助(&H)")
+        # QActionGroup 同样由窗口持有，保证浅色/深色两个动作始终互斥。
+        self.theme_action_group = QActionGroup(self)
+        self.theme_action_group.setExclusive(True)
+        self.light_theme_action = QAction("浅色模式", self)
+        self.light_theme_action.setCheckable(True)
+        self.light_theme_action.setChecked(True)
+        self.light_theme_action.triggered.connect(lambda checked=False: self._set_theme("light"))
+        self.dark_theme_action = QAction("深色模式", self)
+        self.dark_theme_action.setCheckable(True)
+        self.dark_theme_action.triggered.connect(lambda checked=False: self._set_theme("dark"))
+        self.theme_action_group.addAction(self.light_theme_action)
+        self.theme_action_group.addAction(self.dark_theme_action)
+        # 帮助菜单承载低频入口，让主画布上方不再保留自定义 header。
+        self.help_menu.addAction(self.light_theme_action)
+        self.help_menu.addAction(self.dark_theme_action)
+        self.help_menu.addSeparator()
+        self.log_action = self.help_menu.addAction("日志")
+        self.log_action.triggered.connect(self.log_dialog.show)
+
+    def _build_status_group(self) -> QWidget:
+        """构建左侧运行状态分组。注意：只放高频状态，不挤占主画布顶部。"""
+        self.status_group = QGroupBox("状态")
+        layout = QVBoxLayout(self.status_group)
+        layout.setContentsMargins(10, 18, 10, 10)
+        layout.setSpacing(8)
         self.run_state_label = QLabel("READY")
         self.run_state_label.setObjectName("statusPill")
         self.report_label = QLabel("回报：待命")
         self.report_label.setObjectName("reportPill")
-        # 主题下拉：currentData 存的是 THEMES 的键，切换触发 _on_theme_changed。
-        self.theme_select = SelectButton(126)
-        self.theme_select.addItem("浅色模式", "light")
-        self.theme_select.addItem("深色模式", "dark")
-        self.theme_select.currentIndexChanged.connect(self._on_theme_changed)
-        log_button = QPushButton("日志")
-        log_button.clicked.connect(self.log_dialog.show)
-        # 按从左到右顺序把这些控件加入顶栏右侧。
-        for widget in [self.scenario_label, self.step_label, self.run_state_label, self.report_label, self.theme_select, log_button]:
-            layout.addWidget(widget)
-        return header
+        layout.addWidget(self.run_state_label)
+        layout.addWidget(self.report_label)
+        return self.status_group
 
     def _build_left_panel(self) -> QWidget:
         """构建左侧日志和配置面板。注意：面板宽度不能挤压主画布。"""
@@ -1849,6 +1855,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 12, 10, 10)
         layout.setSpacing(10)
+        layout.addWidget(self._build_status_group())
         # “配置”分组：用表单布局把标签与控件按行对齐。
         config_group = QGroupBox("配置")
         form = QFormLayout(config_group)
@@ -2299,10 +2306,9 @@ class MainWindow(QMainWindow):
 
     def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False, fit_side_view: bool = False) -> None:
         """更新 snapshot 状态。注意：保持界面显示和内部数据一致。"""
-        # 顶部状态文本与时间轴。
+        # 左侧状态文本与时间轴。
         self.run_state_label.setText(snapshot.run_state)
         self.report_label.setText(f"回报：{snapshot.control_report}")
-        self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
         self.cpu_label.setText(f"CPU {snapshot.cpu_utilization * 100:.0f}%")
         self._sync_duration_input(snapshot)
@@ -2677,13 +2683,15 @@ class MainWindow(QMainWindow):
             return str(int(duration_s))
         return f"{duration_s:.3f}".rstrip("0").rstrip(".")
 
-    def _on_theme_changed(self) -> None:
-        """处理 theme changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
-        # 下拉项 currentData 即主题键，据此切换主题并重绘整窗。
-        self.theme_key = self.theme_select.currentData()
+    def _set_theme(self, theme_key: str) -> None:
+        """切换界面主题。注意：只改变显示，不改变仿真状态。"""
+        self.theme_key = theme_key
         self.theme = THEMES[self.theme_key]
+        self.light_theme_action.setChecked(theme_key == "light")
+        self.dark_theme_action.setChecked(theme_key == "dark")
         self._apply_theme()
-        self._log("UI", f"切换主题：{self.theme_select.currentText()}")
+        theme_text = "浅色模式" if theme_key == "light" else "深色模式"
+        self._log("UI", f"切换主题：{theme_text}")
 
     def _on_auto_center_changed(self) -> None:
         """处理 auto center changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""

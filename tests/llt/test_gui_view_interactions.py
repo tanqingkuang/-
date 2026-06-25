@@ -16,7 +16,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF, QRect, Qt
-from PySide6.QtWidgets import QApplication, QSplitter
+from PySide6.QtWidgets import QApplication, QFrame, QSplitter
 
 from src.runner.sim_control import (
     NodeState as ControllerNodeState,
@@ -68,6 +68,32 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsNone(self.window._stage_fullscreen_dialog)
         self.assertEqual(self.window.main_layout.indexOf(self.window.stage), 1)
         self.assertEqual(self.window.fullscreen_button.text(), "⛶")
+
+    def test_top_status_bar_moves_to_sidebar_and_help_menu(self) -> None:
+        root_layout = self.window.centralWidget().layout()
+        self.assertEqual(root_layout.count(), 1)
+        self.assertFalse(self.window.findChildren(QFrame, "header"))
+
+        self.assertIs(self.window.run_state_label.parentWidget(), self.window.status_group)
+        self.assertIs(self.window.report_label.parentWidget(), self.window.status_group)
+        snapshot = self.window.sim.snapshot()
+        self.assertEqual(self.window.run_state_label.text(), snapshot.run_state)
+        self.assertEqual(self.window.report_label.text(), f"回报：{snapshot.control_report}")
+
+        menu_titles = [action.text() for action in self.window.menuBar().actions()]
+        self.assertIn("控制监控(&V)", menu_titles)
+        self.assertIn("帮助(&H)", menu_titles)
+        monitor_menu = self.window.monitor_menu
+        self.assertEqual([action.text() for action in monitor_menu.actions()], ["数据监控(&M)", "离线分析(&A)"])
+        help_menu = self.window.help_menu
+        self.assertEqual([action.text() for action in help_menu.actions()], ["浅色模式", "深色模式", "", "日志"])
+
+        self.window.dark_theme_action.trigger()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.theme_key, "dark")
+        self.assertTrue(self.window.dark_theme_action.isChecked())
+        self.assertFalse(self.window.light_theme_action.isChecked())
 
     def test_grid_toggle_controls_top_and_side_views(self) -> None:
         self.assertTrue(self.window.grid_toggle.isChecked())
