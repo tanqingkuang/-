@@ -732,12 +732,12 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(follower._pos_track._lateral._cfg.outMax, 4.0)
             controller.close()
 
-    def test_realtime_logging_uses_20_hz_with_odd_algorithm_decimation(self) -> None:
-        """实时 tick 路径下算法分频为奇数时，日志仍应固定按 20Hz 记录。"""
+    def test_realtime_logging_uses_sim_time_10_hz(self) -> None:
+        """实时 tick 路径下日志应按仿真时间 10Hz 记录，避免不同倍频采样点不一致。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             config = {
-                "duration_s": 0.05,
+                "duration_s": 1.0,
                 "step_s": 0.005,
                 "playback_rate": 10.0,
                 "algorithm_decimation": 3,
@@ -751,15 +751,55 @@ class SimulationControllerTests(unittest.TestCase):
             config_path.write_text(json.dumps(config), encoding="utf-8")
             controller = SimulationController()
             controller.load_config(str(config_path))
+            fake_wall_s = 1.0
 
-            with controller._lock:
-                controller._run_state = "RUNNING"
-                while controller._run_state == "RUNNING":
-                    controller._tick_unlocked()
+            def fake_clock() -> float:
+                return fake_wall_s
+
+            with patch("src.runner.sim_control.time.monotonic", fake_clock):
+                with controller._lock:
+                    controller._run_state = "RUNNING"
+                    controller._control_report = controller._derive_control_report_unlocked()
+                    for index in range(100):
+                        # 模拟 9x 左右播放：100 个 5ms 仿真步只消耗约 55ms 墙钟。
+                        fake_wall_s = 1.0 + index * (0.005 / 9.0)
+                        controller._tick_unlocked()
 
             logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
 
-            self.assertEqual(logged_times, [0.05])
+            self.assertEqual(logged_times, [0.1, 0.2, 0.3, 0.4, 0.5])
+            controller.close()
+
+    def test_realtime_snapshot_generation_is_limited_to_display_rate(self) -> None:
+        """非日志快照应按墙钟显示频率限流，避免高倍频时随 tick 高频构造。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=1.0, step_s=0.005)))
+            controller._logger._file_logging_disabled = True
+            fake_wall_s = 1.0
+            snapshot_count = 0
+            original_make_snapshot = controller._make_snapshot_unlocked
+
+            def fake_clock() -> float:
+                return fake_wall_s
+
+            def counted_make_snapshot() -> SimulationSnapshot:
+                nonlocal snapshot_count
+                snapshot_count += 1
+                return original_make_snapshot()
+
+            controller._make_snapshot_unlocked = counted_make_snapshot  # type: ignore[method-assign]
+            with patch("src.runner.sim_control.time.monotonic", fake_clock):
+                with controller._lock:
+                    controller._run_state = "RUNNING"
+                    controller._control_report = controller._derive_control_report_unlocked()
+                    controller._next_log_sample_time_s = 999.0
+                    for index in range(50):
+                        fake_wall_s = 1.0 + index * 0.01
+                        controller._tick_unlocked()
+
+            self.assertGreaterEqual(snapshot_count, 4)
+            self.assertLessEqual(snapshot_count, 6)
             controller.close()
 
     def test_run_until_complete_finishes_synchronously(self) -> None:
@@ -815,8 +855,8 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(after.nodes[0].x_m, before.nodes[0].x_m)
             controller.close()
 
-    def test_timed_data_logger_records_snapshots_at_20_hz(self) -> None:
-        """关键数据记录应固定为 20Hz，而不是固定每 10 个 tick。"""
+    def test_timed_data_logger_records_snapshots_at_10_hz(self) -> None:
+        """关键数据记录应固定为仿真时间 10Hz，而不是随播放倍率改变。"""
         controller = SimulationController()
 
         result = controller.run_until_complete(
@@ -830,7 +870,7 @@ class SimulationControllerTests(unittest.TestCase):
         logged_times = [round(snapshot.time_s, 6) for snapshot in controller._logger.snapshots]
 
         self.assertEqual(result.code, "OK")
-        self.assertEqual(logged_times, [0.05, 0.1])
+        self.assertEqual(logged_times, [0.1])
         controller.close()
 
     def test_timed_data_logger_persists_snapshot_files(self) -> None:
@@ -858,7 +898,7 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertTrue((run_dirs[0] / "config.json").is_file())
             self.assertTrue((run_dirs[0] / "events.jsonl").is_file())
             snapshot_lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
-            self.assertEqual([round(json.loads(line)["time_s"], 6) for line in snapshot_lines], [0.05, 0.1])
+            self.assertEqual([round(json.loads(line)["time_s"], 6) for line in snapshot_lines], [0.1])
 
     def test_snapshot_log_contains_control_command_and_errors(self) -> None:
         """关键数据日志应包含控制目标指令和位置/速度误差，供后处理与 UI 复用。"""
@@ -869,7 +909,7 @@ class SimulationControllerTests(unittest.TestCase):
                 controller = SimulationController()
                 result = controller.run_until_complete(
                     {
-                        "duration_s": 0.06,
+                        "duration_s": 0.1,
                         "step_s": 0.01,
                         "nodes": [{"node_id": "A01"}],
                         "links": [],
@@ -947,7 +987,7 @@ class SimulationControllerTests(unittest.TestCase):
                 controller = SimulationController()
                 config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
                 self.assertEqual(controller.load_config(str(config_path)).code, "OK")
-                self.assertEqual(controller.step(4).code, "OK")
+                self.assertEqual(controller.step(9).code, "OK")
                 assert controller._logger._snapshot_file is not None
                 controller._logger._snapshot_file.close()
                 controller._logger._snapshot_file = BrokenSnapshotFile()
@@ -957,7 +997,7 @@ class SimulationControllerTests(unittest.TestCase):
                 warn_events = controller.get_recent_events(min_level="WARN")
 
                 self.assertEqual(result.code, "OK")
-                self.assertAlmostEqual(snapshot.time_s, 0.05)
+                self.assertAlmostEqual(snapshot.time_s, 0.1)
                 self.assertTrue(any("snapshot log failed: disk unavailable" in event.message for event in warn_events))
                 self.assertFalse(controller._logger.opened)
                 self.assertTrue(controller._logger._file_logging_disabled)
@@ -1333,6 +1373,50 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(snapshot.time_s, 0.1)
             self.assertLess(len(sleeps), 10)
             self.assertGreater(max(sleeps), 0.001)
+            controller.close()
+
+    def test_run_loop_reports_busy_ratio_as_cpu_utilization(self) -> None:
+        """CPU 利用率应按统计周期内非 sleep 时间 / 墙钟时间计算。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=0.05, step_s=0.005)))
+            controller.set_playback_rate(1.0)
+            controller._logger._file_logging_disabled = True
+            fake_now_s = 0.0
+
+            def fake_clock() -> float:
+                return fake_now_s
+
+            def fake_sleep(_seconds: float) -> None:
+                nonlocal fake_now_s
+                fake_now_s += 0.001
+
+            def fake_tick(*, force_snapshot: bool = False) -> SimulationSnapshot:  # noqa: ARG001
+                nonlocal fake_now_s
+                fake_now_s += 0.004
+                controller._time_s = min(controller._duration_s, controller._time_s + controller._step_s)
+                if controller._time_s >= controller._duration_s:
+                    controller._run_state = "FINISHED"
+                controller._latest_snapshot = controller._make_snapshot_unlocked()
+                return controller._latest_snapshot
+
+            controller._tick_unlocked = fake_tick  # type: ignore[method-assign]
+            with patch("src.runner.sim_control._CPU_UTILIZATION_SAMPLE_PERIOD_S", 0.01), patch(
+                "src.runner.sim_control.time.perf_counter",
+                fake_clock,
+            ), patch("src.runner.sim_control.time.monotonic", fake_clock), patch(
+                "src.runner.sim_control.time.sleep",
+                fake_sleep,
+            ):
+                with controller._lock:
+                    controller._run_state = "RUNNING"
+                    controller._control_report = controller._derive_control_report_unlocked()
+                controller._run_loop()
+
+            snapshot = controller.get_snapshot()
+            self.assertEqual(snapshot.run_state, "FINISHED")
+            self.assertGreaterEqual(snapshot.cpu_utilization, 0.75)
+            self.assertLessEqual(snapshot.cpu_utilization, 0.9)
             controller.close()
 
     def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:

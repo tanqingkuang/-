@@ -66,11 +66,11 @@ ResultCode = Literal[
 
 _DEFAULT_ALGORITHM_DECIMATION = 10
 _COMM_DECIMATION = 2
-_SNAPSHOT_DECIMATION = 2
 _MIN_PLAYBACK_RATE = 0.1
 _MAX_PLAYBACK_RATE = 20.0
 _RUN_LOOP_SLEEP_SLICE_S = 0.005
 _MAX_RUN_LOOP_BATCH_TICKS = 100
+_CPU_UTILIZATION_SAMPLE_PERIOD_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -161,6 +161,7 @@ class SimulationSnapshot:
     links: list[LinkState]
     route: RouteState | None = None  # 当前航段。
     route_segments: list[RouteState] = field(default_factory=list)  # 全部航段。
+    cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。
 
 
 @dataclass(frozen=True)
@@ -230,7 +231,7 @@ _DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
     (-54.0, 0.0, 58.0),
 )
 _FORMATION_COORDINATE_SYSTEM = "x_forward_y_up_z_right"
-_LOG_SAMPLE_PERIOD_S = 0.05
+_LOG_SAMPLE_PERIOD_S = 0.1
 _TIME_EPSILON_S = 1e-9
 
 
@@ -1140,6 +1141,7 @@ class SimulationController:
         self._tick_index = 0
         self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._playback_rate = 1.0
+        self._cpu_utilization = 0.0
         self._algorithm_decimation = _DEFAULT_ALGORITHM_DECIMATION
         self._algorithm_period_s = self._step_s * self._algorithm_decimation
         self._run_state: RunState = "UNLOADED"
@@ -1201,6 +1203,9 @@ class SimulationController:
         """获取当前仿真快照。注意：该操作不推进仿真时间。"""
 
         with self._lock:
+            if self._config is not None and self._run_state == "RUNNING":
+                # 显式查询应返回当前状态；调用频率由 UI 计时器或外部调用方控制。
+                self._latest_snapshot = self._make_snapshot_unlocked()
             return self._latest_snapshot
 
     def start(self) -> CommandResult:
@@ -1237,6 +1242,7 @@ class SimulationController:
             # 切到运行态，清停止标志并拉起后台线程开始自动推进。
             self._run_state = "RUNNING"
             self._control_report = self._derive_control_report_unlocked()
+            self._cpu_utilization = 0.0
             self._stop_requested.clear()
             self._start_worker_unlocked()
             self._latest_snapshot = self._make_snapshot_unlocked()
@@ -1252,6 +1258,7 @@ class SimulationController:
             if self._run_state == "RUNNING":
                 self._run_state = "PAUSED"
                 self._control_report = "保持"
+                self._cpu_utilization = 0.0
                 self._latest_snapshot = self._make_snapshot_unlocked()
                 snapshot = self._latest_snapshot
             elif self._run_state == "PAUSED":
@@ -1494,6 +1501,8 @@ class SimulationController:
         """后台线程主循环。注意：所有共享状态访问必须受锁保护。"""
         current = threading.current_thread()
         last_wall_s = time.perf_counter()
+        stats_start_wall_s = last_wall_s
+        stats_busy_s = 0.0
         sim_budget_s = 0.0
         force_first_tick = True
         try:
@@ -1503,6 +1512,7 @@ class SimulationController:
                 wall_delta_s = max(0.0, now_wall_s - last_wall_s)
                 last_wall_s = now_wall_s
                 snapshots_to_notify: list[SimulationSnapshot] = []
+                cpu_snapshot: SimulationSnapshot | None = None
                 should_sleep = False
                 with self._lock:
                     # 运行态被外部改为非 RUNNING（暂停/结束）时退出循环。
@@ -1536,6 +1546,18 @@ class SimulationController:
                 # 在锁外通知订阅者，避免回调阻塞持锁路径。
                 for snapshot in snapshots_to_notify:
                     self._notify_subscribers(snapshot)
+                busy_end_s = time.perf_counter()
+                stats_busy_s += max(0.0, busy_end_s - now_wall_s)
+                stats_wall_s = max(0.0, busy_end_s - stats_start_wall_s)
+                if stats_wall_s >= _CPU_UTILIZATION_SAMPLE_PERIOD_S:
+                    with self._lock:
+                        self._cpu_utilization = min(1.0, max(0.0, stats_busy_s / stats_wall_s))
+                        self._latest_snapshot = self._make_snapshot_unlocked()
+                        cpu_snapshot = self._latest_snapshot
+                    stats_start_wall_s = busy_end_s
+                    stats_busy_s = 0.0
+                if cpu_snapshot is not None:
+                    self._notify_subscribers(cpu_snapshot)
                 if should_sleep:
                     time.sleep(_RUN_LOOP_SLEEP_SLICE_S)
         finally:
@@ -1580,6 +1602,7 @@ class SimulationController:
         self._tick_index = 0
         self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._last_display_wall_s = 0.0
+        self._cpu_utilization = 0.0
         # 按依赖顺序初始化各子系统：先模型（提供初始状态），再通信，再扰动（依赖前两者）。
         self._model.init(config, self._seed)
         raw_links = list(config.get("links") or [])
@@ -1676,27 +1699,22 @@ class SimulationController:
         elif self._run_state == "RUNNING":
             self._control_report = self._derive_control_report_unlocked()
 
-        # 关键数据记录按 sim-time 20Hz 采样点触发，不依赖算法周期或显示刷新频率。
+        should_refresh_display = self._should_refresh_display_unlocked() or self._run_state == "FINISHED"
+        # 日志按仿真时间固定 10Hz 采样，保证不同播放倍率得到一致的离线数据点。
         should_log_snapshot = self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s
-        # 快照生成按显示分频；算法帧和日志采样点额外生成，避免漏记关键状态。
+        # 快照生成按墙钟显示频率限流；日志采样点额外生成，避免漏记关键状态。
         snapshot: SimulationSnapshot | None = None
-        if (
-            force_snapshot
-            or algorithm_tick
-            or tick_index % _SNAPSHOT_DECIMATION == 0
-            or should_log_snapshot
-            or self._run_state == "FINISHED"
-        ):
+        if force_snapshot or should_refresh_display or should_log_snapshot:
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
-        # 关键数据定时记录固定 20Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
+        # 关键数据定时记录固定 10Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
         if should_log_snapshot and snapshot is not None:
             if not self._logger.write_snapshot(snapshot):
                 self._append_event_unlocked("WARN", "DataLogger", f"snapshot log failed: {self._logger.last_error_message}")
             while self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s:
                 self._next_log_sample_time_s += _LOG_SAMPLE_PERIOD_S
-        # 仅当达到显示刷新间隔或仿真结束时才回传快照触发 UI 更新，否则返回 None 抑制刷新。
-        if self._should_refresh_display_unlocked() or self._run_state == "FINISHED":
+        # 仅当强制产帧、达到显示刷新间隔或仿真结束时才回传快照，否则返回 None 抑制 UI 刷新。
+        if force_snapshot or should_refresh_display:
             return self._latest_snapshot
         return None
 
@@ -1799,6 +1817,7 @@ class SimulationController:
             links=links,
             route=route,
             route_segments=route_segments,
+            cpu_utilization=self._cpu_utilization,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
@@ -1919,6 +1938,7 @@ class SimulationController:
             control_report=self._control_report,
             nodes=[],
             links=[],
+            cpu_utilization=0.0,
         )
 
     def _derive_control_report_unlocked(self) -> ControlReport:

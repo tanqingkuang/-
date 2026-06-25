@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QHeaderView,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QSpinBox,
@@ -171,6 +172,19 @@ class Snapshot:
     links: list[LinkState]
     route: ReferenceRoute | None = None
     route_segments: list[ReferenceRoute] = field(default_factory=list)
+    cpu_utilization: float = 0.0
+
+
+def is_leader_node(node: NodeState) -> bool:
+    """判断节点是否为长机。注意：GUI 显示必须遵循控制器 role，而不是节点顺序。"""
+
+    return node.role.strip().lower() == "leader"
+
+
+def leader_node_from(nodes: list[NodeState]) -> NodeState | None:
+    """从节点列表中取长机。注意：缺少显式长机时回退首节点，保持旧配置可显示。"""
+
+    return next((node for node in nodes if is_leader_node(node)), nodes[0] if nodes else None)
 
 
 class MockSimulation:
@@ -344,6 +358,7 @@ class MockSimulation:
             links=self.links,
             route=ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0),
             route_segments=[ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0)],
+            cpu_utilization=0.0,
         )
 
 
@@ -548,6 +563,7 @@ class ControllerSimulationAdapter:
             links=links,
             route=route,
             route_segments=route_segments,
+            cpu_utilization=snapshot.cpu_utilization,
         )
 
     @staticmethod
@@ -1000,6 +1016,11 @@ class TopView(QGraphicsView):
             viewport.height() / 2.0 - center_y * self.scale_value,
         )
         self._manual_view = True
+        if self.auto_center:
+            # 自动居中开启时，框选只表达“调整缩放比例”，中心仍交给自动居中维护。
+            self._apply_auto_center()
+            self.viewChanged.emit()
+            return
         self.viewChanged.emit()
         self.manualViewChanged.emit()
 
@@ -1161,11 +1182,12 @@ class TopView(QGraphicsView):
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
-        for index, node in enumerate(snapshot.nodes):
+        for node in snapshot.nodes:
+            is_leader = is_leader_node(node)
             # 先画历史尾迹，再画机体，使机体压在尾迹之上。
-            self._draw_trail(painter, node, index, snapshot.time)
-            # 颜色优先级：异常>长机(第0个)>僚机。
-            color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
+            self._draw_trail(painter, node, is_leader, snapshot.time)
+            # 颜色优先级：异常>长机>僚机。
+            color = self.theme.warn if node.health != "normal" else self.theme.leader if is_leader else self.theme.wingman
             painter.save()
             # 平移到机体位置，按速度方向旋转机头朝向。
             painter.translate(node.x, node.y)
@@ -1186,12 +1208,12 @@ class TopView(QGraphicsView):
             painter.setPen(QPen(self.theme.ink, 1))
             painter.drawText(QPointF(node.x - 13, node.y - 18), node.node_id)
 
-    def _draw_trail(self, painter: QPainter, node: NodeState, index: int, current_time: float) -> None:
+    def _draw_trail(self, painter: QPainter, node: NodeState, is_leader: bool, current_time: float) -> None:
         """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
         # 少于 3 个点无法连成有意义的尾迹，直接跳过。
         if len(node.trail) <= 2:
             return
-        base = self.theme.leader if index == 0 else self.theme.wingman
+        base = self.theme.leader if is_leader else self.theme.wingman
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
         for previous, current in zip(node.trail, node.trail[1:]):
             age = max(0.0, current_time - current.time)
@@ -1199,7 +1221,7 @@ class TopView(QGraphicsView):
             alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
             color = QColor(base)
             # 长机尾迹整体比僚机略浓。
-            color.setAlphaF((0.52 if index == 0 else 0.44) * alpha)
+            color.setAlphaF((0.52 if is_leader else 0.44) * alpha)
             painter.setPen(QPen(color, 2))
             painter.drawLine(QPointF(previous.x, previous.y), QPointF(current.x, current.y))
 
@@ -1221,6 +1243,7 @@ class SideView(QWidget):
         self.theme = THEMES["light"]
         self.show_grid = True
         self.segment_locked = True
+        self.auto_center = False
         self.view_angle_deg = 0.0
         self.horizontal_scale = 1.0
         self.horizontal_offset = 0.0
@@ -1242,7 +1265,20 @@ class SideView(QWidget):
     def set_snapshot(self, snapshot: Snapshot) -> None:
         """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
-        if not self._manual_horizontal_view:
+        if self.auto_center:
+            self._apply_auto_center()
+        elif not self._manual_horizontal_view:
+            self._fit_horizontal_view()
+        self.update()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001
+        """处理控件尺寸变化事件，使自动居中在新尺寸下保持居中。"""
+        super().resizeEvent(event)
+        if self.snapshot is None:
+            return
+        if self.auto_center:
+            self._apply_auto_center()
+        elif not self._manual_horizontal_view:
             self._fit_horizontal_view()
         self.update()
 
@@ -1357,6 +1393,21 @@ class SideView(QWidget):
         self._fit_altitude_view()
         self.update()
 
+    def _apply_auto_center(self) -> None:
+        """应用自动居中。注意：只平移横轴和高度轴，不改变缩放或高度跨度。"""
+        if self.snapshot is None or not self.snapshot.nodes:
+            return
+        # 与俯视图一致：优先以正常节点质心为中心，全部异常时退回全部节点。
+        active = [node for node in self.snapshot.nodes if node.health == "normal"]
+        if not active:
+            active = self.snapshot.nodes
+        center_x = sum(self._horizontal_for_point(node.x, node.y) for node in active) / len(active)
+        self.horizontal_offset = self.width() / 2.0 - center_x * self.horizontal_scale
+        altitude_span = max(1.0, self.altitude_max - self.altitude_min)
+        center_altitude = sum(node.altitude for node in active) / len(active)
+        self.altitude_min = center_altitude - altitude_span / 2.0
+        self.altitude_max = center_altitude + altitude_span / 2.0
+
     def _map_x(self, x: float) -> float:
         """映射侧视图横轴坐标。注意：横轴含义由当前模式决定。"""
         return x * self.horizontal_scale + self.horizontal_offset
@@ -1410,6 +1461,11 @@ class SideView(QWidget):
             self.altitude_min = center - span / 2.0
             self.altitude_max = center + span / 2.0
 
+        if self.auto_center:
+            # 自动居中开启时，框选只调整缩放/高度跨度，中心继续由自动居中维护。
+            self._apply_auto_center()
+            self.update()
+            return
         self.update()
         self.top_view.manualViewChanged.emit()
 
@@ -1489,10 +1545,11 @@ class SideView(QWidget):
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 trails 画面元素。注意：只做渲染，不修改仿真状态。"""
-        for index, node in enumerate(snapshot.nodes):
+        for node in snapshot.nodes:
             if len(node.trail) <= 2:
                 continue
-            base = self.theme.leader if index == 0 else self.theme.wingman
+            is_leader = is_leader_node(node)
+            base = self.theme.leader if is_leader else self.theme.wingman
             for previous, current in zip(node.trail, node.trail[1:]):
                 x1 = self._map_x(self._horizontal_for_point(previous.x, previous.y))
                 x2 = self._map_x(self._horizontal_for_point(current.x, current.y))
@@ -1501,17 +1558,18 @@ class SideView(QWidget):
                 age = max(0.0, snapshot.time - current.time)
                 alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
                 color = QColor(base)
-                color.setAlphaF((0.48 if index == 0 else 0.40) * alpha)
+                color.setAlphaF((0.48 if is_leader else 0.40) * alpha)
                 painter.setPen(QPen(color, 2))
                 painter.drawLine(QPointF(x1, self._map_y(previous.altitude)), QPointF(x2, self._map_y(current.altitude)))
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
-        for index, node in enumerate(snapshot.nodes):
+        for node in snapshot.nodes:
             x = self._map_x(self._horizontal_for_point(node.x, node.y))
             if x < -24 or x > self.width() + 24:
                 continue
-            color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
+            is_leader = is_leader_node(node)
+            color = self.theme.warn if node.health != "normal" else self.theme.leader if is_leader else self.theme.wingman
             y = self._map_y(node.altitude)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
@@ -1819,13 +1877,19 @@ class MainWindow(QMainWindow):
         playback_group = QGroupBox("播放")
         playback_layout = QVBoxLayout(playback_group)
         playback_layout.setContentsMargins(10, 18, 10, 10)
+        status_row = QHBoxLayout()
+        self.cpu_label = QLabel("CPU 0%")
+        self.cpu_label.setToolTip("仿真线程忙碌时间 / 墙钟统计周期")
         self.speed_label = QLabel("1.0x")
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
         self.speed_slider.setRange(1, 200)
         self.speed_slider.setValue(10)  # 默认 1.0x
         self.speed_slider.valueChanged.connect(self._on_speed_changed)
         playback_layout.addWidget(self.speed_slider)
-        playback_layout.addWidget(self.speed_label, alignment=Qt.AlignmentFlag.AlignRight)
+        status_row.addWidget(self.cpu_label)
+        status_row.addStretch(1)
+        status_row.addWidget(self.speed_label)
+        playback_layout.addLayout(status_row)
         layout.addWidget(playback_group)
 
         # “运行期扰动”分组：四个按钮排成 2x2 网格。
@@ -1976,9 +2040,9 @@ class MainWindow(QMainWindow):
         self.overall_table.setHorizontalHeaderLabels(["侧偏(m)", "待飞距(m)", "高度(m)"])
         self.link_table = QTableWidget(0, 5)
         self.link_table.setHorizontalHeaderLabels(["链路", "方向", "延迟", "丢包", "状态"])
-        self._configure_table(self.node_table, [48, 88, 88, 88, 50])
+        self._configure_table(self.node_table, [48, 88, 88, 88, 50], expandable=True)
         self._configure_table(self.overall_table, [82, 94, 82], height=78)
-        self._configure_table(self.link_table, [86, 52, 58, 50, 54])
+        self._configure_table(self.link_table, [86, 52, 58, 50, 54], expandable=True)
         node_title = QLabel("节点跟踪误差")
         node_title.setObjectName("sectionTitle")
         overall_title = QLabel("整体跟踪情况")
@@ -1989,16 +2053,17 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.overall_table)
         layout.addSpacing(8)
         layout.addWidget(node_title)
-        layout.addWidget(self.node_table)
+        layout.addWidget(self.node_table, 1)
         layout.addSpacing(8)
         layout.addWidget(link_title)
-        layout.addWidget(self.link_table)
-        layout.addStretch(1)
+        layout.addWidget(self.link_table, 1)
         return panel
 
-    def _configure_table(self, table: QTableWidget, widths: list[int], *, height: int = 138) -> None:
+    def _configure_table(
+        self, table: QTableWidget, widths: list[int], *, height: int = 138, expandable: bool = False
+    ) -> None:
         """配置状态表通用样式。注意：表格只读且不显示多余行号。"""
-        # 隐藏行号列；横向滚动条永远关闭（靠固定列宽控制），纵向按需出现。
+        # 隐藏行号列；横向滚动条默认关闭（靠列宽与末列拉伸控制），纵向按需出现。
         table.verticalHeader().setVisible(False)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -2009,15 +2074,22 @@ class MainWindow(QMainWindow):
         table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         header = table.horizontalHeader()
-        # 最后一列拉伸吃掉余宽；其余列固定为指定宽度。
-        header.setStretchLastSection(True)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        for index, width in enumerate(widths):
+        # 最后一列拉伸吃掉余宽；其余列固定为指定最小宽度，避免表格内部留空。
+        header.setStretchLastSection(False)
+        for index, width in enumerate(widths[:-1]):
+            header.setSectionResizeMode(index, QHeaderView.ResizeMode.Fixed)
             table.setColumnWidth(index, width)
-        # 固定行高与表高，保证两张表布局稳定。
+        last_index = len(widths) - 1
+        table.setColumnWidth(last_index, widths[last_index])
+        header.setSectionResizeMode(last_index, QHeaderView.ResizeMode.Stretch)
+        # 固定行高；节点/链路表优先吃掉面板剩余高度，空间不足时再出现纵向滚动条。
         table.verticalHeader().setDefaultSectionSize(30)
         table.verticalHeader().setMinimumSectionSize(30)
-        table.setFixedHeight(height)
+        if expandable:
+            table.setMinimumHeight(height)
+            table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        else:
+            table.setFixedHeight(height)
 
     def _install_button_cursors(self) -> None:
         """为按钮安装手型光标。注意：只影响交互提示，不改变按钮逻辑。"""
@@ -2227,6 +2299,7 @@ class MainWindow(QMainWindow):
         self.report_label.setText(f"回报：{snapshot.control_report}")
         self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
+        self.cpu_label.setText(f"CPU {snapshot.cpu_utilization * 100:.0f}%")
         self._sync_duration_input(snapshot)
         # 进度 = time/duration 换算到千分刻度；duration 为 0 时置 0 防除零。
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
@@ -2265,10 +2338,11 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.node_table.setItem(row, column, QTableWidgetItem(value))
 
-        # 整体跟踪表：用长机/首节点代表当前全局航线跟踪情况。
+        # 整体跟踪表：用长机代表当前全局航线跟踪情况，缺少显式长机时才回退首节点。
         self.overall_table.setRowCount(1 if snapshot.nodes else 0)
         if snapshot.nodes:
-            leader = snapshot.nodes[0]
+            leader = leader_node_from(snapshot.nodes)
+            assert leader is not None
             side_offset = leader.cross_track_error
             if side_offset is None:
                 side_offset = (leader.y - WORLD_HEIGHT / 2) * 0.8
@@ -2600,9 +2674,14 @@ class MainWindow(QMainWindow):
 
     def _on_auto_center_changed(self) -> None:
         """处理 auto center changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
-        # 同步开关状态到俯视图，并立即用当前快照触发一次居中重排。
-        self.top_view.auto_center = self.auto_center.isChecked()
-        self.top_view.set_snapshot(self.sim.snapshot())
+        # 同步开关状态到两个视图，并立即用当前快照触发一次居中重排。
+        checked = self.auto_center.isChecked()
+        snapshot = self.sim.snapshot()
+        self.top_view.auto_center = checked
+        self.side_view.auto_center = checked
+        self.top_view.set_snapshot(snapshot)
+        self.side_view.set_snapshot(snapshot)
+        self._sync_side_view_controls()
 
     def _on_grid_changed(self) -> None:
         """处理 grid changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""

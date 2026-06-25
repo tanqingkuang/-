@@ -108,6 +108,24 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(self.window.sim.speed, 20.0)
         self.assertAlmostEqual(self.window.sim.controller.playback_rate, 20.0)
 
+    def test_cpu_utilization_label_updates_from_snapshot(self) -> None:
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            disturbance="无",
+            nodes=[],
+            links=[],
+            cpu_utilization=0.8,
+        )
+
+        self.window._update_snapshot(snapshot)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.cpu_label.text(), "CPU 80%")
+
     def test_load_config_syncs_playback_rate_to_slider(self) -> None:
         self._load_ui_config(playback_rate=2.0)
 
@@ -148,6 +166,7 @@ class GuiViewInteractionTests(unittest.TestCase):
             step_s=0.1,
             run_state="RUNNING",
             control_report="保持",
+            cpu_utilization=0.42,
             nodes=[
                 ControllerNodeState(
                     node_id="A01",
@@ -176,8 +195,10 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(first.nodes[0].vx, 0.0)
         self.assertAlmostEqual(first.nodes[0].vy, 8.0)
+        self.assertAlmostEqual(first.cpu_utilization, 0.42)
         self.assertAlmostEqual(repeated.nodes[0].vx, 0.0)
         self.assertAlmostEqual(repeated.nodes[0].vy, 8.0)
+        self.assertAlmostEqual(repeated.cpu_utilization, 0.42)
 
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
@@ -215,6 +236,33 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(small.height(), large.height(), delta=4)
         self.assertLessEqual(large.width(), 14)
         self.assertLessEqual(large.height(), 10)
+
+    def test_top_view_marks_role_leader_when_leader_is_not_first_node(self) -> None:
+        view = self.window.top_view
+        view.show_grid = False
+        view.snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="",
+            disturbance="无",
+            nodes=[
+                NodeState("A01", "wingman", 0.0, 0.0, 1.0, 0.0),
+                NodeState("A05", "leader", 80.0, 0.0, 1.0, 0.0),
+            ],
+            links=[],
+        )
+        view.scale_value = 1.0
+        view.offset = QPointF(180.0, 180.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        leader_color = self.window.theme.leader.name()
+
+        self.assertEqual(self._count_pixels_near(image, 180, 180, leader_color), 0)
+        self.assertGreater(self._count_pixels_near(image, 260, 180, leader_color), 0)
 
     def test_top_view_link_keeps_screen_width_during_zoom(self) -> None:
         thin = self._link_stroke_height_at_scale(0.45)
@@ -280,6 +328,135 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(view.scale_value, initial_scale)
         self.assertAlmostEqual(view.offset.x(), initial_offset.x(), delta=0.01)
         self.assertAlmostEqual(view.offset.y(), initial_offset.y(), delta=0.01)
+
+    def test_auto_center_moves_top_and_side_views_without_rescaling(self) -> None:
+        self._load_ui_config()
+        self.window.top_view.scale_value = 1.7
+        self.window.side_view.horizontal_scale = 1.4
+        self.window.side_view.altitude_min = 1180.0
+        self.window.side_view.altitude_max = 1260.0
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+
+        top_scale = self.window.top_view.scale_value
+        side_scale = self.window.side_view.horizontal_scale
+        altitude_span = self.window.side_view.altitude_max - self.window.side_view.altitude_min
+        snapshot = self.window.top_view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        moved_nodes = [
+            replace(node, x=node.x + 500.0, y=node.y + 80.0, altitude=node.altitude + 60.0)
+            for node in snapshot.nodes
+        ]
+        running_snapshot = replace(
+            snapshot,
+            time=snapshot.time + snapshot.step,
+            run_state="RUNNING",
+            nodes=moved_nodes,
+        )
+
+        self.window._update_snapshot(running_snapshot)
+        self.app.processEvents()
+
+        self.assertAlmostEqual(self.window.top_view.scale_value, top_scale)
+        self.assertAlmostEqual(self.window.side_view.horizontal_scale, side_scale)
+        self.assertAlmostEqual(self.window.side_view.altitude_max - self.window.side_view.altitude_min, altitude_span)
+        active = [node for node in moved_nodes if node.health == "normal"]
+        top_center_x = sum(node.x for node in active) / len(active)
+        top_center_y = sum(node.y for node in active) / len(active)
+        self.assertAlmostEqual(
+            self.window.top_view.offset.x(),
+            self.window.top_view.viewport().rect().width() / 2.0 - top_center_x * top_scale,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(
+            self.window.top_view.offset.y(),
+            self.window.top_view.viewport().rect().height() / 2.0 - top_center_y * top_scale,
+            delta=0.01,
+        )
+        side_center_x = sum(
+            self.window.side_view._horizontal_for_point(node.x, node.y)
+            for node in active
+        ) / len(active)
+        side_center_altitude = sum(node.altitude for node in active) / len(active)
+        self.assertAlmostEqual(
+            self.window.side_view.horizontal_offset,
+            self.window.side_view.width() / 2.0 - side_center_x * side_scale,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(
+            (self.window.side_view.altitude_min + self.window.side_view.altitude_max) / 2.0,
+            side_center_altitude,
+            delta=0.01,
+        )
+
+    def test_auto_center_survives_top_view_selection_zoom(self) -> None:
+        self._load_ui_config()
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+        view = self.window.top_view
+        old_scale = view.scale_value
+        view._selection_origin = QPointF(100.0, 100.0)
+        view._selection_current = QPointF(300.0, 220.0)
+
+        view._zoom_to_selection()
+        self.app.processEvents()
+
+        self.assertTrue(self.window.auto_center.isChecked())
+        self.assertTrue(self.window.top_view.auto_center)
+        self.assertTrue(self.window.side_view.auto_center)
+        self.assertNotAlmostEqual(view.scale_value, old_scale)
+        snapshot = view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        active = [node for node in snapshot.nodes if node.health == "normal"]
+        center_x = sum(node.x for node in active) / len(active)
+        center_y = sum(node.y for node in active) / len(active)
+        self.assertAlmostEqual(
+            view.offset.x(),
+            view.viewport().rect().width() / 2.0 - center_x * view.scale_value,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(
+            view.offset.y(),
+            view.viewport().rect().height() / 2.0 - center_y * view.scale_value,
+            delta=0.01,
+        )
+
+    def test_auto_center_survives_side_view_selection_zoom(self) -> None:
+        self._load_ui_config()
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+        view = self.window.side_view
+        old_scale = view.horizontal_scale
+        old_span = view.altitude_max - view.altitude_min
+        view._selection_origin = QPointF(100.0, 44.0)
+        view._selection_current = QPointF(420.0, 84.0)
+
+        view._zoom_to_selection()
+        self.app.processEvents()
+
+        self.assertTrue(self.window.auto_center.isChecked())
+        self.assertTrue(self.window.top_view.auto_center)
+        self.assertTrue(self.window.side_view.auto_center)
+        self.assertNotAlmostEqual(view.horizontal_scale, old_scale)
+        self.assertNotAlmostEqual(view.altitude_max - view.altitude_min, old_span)
+        snapshot = view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        active = [node for node in snapshot.nodes if node.health == "normal"]
+        center_x = sum(view._horizontal_for_point(node.x, node.y) for node in active) / len(active)
+        center_altitude = sum(node.altitude for node in active) / len(active)
+        self.assertAlmostEqual(
+            view.horizontal_offset,
+            view.width() / 2.0 - center_x * view.horizontal_scale,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(
+            (view.altitude_min + view.altitude_max) / 2.0,
+            center_altitude,
+            delta=0.01,
+        )
 
     def test_reset_view_refits_route_and_aircraft_after_manual_view_change(self) -> None:
         self._load_ui_config(
@@ -774,6 +951,12 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(statuses["A03"], "故障")
         self.assertEqual(statuses["A02"], "正常")
 
+    def test_status_tables_expand_to_use_panel_height_before_scrolling(self) -> None:
+        self.app.processEvents()
+
+        self.assertGreater(self.window.node_table.height(), 180)
+        self.assertGreater(self.window.link_table.height(), 180)
+
     def test_node_table_shows_track_errors_and_overall_table_uses_leader_route_metrics(self) -> None:
         snapshot = Snapshot(
             time=0.0,
@@ -831,6 +1014,50 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
         self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
+        self.assert_table_uses_full_width(self.window.node_table)
+        self.assert_table_uses_full_width(self.window.overall_table)
+
+    def test_overall_table_uses_role_leader_when_leader_is_not_first_node(self) -> None:
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[
+                NodeState(
+                    "A01",
+                    "wingman",
+                    100.0,
+                    120.0,
+                    20.0,
+                    0.0,
+                    1300.0,
+                    cross_track_error=99.4,
+                    distance_to_go=888.6,
+                ),
+                NodeState(
+                    "A05",
+                    "leader",
+                    80.0,
+                    90.0,
+                    20.0,
+                    0.0,
+                    1200.0,
+                    cross_track_error=12.4,
+                    distance_to_go=345.6,
+                ),
+            ],
+            links=[],
+        )
+
+        self.window._update_snapshot(snapshot)
+
+        self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
+        self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
+        self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
+
 
     def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
         self._load_ui_config(
@@ -850,6 +1077,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(directions["A01-A02"], "双向")
         self.assertEqual(directions["A02-A03"], "单向")
         self.assertEqual(self.window.link_table.horizontalScrollBar().maximum(), 0)
+        self.assert_table_uses_full_width(self.window.link_table)
 
     def test_duration_input_syncs_loaded_config_duration(self) -> None:
         self._load_ui_config(duration_s=2400.0)
@@ -969,6 +1197,10 @@ class GuiViewInteractionTests(unittest.TestCase):
             or abs(fitted_height - rect.height() * 0.80) <= 1.0
         )
 
+    def assert_table_uses_full_width(self, table) -> None:  # noqa: ANN001
+        header_width = sum(table.columnWidth(column) for column in range(table.columnCount()))
+        self.assertGreaterEqual(header_width, table.viewport().width() - 1)
+
     def _write_config_file(self, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         config = {
@@ -992,6 +1224,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         count = 0
         for y in range(image.height()):
             for x in range(image.width()):
+                if image.pixelColor(x, y).name() == color_name:
+                    count += 1
+        return count
+
+    def _count_pixels_near(self, image, center_x: int, center_y: int, color_name: str) -> int:  # noqa: ANN001
+        count = 0
+        for y in range(max(0, center_y - 18), min(image.height(), center_y + 19)):
+            for x in range(max(0, center_x - 18), min(image.width(), center_x + 19)):
                 if image.pixelColor(x, y).name() == color_name:
                     count += 1
         return count

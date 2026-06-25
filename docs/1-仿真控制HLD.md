@@ -436,13 +436,13 @@ def _tick() -> SimulationSnapshot
 | 1 | 编队算法 | `20 Hz` | sim-time | 每 10 个基础 tick | 读取当前模型状态；<br />从通信功能读取各节点 Inbox；<br />运行各节点编队算法；<br />生成控制量和 Outbox；<br />未触发时沿用上一帧控制量，不产生新的 Outbox |
 | 2 | 通信功能 | `100 Hz` | sim-time | 每 2 个基础 tick | 接收编队算法新产生的 Outbox；<br />调用通信功能 `tick(dt_s)`；<br />推进在途消息、延迟和丢包；<br />更新各节点 Inbox |
 | 3 | 模型功能 | `200 Hz` | sim-time | 每个基础 tick | 将当前有效控制量写入模型；<br />调用加扰 `tick(time_s, dt_s)` 并把动态扰动写入模型 / 通信；<br />调用模型迭代 `step(step_s)` 推进动力学；<br />更新时间、运行状态和控制回报 |
-| 4 | 关键数据记录 | `20 Hz` | sim-time | 每 `0.05 s` 采样点，默认每 10 个 `0.005 s` 基础 tick | 写定时关键数据快照 |
-| 5 | 快照生成 | `100 Hz` | sim-time | 每 2 个基础 tick | 生成最新 `SimulationSnapshot`，供 `get_snapshot()` 返回 |
+| 4 | 关键数据记录 | `10 Hz` | sim-time | 每 `0.1 s` 采样点，默认每 20 个 `0.005 s` 基础 tick | 写定时关键数据快照；不同播放倍率下采样点保持一致 |
+| 5 | 显示快照生成 | `10 Hz` | wall-clock | wall-clock 节流命中时，或强制产帧 / 日志采样点 / 仿真结束 | 生成最新 `SimulationSnapshot`；显示用快照不随播放倍率升高 |
 | 6 | 显示回显刷新 | `10 Hz` | wall-clock | wall-clock 节流命中时 | 更新可供 UI 读取的最近快照；若启用订阅，则通知订阅者 |
 
 频率约束：
 
-- 各 sim-time 频率优先选取能被基础仿真 tick 整除的值，避免分数 tick 调度；本版关键数据记录固定以 `0.05 s` 采样点为准，若配置步长不能整除 `0.05 s`，则在跨过采样点后的第一个基础 tick 记录。
+- 各 sim-time 频率优先选取能被基础仿真 tick 整除的值，避免分数 tick 调度；本版关键数据记录固定以 `0.1 s` 采样点为准，若配置步长不能整除 `0.1 s`，则在跨过采样点后的第一个基础 tick 记录。
 - 显示回显刷新按 wall-clock 节流，不随 `playback_rate` 增大而提高刷新频率。
 - `playback_rate` 只影响 wall-clock 调度间隔，不改变任何 sim-time 频率。
 - 编队算法控制周期由仿真控制统一计算并注入算法实体：`control_period_s = step_s * algorithm_decimation`。默认 `step_s=0.005`、`algorithm_decimation=10`，因此默认控制周期为 `0.05 s`（20 Hz）。
@@ -564,10 +564,10 @@ class DataLogger:
 
 关键数据日志与 UI 事件日志分开：
 
-- 关键数据日志是定时记录的仿真数据，固定 `20 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`。
-- 记录对象为 `SimulationSnapshot` 的关键数据子集，至少包含 `time_s`、`run_state`、节点状态和链路状态；节点状态包含位置/速度指令与控制误差，供后处理和未来 UI 使用；`step_s`、`route`、`route_segments` 不写入关键数据日志。事件对象只通过 `write_event()` 作为诊断信息记录，不参与 20Hz 定时采样。
+- 关键数据日志是定时记录的仿真数据，固定 `10 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`；播放倍率只改变单位墙钟内推进的仿真时间，不改变日志采样点。
+- 记录对象为 `SimulationSnapshot` 的关键数据子集，至少包含 `time_s`、`run_state`、节点状态和链路状态；节点状态包含位置/速度指令与控制误差，供后处理和未来 UI 使用；`step_s`、`route`、`route_segments` 不写入关键数据日志。事件对象只通过 `write_event()` 作为诊断信息记录，不参与 10Hz 定时采样。
 - GUI 顶部“日志”窗口只展示 `SimulationEvent` 最近事件，不读取关键数据日志文件，也不决定关键数据日志频率。
-- 日志组件在首次实际推进仿真时在工作目录下创建 `logs/<run-id>/`，其中 `snapshots.jsonl` 记录 20Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存本次运行配置；内存列表用于测试和运行期查询。
+- 日志组件在首次实际推进仿真时在工作目录下创建 `logs/<run-id>/`，其中 `snapshots.jsonl` 记录 10Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存本次运行配置；内存列表用于测试和运行期查询。
 - 日志落盘时按字段语义做十进制四舍五入：时间类字段保留 `3` 位小数，位置/距离和速度类字段保留 `2` 位小数，加速度类字段保留 `3` 位小数，过载类字段保留 `4` 位小数，角度类字段保留 `2` 位小数；仿真内部状态不因日志格式截断。
 
 日志写入失败策略：
@@ -604,8 +604,8 @@ class DataLogger:
 
 ## 11. 快照生成策略
 
-- UI 刷新快照可以低于仿真 tick 频率，默认每 `0.1s` wall-clock 或每 N 个 tick 推送一次。
-- 日志快照按日志配置节拍写入，不必等同 UI 刷新节拍。
+- UI 刷新快照低于仿真 tick 频率，默认每 `0.1s` wall-clock 生成 / 推送一次；该频率不随播放倍率增加。
+- 日志快照按仿真时间 `0.1s` 采样点写入，不等同 UI 刷新节拍；二者默认同为 10Hz，但时间基准不同。
 - 渐隐轨迹缓存由 UI 根据连续快照维护；仿真控制快照只携带当前时刻节点状态。
 - 快照对象生成后应视为不可变，避免 UI 渲染过程中被后台修改。
 
