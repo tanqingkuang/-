@@ -1131,6 +1131,41 @@ class GuiViewInteractionTests(unittest.TestCase):
             self.assertAlmostEqual(snapshot.time_s, 0.5)
             self.assertAlmostEqual(snapshot.duration_s, 1.0)
 
+    def test_open_live_monitor_in_ready_state_binds_controller(self) -> None:
+        """Regression: READY 曾被排除在 follow() 之外，导致监控窗口 _ctrl 始终为 None。"""
+        try:
+            from src.ui.gui.live_monitor import LiveMonitorWindow  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("PySide6.QtCharts not available")
+
+        self._load_ui_config()
+        self.assertEqual(self.window.sim.controller.get_snapshot().run_state, "READY")
+
+        self.window._open_live_monitor()
+        self.app.processEvents()
+
+        self.assertIsNotNone(self.window._live_monitor)
+        self.assertIsNotNone(self.window._live_monitor._ctrl)
+        self.assertIs(self.window._live_monitor._ctrl, self.window.sim.controller)
+
+    def test_step_binds_live_monitor_controller(self) -> None:
+        """Regression: _step() 未调用 follow()，单步后监控窗口 _ctrl 仍为 None。"""
+        try:
+            from src.ui.gui.live_monitor import LiveMonitorWindow
+        except ModuleNotFoundError:
+            self.skipTest("PySide6.QtCharts not available")
+
+        self._load_ui_config()
+        self.window._live_monitor = LiveMonitorWindow(self.window)
+        # _ctrl 未绑定，模拟旧代码中打开监控但未 follow 的状态
+        self.assertIsNone(self.window._live_monitor._ctrl)
+
+        self.window._step()
+        self.app.processEvents()
+
+        self.assertIsNotNone(self.window._live_monitor._ctrl)
+        self.assertIs(self.window._live_monitor._ctrl, self.window.sim.controller)
+
     def _load_ui_config(
         self,
         *,
