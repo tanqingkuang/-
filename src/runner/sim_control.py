@@ -66,7 +66,6 @@ ResultCode = Literal[
 
 _DEFAULT_ALGORITHM_DECIMATION = 10
 _COMM_DECIMATION = 2
-_SNAPSHOT_DECIMATION = 2
 _MIN_PLAYBACK_RATE = 0.1
 _MAX_PLAYBACK_RATE = 20.0
 _RUN_LOOP_SLEEP_SLICE_S = 0.005
@@ -232,7 +231,7 @@ _DEFAULT_TRIANGLE_WING_SLOTS: tuple[tuple[float, float, float], ...] = (
     (-54.0, 0.0, 58.0),
 )
 _FORMATION_COORDINATE_SYSTEM = "x_forward_y_up_z_right"
-_LOG_SAMPLE_PERIOD_S = 0.05
+_LOG_SAMPLE_PERIOD_S = 0.1
 _TIME_EPSILON_S = 1e-9
 
 
@@ -1204,6 +1203,9 @@ class SimulationController:
         """获取当前仿真快照。注意：该操作不推进仿真时间。"""
 
         with self._lock:
+            if self._config is not None and self._run_state == "RUNNING":
+                # 显式查询应返回当前状态；调用频率由 UI 计时器或外部调用方控制。
+                self._latest_snapshot = self._make_snapshot_unlocked()
             return self._latest_snapshot
 
     def start(self) -> CommandResult:
@@ -1697,27 +1699,22 @@ class SimulationController:
         elif self._run_state == "RUNNING":
             self._control_report = self._derive_control_report_unlocked()
 
-        # 关键数据记录按 sim-time 20Hz 采样点触发，不依赖算法周期或显示刷新频率。
+        should_refresh_display = self._should_refresh_display_unlocked() or self._run_state == "FINISHED"
+        # 日志按仿真时间固定 10Hz 采样，保证不同播放倍率得到一致的离线数据点。
         should_log_snapshot = self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s
-        # 快照生成按显示分频；算法帧和日志采样点额外生成，避免漏记关键状态。
+        # 快照生成按墙钟显示频率限流；日志采样点额外生成，避免漏记关键状态。
         snapshot: SimulationSnapshot | None = None
-        if (
-            force_snapshot
-            or algorithm_tick
-            or tick_index % _SNAPSHOT_DECIMATION == 0
-            or should_log_snapshot
-            or self._run_state == "FINISHED"
-        ):
+        if force_snapshot or should_refresh_display or should_log_snapshot:
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
-        # 关键数据定时记录固定 20Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
+        # 关键数据定时记录固定 10Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
         if should_log_snapshot and snapshot is not None:
             if not self._logger.write_snapshot(snapshot):
                 self._append_event_unlocked("WARN", "DataLogger", f"snapshot log failed: {self._logger.last_error_message}")
             while self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s:
                 self._next_log_sample_time_s += _LOG_SAMPLE_PERIOD_S
-        # 仅当达到显示刷新间隔或仿真结束时才回传快照触发 UI 更新，否则返回 None 抑制刷新。
-        if self._should_refresh_display_unlocked() or self._run_state == "FINISHED":
+        # 仅当强制产帧、达到显示刷新间隔或仿真结束时才回传快照，否则返回 None 抑制 UI 刷新。
+        if force_snapshot or should_refresh_display:
             return self._latest_snapshot
         return None
 
