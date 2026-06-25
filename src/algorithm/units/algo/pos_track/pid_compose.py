@@ -88,7 +88,7 @@ class PidCompose(PosTrackBase):
         # 配合本机自身 vd，外/内侧僚机的半径与速度差异被自动吸收(v_S/R_S = dVPsi)。
         lateral_ff = -u.selfCmd.v.dVPsi * u.selfState.v.vd
         # 三轴统一调用 step(位置误差, 速度误差)：前向由增益决定是速度环(长机)还是位置环(僚机)，
-        # 法向/侧向恒为位置环。长机 gainForward 置 kp=ki=0 时前向退化为 kd/kiv 的速度 PI，前向位置误差被忽略。
+        # 法向/侧向恒为位置环。长机 gainForward 置 kp=ki=0 时前向为速度环(kd 比例、kiv 可选积分；默认 kiv=0 即纯 P)，前向位置误差被忽略。
         acc_track = (
             self._forward.step(pos_err[0], vel_err[0]),
             self._vertical.step(pos_err[1], vel_err[1]),

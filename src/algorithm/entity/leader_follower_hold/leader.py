@@ -123,7 +123,7 @@ def _tracker_init(control_period_s: float, gain_forward: CtrlInitS) -> PidCompos
 
 
 def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
-    """生成长机默认位置跟踪器配置。注意：前向为速度环，速度比例走 kd(本机无前向位置基准，kp=ki=0)。"""
+    """生成长机默认位置跟踪器配置。注意：前向为速度环纯 P，速度比例走 kd(本机无前向位置基准，kp=ki=0)；kiv 速度积分预留，默认 0。"""
     gain_forward = CtrlInitS(kp=0.0, ki=0.0, kd=1.0, kiv=0.0, dt=control_period_s, outMax=6.0)
     return _tracker_init(control_period_s, gain_forward)
 

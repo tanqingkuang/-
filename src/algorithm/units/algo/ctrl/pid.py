@@ -7,7 +7,7 @@ from src.algorithm.units.algo.formation_math import clamp
 
 
 class Pid(CtrlBase):
-    """通用双通道控制器：位置误差走 kp/ki、速度误差走 kd/kiv，两路积分独立。注意：长机置 kp=ki=0 退化为速度 PI，僚机置 kiv=0 退化为位置 PID。"""
+    """通用双通道控制器：位置误差走 kp/ki、速度误差走 kd/kiv，两路积分独立。注意：长机置 kp=ki=0 为速度环(kd 比例、kiv 可选积分)，僚机置 kiv=0 为位置 PID。"""
 
     def __init__(self) -> None:
         """初始化 Pid 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""

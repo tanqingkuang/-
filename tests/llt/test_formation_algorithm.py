@@ -109,6 +109,40 @@ class CtrlPidTests(unittest.TestCase):
         pid.reset()
         self.assertAlmostEqual(pid.step(0.0, 0.0), 0.0)
 
+    def test_pid_velocity_integral_accumulates_and_resets(self) -> None:
+        """验证速度积分通道(kiv)按速度误差累积、与位置通道独立，reset 清零速度积分。"""
+
+        # kp=ki=0(位置通道关闭)，输出 = kd·velErr + kiv·∫velErr。
+        pid = Pid()
+        pid.init(CtrlInitS(kp=0.0, ki=0.0, kd=0.5, kiv=2.0, dt=0.1))
+
+        # 第一拍：∫velErr = 1.0·0.1 = 0.1，输出 = 0.5·1 + 2.0·0.1 = 0.7。
+        self.assertAlmostEqual(pid.step(0.0, 1.0), 0.7)
+        # 第二拍：∫velErr 累积到 0.2，输出 = 0.5·1 + 2.0·0.2 = 0.9。位置误差非零也不应影响(ki=0)。
+        self.assertAlmostEqual(pid.step(100.0, 1.0), 0.9)
+
+        pid.reset()
+        # reset 后速度积分清零，本拍重新从 0 累积，输出同首拍 0.7(未清零则为 0.5+2.0·0.3=1.1)。
+        self.assertAlmostEqual(pid.step(0.0, 1.0), 0.7)
+
+    def test_pid_velocity_integral_clamped_by_imaxvel(self) -> None:
+        """验证速度积分受 iMaxVel 限幅，正负两侧都被钳住。"""
+
+        pid = Pid()
+        pid.init(CtrlInitS(kp=0.0, ki=0.0, kd=0.0, kiv=1.0, dt=0.1, iMaxVel=0.15))
+
+        # ∫velErr 累积 0.2 但被钳到 0.15，输出 = 1.0·0.15。
+        self.assertAlmostEqual(pid.step(0.0, 2.0), 0.15)
+        # 大负误差把速度积分拉到下限 -0.15。
+        self.assertAlmostEqual(pid.step(0.0, -100.0), -0.15)
+
+    def test_pid_rejects_dual_integrators(self) -> None:
+        """验证位置积分与速度积分互斥：ki 与 kiv 同时非零时 init 报错。"""
+
+        pid = Pid()
+        with self.assertRaises(ValueError):
+            pid.init(CtrlInitS(ki=1.0, kiv=1.0, dt=0.1))
+
 
 class PosCalcTests(unittest.TestCase):
     def test_route_interp_projects_to_line_and_sets_speed(self) -> None:
@@ -457,8 +491,8 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 2.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 2.0)
 
-    def test_pid_compose_forward_speed_pi_uses_scalar_speed_error(self) -> None:
-        """验证长机型前向速度环按地速标量误差控制(速度比例走 kd、kp=0)，不把目标速度投影到当前航向后再相减。"""
+    def test_pid_compose_forward_speed_p_uses_scalar_speed_error(self) -> None:
+        """验证长机型前向速度环按地速标量误差控制(纯 P，速度比例走 kd、kp=ki=kiv=0)，不把目标速度投影到当前航向后再相减。"""
 
         tracker = PidCompose()
         tracker.init(
