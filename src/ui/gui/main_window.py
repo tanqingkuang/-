@@ -1772,6 +1772,7 @@ class MainWindow(QMainWindow):
         self._stage_layout_stretch = 1
         self.disturbance_buttons: list[QPushButton] = []
         self._segment_lock_preferred = True
+        self._live_monitor: "LiveMonitorWindow | None" = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()
         self._install_button_cursors()
@@ -1784,6 +1785,8 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         """构建主窗口全部 UI 区域。注意：控件引用需保存供后续事件更新使用。"""
+        monitor_menu = self.menuBar().addMenu("控制监控(&V)")
+        monitor_menu.addAction("数据监控(&M)").triggered.connect(self._open_live_monitor)
         root = QWidget()
         self.setCentralWidget(root)
         # 整体竖向：顶部 header + 下方主区。
@@ -2381,6 +2384,8 @@ class MainWindow(QMainWindow):
         # 只有控制器确认 OK 才开启刷新定时器，避免空转。
         if self.sim.last_result_code == "OK":
             self.timer.start()
+            if self._live_monitor is not None:
+                self._live_monitor.follow(self.sim.controller)
         self._log("UI", f"start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _pause(self) -> None:
@@ -2408,6 +2413,8 @@ class MainWindow(QMainWindow):
         snapshot = self.sim.reset()
         # 重置后队形回到初值，请求俯视图与侧视图重新自适应铺满。
         self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
+        if self._live_monitor is not None:
+            self._live_monitor.unfollow()
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
@@ -2464,6 +2471,8 @@ class MainWindow(QMainWindow):
             # remember=False 用于“自动加载上次配置”场景，避免重复写回。
             if remember:
                 self._save_last_config_path(config_path)
+            if self._live_monitor is not None:
+                self._live_monitor.unfollow()
         else:
             # 失败只记录告警，不改动当前已加载配置。
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
@@ -2780,6 +2789,16 @@ class MainWindow(QMainWindow):
         self.fullscreen_button.setToolTip("退出全屏" if active else "全屏显示")
         self.fullscreen_button.setAccessibleName("退出全屏" if active else "全屏显示")
 
+    def _open_live_monitor(self) -> None:
+        """打开实时控制监控窗口。"""
+        from src.ui.gui.live_monitor import LiveMonitorWindow
+        if self._live_monitor is None:
+            self._live_monitor = LiveMonitorWindow(self)
+        if self.sim.snapshot().run_state not in ("UNLOADED", "READY"):
+            self._live_monitor.follow(self.sim.controller)
+        self._live_monitor.show()
+        self._live_monitor.raise_()
+
     def _log(self, source: str, message: str) -> None:
         """追加一条界面日志。注意：日志容量由日志面板负责裁剪。"""
         self.log_dialog.append(self.sim.time, source, message)
@@ -2788,6 +2807,8 @@ class MainWindow(QMainWindow):
         """处理窗口关闭事件。注意：关闭前需要释放控制器资源。"""
         # 关窗前停定时器并释放控制器资源，避免后台线程泄漏。
         self.timer.stop()
+        if self._live_monitor is not None:
+            self._live_monitor.close()
         self.sim.close()
         super().closeEvent(event)
 
