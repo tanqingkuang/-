@@ -114,7 +114,7 @@ ResultCode = Literal[
 
 - `duplex` 表示 `link_id` 两端共享同一条双向链路状态。
 - `simplex` 表示链路方向按 `link_id` 的源节点到目标节点解释；反向链路需要单独一条 `link_id`。
-- 当前阶段不设计带宽字段。
+- 带宽字段不进入仿真控制基础配置契约。
 
 ### 4.4 仿真快照
 
@@ -349,7 +349,7 @@ def inject_disturbance(command: DisturbanceCommand) -> CommandResult
 约束：
 
 - 未加载配置返回 `ERR_NO_CONFIG`。
-- `FINISHED` 下不接受新增扰动，返回 `ERR_INVALID_STATE`。
+- `FINISHED` 下不接受注入扰动，返回 `ERR_INVALID_STATE`。
 
 ### 5.12 订阅快照
 
@@ -366,7 +366,7 @@ class Subscription:
 
 语义：
 
-- 仿真控制按显示回显刷新节拍调用订阅者，首版默认 `10 Hz`。
+- 仿真控制按显示回显刷新节拍调用订阅者，默认 `10 Hz`。
 - 回调必须是短耗时函数；UI 线程适配由 UI 层负责。
 - 同一个订阅者多次订阅时，建议返回同一订阅或替换旧订阅，避免重复刷新。
 
@@ -384,7 +384,7 @@ def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> 
 语义：
 
 - 给 UI “日志”窗口使用。
-- 返回内存环形缓冲中的最近事件，不直接扫描 HDF5 或大日志文件。
+- 返回内存环形缓冲中的最近事件，不直接扫描 JSONL 关键数据日志或其他大日志文件。
 - UI 可以自己缓存已经收到的事件，但不能作为唯一事件源；仿真控制仍需维护最近事件，覆盖 UI 面板晚打开、UI 刷新丢帧、headless 运行和内部错误追踪等场景。
 
 ### 5.14 headless 运行
@@ -417,7 +417,7 @@ def run_until_complete(config: object | str, *, seed: int | None = None) -> Comm
 
 非法状态转换必须返回 `CommandResult(code="ERR_INVALID_STATE")`，不得静默执行不确定行为。
 
-运行期异常场景不进入本状态机，后续单独设计。
+运行期异常场景不进入本状态机，由异常处理策略单独约束。
 
 ## 7. 多速率调度
 
@@ -425,11 +425,11 @@ def run_until_complete(config: object | str, *, seed: int | None = None) -> Comm
 def _tick() -> SimulationSnapshot
 ```
 
-仿真控制内部以固定基础步长推进仿真时间。首版基础 tick 为 `200 Hz`，不同模块不强制每个基础 tick 都执行，而是由调度器按各自频率触发。
+仿真控制内部以固定基础步长推进仿真时间。基础 tick 为 `200 Hz`，不同模块不强制每个基础 tick 都执行，而是由调度器按各自频率触发。
 
 本节只描述仿真控制内部推进和显示回显刷新，不描述 UI 到仿真控制的命令调用。`load_config()`、`start()`、`pause()`、`step()`、`reset()`、`set_playback_rate()`、`inject_disturbance()`、`close()` 均为事件触发接口，不进入定时调度表。
 
-首版默认调度如下：
+默认调度如下：
 
 | 顺序 | 调度块 | 默认频率 | 时间基准 | 触发条件 | 动作 |
 | --- | --- | --- | --- | --- | --- |
@@ -459,9 +459,11 @@ def _tick() -> SimulationSnapshot
 
 ## 8. 对内模块接口
 
-本节定义仿真控制期望其他模块提供的最小接口，用于后续各模块 LLD / 实现对齐。
+本节定义仿真控制期望各内部模块提供的最小接口，用于模块边界、调用顺序和异常处理对齐。
 
 ### 8.1 配置加载
+
+配置加载组件负责读取配置文件、解析 JSON/YAML、校验运行所需字段，并把结构化配置交给仿真控制初始化各模块。
 
 ```python
 class ConfigLoader:
@@ -490,6 +492,8 @@ def inject_wind(command: object) -> None: ...
 节点健康状态由加扰模块自行管理，不再下发给模型层。
 
 ### 8.3 通信功能
+
+通信功能负责维护节点收件箱、在途消息队列和方向级链路状态。仿真控制向通信功能下发节点列表与链路配置，并在算法节拍与通信节拍之间搬运 outbox / inbox。
 
 ```python
 class CommunicationEngine:
@@ -533,6 +537,8 @@ class FormationAlgorithm:
 
 ### 8.5 加扰
 
+加扰组件负责解释动态扰动命令、维护扰动持续时间、更新节点健康状态，并把风场、链路中断和链路丢包率等影响写入模型或通信模块。
+
 ```python
 class DisturbanceEngine:
     def init(config: dict[str, object], seed: int, model: ModelIterator, comm: CommunicationEngine) -> None: ...
@@ -545,6 +551,8 @@ class DisturbanceEngine:
 
 ### 8.6 关键数据日志
 
+关键数据日志组件负责按采样节拍记录运行快照和诊断事件，并保存本次运行配置。
+
 ```python
 class DataLogger:
     def open(run_id: str, config: dict[str, object]) -> None: ...
@@ -556,16 +564,16 @@ class DataLogger:
 
 关键数据日志与 UI 事件日志分开：
 
-- 关键数据日志是定时记录的仿真数据，首版固定 `20 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`。
+- 关键数据日志是定时记录的仿真数据，固定 `20 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`。
 - 记录对象为 `SimulationSnapshot` 的关键数据子集，至少包含 `time_s`、`run_state`、节点状态和链路状态；节点状态包含位置/速度指令与控制误差，供后处理和未来 UI 使用；`step_s`、`route`、`route_segments` 不写入关键数据日志。事件对象只通过 `write_event()` 作为诊断信息记录，不参与 20Hz 定时采样。
 - GUI 顶部“日志”窗口只展示 `SimulationEvent` 最近事件，不读取关键数据日志文件，也不决定关键数据日志频率。
-- 当前实现会在首次实际推进仿真时在工作目录下创建 `logs/<run-id>/`，其中 `snapshots.jsonl` 记录 20Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存本次运行配置；内存列表仅用于测试和运行期查询。
+- 日志组件在首次实际推进仿真时在工作目录下创建 `logs/<run-id>/`，其中 `snapshots.jsonl` 记录 20Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存本次运行配置；内存列表用于测试和运行期查询。
 - 日志落盘时按字段语义做十进制四舍五入：时间类字段保留 `3` 位小数，位置/距离和速度类字段保留 `2` 位小数，加速度类字段保留 `3` 位小数，过载类字段保留 `4` 位小数，角度类字段保留 `2` 位小数；仿真内部状态不因日志格式截断。
 
 日志写入失败策略：
 
 - 非关键实时快照写失败：记录 `WARN`，仿真可继续。
-- run 元数据、配置、最终指标写失败：按异常场景处理，后续单独设计。
+- run 元数据、配置、最终指标写失败：按异常场景处理。
 
 ## 9. 错误码
 
@@ -591,29 +599,26 @@ class DataLogger:
 - UI 只调用事件触发的命令接口并消费回显快照；运行态推进由仿真控制的调度器触发内部 `_tick()`。
 - 公共 `step()` 只用于暂停态 / 准备态下的人工单步。
 - headless 模式使用同步循环，不依赖 GUI event loop。
-- 后续若引入后台线程，所有命令接口必须串行化进入仿真控制事件队列，避免 UI 线程和仿真线程同时修改状态。
+- 后台线程与命令接口必须串行化进入仿真控制事件队列，避免 UI 线程和仿真线程同时修改状态。
 - `step_s` 是基础 tick 的仿真时间步长；`playback_rate` 决定 wall-clock 调度间隔：`wall_interval_s = step_s / playback_rate`。
 
 ## 11. 快照生成策略
 
-- UI 刷新快照可以低于仿真 tick 频率，首版默认每 `0.1s` wall-clock 或每 N 个 tick 推送一次。
+- UI 刷新快照可以低于仿真 tick 频率，默认每 `0.1s` wall-clock 或每 N 个 tick 推送一次。
 - 日志快照按日志配置节拍写入，不必等同 UI 刷新节拍。
 - 渐隐轨迹缓存由 UI 根据连续快照维护；仿真控制快照只携带当前时刻节点状态。
 - 快照对象生成后应视为不可变，避免 UI 渲染过程中被后台修改。
 
-## 12. 后续实现顺序
+## 12. 模块归属
 
-1. 实现 `SimulationController` 状态机和 `CommandResult` / `SimulationSnapshot` 数据结构。
-2. 接入配置加载，完成 `load_config()` 到 `READY` 的闭环。
-3. 先用最小模型迭代和 SimpleFollow 编队算法打通 `start()` / `step()` / `reset()`。
-4. 将 PySide6 UI 的 `MockSimulation` 替换为 `SimulationController` 适配器。
-5. 接入通信功能、加扰和关键数据日志。
+仿真控制负责稳定的应用层接口和调度闭环。配置加载、动态扰动和关键数据日志可以作为仿真控制内部组件实现，也可以按数据组 / 环境组边界拆分为独立模块；拆分后的接口语义保持本章定义不变。CLI 入口只包装配置加载与 `run_until_complete(config)`，不改变仿真控制的应用层契约。
 
 ## 13. 关联代码
 
 - `src/runner/sim_control.py`
 - `src/ui/gui/main_window.py`
-- `src/data/config_loader.py`
 - `src/environment/model.py`
 - `src/environment/comm.py`
+- `src/data/config_loader.py`
+- `src/data/logger.py`
 - `src/environment/disturb.py`

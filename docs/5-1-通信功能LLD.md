@@ -22,7 +22,7 @@
 - 不解析 `MessageEnvelope.payload` 内容。
 - 不持有算法或加扰模块的引用，只暴露被动接受接口。
 - 不负责模型动力学或传感器噪声。
-- 节点数量在 `init` 时固定，运行期不新增或删除节点。
+- 节点数量在 `init` 时固定，运行期不增删节点。
 - 当前不仿真带宽限制。
 
 ## 4. 数据结构
@@ -76,7 +76,7 @@ def init(config: dict, seed: int) -> None
 - 同一方向重复配置抛 `ValueError`；`duplex` 与任一已占用方向冲突时抛 `ValueError`；两条互为反向的 `simplex` 链路允许共存。
 - `seed` 用于初始化丢包随机数生成器，保证批量仿真可复现。
 - 保存链路配置的深拷贝作为 `_base_links` 基线快照，供 `reset()` 恢复使用。
-- 节点和链路数量在此固定，运行期不新增或删除。
+- 节点和链路数量在此固定，运行期不增删。
 
 ```python
 def reset() -> None
@@ -96,7 +96,7 @@ def close() -> None
 ```python
 def update_topology(config: dict) -> None
 ```
-- 只更新已有链路的 `latency_ms` 和 `loss_rate`；不可新增或删除链路和节点。
+- 只更新已有链路的 `latency_ms` 和 `loss_rate`；不可增删链路和节点。
 - 不修改 `status` 和 `fault_until_s`，运行期注入的故障状态不受影响；config 中若含 `status` 字段，忽略。
 - `link_id` 归一化规则同 `inject_link_qos`：`duplex` 正向和反向等价，同时更新两条方向记录；`simplex` 只更新精确方向；未知 `link_id` 抛 `ValueError`。
 - 同一次调用中若多个条目解析到同一方向记录，抛 `ValueError`；两条互为反向的 `simplex` 可在同一次调用中分别更新。
@@ -109,9 +109,9 @@ def update_topology(config: dict) -> None
 ```python
 def send(messages: list[MessageEnvelope]) -> None
 ```
-- 仿真控制将算法本轮 outbox 写入通信模块。
+- 仿真控制将算法本拍 outbox 写入通信模块。
 - 对每条消息依次执行以下步骤：
-  1. 校验 `source`：若不在节点列表中，整条消息静默丢弃，跳过后续步骤。
+  1. 校验 `source`：若不在节点列表中，整条消息静默丢弃，跳过其余步骤。
   2. 展开 `target`：
      - `"broadcast"` → 展开为所有节点（除 source 自身）
      - `list[str]` → 去重保序后展开（重复项不报错）
@@ -154,7 +154,7 @@ def read_link_states() -> list[LinkState]
 def inject_link_fault(link_id: str, status: str, duration_s: float | None = None) -> None
 ```
 - 将指定链路的 `status` 设为 `normal` / `lost`；其他值抛 `ValueError`。
-- `lost` 时该链路后续所有消息静默丢弃；已在途消息继续推进（物理上已发出）。
+- `lost` 时该链路之后的所有消息静默丢弃；已在途消息继续推进（物理上已发出）。
 - `duration_s` 仅对 `status="lost"` 有效；`status="normal"` 时传入非 `None` 的 `duration_s` 抛 `ValueError`。
 - `duration_s is not None` 且为非有限数（`NaN`/`Inf`）或 `<= 0` 时抛 `ValueError`（`None` 表示永久故障，不受此约束）。
 - `duration_s=None` → 永久故障，直到手动调用 `inject_link_fault(link_id, "normal")` 恢复；手动恢复时同时清除 `fault_until_s`。

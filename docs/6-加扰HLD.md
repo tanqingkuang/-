@@ -2,7 +2,7 @@
 
 ## 1. 定位
 
-加扰是高层分割阶段新增的横切 Control，统一管理不确定性索引、stochastic 扰动配置分发和动态扰动推进。
+加扰是仿真环境组的横切 Control，统一管理不确定性索引、stochastic 扰动配置分发和动态扰动推进。
 
 ## 2. 职责
 
@@ -29,5 +29,6 @@
 
 ## 5. 关联代码
 
+- `src/runner/sim_control.py`
 - `src/environment/disturb.py`
 
