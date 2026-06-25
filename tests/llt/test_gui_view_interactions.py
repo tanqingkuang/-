@@ -108,6 +108,24 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(self.window.sim.speed, 20.0)
         self.assertAlmostEqual(self.window.sim.controller.playback_rate, 20.0)
 
+    def test_cpu_utilization_label_updates_from_snapshot(self) -> None:
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            disturbance="无",
+            nodes=[],
+            links=[],
+            cpu_utilization=0.8,
+        )
+
+        self.window._update_snapshot(snapshot)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.cpu_label.text(), "CPU 80%")
+
     def test_load_config_syncs_playback_rate_to_slider(self) -> None:
         self._load_ui_config(playback_rate=2.0)
 
@@ -148,6 +166,7 @@ class GuiViewInteractionTests(unittest.TestCase):
             step_s=0.1,
             run_state="RUNNING",
             control_report="保持",
+            cpu_utilization=0.42,
             nodes=[
                 ControllerNodeState(
                     node_id="A01",
@@ -176,8 +195,10 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(first.nodes[0].vx, 0.0)
         self.assertAlmostEqual(first.nodes[0].vy, 8.0)
+        self.assertAlmostEqual(first.cpu_utilization, 0.42)
         self.assertAlmostEqual(repeated.nodes[0].vx, 0.0)
         self.assertAlmostEqual(repeated.nodes[0].vy, 8.0)
+        self.assertAlmostEqual(repeated.cpu_utilization, 0.42)
 
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None

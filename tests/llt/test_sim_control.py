@@ -1335,6 +1335,50 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertGreater(max(sleeps), 0.001)
             controller.close()
 
+    def test_run_loop_reports_busy_ratio_as_cpu_utilization(self) -> None:
+        """CPU 利用率应按统计周期内非 sleep 时间 / 墙钟时间计算。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=0.05, step_s=0.005)))
+            controller.set_playback_rate(1.0)
+            controller._logger._file_logging_disabled = True
+            fake_now_s = 0.0
+
+            def fake_clock() -> float:
+                return fake_now_s
+
+            def fake_sleep(_seconds: float) -> None:
+                nonlocal fake_now_s
+                fake_now_s += 0.001
+
+            def fake_tick(*, force_snapshot: bool = False) -> SimulationSnapshot:  # noqa: ARG001
+                nonlocal fake_now_s
+                fake_now_s += 0.004
+                controller._time_s = min(controller._duration_s, controller._time_s + controller._step_s)
+                if controller._time_s >= controller._duration_s:
+                    controller._run_state = "FINISHED"
+                controller._latest_snapshot = controller._make_snapshot_unlocked()
+                return controller._latest_snapshot
+
+            controller._tick_unlocked = fake_tick  # type: ignore[method-assign]
+            with patch("src.runner.sim_control._CPU_UTILIZATION_SAMPLE_PERIOD_S", 0.01), patch(
+                "src.runner.sim_control.time.perf_counter",
+                fake_clock,
+            ), patch("src.runner.sim_control.time.monotonic", fake_clock), patch(
+                "src.runner.sim_control.time.sleep",
+                fake_sleep,
+            ):
+                with controller._lock:
+                    controller._run_state = "RUNNING"
+                    controller._control_report = controller._derive_control_report_unlocked()
+                controller._run_loop()
+
+            snapshot = controller.get_snapshot()
+            self.assertEqual(snapshot.run_state, "FINISHED")
+            self.assertGreaterEqual(snapshot.cpu_utilization, 0.75)
+            self.assertLessEqual(snapshot.cpu_utilization, 0.9)
+            controller.close()
+
     def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:
         """LeaderEntity outbox broadcasts must pass through CommunicationChannel and arrive at followers."""
         config = {

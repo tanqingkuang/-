@@ -71,6 +71,7 @@ _MIN_PLAYBACK_RATE = 0.1
 _MAX_PLAYBACK_RATE = 20.0
 _RUN_LOOP_SLEEP_SLICE_S = 0.005
 _MAX_RUN_LOOP_BATCH_TICKS = 100
+_CPU_UTILIZATION_SAMPLE_PERIOD_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -161,6 +162,7 @@ class SimulationSnapshot:
     links: list[LinkState]
     route: RouteState | None = None  # 当前航段。
     route_segments: list[RouteState] = field(default_factory=list)  # 全部航段。
+    cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。
 
 
 @dataclass(frozen=True)
@@ -1140,6 +1142,7 @@ class SimulationController:
         self._tick_index = 0
         self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._playback_rate = 1.0
+        self._cpu_utilization = 0.0
         self._algorithm_decimation = _DEFAULT_ALGORITHM_DECIMATION
         self._algorithm_period_s = self._step_s * self._algorithm_decimation
         self._run_state: RunState = "UNLOADED"
@@ -1237,6 +1240,7 @@ class SimulationController:
             # 切到运行态，清停止标志并拉起后台线程开始自动推进。
             self._run_state = "RUNNING"
             self._control_report = self._derive_control_report_unlocked()
+            self._cpu_utilization = 0.0
             self._stop_requested.clear()
             self._start_worker_unlocked()
             self._latest_snapshot = self._make_snapshot_unlocked()
@@ -1252,6 +1256,7 @@ class SimulationController:
             if self._run_state == "RUNNING":
                 self._run_state = "PAUSED"
                 self._control_report = "保持"
+                self._cpu_utilization = 0.0
                 self._latest_snapshot = self._make_snapshot_unlocked()
                 snapshot = self._latest_snapshot
             elif self._run_state == "PAUSED":
@@ -1494,6 +1499,8 @@ class SimulationController:
         """后台线程主循环。注意：所有共享状态访问必须受锁保护。"""
         current = threading.current_thread()
         last_wall_s = time.perf_counter()
+        stats_start_wall_s = last_wall_s
+        stats_busy_s = 0.0
         sim_budget_s = 0.0
         force_first_tick = True
         try:
@@ -1503,6 +1510,7 @@ class SimulationController:
                 wall_delta_s = max(0.0, now_wall_s - last_wall_s)
                 last_wall_s = now_wall_s
                 snapshots_to_notify: list[SimulationSnapshot] = []
+                cpu_snapshot: SimulationSnapshot | None = None
                 should_sleep = False
                 with self._lock:
                     # 运行态被外部改为非 RUNNING（暂停/结束）时退出循环。
@@ -1536,6 +1544,18 @@ class SimulationController:
                 # 在锁外通知订阅者，避免回调阻塞持锁路径。
                 for snapshot in snapshots_to_notify:
                     self._notify_subscribers(snapshot)
+                busy_end_s = time.perf_counter()
+                stats_busy_s += max(0.0, busy_end_s - now_wall_s)
+                stats_wall_s = max(0.0, busy_end_s - stats_start_wall_s)
+                if stats_wall_s >= _CPU_UTILIZATION_SAMPLE_PERIOD_S:
+                    with self._lock:
+                        self._cpu_utilization = min(1.0, max(0.0, stats_busy_s / stats_wall_s))
+                        self._latest_snapshot = self._make_snapshot_unlocked()
+                        cpu_snapshot = self._latest_snapshot
+                    stats_start_wall_s = busy_end_s
+                    stats_busy_s = 0.0
+                if cpu_snapshot is not None:
+                    self._notify_subscribers(cpu_snapshot)
                 if should_sleep:
                     time.sleep(_RUN_LOOP_SLEEP_SLICE_S)
         finally:
@@ -1580,6 +1600,7 @@ class SimulationController:
         self._tick_index = 0
         self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._last_display_wall_s = 0.0
+        self._cpu_utilization = 0.0
         # 按依赖顺序初始化各子系统：先模型（提供初始状态），再通信，再扰动（依赖前两者）。
         self._model.init(config, self._seed)
         raw_links = list(config.get("links") or [])
@@ -1799,6 +1820,7 @@ class SimulationController:
             links=links,
             route=route,
             route_segments=route_segments,
+            cpu_utilization=self._cpu_utilization,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
@@ -1919,6 +1941,7 @@ class SimulationController:
             control_report=self._control_report,
             nodes=[],
             links=[],
+            cpu_utilization=0.0,
         )
 
     def _derive_control_report_unlocked(self) -> ControlReport:

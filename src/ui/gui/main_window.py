@@ -172,6 +172,7 @@ class Snapshot:
     links: list[LinkState]
     route: ReferenceRoute | None = None
     route_segments: list[ReferenceRoute] = field(default_factory=list)
+    cpu_utilization: float = 0.0
 
 
 def is_leader_node(node: NodeState) -> bool:
@@ -357,6 +358,7 @@ class MockSimulation:
             links=self.links,
             route=ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0),
             route_segments=[ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0)],
+            cpu_utilization=0.0,
         )
 
 
@@ -561,6 +563,7 @@ class ControllerSimulationAdapter:
             links=links,
             route=route,
             route_segments=route_segments,
+            cpu_utilization=snapshot.cpu_utilization,
         )
 
     @staticmethod
@@ -1874,13 +1877,19 @@ class MainWindow(QMainWindow):
         playback_group = QGroupBox("播放")
         playback_layout = QVBoxLayout(playback_group)
         playback_layout.setContentsMargins(10, 18, 10, 10)
+        status_row = QHBoxLayout()
+        self.cpu_label = QLabel("CPU 0%")
+        self.cpu_label.setToolTip("仿真线程忙碌时间 / 墙钟统计周期")
         self.speed_label = QLabel("1.0x")
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
         self.speed_slider.setRange(1, 200)
         self.speed_slider.setValue(10)  # 默认 1.0x
         self.speed_slider.valueChanged.connect(self._on_speed_changed)
         playback_layout.addWidget(self.speed_slider)
-        playback_layout.addWidget(self.speed_label, alignment=Qt.AlignmentFlag.AlignRight)
+        status_row.addWidget(self.cpu_label)
+        status_row.addStretch(1)
+        status_row.addWidget(self.speed_label)
+        playback_layout.addLayout(status_row)
         layout.addWidget(playback_group)
 
         # “运行期扰动”分组：四个按钮排成 2x2 网格。
@@ -2290,6 +2299,7 @@ class MainWindow(QMainWindow):
         self.report_label.setText(f"回报：{snapshot.control_report}")
         self.step_label.setText(f"步长：{snapshot.step:.3f}s")
         self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
+        self.cpu_label.setText(f"CPU {snapshot.cpu_utilization * 100:.0f}%")
         self._sync_duration_input(snapshot)
         # 进度 = time/duration 换算到千分刻度；duration 为 0 时置 0 防除零。
         self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
