@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import PosTrackDiagS, copy_motion, copy_pos_track_diag
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init
+from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
@@ -36,16 +36,15 @@ class FollowerEntity(EntityBase):
         self._inbound.init(None)
         self._tra_plan.init(None)
         self._pos_calc.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
-        self._pos_track.init(_default_tracker_init(cfg.control_period_s))
+        self._pos_track.init(_follower_tracker_init(cfg.control_period_s))
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
         self._inbound_u = InboundInputS(inbox=self._inbox)
         self._inbound_y = InboundOutputS(leaderState=self.cxt.leaderState, cmd=self.cxt.cmd)
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
-        # 槽位几何输入：本机状态 + 长机状态 + 编队指令，三者共同定出僚机目标位
+        # 槽位几何输入：长机状态 + 编队指令即可定出僚机目标位，前向待飞距闭环已下沉到 PidCompose，无需本机状态
         self._pos_calc_u = SlotGeometryInputS(
-            selfState=self.cxt.selfState,
             leaderState=self.cxt.leaderState,
             cmd=self.cxt.cmd,
         )

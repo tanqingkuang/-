@@ -112,12 +112,23 @@ class LeaderEntity(EntityBase):
         return None
 
 
-def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
-    """生成长机默认位置跟踪器配置。注意：仅在外部未注入配置时使用。"""
+def _tracker_init(control_period_s: float, gain_forward: CtrlInitS) -> PidComposeInitS:
+    """按给定前向增益生成位置跟踪器配置。注意：法向/侧向恒为位置环，长机与僚机只在前向通道有别。"""
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
-    # 三轴 PID 增益分别整定：纵向(前向)、横向(侧偏)、垂向(高度)，dt 使用上层注入的控制周期。
-    gain_forward = CtrlInitS(kp=1.0, ki=0.0, kd=0.0, dt=control_period_s, outMax=6.0)
+    # 法向(垂向)、侧向(侧偏)位置环两实体共用；前向通道由调用方按角色注入。
     gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
     gain_vertical = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=control_period_s, outMax=6.0)
     return PidComposeInitS(0.5, gain_forward, gain_lateral, gain_vertical)
+
+
+def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
+    """生成长机默认位置跟踪器配置。注意：前向为速度环纯 P，速度比例走 kd(本机无前向位置基准，kp=ki=0)；kiv 速度积分预留，默认 0。"""
+    gain_forward = CtrlInitS(kp=0.0, ki=0.0, kd=1.0, kiv=0.0, dt=control_period_s, outMax=6.0)
+    return _tracker_init(control_period_s, gain_forward)
+
+
+def _follower_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
+    """生成僚机默认位置跟踪器配置。注意：前向为位置环(kp/ki 控待飞距、kd 阻尼)，增益待整定。"""
+    gain_forward = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, kiv=0.0, dt=control_period_s, outMax=6.0)
+    return _tracker_init(control_period_s, gain_forward)

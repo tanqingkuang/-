@@ -109,6 +109,40 @@ class CtrlPidTests(unittest.TestCase):
         pid.reset()
         self.assertAlmostEqual(pid.step(0.0, 0.0), 0.0)
 
+    def test_pid_velocity_integral_accumulates_and_resets(self) -> None:
+        """验证速度积分通道(kiv)按速度误差累积、与位置通道独立，reset 清零速度积分。"""
+
+        # kp=ki=0(位置通道关闭)，输出 = kd·velErr + kiv·∫velErr。
+        pid = Pid()
+        pid.init(CtrlInitS(kp=0.0, ki=0.0, kd=0.5, kiv=2.0, dt=0.1))
+
+        # 第一拍：∫velErr = 1.0·0.1 = 0.1，输出 = 0.5·1 + 2.0·0.1 = 0.7。
+        self.assertAlmostEqual(pid.step(0.0, 1.0), 0.7)
+        # 第二拍：∫velErr 累积到 0.2，输出 = 0.5·1 + 2.0·0.2 = 0.9。位置误差非零也不应影响(ki=0)。
+        self.assertAlmostEqual(pid.step(100.0, 1.0), 0.9)
+
+        pid.reset()
+        # reset 后速度积分清零，本拍重新从 0 累积，输出同首拍 0.7(未清零则为 0.5+2.0·0.3=1.1)。
+        self.assertAlmostEqual(pid.step(0.0, 1.0), 0.7)
+
+    def test_pid_velocity_integral_clamped_by_imaxvel(self) -> None:
+        """验证速度积分受 iMaxVel 限幅，正负两侧都被钳住。"""
+
+        pid = Pid()
+        pid.init(CtrlInitS(kp=0.0, ki=0.0, kd=0.0, kiv=1.0, dt=0.1, iMaxVel=0.15))
+
+        # ∫velErr 累积 0.2 但被钳到 0.15，输出 = 1.0·0.15。
+        self.assertAlmostEqual(pid.step(0.0, 2.0), 0.15)
+        # 大负误差把速度积分拉到下限 -0.15。
+        self.assertAlmostEqual(pid.step(0.0, -100.0), -0.15)
+
+    def test_pid_rejects_dual_integrators(self) -> None:
+        """验证位置积分与速度积分互斥：ki 与 kiv 同时非零时 init 报错。"""
+
+        pid = Pid()
+        with self.assertRaises(ValueError):
+            pid.init(CtrlInitS(ki=1.0, kiv=1.0, dt=0.1))
+
 
 class PosCalcTests(unittest.TestCase):
     def test_route_interp_projects_to_line_and_sets_speed(self) -> None:
@@ -296,8 +330,8 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 995.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vEast, 12.0)
 
-    def test_slot_geometry_adds_along_track_catchup_speed(self) -> None:
-        """验证僚机落后于前向槽位时，速度指令会沿长机航迹方向增加以收敛待飞距。"""
+    def test_slot_geometry_leaves_forward_catchup_to_position_track(self) -> None:
+        """验证僚机落后于前向槽位时，槽位单元只给纯速度前馈、不再注入待飞距追赶速度(已下沉到 PidCompose 前向位置环)。"""
 
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=8.0)
@@ -313,13 +347,14 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            SlotGeometryInputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
-        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 10.0)
+        # 落后 30m 的待飞距不再叠加到速度上，速度只剩长机直线前馈。
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 8.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
 
     def test_slot_geometry_rotates_slot_offsets_with_leader_track(self) -> None:
@@ -430,14 +465,14 @@ class PosCalcTests(unittest.TestCase):
 
 
 class PosTrackTests(unittest.TestCase):
-    def test_pid_compose_ignores_forward_position_and_uses_speed_pi(self) -> None:
-        """验证 PID 组合跟踪中前向只做速度 PI，法向/侧向按苏联系轴序生成加速度。"""
+    def test_pid_compose_forward_closes_position_and_velocity(self) -> None:
+        """验证僚机型前向位置环：前向加速度同时受待飞距(kp)与速度误差(kd)驱动，法向/侧向按苏联系轴序生成加速度。"""
 
         tracker = PidCompose()
         tracker.init(
             PidComposeInitS(
                 vMin=3.0,
-                gainForward=CtrlInitS(kp=2.0, ki=1.0, kd=100.0, dt=0.1),
+                gainForward=CtrlInitS(kp=0.1, ki=0.0, kd=0.5, dt=0.1),
                 gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.0, dt=0.1),
                 gainVertical=CtrlInitS(kp=0.25, ki=0.0, kd=0.0, dt=0.1),
             )
@@ -451,18 +486,19 @@ class PosTrackTests(unittest.TestCase):
             PosTrackOutputS(accCmd=ctx.selfAccCmd),
         )
 
-        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 4.2)
+        # 前向(东向)：kp·前向位置误差 + kd·前向速度误差 = 0.1·50 + 0.5·2 = 6.0。
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 6.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 2.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 2.0)
 
-    def test_pid_compose_forward_speed_pi_uses_scalar_speed_error(self) -> None:
-        """验证前向速度环按地速标量误差控制，不把目标速度投影到当前航向后再相减。"""
+    def test_pid_compose_forward_speed_p_uses_scalar_speed_error(self) -> None:
+        """验证长机型前向速度环按地速标量误差控制(纯 P，速度比例走 kd、kp=ki=kiv=0)，不把目标速度投影到当前航向后再相减。"""
 
         tracker = PidCompose()
         tracker.init(
             PidComposeInitS(
                 vMin=3.0,
-                gainForward=CtrlInitS(kp=1.0, ki=0.0, kd=0.0, dt=0.1, outMax=20.0),
+                gainForward=CtrlInitS(kp=0.0, ki=0.0, kd=1.0, dt=0.1, outMax=20.0),
             )
         )
         ctx = FormContextS()
