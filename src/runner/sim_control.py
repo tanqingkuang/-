@@ -40,7 +40,7 @@ from src.algorithm.entity.base import EntityBase
 from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
 from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
+from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
 from src.common.envelope import MessageEnvelope
 from src.environment.comm import CommunicationChannel
 from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
@@ -632,6 +632,31 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
     )
 
 
+def _build_vel_cmd_limit(config: dict[str, object] | None = None) -> VelCmdLimitS:
+    """从配置 control.velocity_command_limits 解析前向/垂向速度指令限幅。注意：整块或单项缺省即不限(±inf)，侧向不参与。"""
+    control = (config or {}).get("control")
+    if control is None:
+        return VelCmdLimitS()
+    if not isinstance(control, dict):
+        raise ValueError("control must be an object")
+    limits = control.get("velocity_command_limits")
+    if limits is None:
+        return VelCmdLimitS()
+    if not isinstance(limits, dict):
+        raise ValueError("control.velocity_command_limits must be an object")
+    limit = VelCmdLimitS(
+        forwardMin=float(limits.get("forward_min_mps", float("-inf"))),
+        forwardMax=float(limits.get("forward_max_mps", float("inf"))),
+        verticalMin=float(limits.get("vertical_min_mps", float("-inf"))),
+        verticalMax=float(limits.get("vertical_max_mps", float("inf"))),
+    )
+    if limit.forwardMin > limit.forwardMax:
+        raise ValueError("control.velocity_command_limits: forward_min_mps must be <= forward_max_mps")
+    if limit.verticalMin > limit.verticalMax:
+        raise ValueError("control.velocity_command_limits: vertical_min_mps must be <= vertical_max_mps")
+    return limit
+
+
 class _ConfigLoader:
     """控制器首版使用的轻量 JSON/YAML 加载器。注意：YAML 依赖缺失时只支持 JSON。"""
 
@@ -687,6 +712,7 @@ class _ConfigLoader:
         # 复用构造函数做深层校验：航线、编队/通信、模型配置任一非法都会在此抛错。
         _build_leader_route(config)
         _build_formation_comm_init(list(nodes or []), list(links or []), config)
+        _build_vel_cmd_limit(config)
         ModelIterator._parse_model_config(model)
 
 
@@ -702,6 +728,7 @@ class _NodeAlgorithm:
         initial_leader_state: MotionProfS | None,
         leader_route: RouteS | None,
         control_period_s: float,
+        vel_cmd_limit: VelCmdLimitS | None = None,
     ) -> None:
         """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
@@ -720,6 +747,7 @@ class _NodeAlgorithm:
                 commInit=comm_init,
                 route=leader_route,
                 control_period_s=control_period_s,
+                velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
             )
         )
         # 僚机预置：直接进入 HOLD/三角队形并写入长机初态，避免冷启动时无参考。
@@ -1638,6 +1666,8 @@ class SimulationController:
         )
         leader_route = _build_leader_route(config)
         self._leader_route = leader_route
+        # 前向/垂向速度指令限幅(串级 P+PI 外环输出)，由配置注入各节点实体。
+        vel_cmd_limit = _build_vel_cmd_limit(config)
         # 显示用航线不插圆弧：界面只体现 base 里的原始航段(圆弧仅长机跟踪内部使用)。
         self._display_route = _build_leader_route(config, insert_arcs=False)
         # 为每个节点创建算法适配器（长机/僚机实体由角色决定）。
@@ -1649,6 +1679,7 @@ class SimulationController:
                 initial_leader_motion,
                 leader_route,
                 self._algorithm_period_s,
+                vel_cmd_limit,
             )
             for node_id in states
         }

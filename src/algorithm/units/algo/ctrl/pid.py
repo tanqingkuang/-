@@ -25,8 +25,9 @@ class Pid(CtrlBase):
         self._cfg = cfg
         self.reset()
 
-    def step(self, posErr: float, velErr: float) -> float:
-        """推进 Pid 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
+    def step(self, posErr: float, velFf: float, velActual: float) -> float:
+        """推进 Pid 一个处理周期。注意：并联式控制律，内部取 velErr=velFf-velActual。"""
+        velErr = velFf - velActual
         self._integral += posErr * self._cfg.dt
         if self._cfg.iMax > 0.0:
             self._integral = clamp(self._integral, -self._cfg.iMax, self._cfg.iMax)

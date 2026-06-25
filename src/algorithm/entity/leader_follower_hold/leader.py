@@ -5,8 +5,15 @@ from __future__ import annotations
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import PosTrackDiagS, RemoteCmdS, copy_motion, copy_pos_track_diag
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.types import DEFAULT_CONTROL_PERIOD_S, EntityInitS, EntityInputS, EntityOutputS
+from src.algorithm.entity.types import (
+    DEFAULT_CONTROL_PERIOD_S,
+    EntityInitS,
+    EntityInputS,
+    EntityOutputS,
+    VelCmdLimitS,
+)
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
+from src.algorithm.units.algo.ctrl.ppi import PPIInitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
@@ -43,7 +50,7 @@ class LeaderEntity(EntityBase):
         self._task.init(None)
         self._tra_plan.init(LeaderRouteInitS(cfg.route))
         self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M, leadTimeS=_LEADER_FF_LEAD_TIME_S))
-        self._pos_track.init(_default_tracker_init(cfg.control_period_s))
+        self._pos_track.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
         # 预先绑定各单元输入/输出端口到共享黑板字段，step 时直接复用、零拷贝串联
@@ -112,23 +119,60 @@ class LeaderEntity(EntityBase):
         return None
 
 
-def _tracker_init(control_period_s: float, gain_forward: CtrlInitS) -> PidComposeInitS:
-    """按给定前向增益生成位置跟踪器配置。注意：法向/侧向恒为位置环，长机与僚机只在前向通道有别。"""
+def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: VelCmdLimitS) -> PidComposeInitS:
+    """按给定前向增益生成位置跟踪器配置。注意：前向/垂向走串级 P+PI(可限速)，侧向恒为位置环 Pid，长机与僚机只在前向通道有别。"""
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
-    # 法向(垂向)、侧向(侧偏)位置环两实体共用；前向通道由调用方按角色注入。
+    # 侧向(侧偏)保持并联式位置环 Pid(只限侧向加速度，速度不限)，两实体共用。
     gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
-    gain_vertical = CtrlInitS(kp=0.2, ki=0.0, kd=0.6, dt=control_period_s, outMax=6.0)
+    # 垂向改串级 P+PI：等价旧 kp=0.2/kd=0.6(kpPos=kp/kd)，acc 限幅沿用 ±6；
+    # 垂向速度限幅 vCmdMin/vCmdMax 由配置注入(默认 ±inf 不限)。
+    gain_vertical = PPIInitS(
+        kpPos=0.2 / 0.6,
+        kpVel=0.6,
+        kiVel=0.0,
+        dt=control_period_s,
+        accMin=-6.0,
+        accMax=6.0,
+        vCmdMin=vel_limit.verticalMin,
+        vCmdMax=vel_limit.verticalMax,
+    )
     return PidComposeInitS(0.5, gain_forward, gain_lateral, gain_vertical)
 
 
-def _default_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
-    """生成长机默认位置跟踪器配置。注意：前向为速度环纯 P，速度比例走 kd(本机无前向位置基准，kp=ki=0)；kiv 速度积分预留，默认 0。"""
-    gain_forward = CtrlInitS(kp=0.0, ki=0.0, kd=1.0, kiv=0.0, dt=control_period_s, outMax=6.0)
-    return _tracker_init(control_period_s, gain_forward)
+def _default_tracker_init(
+    control_period_s: float = DEFAULT_CONTROL_PERIOD_S, vel_limit: VelCmdLimitS | None = None
+) -> PidComposeInitS:
+    """生成长机默认位置跟踪器配置。注意：前向串级 P+PI 退化为纯速度环(外环 kpPos=0，速度比例走 kpVel)，内环积分 kiVel 预留默认 0。"""
+    vel_limit = vel_limit or VelCmdLimitS()
+    # 长机无前向位置基准，外环 kpPos=0 -> vel_cmd=velFf，纯内环 PI 速度环；前向速度限幅由配置注入。
+    gain_forward = PPIInitS(
+        kpPos=0.0,
+        kpVel=1.0,
+        kiVel=0.0,
+        dt=control_period_s,
+        accMin=-6.0,
+        accMax=6.0,
+        vCmdMin=vel_limit.forwardMin,
+        vCmdMax=vel_limit.forwardMax,
+    )
+    return _tracker_init(control_period_s, gain_forward, vel_limit)
 
 
-def _follower_tracker_init(control_period_s: float = DEFAULT_CONTROL_PERIOD_S) -> PidComposeInitS:
-    """生成僚机默认位置跟踪器配置。注意：前向为位置环(kp/ki 控待飞距、kd 阻尼)，增益待整定。"""
-    gain_forward = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, kiv=0.0, dt=control_period_s, outMax=6.0)
-    return _tracker_init(control_period_s, gain_forward)
+def _follower_tracker_init(
+    control_period_s: float = DEFAULT_CONTROL_PERIOD_S, vel_limit: VelCmdLimitS | None = None
+) -> PidComposeInitS:
+    """生成僚机默认位置跟踪器配置。注意：前向串级 P+PI，等价旧 kp=0.02/kd=0.12(kpPos=kp/kd)，增益待整定。"""
+    vel_limit = vel_limit or VelCmdLimitS()
+    # 前向速度限幅由配置注入；前向速度恒正，按需设 forwardMin>0、forwardMax 上限。
+    gain_forward = PPIInitS(
+        kpPos=0.02 / 0.12,
+        kpVel=0.12,
+        kiVel=0.0,
+        dt=control_period_s,
+        accMin=-6.0,
+        accMax=6.0,
+        vCmdMin=vel_limit.forwardMin,
+        vCmdMax=vel_limit.forwardMax,
+    )
+    return _tracker_init(control_period_s, gain_forward, vel_limit)

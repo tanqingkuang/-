@@ -20,6 +20,16 @@ DEFAULT_CONTROL_PERIOD_S = 0.05
 
 
 @dataclass
+class VelCmdLimitS:
+    """前向/垂向速度指令限幅(串级 P+PI 外环输出)。注意：非对称，默认 ±inf 表示不限；侧向不限速。"""
+
+    forwardMin: float = float("-inf")  # 前向速度指令下限(前向恒正时设 >0)
+    forwardMax: float = float("inf")  # 前向速度指令上限
+    verticalMin: float = float("-inf")  # 垂向速度指令下限(下降速度上限取负)
+    verticalMax: float = float("inf")  # 垂向速度指令上限(爬升速度上限)
+
+
+@dataclass
 class EntityInitS:
     """实体一次性初始化配置。注意：route 仅长机使用，僚机可为空。"""
 
@@ -27,6 +37,7 @@ class EntityInitS:
     commInit: FormCommInitS = field(default_factory=FormCommInitS)  # 通信拓扑与队形配置
     route: RouteS | None = None  # 预置航线，僚机无需航线时为 None
     control_period_s: float = DEFAULT_CONTROL_PERIOD_S  # 控制算法处理周期，单位 s
+    velCmdLimit: VelCmdLimitS = field(default_factory=VelCmdLimitS)  # 前向/垂向速度指令限幅
 
 
 @dataclass

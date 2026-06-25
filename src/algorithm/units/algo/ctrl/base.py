@@ -26,8 +26,8 @@ class CtrlBase:
         """按配置初始化 CtrlBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError
 
-    def step(self, posErr: float, velErr: float) -> float:
-        """推进 CtrlBase 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
+    def step(self, posErr: float, velFf: float, velActual: float) -> float:
+        """推进 CtrlBase 一个处理周期。注意：posErr 为位置误差，velFf 为速度前馈，velActual 为实测速度；并联式控制律内部取 velErr=velFf-velActual。"""
         raise NotImplementedError
 
     def reset(self) -> None:

@@ -23,6 +23,7 @@ from src.runner.sim_control import (
     _DataLogger,
     _build_formation_comm_init,
     _build_leader_route,
+    _build_vel_cmd_limit,
     _route_state_from_wayline,
 )
 
@@ -506,6 +507,40 @@ class SimulationControllerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "explicit slots"):
             _build_formation_comm_init(nodes, [])
+
+    def test_vel_cmd_limit_absent_block_means_unbounded(self) -> None:
+        """缺省 control 块时前向/垂向速度指令均不限(±inf)。"""
+        limit = _build_vel_cmd_limit({})
+        self.assertEqual(limit.forwardMin, float("-inf"))
+        self.assertEqual(limit.forwardMax, float("inf"))
+        self.assertEqual(limit.verticalMin, float("-inf"))
+        self.assertEqual(limit.verticalMax, float("inf"))
+
+    def test_vel_cmd_limit_parsed_from_config(self) -> None:
+        """control.velocity_command_limits 四个速度上下限被正确解析。"""
+        limit = _build_vel_cmd_limit(
+            {
+                "control": {
+                    "velocity_command_limits": {
+                        "forward_min_mps": 1.0,
+                        "forward_max_mps": 40.0,
+                        "vertical_min_mps": -3.0,
+                        "vertical_max_mps": 3.0,
+                    }
+                }
+            }
+        )
+        self.assertEqual(
+            (limit.forwardMin, limit.forwardMax, limit.verticalMin, limit.verticalMax),
+            (1.0, 40.0, -3.0, 3.0),
+        )
+
+    def test_vel_cmd_limit_rejects_inverted_bounds(self) -> None:
+        """下限>上限的非法限幅在解析阶段报错。"""
+        with self.assertRaisesRegex(ValueError, "forward_min_mps"):
+            _build_vel_cmd_limit({"control": {"velocity_command_limits": {"forward_min_mps": 50.0, "forward_max_mps": 10.0}}})
+        with self.assertRaisesRegex(ValueError, "vertical_min_mps"):
+            _build_vel_cmd_limit({"control": {"velocity_command_limits": {"vertical_min_mps": 3.0, "vertical_max_mps": -3.0}}})
 
     def test_current_route_uses_written_vertical_segment_after_algorithm_step(self) -> None:
         """UI route fallback should not mistake a north-south current segment for an empty route."""

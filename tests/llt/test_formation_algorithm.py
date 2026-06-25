@@ -30,6 +30,7 @@ from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
+from src.algorithm.units.algo.ctrl.ppi import PPI, PPIInitS
 from src.algorithm.units.algo.formation_math import clamp, enu_to_track, horizontal_track_to_enu, track_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
@@ -102,12 +103,13 @@ class CtrlPidTests(unittest.TestCase):
         pid = Pid()
         pid.init(CtrlInitS(kp=2.0, ki=1.0, kd=0.5, dt=0.1, iMax=0.15, outMax=10.0))
 
-        self.assertAlmostEqual(pid.step(1.0, 2.0), 3.1)
-        self.assertAlmostEqual(pid.step(1.0, 0.0), 2.15)
-        self.assertAlmostEqual(pid.step(100.0, 0.0), 10.0)
+        # step(posErr, velFf, velActual)，并联式内部取 velErr=velFf-velActual；此处 velActual=0 故 velErr=velFf。
+        self.assertAlmostEqual(pid.step(1.0, 2.0, 0.0), 3.1)
+        self.assertAlmostEqual(pid.step(1.0, 0.0, 0.0), 2.15)
+        self.assertAlmostEqual(pid.step(100.0, 0.0, 0.0), 10.0)
 
         pid.reset()
-        self.assertAlmostEqual(pid.step(0.0, 0.0), 0.0)
+        self.assertAlmostEqual(pid.step(0.0, 0.0, 0.0), 0.0)
 
     def test_pid_velocity_integral_accumulates_and_resets(self) -> None:
         """验证速度积分通道(kiv)按速度误差累积、与位置通道独立，reset 清零速度积分。"""
@@ -117,13 +119,13 @@ class CtrlPidTests(unittest.TestCase):
         pid.init(CtrlInitS(kp=0.0, ki=0.0, kd=0.5, kiv=2.0, dt=0.1))
 
         # 第一拍：∫velErr = 1.0·0.1 = 0.1，输出 = 0.5·1 + 2.0·0.1 = 0.7。
-        self.assertAlmostEqual(pid.step(0.0, 1.0), 0.7)
+        self.assertAlmostEqual(pid.step(0.0, 1.0, 0.0), 0.7)
         # 第二拍：∫velErr 累积到 0.2，输出 = 0.5·1 + 2.0·0.2 = 0.9。位置误差非零也不应影响(ki=0)。
-        self.assertAlmostEqual(pid.step(100.0, 1.0), 0.9)
+        self.assertAlmostEqual(pid.step(100.0, 1.0, 0.0), 0.9)
 
         pid.reset()
         # reset 后速度积分清零，本拍重新从 0 累积，输出同首拍 0.7(未清零则为 0.5+2.0·0.3=1.1)。
-        self.assertAlmostEqual(pid.step(0.0, 1.0), 0.7)
+        self.assertAlmostEqual(pid.step(0.0, 1.0, 0.0), 0.7)
 
     def test_pid_velocity_integral_clamped_by_imaxvel(self) -> None:
         """验证速度积分受 iMaxVel 限幅，正负两侧都被钳住。"""
@@ -132,9 +134,9 @@ class CtrlPidTests(unittest.TestCase):
         pid.init(CtrlInitS(kp=0.0, ki=0.0, kd=0.0, kiv=1.0, dt=0.1, iMaxVel=0.15))
 
         # ∫velErr 累积 0.2 但被钳到 0.15，输出 = 1.0·0.15。
-        self.assertAlmostEqual(pid.step(0.0, 2.0), 0.15)
+        self.assertAlmostEqual(pid.step(0.0, 2.0, 0.0), 0.15)
         # 大负误差把速度积分拉到下限 -0.15。
-        self.assertAlmostEqual(pid.step(0.0, -100.0), -0.15)
+        self.assertAlmostEqual(pid.step(0.0, -100.0, 0.0), -0.15)
 
     def test_pid_rejects_dual_integrators(self) -> None:
         """验证位置积分与速度积分互斥：ki 与 kiv 同时非零时 init 报错。"""
@@ -142,6 +144,75 @@ class CtrlPidTests(unittest.TestCase):
         pid = Pid()
         with self.assertRaises(ValueError):
             pid.init(CtrlInitS(ki=1.0, kiv=1.0, dt=0.1))
+
+
+class CtrlPpiTests(unittest.TestCase):
+    def test_ppi_cascade_equivals_parallel_pid_without_limits(self) -> None:
+        """验证无限幅时串级 P+PI(纯比例) 与并联式 PID 代数等价：kpPos·kpVel=kp、kpVel=kd。"""
+
+        ppi = PPI()
+        ppi.init(PPIInitS(kpPos=0.5, kpVel=2.0, kiVel=0.0, dt=0.1))
+        # vel_cmd = 3.0 + 0.5·1.0 = 3.5; vel_err = 3.5 - 0 = 3.5; acc = 2.0·3.5 = 7.0。
+        # 等价并联式 kp=1.0,kd=2.0: 1.0·1.0 + 2.0·3.0 = 7.0。
+        self.assertAlmostEqual(ppi.step(1.0, 3.0, 0.0), 7.0)
+
+    def test_ppi_velocity_command_clamp_is_asymmetric(self) -> None:
+        """验证外环速度指令按 vCmdMin/vCmdMax 非对称限幅，限的是速度而非加速度。"""
+
+        ppi = PPI()
+        ppi.init(PPIInitS(kpPos=1.0, kpVel=1.0, kiVel=0.0, dt=0.1, vCmdMin=0.0, vCmdMax=5.0))
+        # vel_cmd = 2.0 + 1.0·10 = 12.0 -> 夹到 5.0; vel_err = 5.0 - 1.0 = 4.0; acc = 4.0。
+        self.assertAlmostEqual(ppi.step(10.0, 2.0, 1.0), 4.0)
+        # vel_cmd = 2.0 - 10 = -8.0 -> 夹到下限 0.0; vel_err = 0 - 1.0 = -1.0; acc = -1.0。
+        self.assertAlmostEqual(ppi.step(-10.0, 2.0, 1.0), -1.0)
+
+    def test_ppi_acceleration_clamp_is_asymmetric(self) -> None:
+        """验证内环输出加速度按 accMin/accMax 非对称限幅。"""
+
+        ppi = PPI()
+        ppi.init(PPIInitS(kpPos=0.0, kpVel=10.0, kiVel=0.0, dt=0.1, accMin=-1.0, accMax=2.0))
+        self.assertAlmostEqual(ppi.step(0.0, 5.0, 0.0), 2.0)  # acc=50 -> 上限 2.0
+        self.assertAlmostEqual(ppi.step(0.0, -5.0, 0.0), -1.0)  # acc=-50 -> 下限 -1.0
+
+    def test_ppi_integral_clamped_by_iout_max(self) -> None:
+        """验证内环积分(以加速度贡献量存储)受 iOutMax 限幅，正负两侧都被钳住。"""
+
+        ppi = PPI()
+        ppi.init(PPIInitS(kpPos=0.0, kpVel=0.0, kiVel=1.0, dt=0.1, iOutMax=0.15))
+        # 积分累积 1.0·2.0·0.1=0.2 但被钳到 0.15，acc = 0 + 0.15。
+        self.assertAlmostEqual(ppi.step(0.0, 2.0, 0.0), 0.15)
+        # 大负误差把积分拉到下限 -0.15。
+        self.assertAlmostEqual(ppi.step(0.0, -100.0, 0.0), -0.15)
+
+    def test_ppi_anti_windup_back_calculation_recovers_immediately(self) -> None:
+        """验证输出饱和时反算法回退积分：饱和期积分被钉住不绕死，误差反向后立即退出饱和。"""
+
+        ppi = PPI()
+        ppi.init(PPIInitS(kpPos=0.0, kpVel=0.0, kiVel=1.0, dt=1.0, accMin=-1.0, accMax=1.0))
+        # 第一拍：积分 +2.0=2.0，acc=2.0 夹到 1.0，反算法回退 (2.0-1.0) -> 积分钉在 1.0。
+        self.assertAlmostEqual(ppi.step(0.0, 2.0, 0.0), 1.0)
+        # 第二拍：再饱和，积分仍被钉在 1.0(无 windup)。
+        self.assertAlmostEqual(ppi.step(0.0, 2.0, 0.0), 1.0)
+        # 误差反向：积分 1.0 + (-0.5) = 0.5，acc=0.5 不再饱和，立即恢复。
+        # 若无抗饱和，积分会绕到 4.0 以上，此拍仍被钉在上限 1.0。
+        self.assertAlmostEqual(ppi.step(0.0, -0.5, 0.0), 0.5)
+
+    def test_ppi_reset_clears_integral(self) -> None:
+        """验证 reset 清零内环积分。"""
+
+        ppi = PPI()
+        ppi.init(PPIInitS(kpPos=0.0, kpVel=0.0, kiVel=2.0, dt=0.1))
+        ppi.step(0.0, 1.0, 0.0)  # 积分累积 0.2
+        ppi.reset()
+        self.assertAlmostEqual(ppi.step(0.0, 1.0, 0.0), 0.2)  # 复位后从 0 重新累积
+
+    def test_ppi_init_rejects_inverted_limits(self) -> None:
+        """验证 init 拦截非法限幅区间(下限>上限)。"""
+
+        with self.assertRaises(ValueError):
+            PPI().init(PPIInitS(vCmdMin=5.0, vCmdMax=1.0, dt=0.1))
+        with self.assertRaises(ValueError):
+            PPI().init(PPIInitS(accMin=2.0, accMax=-2.0, dt=0.1))
 
 
 class PosCalcTests(unittest.TestCase):
