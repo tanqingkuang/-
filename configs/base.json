@@ -71,7 +71,7 @@
   },
   "control": {
     "velocity_command_limits": {
-      "forward_min_mps": -14.0,
+      "forward_min_mps": 14.0,
       "forward_max_mps": 25.0,
       "vertical_min_mps": -3.0,
       "vertical_max_mps": 3.0
