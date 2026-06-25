@@ -1773,6 +1773,7 @@ class MainWindow(QMainWindow):
         self.disturbance_buttons: list[QPushButton] = []
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
+        self._offline_plot: "OfflinePlotWindow | None" = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()
         self._install_button_cursors()
@@ -1787,6 +1788,7 @@ class MainWindow(QMainWindow):
         """构建主窗口全部 UI 区域。注意：控件引用需保存供后续事件更新使用。"""
         monitor_menu = self.menuBar().addMenu("控制监控(&V)")
         monitor_menu.addAction("数据监控(&M)").triggered.connect(self._open_live_monitor)
+        monitor_menu.addAction("离线分析(&A)").triggered.connect(self._open_offline_plot)
         root = QWidget()
         self.setCentralWidget(root)
         # 整体竖向：顶部 header + 下方主区。
@@ -2791,6 +2793,14 @@ class MainWindow(QMainWindow):
         self.fullscreen_button.setToolTip("退出全屏" if active else "全屏显示")
         self.fullscreen_button.setAccessibleName("退出全屏" if active else "全屏显示")
 
+    def _open_offline_plot(self) -> None:
+        """打开离线控制误差回放窗口。"""
+        from src.ui.gui.offline_plot import OfflinePlotWindow
+        if self._offline_plot is None:
+            self._offline_plot = OfflinePlotWindow(self)
+        self._offline_plot.show()
+        self._offline_plot.raise_()
+
     def _open_live_monitor(self) -> None:
         """打开实时控制监控窗口。"""
         from src.ui.gui.live_monitor import LiveMonitorWindow
@@ -2811,6 +2821,8 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         if self._live_monitor is not None:
             self._live_monitor.close()
+        if self._offline_plot is not None:
+            self._offline_plot.close()
         self.sim.close()
         super().closeEvent(event)
 

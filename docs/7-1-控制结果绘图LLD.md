@@ -2,17 +2,21 @@
 
 ## 1. 定位与架构
 
-本阶段只实现 `LiveMonitorWindow`（`QDialog`），用于实时监控控制误差数据。
+本文档涵盖两个绘图组件：
 
 | 组件 | 定位 | 数据来源 |
 | --- | --- | --- |
-| `LiveMonitorWindow` | 运行中监控三轴控制误差是否收敛、是否发散 | `SimulationController.get_snapshot()` 内存快照 |
+| `LiveMonitorWindow` | 运行中实时监控三轴控制误差是否收敛、是否发散 | `SimulationController.get_snapshot()` 内存快照 |
+| `OfflinePlotWindow` | 运行结束后加载日志文件、回放并分析控制误差时序曲线 | `logs/<run-id>/snapshots.jsonl` 落盘文件 |
 
 实时窗口持有 `SimulationController` 引用，用 `QTimer`（100 ms）轮询 `get_snapshot()`。绘图时间统一取 `snapshot.time_s`，不走 JSONL，不解析文件。
 
-本阶段不实现离线绘图分析。
+离线窗口不持有控制器引用，不使用定时器；用户通过文件对话框选择 `snapshots.jsonl`，一次性加载全部帧，静态渲染完整时序曲线。
 
-主窗口入口：新增标准菜单栏 **控制监控(&V)**，在其中添加"数据监控(&M)"菜单项。
+主窗口入口：标准菜单栏 **控制监控(&V)**，包含两个菜单项：
+
+- **数据监控(&M)**：打开 `LiveMonitorWindow`
+- **离线分析(&A)**：打开 `OfflinePlotWindow`
 
 **图表库**：PySide6.QtCharts 作为正式 GUI 硬依赖，不做降级保护。
 
@@ -260,7 +264,7 @@ QtCharts 为硬依赖，代码中不做降级保护。
 
 ---
 
-## 8. 文件变更清单
+## 8. 文件变更清单（LiveMonitorWindow）
 
 | 文件 | 操作 | 说明 |
 | --- | --- | --- |
@@ -268,3 +272,231 @@ QtCharts 为硬依赖，代码中不做降级保护。
 | `src/ui/gui/main_window.py` | 修改 | 菜单栏、`_open_live_monitor()`、`_start()`、`_reset()`、`closeEvent()`、`_apply_config_path()` |
 | `requirements-gui.txt` | 修改 | 显式追加 `PySide6-Addons==6.11.1`（QtCharts 所在包） |
 | `src/runner/sim_control.py` | 不修改 | 现有 `NodeState` 字段满足 V1 需求 |
+
+---
+
+## 9. OfflinePlotWindow 设计
+
+### 9.1 定位
+
+`OfflinePlotWindow`（`QDialog`）是纯离线可视化组件，不依赖仿真控制器，不使用定时器。用户选择 `snapshots.jsonl` 文件后，窗口一次性加载所有帧，静态渲染完整时序曲线，便于事后分析控制误差收敛情况。
+
+### 9.2 数据源：snapshots.jsonl
+
+`_DataLogger.write_snapshot()` 按 10 Hz（仿真时间）写入，每行一个 JSON 对象，字段与 `SimulationSnapshot` 一致，省略 `step_s`、`route`、`route_segments`。
+
+典型帧格式（字段已精度截断）：
+
+```json
+{
+  "time_s": 0.100,
+  "duration_s": 120.0,
+  "run_state": "RUNNING",
+  "control_report": "保持",
+  "nodes": [
+    {
+      "node_id": "A01", "role": "leader", "health": "normal",
+      "x_m": 140.12, "y_m": 260.34, "altitude_m": 1200.00,
+      "psi_v_deg": 89.73, "theta_deg": 0.00, "speed_mps": 8.02,
+      "vx_mps": 0.24, "vy_mps": 8.02, "vz_mps": 0.00,
+      "nx": 0.00, "nz": 1.00, "phi_deg": 0.00, "psi_dot_deg_s": 0.00,
+      "cmd_vel_east_mps": 0.00, "cmd_vel_north_mps": 8.00, "cmd_vel_up_mps": 0.00,
+      "track_pos_err_x_m": 0.12, "track_pos_err_y_m": 0.00, "track_pos_err_z_m": -0.34,
+      "track_vel_err_x_mps": 0.02, "track_vel_err_y_mps": 0.00, "track_vel_err_z_mps": 0.00,
+      "cross_track_error_m": null, "distance_to_go_m": null
+    }
+  ],
+  "links": [...],
+  "cpu_utilization": 0.03
+}
+```
+
+所有 `NodeState` 字段均存在；`null` 对应 Python `None`，与 `NodeState.cross_track_error_m: float | None` 兼容。
+
+### 9.3 通道与代码复用
+
+`OfflinePlotWindow` 复用 `live_monitor.py` 中的纯工具定义，但通道列表独立维护：
+
+```python
+from src.ui.gui.live_monitor import Ch, _hdg_dev, _PALETTE, _apply_y_range
+```
+
+`OFFLINE_CHANNELS` 在 `offline_plot.py` 内独立定义（7 个通道，内容与 `live_monitor.CHANNELS` 相同），不从 `live_monitor` 导入 `CHANNELS`，以便后续扩展离线专属通道（如 `nx/nz`、`cross_track_error_m`）时不影响实时监控侧边栏。
+
+### 9.4 NodeState 重建
+
+JSONL 中每个节点 dict 直接用于重建 `NodeState`：
+
+```python
+from dataclasses import fields as dc_fields
+from src.runner.sim_control import NodeState
+
+_NODE_STATE_FIELDS = {f.name for f in dc_fields(NodeState)}
+
+node_kw = {k: v for k, v in node_dict.items() if k in _NODE_STATE_FIELDS}
+node = NodeState(**node_kw)
+```
+
+过滤未知键（JSONL 格式演进时的容错）。`NodeState` 所有无默认值字段（`node_id`、`role`、`health`、`x_m` 等 16 个）在规范 JSONL 中始终存在；`TypeError` 说明文件损坏，跳过该帧节点即可。
+
+### 9.5 UI 布局
+
+```text
+OfflinePlotWindow（QDialog，默认 1200 × 760）
+└── QVBoxLayout（root）
+    ├── 顶栏（QWidget，固定高约 36）
+    │   ├── QPushButton "打开日志…"（固定宽 90）
+    │   └── QLabel path（伸展，显示文件名，tooltip 显示完整路径）
+    ├── QFrame（水平分隔线）
+    └── QHBoxLayout（body）
+        ├── 左侧边栏（QWidget，固定宽 170）
+        │   ├── QGroupBox "节点"（动态填充，同 LiveMonitorWindow）
+        │   └── QGroupBox "通道"（按轴分组，同 LiveMonitorWindow）
+        └── 右侧图表区（QWidget，stretch=1）
+            └── QScrollArea
+                └── 每通道一行：QChartView（rubber band zoom）
+```
+
+与 `LiveMonitorWindow` 的主要区别：
+
+- 无策略色条（`control_report` 随时间变化，离线场景意义不大）
+- 无"时间窗口"下拉框（X 轴固定为完整仿真时间范围）
+- 无当前值标签（数据静态，末尾值无特殊意义）
+- 顶栏替换为文件选择栏
+
+### 9.6 图表行为
+
+**X 轴**：加载完成后设为 `[t_min, t_max + Δ]`，其中 `Δ = 0.5 s`（留白避免最后一点被截断）。X 轴端点在数据加载后固定，不随任何操作变化（用户若缩放则由 QtCharts 内部管理）。
+
+**Y 轴**：同 `_apply_y_range()`，5%～95% 百分位，始终包含 0。
+
+**y=0 基准线**：灰色虚线，端点固定为 `[t_min, t_max + Δ]`，不需要动态更新。
+
+**缩放交互**：每个 `QChartView` 启用 `RectangleRubberBand`——用户左键拖拽矩形框选区域放大；右键点击图表区重置该子图缩放（Qt 内置行为）。
+
+**数据量**：10 Hz × 120 s = 1200 帧/节点，3 节点 × 7 通道 × 1200 点 = 25200 个 `QPointF`，一次性 `series.replace()` 填入，耗时可忽略。
+
+### 9.7 数据结构
+
+```python
+# 节点表：node_id -> {color: str, visible: bool, cb: QCheckBox | None}
+_nodes: dict[str, dict]
+
+# 缓冲区：ch.key -> node_id -> list[(time_s, value)]
+# 使用 list 而非 deque，加载后不再追加
+_bufs: dict[str, dict[str, list[tuple[float, float]]]]
+
+# 坐标轴范围
+_t_min: float  # 所有帧中最小 time_s
+_t_max: float  # 所有帧中最大 time_s
+
+# series：(node_id, ch.key) -> QLineSeries
+_series: dict[tuple[str, str], QLineSeries]
+
+# 行缓存：ch.key -> (QChart, x_ax, y_ax, zero_series)
+_rows: dict[str, tuple]
+```
+
+### 9.8 方法职责
+
+| 方法 | 职责 |
+| --- | --- |
+| `_build_ui()` | 顶栏 + 侧边栏 + 图表区骨架，末尾调用 `_rebuild_charts()` |
+| `_build_sidebar()` | 节点 GroupBox（动态）+ 通道 GroupBox（同 LiveMonitorWindow） |
+| `_refresh_node_panel()` | 清空并重建节点 checkbox，同 LiveMonitorWindow |
+| `_toggle_node(nid, visible)` | 切换节点可见性，调用 `_rebuild_charts()` |
+| `_choose_file()` | `QFileDialog.getOpenFileName`，过滤 `*.jsonl`，调用 `_load_file()` |
+| `_load_file(path)` | 解析 JSONL → 填充 `_nodes` + `_bufs` → 调用 `_refresh_node_panel()` + `_rebuild_charts()` |
+| `_rebuild_charts()` | 按勾选通道和节点重建 `_series` 和 `_rows`，末尾调用 `_populate_series()` |
+| `_make_chart(ch, node_ids, show_x)` | 创建单通道 `QChart`，返回 `(chart, x_ax, y_ax, zero_s)` |
+| `_populate_series()` | 将 `_bufs` 数据填入 `_series`，刷新 X/Y 轴范围和零基准线端点 |
+
+`_load_file()` 出错时在 path label 显示简短错误，不弹对话框，不打断 UI。
+
+### 9.9 MainWindow 集成
+
+```python
+# __init__
+self._offline_plot: "OfflinePlotWindow | None" = None
+
+# _build_ui — 菜单（追加到 monitor_menu）
+monitor_menu.addAction("离线分析(&A)").triggered.connect(self._open_offline_plot)
+
+# _open_offline_plot（懒加载，与 _open_live_monitor 模式一致）
+def _open_offline_plot(self) -> None:
+    from src.ui.gui.offline_plot import OfflinePlotWindow
+    if self._offline_plot is None:
+        self._offline_plot = OfflinePlotWindow(self)
+    self._offline_plot.show()
+    self._offline_plot.raise_()
+
+# closeEvent
+if self._offline_plot is not None:
+    self._offline_plot.close()
+```
+
+`OfflinePlotWindow` 不关联仿真生命周期（无 `follow`/`unfollow`），因此 `_start()`、`_reset()`、`_apply_config_path()` 均不需要修改。
+
+### 9.10 注释覆盖率
+
+`scripts/comment_coverage.py` 要求所有公开和私有函数/类均有 docstring。`offline_plot.py` 所有方法必须一一添加。
+
+---
+
+### 9.11 规划中的编队控制效果分析（暂不实现）
+
+当前 V1 只实现"打开 JSONL 文件、按通道显示时序曲线"，属于基础可视化。后续需要扩展为**编队控制效果分析**，侧重点与实时监控不同：
+
+| 维度 | 实时监控（LiveMonitorWindow） | 离线分析（OfflinePlotWindow 规划） |
+| --- | --- | --- |
+| 时间范围 | 滚动窗口（30/60/120 s） | 完整仿真时长 |
+| 关注目标 | 当前是否发散 / 是否收敛 | 全程控制质量评估 |
+| 指标形式 | 瞬时曲线 | 统计量 + 阶段分析 |
+| 交互方式 | 实时自动刷新 | 静态，支持局部缩放 |
+
+#### 9.11.1 误差收敛性分析
+
+- **稳态误差**：仿真后段（如最后 10% 时长）各通道误差的均值和 RMS，每节点单独计算。
+- **收敛时间**：误差首次进入并持续留在稳态区间（如 ±0.5 m）的时刻。
+- **最大超调**：各通道误差的历史最大绝对值及发生时刻。
+
+以上指标以数值表格形式展示，不依赖曲线图。
+
+#### 9.11.2 队形精度分析
+
+- **节点相对位置误差**：各节点相对长机的实际位置 vs 理论槽位，在航迹坐标系三轴分解。等同于 `track_pos_err_{x,y,z}_m`，但需区分集结阶段与保持阶段分段统计。
+- **队形保持率**：保持阶段中，节点误差落在允许范围内的时间占比。
+- **编队重构分析**：识别 `control_report == "重构"` 区间，统计重构持续时长和重构后误差恢复速率。
+
+#### 9.11.3 航线跟踪质量（长机）
+
+- **侧偏距时序**：`cross_track_error_m` 全程曲线，评估长机对规划航线的跟踪精度。
+- **待飞距**：`distance_to_go_m` 曲线，反映长机是否按预期速率飞完航段。
+- **航段切换时刻**：从快照检测 `route` 变化，在时序图上标记垂直分隔线。
+
+#### 9.11.4 控制量历程
+
+- **加速度指令**：`nx`（切向过载）、`nz`（法向过载）、`phi_deg`（滚转角）全程时序，评估控制律平滑性和极值裕量。
+- **速度指令 vs 实际速度**：`cmd_vel_{east,north,up}_mps` 与 `v{x,y,z}_mps` 对比曲线，反映指令跟踪能力。
+
+#### 9.11.5 数据导出
+
+- 将统计指标导出为 CSV，供外部工具（Excel、MATLAB、Python）进一步处理。
+- 将当前可见曲线导出为 PNG，分辨率不低于 150 dpi。
+
+#### 9.11.6 实现约束
+
+- 以上功能均依赖已有 JSONL 字段，不需要修改 `NodeState` 或 `SimulationSnapshot`。
+- 统计计算在 UI 线程同步完成（数据量小，不需要异步），但若加载时长超过 500 ms 应考虑进度提示。
+- 导出功能依赖标准库（`csv`）和 `QChart.grab()`，不引入新的第三方依赖。
+
+---
+
+## 10. 文件变更清单（OfflinePlotWindow）
+
+| 文件 | 操作 | 说明 |
+| --- | --- | --- |
+| `src/ui/gui/offline_plot.py` | 新建 | `OfflinePlotWindow` 全部实现 |
+| `src/ui/gui/main_window.py` | 修改 | `_offline_plot` 字段、`_open_offline_plot()`、`monitor_menu` 追加菜单项、`closeEvent()` |
+| `src/ui/gui/live_monitor.py` | 不修改 | `CHANNELS`、`_PALETTE`、`_apply_y_range` 由 offline_plot 直接 import |
+| `src/runner/sim_control.py` | 不修改 | |
