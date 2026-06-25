@@ -1012,6 +1012,11 @@ class TopView(QGraphicsView):
             viewport.height() / 2.0 - center_y * self.scale_value,
         )
         self._manual_view = True
+        if self.auto_center:
+            # 自动居中开启时，框选只表达“调整缩放比例”，中心仍交给自动居中维护。
+            self._apply_auto_center()
+            self.viewChanged.emit()
+            return
         self.viewChanged.emit()
         self.manualViewChanged.emit()
 
@@ -1452,6 +1457,11 @@ class SideView(QWidget):
             self.altitude_min = center - span / 2.0
             self.altitude_max = center + span / 2.0
 
+        if self.auto_center:
+            # 自动居中开启时，框选只调整缩放/高度跨度，中心继续由自动居中维护。
+            self._apply_auto_center()
+            self.update()
+            return
         self.update()
         self.top_view.manualViewChanged.emit()
 
