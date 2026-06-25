@@ -173,6 +173,18 @@ class Snapshot:
     route_segments: list[ReferenceRoute] = field(default_factory=list)
 
 
+def is_leader_node(node: NodeState) -> bool:
+    """判断节点是否为长机。注意：GUI 显示必须遵循控制器 role，而不是节点顺序。"""
+
+    return node.role.strip().lower() == "leader"
+
+
+def leader_node_from(nodes: list[NodeState]) -> NodeState | None:
+    """从节点列表中取长机。注意：缺少显式长机时回退首节点，保持旧配置可显示。"""
+
+    return next((node for node in nodes if is_leader_node(node)), nodes[0] if nodes else None)
+
+
 class MockSimulation:
     """真实控制器接入前使用的小型 UI 演示数据源。注意：仅作为界面兜底。"""
 
@@ -1161,11 +1173,12 @@ class TopView(QGraphicsView):
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
-        for index, node in enumerate(snapshot.nodes):
+        for node in snapshot.nodes:
+            is_leader = is_leader_node(node)
             # 先画历史尾迹，再画机体，使机体压在尾迹之上。
-            self._draw_trail(painter, node, index, snapshot.time)
-            # 颜色优先级：异常>长机(第0个)>僚机。
-            color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
+            self._draw_trail(painter, node, is_leader, snapshot.time)
+            # 颜色优先级：异常>长机>僚机。
+            color = self.theme.warn if node.health != "normal" else self.theme.leader if is_leader else self.theme.wingman
             painter.save()
             # 平移到机体位置，按速度方向旋转机头朝向。
             painter.translate(node.x, node.y)
@@ -1186,12 +1199,12 @@ class TopView(QGraphicsView):
             painter.setPen(QPen(self.theme.ink, 1))
             painter.drawText(QPointF(node.x - 13, node.y - 18), node.node_id)
 
-    def _draw_trail(self, painter: QPainter, node: NodeState, index: int, current_time: float) -> None:
+    def _draw_trail(self, painter: QPainter, node: NodeState, is_leader: bool, current_time: float) -> None:
         """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
         # 少于 3 个点无法连成有意义的尾迹，直接跳过。
         if len(node.trail) <= 2:
             return
-        base = self.theme.leader if index == 0 else self.theme.wingman
+        base = self.theme.leader if is_leader else self.theme.wingman
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
         for previous, current in zip(node.trail, node.trail[1:]):
             age = max(0.0, current_time - current.time)
@@ -1199,7 +1212,7 @@ class TopView(QGraphicsView):
             alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
             color = QColor(base)
             # 长机尾迹整体比僚机略浓。
-            color.setAlphaF((0.52 if index == 0 else 0.44) * alpha)
+            color.setAlphaF((0.52 if is_leader else 0.44) * alpha)
             painter.setPen(QPen(color, 2))
             painter.drawLine(QPointF(previous.x, previous.y), QPointF(current.x, current.y))
 
@@ -1489,10 +1502,11 @@ class SideView(QWidget):
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 trails 画面元素。注意：只做渲染，不修改仿真状态。"""
-        for index, node in enumerate(snapshot.nodes):
+        for node in snapshot.nodes:
             if len(node.trail) <= 2:
                 continue
-            base = self.theme.leader if index == 0 else self.theme.wingman
+            is_leader = is_leader_node(node)
+            base = self.theme.leader if is_leader else self.theme.wingman
             for previous, current in zip(node.trail, node.trail[1:]):
                 x1 = self._map_x(self._horizontal_for_point(previous.x, previous.y))
                 x2 = self._map_x(self._horizontal_for_point(current.x, current.y))
@@ -1501,17 +1515,18 @@ class SideView(QWidget):
                 age = max(0.0, snapshot.time - current.time)
                 alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
                 color = QColor(base)
-                color.setAlphaF((0.48 if index == 0 else 0.40) * alpha)
+                color.setAlphaF((0.48 if is_leader else 0.40) * alpha)
                 painter.setPen(QPen(color, 2))
                 painter.drawLine(QPointF(x1, self._map_y(previous.altitude)), QPointF(x2, self._map_y(current.altitude)))
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
-        for index, node in enumerate(snapshot.nodes):
+        for node in snapshot.nodes:
             x = self._map_x(self._horizontal_for_point(node.x, node.y))
             if x < -24 or x > self.width() + 24:
                 continue
-            color = self.theme.warn if node.health != "normal" else self.theme.leader if index == 0 else self.theme.wingman
+            is_leader = is_leader_node(node)
+            color = self.theme.warn if node.health != "normal" else self.theme.leader if is_leader else self.theme.wingman
             y = self._map_y(node.altitude)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
@@ -2265,10 +2280,11 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.node_table.setItem(row, column, QTableWidgetItem(value))
 
-        # 整体跟踪表：用长机/首节点代表当前全局航线跟踪情况。
+        # 整体跟踪表：用长机代表当前全局航线跟踪情况，缺少显式长机时才回退首节点。
         self.overall_table.setRowCount(1 if snapshot.nodes else 0)
         if snapshot.nodes:
-            leader = snapshot.nodes[0]
+            leader = leader_node_from(snapshot.nodes)
+            assert leader is not None
             side_offset = leader.cross_track_error
             if side_offset is None:
                 side_offset = (leader.y - WORLD_HEIGHT / 2) * 0.8

@@ -216,6 +216,33 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertLessEqual(large.width(), 14)
         self.assertLessEqual(large.height(), 10)
 
+    def test_top_view_marks_role_leader_when_leader_is_not_first_node(self) -> None:
+        view = self.window.top_view
+        view.show_grid = False
+        view.snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="",
+            disturbance="无",
+            nodes=[
+                NodeState("A01", "wingman", 0.0, 0.0, 1.0, 0.0),
+                NodeState("A05", "leader", 80.0, 0.0, 1.0, 0.0),
+            ],
+            links=[],
+        )
+        view.scale_value = 1.0
+        view.offset = QPointF(180.0, 180.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        leader_color = self.window.theme.leader.name()
+
+        self.assertEqual(self._count_pixels_near(image, 180, 180, leader_color), 0)
+        self.assertGreater(self._count_pixels_near(image, 260, 180, leader_color), 0)
+
     def test_top_view_link_keeps_screen_width_during_zoom(self) -> None:
         thin = self._link_stroke_height_at_scale(0.45)
         thick = self._link_stroke_height_at_scale(3.5)
@@ -832,6 +859,48 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
 
+    def test_overall_table_uses_role_leader_when_leader_is_not_first_node(self) -> None:
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[
+                NodeState(
+                    "A01",
+                    "wingman",
+                    100.0,
+                    120.0,
+                    20.0,
+                    0.0,
+                    1300.0,
+                    cross_track_error=99.4,
+                    distance_to_go=888.6,
+                ),
+                NodeState(
+                    "A05",
+                    "leader",
+                    80.0,
+                    90.0,
+                    20.0,
+                    0.0,
+                    1200.0,
+                    cross_track_error=12.4,
+                    distance_to_go=345.6,
+                ),
+            ],
+            links=[],
+        )
+
+        self.window._update_snapshot(snapshot)
+
+        self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
+        self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
+        self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
+
+
     def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
         self._load_ui_config(
             links=[
@@ -992,6 +1061,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         count = 0
         for y in range(image.height()):
             for x in range(image.width()):
+                if image.pixelColor(x, y).name() == color_name:
+                    count += 1
+        return count
+
+    def _count_pixels_near(self, image, center_x: int, center_y: int, color_name: str) -> int:  # noqa: ANN001
+        count = 0
+        for y in range(max(0, center_y - 18), min(image.height(), center_y + 19)):
+            for x in range(max(0, center_x - 18), min(image.width(), center_x + 19)):
                 if image.pixelColor(x, y).name() == color_name:
                     count += 1
         return count
