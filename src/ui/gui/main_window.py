@@ -181,8 +181,21 @@ class ObstacleView:
         return f"{self.obstacle_id}  圆 ({self.center_x:.0f},{self.center_y:.0f}) r{self.radius:.0f}"
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    """把任意配置值安全转成 float。注意：非法值（如字符串）返回默认值，避免 UI-only 字段拖垮加载流程。"""
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
-    """从配置 JSON 解析 avoidance 障碍与膨胀间距，供 UI 显示。注意：仅读取、不校验飞行约束，失败时安全返回空。"""
+    """从配置 JSON 解析 avoidance 障碍与膨胀间距，供 UI 显示。
+
+    注意：仅读取、不校验飞行约束。本函数为“安全解析”——任何缺失/非法字段都退化为默认值或被跳过，
+    绝不抛异常拖垮 _apply_config_path（该流程在控制器加载成功后调用）。
+    约定与文档 §4.2 一致：顶层 enabled=false 或 obstacles 为空 → 完全跳过避障，返回空。
+    """
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -192,37 +205,46 @@ def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
     avoidance = data.get("avoidance") if isinstance(data, dict) else None
     if not isinstance(avoidance, dict):
         return [], 0.0
-    clearance = float(avoidance.get("clearance_m", 0.0) or 0.0)
+    # 顶层总开关：显式关闭即完全跳过避障，等价于现状（不显示、不绘制、不可生成）。
+    if not avoidance.get("enabled", True):
+        return [], 0.0
+    clearance = _safe_float(avoidance.get("clearance_m", 0.0))
     obstacles: list[ObstacleView] = []
-    for index, raw in enumerate(avoidance.get("obstacles", []) or []):
+    raw_obstacles = avoidance.get("obstacles", [])
+    if not isinstance(raw_obstacles, list):
+        return [], clearance
+    for index, raw in enumerate(raw_obstacles):
         if not isinstance(raw, dict):
             continue
         obstacle_id = str(raw.get("id", f"OB{index + 1}"))
         enabled = bool(raw.get("enabled", True))
         if str(raw.get("type", "circle")) == "rect":
-            lo = raw.get("min", {}) or {}
-            hi = raw.get("max", {}) or {}
+            lo = raw.get("min", {})
+            hi = raw.get("max", {})
+            lo = lo if isinstance(lo, dict) else {}
+            hi = hi if isinstance(hi, dict) else {}
             obstacles.append(
                 ObstacleView(
                     obstacle_id=obstacle_id,
                     kind="rect",
                     enabled=enabled,
-                    min_x=float(lo.get("east_m", 0.0)),
-                    min_y=float(lo.get("north_m", 0.0)),
-                    max_x=float(hi.get("east_m", 0.0)),
-                    max_y=float(hi.get("north_m", 0.0)),
+                    min_x=_safe_float(lo.get("east_m", 0.0)),
+                    min_y=_safe_float(lo.get("north_m", 0.0)),
+                    max_x=_safe_float(hi.get("east_m", 0.0)),
+                    max_y=_safe_float(hi.get("north_m", 0.0)),
                 )
             )
         else:
-            center = raw.get("center", {}) or {}
+            center = raw.get("center", {})
+            center = center if isinstance(center, dict) else {}
             obstacles.append(
                 ObstacleView(
                     obstacle_id=obstacle_id,
                     kind="circle",
                     enabled=enabled,
-                    center_x=float(center.get("east_m", 0.0)),
-                    center_y=float(center.get("north_m", 0.0)),
-                    radius=float(raw.get("radius_m", 0.0)),
+                    center_x=_safe_float(center.get("east_m", 0.0)),
+                    center_y=_safe_float(center.get("north_m", 0.0)),
+                    radius=_safe_float(raw.get("radius_m", 0.0)),
                 )
             )
     return obstacles, clearance
