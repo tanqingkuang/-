@@ -2050,13 +2050,13 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
         # 节点误差表、整体跟踪表和链路表分开显示，避免把全局航线指标误认为单机误差。
         self.node_table = QTableWidget(0, 5)
-        self.node_table.setHorizontalHeaderLabels(["ID", "前向误差(m)", "垂向误差(m)", "侧向误差(m)", "状态"])
-        self.overall_table = QTableWidget(0, 3)
-        self.overall_table.setHorizontalHeaderLabels(["侧偏(m)", "待飞距(m)", "高度(m)"])
+        self.node_table.setHorizontalHeaderLabels(["ID", "前向(m)", "垂向(m)", "侧向(m)", "状态"])
+        self.overall_table = QTableWidget(0, 4)
+        self.overall_table.setHorizontalHeaderLabels(["侧偏(m)", "待飞距(m)", "高度(m)", "地速(m/s)"])
         self.link_table = QTableWidget(0, 5)
         self.link_table.setHorizontalHeaderLabels(["链路", "方向", "延迟", "丢包", "状态"])
         self._configure_table(self.node_table, [48, 88, 88, 88, 50], expandable=True)
-        self._configure_table(self.overall_table, [82, 94, 82], height=78)
+        self._configure_table(self.overall_table, [72, 86, 72, 80], height=78)
         self._configure_table(self.link_table, [86, 52, 58, 50, 54], expandable=True)
         node_title = QLabel("节点跟踪误差")
         node_title.setObjectName("sectionTitle")
@@ -2359,7 +2359,9 @@ class MainWindow(QMainWindow):
             distance_to_go = leader.distance_to_go
             if distance_to_go is None:
                 distance_to_go = max(0.0, (WORLD_WIDTH - leader.x) * 4)
-            values = [f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{leader.altitude:.0f}"]
+            # 地速按水平面速度模长显示，不把垂向爬升率计入整体跟踪表。
+            ground_speed = math.hypot(leader.vx, leader.vy)
+            values = [f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{leader.altitude:.0f}", f"{ground_speed:.0f}"]
             for column, value in enumerate(values):
                 self.overall_table.setItem(0, column, QTableWidgetItem(value))
 

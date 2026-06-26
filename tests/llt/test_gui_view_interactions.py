@@ -1024,9 +1024,9 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window._update_snapshot(snapshot)
 
         self.assertEqual(self.window.node_table.columnCount(), 5)
-        self.assertEqual(self.window.node_table.horizontalHeaderItem(1).text(), "前向误差(m)")
-        self.assertEqual(self.window.node_table.horizontalHeaderItem(2).text(), "垂向误差(m)")
-        self.assertEqual(self.window.node_table.horizontalHeaderItem(3).text(), "侧向误差(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(1).text(), "前向(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(2).text(), "垂向(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(3).text(), "侧向(m)")
         self.assertEqual(self.window.node_table.item(0, 1).text(), "1.2")
         self.assertEqual(self.window.node_table.item(0, 2).text(), "-3.4")
         self.assertEqual(self.window.node_table.item(0, 3).text(), "5.6")
@@ -1034,9 +1034,12 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.node_table.item(1, 2).text(), "9.1")
         self.assertEqual(self.window.node_table.item(1, 3).text(), "-2.3")
         self.assertEqual(self.window.overall_table.rowCount(), 1)
+        self.assertEqual(self.window.overall_table.columnCount(), 4)
+        self.assertEqual(self.window.overall_table.horizontalHeaderItem(3).text(), "地速(m/s)")
         self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
         self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
         self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
+        self.assertEqual(self.window.overall_table.item(0, 3).text(), "20")
         self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
         self.assert_table_uses_full_width(self.window.node_table)
@@ -1082,6 +1085,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
         self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
         self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
+        self.assertEqual(self.window.overall_table.item(0, 3).text(), "20")
 
 
     def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
