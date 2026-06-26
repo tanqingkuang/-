@@ -82,8 +82,10 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         menu_titles = [action.text() for action in self.window.menuBar().actions()]
         self.assertIn("控制监控(&V)", menu_titles)
+        self.assertIn("数据分析(&D)", menu_titles)
         self.assertIn("帮助(&H)", menu_titles)
         self.assertEqual([action.text() for action in self.window.monitor_menu.actions()], ["数据监控(&M)", "离线分析(&A)"])
+        self.assertEqual([action.text() for action in self.window.data_analysis_menu.actions()], ["控制效果分析(&A)"])
         help_menu = self.window.help_menu
         self.assertEqual([action.text() for action in help_menu.actions()], ["浅色模式", "深色模式", "", "日志"])
 
@@ -93,6 +95,13 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.theme_key, "dark")
         self.assertTrue(self.window.dark_theme_action.isChecked())
         self.assertFalse(self.window.light_theme_action.isChecked())
+
+    def test_data_analysis_menu_opens_independent_window(self) -> None:
+        self.window._open_data_analysis_window()
+        self.app.processEvents()
+
+        self.assertIsNotNone(self.window._data_analysis_window)
+        self.assertEqual(self.window._data_analysis_window.windowTitle(), "离线控制效果分析")
 
     def test_grid_toggle_controls_top_and_side_views(self) -> None:
         self.assertTrue(self.window.grid_toggle.isChecked())

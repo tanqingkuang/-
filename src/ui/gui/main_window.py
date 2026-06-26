@@ -1776,6 +1776,7 @@ class MainWindow(QMainWindow):
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
+        self._data_analysis_window: "DataAnalysisWindow | None" = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()
         self._install_button_cursors()
@@ -1815,6 +1816,10 @@ class MainWindow(QMainWindow):
         self.monitor_menu.addAction("数据监控(&M)").triggered.connect(self._open_live_monitor)
         # 离线分析是 upstream 新增入口，rebase 后继续归在控制监控菜单下。
         self.monitor_menu.addAction("离线分析(&A)").triggered.connect(self._open_offline_plot)
+
+        # 数据分析是独立离线工具入口，不复用控制监控下的旧离线回放窗口。
+        self.data_analysis_menu = self.menuBar().addMenu("数据分析(&D)")
+        self.data_analysis_menu.addAction("控制效果分析(&A)").triggered.connect(self._open_data_analysis_window)
 
         # 帮助菜单承载低频入口，避免主题/日志控件常驻占用主画布顶部空间。
         self.help_menu = self.menuBar().addMenu("帮助(&H)")
@@ -2825,6 +2830,15 @@ class MainWindow(QMainWindow):
         self._offline_plot.show()
         self._offline_plot.raise_()
 
+    def _open_data_analysis_window(self) -> None:
+        """打开离线控制效果数据分析窗口。"""
+        from src.ui.gui.data_analysis_window import DataAnalysisWindow
+        # 新数据分析窗口独立持有，避免影响旧 OfflinePlotWindow 生命周期。
+        if self._data_analysis_window is None:
+            self._data_analysis_window = DataAnalysisWindow(self)
+        self._data_analysis_window.show()
+        self._data_analysis_window.raise_()
+
     def _open_live_monitor(self) -> None:
         """打开实时控制监控窗口。"""
         from src.ui.gui.live_monitor import LiveMonitorWindow
@@ -2847,6 +2861,8 @@ class MainWindow(QMainWindow):
             self._live_monitor.close()
         if self._offline_plot is not None:
             self._offline_plot.close()
+        if self._data_analysis_window is not None:
+            self._data_analysis_window.close()
         self.sim.close()
         super().closeEvent(event)
 
