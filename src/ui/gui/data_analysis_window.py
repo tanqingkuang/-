@@ -220,6 +220,7 @@ class DataAnalysisWindow(QDialog):
         self._summary_table: QTableWidget
         self._channel_buttons: dict[str, QRadioButton] = {}
         self._channel_group: QButtonGroup
+        self._selected_channel_key = CHANNELS[0].key
         self._chart_grid: QGridLayout
         self._chart_layers: dict[str, ChartLayerState] = {}
         self._source_legend_layout: QHBoxLayout
@@ -386,12 +387,19 @@ class DataAnalysisWindow(QDialog):
             button.setObjectName(f"offlineChannel_{channel.key}")
             # 默认绘制第一个通道；汇总表仍显示全部通道。
             button.setChecked(index == 0)
-            button.toggled.connect(lambda checked: self._refresh_all() if checked else None)
+            button.toggled.connect(
+                lambda checked, channel_key=channel.key: self._set_plot_channel(channel_key) if checked else None
+            )
             self._channel_buttons[channel.key] = button
             self._channel_group.addButton(button)
             lay.addWidget(button)
         lay.addStretch()
         return box
+
+    def _set_plot_channel(self, channel_key: str) -> None:
+        """切换当前绘图通道，并刷新滑动窗口曲线。"""
+        self._selected_channel_key = channel_key
+        self._refresh_all()
 
     def _build_chart_panel(self) -> QWidget:
         """构建右侧滑动窗口曲线面板。"""
@@ -484,7 +492,7 @@ class DataAnalysisWindow(QDialog):
             # 未选择文件时清空 tooltip，避免残留上一次路径。
             path_label.setToolTip("")
             return
-        prefix = source.path.name
+        prefix = _display_path(source.path)
         if source.error:
             # 顶栏只展示短状态，详细异常放在 tooltip，避免撑坏布局。
             path_label.setText(f"{prefix} - 加载失败")
@@ -613,7 +621,7 @@ class DataAnalysisWindow(QDialog):
     def _selected_channel(self) -> AnalysisChannel:
         """返回左侧单选列表当前选中的绘图通道。"""
         for channel in CHANNELS:
-            if self._channel_buttons[channel.key].isChecked():
+            if channel.key == self._selected_channel_key:
                 return channel
         # 理论上不会发生；保底返回首通道，避免空选择导致刷新失败。
         return CHANNELS[0]
@@ -758,6 +766,16 @@ def _curve_source_labels(curves_by_metric: dict[str, list[CurveSpec]]) -> list[s
     return labels
 
 
+def _display_path(path: Path) -> str:
+    """返回适合顶栏展示的路径，优先使用当前仓库下的相对路径。"""
+    try:
+        # 选中的日志通常位于 dist/logs，显示相对路径比单纯文件名更可辨认。
+        return str(path.resolve().relative_to(Path.cwd().resolve()))
+    except (OSError, ValueError):
+        # 外部文件不强行改写路径，避免不同盘符 relative_to 抛错后丢信息。
+        return str(path)
+
+
 def _fill_source_legend(layout: QHBoxLayout, labels: list[str]) -> None:
     """填充共享 A/B 图例，避免每张图重复显示图例。"""
     _clear_layout(layout)
@@ -796,7 +814,6 @@ def _make_chart_view(
     x_axis = QValueAxis()
     # 传入范围可能只有一个点，最小跨度保护避免 Qt 轴退化。
     x_axis.setRange(x_range[0], max(x_range[0] + 0.001, x_range[1]))
-    x_axis.setTitleText("t (s)")
     x_axis.setGridLineColor(QColor("#e2e8f0"))
     chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
 
@@ -849,7 +866,6 @@ def _make_chart_layer(title: str, accent_color: str) -> ChartLayerState:
     x_axis = QValueAxis()
     # 初始范围给一个最小跨度，后续刷新再写入真实时间范围。
     x_axis.setRange(0.0, 0.001)
-    x_axis.setTitleText("t (s)")
     x_axis.setGridLineColor(QColor("#e2e8f0"))
     chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
 

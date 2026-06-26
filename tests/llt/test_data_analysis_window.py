@@ -12,6 +12,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCharts import QChartView
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.ui.gui import data_analysis_window as data_analysis_window_module
@@ -54,6 +55,10 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(window._target_combo.itemText(0), "all")
             self.assertIn("A01", [window._target_combo.itemText(i) for i in range(window._target_combo.count())])
             self.assertEqual(window.summary_table.item(0, 1).text(), "4.00 |")
+            self.assertIn("pos_y", window._channel_buttons)
+            self.assertIn("vel_y", window._channel_buttons)
+            self.assertEqual(len(window._channel_buttons), 6)
+            self.assertEqual(window._chart_layers["mean"].x_axis.titleText(), "")
 
             window._source_checks["B"].setChecked(True)
             self.app.processEvents()
@@ -75,12 +80,55 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertTrue(window._popup.findChildren(type(window._status_label), "offlineLegendLabelA"))
             self.assertTrue(window._popup.findChildren(type(window._status_label), "offlineLegendLabelB"))
             self.assertTrue(all(not view.chart().legend().isVisible() for view in window._popup.findChildren(QChartView)))
+            self.assertTrue(
+                all(
+                    not view.chart().axes(Qt.Orientation.Horizontal)[0].titleText()
+                    for view in window._popup.findChildren(QChartView)
+                )
+            )
 
             rows = window._metric_rows_for_source(window._sources["A"], 0.0, 1.0)
             self.assertEqual(len(rows), 18)
             self.assertEqual(rows[0]["input_label"], "A")
             self.assertEqual(rows[0]["scope"], "all")
             self.assertEqual(rows[0]["channel"], "前向位置误差 x")
+
+    def test_vertical_channel_buttons_switch_plot_channel(self) -> None:
+        """垂向位置和垂向速度按钮应能切换当前绘图通道。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self._write_snapshots(Path(tmp) / "snapshots.jsonl", offset=0.0)
+            window = DataAnalysisWindow()
+            window.show()
+            window._load_file("A", path)
+            self.app.processEvents()
+
+            window._channel_buttons["pos_y"].click()
+            self.app.processEvents()
+            self.assertEqual(window._selected_channel().key, "pos_y")
+            self.assertEqual(window._status_label.text(), "垂向位置误差 y")
+            self.assertIn(("A", "all", "pos_y", 0.0, 1.0, 5.0), window._window_curve_cache)
+
+            window._channel_buttons["vel_y"].click()
+            self.app.processEvents()
+            self.assertEqual(window._selected_channel().key, "vel_y")
+            self.assertEqual(window._status_label.text(), "垂向速度误差 y")
+            self.assertIn(("A", "all", "vel_y", 0.0, 1.0, 5.0), window._window_curve_cache)
+
+    def test_loaded_file_displays_relative_path_when_under_workspace(self) -> None:
+        """工作区内文件应在顶栏显示相对路径，而不是只显示文件名。"""
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmp:
+            path = self._write_snapshots(Path(tmp) / "snapshots.jsonl", offset=0.0)
+            window = DataAnalysisWindow()
+            window.show()
+            self.app.processEvents()
+
+            window._load_file("A", path)
+            self.app.processEvents()
+
+            label_text = window._path_labels["A"].text()
+            self.assertNotEqual(label_text, "snapshots.jsonl")
+            self.assertTrue(label_text.endswith("snapshots.jsonl"))
+            self.assertIn("snapshots.jsonl", window._path_labels["A"].toolTip())
 
     def test_toggling_b_reuses_a_window_curve_cache(self) -> None:
         """B 图层显隐不应触发 A 图层的滑窗重复计算。"""
