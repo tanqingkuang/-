@@ -160,6 +160,75 @@ class ReferenceRoute:
 
 
 @dataclass
+class ObstacleView:
+    """俯视图显示用的二维障碍（无限高柱体）。注意：当前仅供 UI 显示与勾选，规划后端后续接入。"""
+
+    obstacle_id: str  # 障碍唯一标识，列表显示/勾选用
+    kind: str  # "circle" | "rect"
+    enabled: bool = True  # 是否启用（参与避障）
+    center_x: float = 0.0  # 圆心 east（kind=circle）
+    center_y: float = 0.0  # 圆心 north
+    radius: float = 0.0  # 半径，米（kind=circle）
+    min_x: float = 0.0  # 矩形 east 下界（kind=rect）
+    min_y: float = 0.0  # 矩形 north 下界
+    max_x: float = 0.0  # 矩形 east 上界
+    max_y: float = 0.0  # 矩形 north 上界
+
+    def label(self) -> str:
+        """生成左面板勾选列表的显示文本。注意：仅用于界面展示。"""
+        if self.kind == "rect":
+            return f"{self.obstacle_id}  矩形 ({self.min_x:.0f},{self.min_y:.0f})-({self.max_x:.0f},{self.max_y:.0f})"
+        return f"{self.obstacle_id}  圆 ({self.center_x:.0f},{self.center_y:.0f}) r{self.radius:.0f}"
+
+
+def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
+    """从配置 JSON 解析 avoidance 障碍与膨胀间距，供 UI 显示。注意：仅读取、不校验飞行约束，失败时安全返回空。"""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        # 非 JSON（如 YAML）或读取失败时不影响主流程，返回空障碍集。
+        return [], 0.0
+    avoidance = data.get("avoidance") if isinstance(data, dict) else None
+    if not isinstance(avoidance, dict):
+        return [], 0.0
+    clearance = float(avoidance.get("clearance_m", 0.0) or 0.0)
+    obstacles: list[ObstacleView] = []
+    for index, raw in enumerate(avoidance.get("obstacles", []) or []):
+        if not isinstance(raw, dict):
+            continue
+        obstacle_id = str(raw.get("id", f"OB{index + 1}"))
+        enabled = bool(raw.get("enabled", True))
+        if str(raw.get("type", "circle")) == "rect":
+            lo = raw.get("min", {}) or {}
+            hi = raw.get("max", {}) or {}
+            obstacles.append(
+                ObstacleView(
+                    obstacle_id=obstacle_id,
+                    kind="rect",
+                    enabled=enabled,
+                    min_x=float(lo.get("east_m", 0.0)),
+                    min_y=float(lo.get("north_m", 0.0)),
+                    max_x=float(hi.get("east_m", 0.0)),
+                    max_y=float(hi.get("north_m", 0.0)),
+                )
+            )
+        else:
+            center = raw.get("center", {}) or {}
+            obstacles.append(
+                ObstacleView(
+                    obstacle_id=obstacle_id,
+                    kind="circle",
+                    enabled=enabled,
+                    center_x=float(center.get("east_m", 0.0)),
+                    center_y=float(center.get("north_m", 0.0)),
+                    radius=float(raw.get("radius_m", 0.0)),
+                )
+            )
+    return obstacles, clearance
+
+
+@dataclass
 class Snapshot:
     """面向 UI 的仿真快照。注意：由真实控制器或 mock 数据适配得到。"""
 
@@ -813,6 +882,9 @@ class TopView(QGraphicsView):
         super().__init__(parent)
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
+        # 避障障碍（来自配置，独立于仿真快照）：加载配置后由主窗口注入，仅用于显示。
+        self.obstacles: list[ObstacleView] = []
+        self.obstacle_clearance = 0.0
         # 视图变换由 scale_value(缩放) 与 offset(平移) 两个量描述：屏幕 = 世界*scale + offset。
         self.scale_value = 1.0
         self.offset = self._default_offset()
@@ -833,6 +905,12 @@ class TopView(QGraphicsView):
     def set_theme(self, theme: Theme) -> None:
         """设置当前主题。注意：需要同步更新画布和控件颜色。"""
         self.theme = theme
+        self.viewport().update()
+
+    def set_obstacles(self, obstacles: list[ObstacleView], clearance: float) -> None:
+        """设置用于显示的避障障碍集与膨胀间距。注意：只更新显示，不推进仿真。"""
+        self.obstacles = obstacles
+        self.obstacle_clearance = clearance
         self.viewport().update()
 
     def set_snapshot(self, snapshot: Snapshot, *, fit_view: bool = False) -> None:
@@ -969,6 +1047,8 @@ class TopView(QGraphicsView):
         painter.scale(self.scale_value, self.scale_value)
         if self.show_grid:
             self._draw_grid(painter)
+        # 障碍画在网格之上、航线/节点之下，避免遮挡飞机与航线。
+        self._draw_obstacles(painter)
         if self.snapshot:
             # 绘制顺序：航线在底，链路其次，节点最上，保证遮挡关系正确。
             if self.snapshot.nodes:
@@ -1109,6 +1189,16 @@ class TopView(QGraphicsView):
         for route in self._route_segments():
             xs.extend([route.start_x, route.end_x])
             ys.extend([route.start_y, route.end_y])
+        # 让启用的障碍也纳入包围盒，使自适应铺满时障碍不被挤出视野。
+        for obstacle in self.obstacles:
+            if not obstacle.enabled:
+                continue
+            if obstacle.kind == "rect":
+                xs.extend([obstacle.min_x, obstacle.max_x])
+                ys.extend([obstacle.min_y, obstacle.max_y])
+            else:
+                xs.extend([obstacle.center_x - obstacle.radius, obstacle.center_x + obstacle.radius])
+                ys.extend([obstacle.center_y - obstacle.radius, obstacle.center_y + obstacle.radius])
         if not xs or not ys:
             return None
         return min(xs), max(xs), min(ys), max(ys)
@@ -1139,6 +1229,67 @@ class TopView(QGraphicsView):
     def _grid_world_spacing(self) -> int:
         """返回俯视图当前应使用的网格世界间距（依据自身缩放自适应）。"""
         return adaptive_world_grid_spacing(self.scale_value)
+
+    def _obstacle_center(self, obstacle: ObstacleView) -> tuple[float, float]:
+        """返回障碍中心世界坐标。注意：矩形取几何中心，圆取圆心。"""
+        if obstacle.kind == "rect":
+            return (obstacle.min_x + obstacle.max_x) / 2.0, (obstacle.min_y + obstacle.max_y) / 2.0
+        return obstacle.center_x, obstacle.center_y
+
+    def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
+        """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（矩形按方角近似）。"""
+        if obstacle.kind == "rect":
+            painter.drawRect(
+                QRectF(
+                    obstacle.min_x - inflate,
+                    obstacle.min_y - inflate,
+                    (obstacle.max_x - obstacle.min_x) + 2.0 * inflate,
+                    (obstacle.max_y - obstacle.min_y) + 2.0 * inflate,
+                )
+            )
+        else:
+            radius = obstacle.radius + inflate
+            painter.drawEllipse(QPointF(obstacle.center_x, obstacle.center_y), radius, radius)
+
+    def _draw_obstacles(self, painter: QPainter) -> None:
+        """绘制避障障碍与膨胀圈。注意：只做渲染，不修改仿真状态。"""
+        if not self.obstacles:
+            return
+        for obstacle in self.obstacles:
+            if obstacle.enabled:
+                # 膨胀圈：障碍外扩 clearance，橙色虚线、不填充。
+                ring = QColor(self.theme.warn)
+                ring.setAlphaF(0.85)
+                ring_pen = QPen(ring, 1.6 / self.scale_value)
+                ring_pen.setDashPattern([6, 5])
+                painter.setPen(ring_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                if self.obstacle_clearance > 0.0:
+                    self._stroke_obstacle_shape(painter, obstacle, self.obstacle_clearance)
+                # 障碍本体：半透明填充 + 实线描边。
+                fill = QColor(self.theme.warn)
+                fill.setAlphaF(0.28)
+                painter.setBrush(fill)
+                painter.setPen(QPen(self.theme.warn, 2.0 / self.scale_value))
+                self._stroke_obstacle_shape(painter, obstacle, 0.0)
+            else:
+                # 未勾选：灰色虚线、不填充、不画膨胀，弱化表示“本次不避”。
+                faint = QColor(self.theme.muted)
+                faint.setAlphaF(0.7)
+                faint_pen = QPen(faint, 1.4 / self.scale_value)
+                faint_pen.setDashPattern([4, 5])
+                painter.setPen(faint_pen)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                self._stroke_obstacle_shape(painter, obstacle, 0.0)
+            # 在障碍中心标注 id（标签不随缩放，保持屏幕尺寸）。
+            center_x, center_y = self._obstacle_center(obstacle)
+            painter.save()
+            painter.translate(center_x, center_y)
+            painter.scale(1.0 / self.scale_value, 1.0 / self.scale_value)
+            painter.setPen(QPen(self.theme.ink if obstacle.enabled else self.theme.muted, 1))
+            text = obstacle.obstacle_id if obstacle.enabled else f"{obstacle.obstacle_id}（未勾选）"
+            painter.drawText(QPointF(-10.0, 4.0), text)
+            painter.restore()
 
     def _draw_route(self, painter: QPainter) -> None:
         """绘制 route 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -1773,6 +1924,9 @@ class MainWindow(QMainWindow):
         self._stage_layout_index = 1
         self._stage_layout_stretch = 1
         self.disturbance_buttons: list[QPushButton] = []
+        # 避障障碍（来自配置）与其勾选框，加载配置后填充。
+        self.obstacles: list[ObstacleView] = []
+        self.obstacle_checkboxes: list[QCheckBox] = []
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
@@ -1936,9 +2090,86 @@ class MainWindow(QMainWindow):
             # index//2 为行、index%2 为列，铺成两行两列。
             grid.addWidget(button, index // 2, index % 2)
         layout.addWidget(disturb_group)
+
+        # “避障”分组：障碍来自 JSON，勾选启用的子集，一键生成航线（规划后端后续接入）。
+        avoidance_group = QGroupBox("避障")
+        avoidance_layout = QVBoxLayout(avoidance_group)
+        avoidance_layout.setContentsMargins(10, 18, 10, 10)
+        avoidance_layout.setSpacing(8)
+        # 障碍勾选列表容器：加载配置后由 _rebuild_obstacle_list 动态填充。
+        self.obstacle_list_container = QWidget()
+        self.obstacle_list_layout = QVBoxLayout(self.obstacle_list_container)
+        self.obstacle_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.obstacle_list_layout.setSpacing(4)
+        avoidance_layout.addWidget(self.obstacle_list_container)
+        # 一键生成航线：当前为占位，规划内核在后续步骤接入。
+        self.generate_route_button = QPushButton("⟳ 生成航线")
+        self.generate_route_button.clicked.connect(self._generate_route)
+        avoidance_layout.addWidget(self.generate_route_button)
+        # 状态行：显示启用障碍数 / 生成结果 / 失败原因。
+        self.avoidance_status = QLabel("（未加载障碍）")
+        self.avoidance_status.setObjectName("reportPill")
+        self.avoidance_status.setWordWrap(True)
+        avoidance_layout.addWidget(self.avoidance_status)
+        layout.addWidget(avoidance_group)
+        # 初始无障碍：同步一次列表与状态显示。
+        self._rebuild_obstacle_list()
+
         # 底部弹性占位把上面各分组顶到面板顶部。
         layout.addStretch(1)
         return panel
+
+    def _rebuild_obstacle_list(self) -> None:
+        """按当前障碍集重建左面板勾选列表。注意：只改显示控件，不触发规划。"""
+        # 清空旧复选框/占位标签。
+        while self.obstacle_list_layout.count():
+            item = self.obstacle_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.obstacle_checkboxes = []
+        if not self.obstacles:
+            placeholder = QLabel("（当前配置无障碍）")
+            placeholder.setObjectName("reportPill")
+            self.obstacle_list_layout.addWidget(placeholder)
+            self.generate_route_button.setEnabled(False)
+            return
+        self.generate_route_button.setEnabled(True)
+        for obstacle in self.obstacles:
+            checkbox = QCheckBox(obstacle.label())
+            checkbox.setChecked(obstacle.enabled)
+            # 默认参数绑定 obstacle，避免闭包共享变量。
+            checkbox.toggled.connect(lambda checked, ob=obstacle: self._on_obstacle_toggled(ob, checked))
+            self.obstacle_checkboxes.append(checkbox)
+            self.obstacle_list_layout.addWidget(checkbox)
+
+    def _on_obstacle_toggled(self, obstacle: ObstacleView, checked: bool) -> None:
+        """勾选/取消某障碍。注意：仅更新启用标志与显示，不触发规划。"""
+        obstacle.enabled = checked
+        self.top_view.viewport().update()
+        self._update_avoidance_status()
+
+    def _update_avoidance_status(self) -> None:
+        """刷新避障状态文本。注意：只读当前障碍集，不触发规划。"""
+        if not self.obstacles:
+            self.avoidance_status.setText("（未加载障碍）")
+            return
+        enabled = sum(1 for obstacle in self.obstacles if obstacle.enabled)
+        self.avoidance_status.setText(f"启用 {enabled}/{len(self.obstacles)} 个障碍 · 待生成航线")
+
+    def _set_obstacles_from_config(self, path: str) -> None:
+        """从配置文件解析障碍并刷新显示。注意：解析失败时清空障碍，保持界面一致。"""
+        obstacles, clearance = parse_avoidance_config(path)
+        self.obstacles = obstacles
+        self.top_view.set_obstacles(obstacles, clearance)
+        self._rebuild_obstacle_list()
+        self._update_avoidance_status()
+
+    def _generate_route(self) -> None:
+        """响应“生成航线”。注意：规划内核（A*+可飞性校验）在后续步骤接入，当前仅占位提示。"""
+        enabled = [obstacle for obstacle in self.obstacles if obstacle.enabled]
+        self.avoidance_status.setText(f"已选 {len(enabled)} 个障碍 · 规划后端待实现（步骤2-5）")
+        self._log("Avoid", f"生成航线请求：启用障碍 {[obstacle.obstacle_id for obstacle in enabled]}（规划后端待实现）")
 
     def _build_stage(self) -> QWidget:
         """构建中央仿真画布区域。注意：俯视图和侧视图需要共享横向视野。"""
@@ -2490,6 +2721,8 @@ class MainWindow(QMainWindow):
         snapshot = self.sim.load_config(path)
         if self.sim.last_result_code == "OK":
             self._sync_speed_controls(self.sim.speed)
+            # 先注入障碍再铺满，使自适应视野包含障碍区。
+            self._set_obstacles_from_config(path)
         self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
         if self.sim.last_result_code == "OK":
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。

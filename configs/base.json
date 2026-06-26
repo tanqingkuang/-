@@ -26,6 +26,39 @@
       }
     ]
   },
+  "avoidance": {
+    "enabled": true,
+    "turn_radius_m": 400.0,
+    "leg_length_margin_m": 80.0,
+    "clearance_m": 120.0,
+    "grid": {
+      "resolution_m": 20.0,
+      "margin_m": 300.0
+    },
+    "obstacles": [
+      {
+        "id": "C1",
+        "type": "circle",
+        "enabled": true,
+        "center": { "east_m": 900.0, "north_m": 0.0 },
+        "radius_m": 200.0
+      },
+      {
+        "id": "C2",
+        "type": "circle",
+        "enabled": true,
+        "center": { "east_m": 2000.0, "north_m": 1200.0 },
+        "radius_m": 200.0
+      },
+      {
+        "id": "R1",
+        "type": "rect",
+        "enabled": false,
+        "min": { "east_m": 350.0, "north_m": -180.0 },
+        "max": { "east_m": 650.0, "north_m": 180.0 }
+      }
+    ]
+  },
   "formation": {
     "pattern": "TRIANGLE",
     "coordinate_system": "x_forward_y_up_z_right",
