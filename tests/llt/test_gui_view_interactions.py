@@ -999,6 +999,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                     20.0,
                     0.0,
                     1200.0,
+                    vertical_speed=3.2,
                     cross_track_error=12.4,
                     distance_to_go=345.6,
                     track_pos_err_x=1.2,
@@ -1035,13 +1036,16 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.node_table.item(1, 2).text(), "9.1")
         self.assertEqual(self.window.node_table.item(1, 3).text(), "-2.3")
         self.assertEqual(self.window.overall_table.rowCount(), 1)
-        self.assertEqual(self.window.overall_table.columnCount(), 4)
+        self.assertEqual(self.window.overall_table.columnCount(), 5)
         self.assertEqual(self.window.overall_table.horizontalHeaderItem(3).text(), "地速(m/s)")
+        self.assertEqual(self.window.overall_table.horizontalHeaderItem(4).text(), "天向速度(m/s)")
         self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
         self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
         self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
         self.assertEqual(self.window.overall_table.item(0, 3).text(), "20")
         self.assertEqual(self.window.overall_table.item(0, 3).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
+        self.assertEqual(self.window.overall_table.item(0, 4).text(), "3")
+        self.assertLessEqual(self.window.overall_table.height(), 66)
         self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
         self.assert_table_uses_full_width(self.window.node_table)
@@ -1075,6 +1079,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                     20.0,
                     0.0,
                     1200.0,
+                    vertical_speed=-4.4,
                     cross_track_error=12.4,
                     distance_to_go=345.6,
                 ),
@@ -1088,6 +1093,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
         self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
         self.assertEqual(self.window.overall_table.item(0, 3).text(), "20")
+        self.assertEqual(self.window.overall_table.item(0, 4).text(), "-4")
 
 
     def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
