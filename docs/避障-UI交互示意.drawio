@@ -1,0 +1,109 @@
+<mxfile host="Electron" agent="Claude">
+  <diagram name="避障UI交互" id="avoid-ui-1">
+    <mxGraphModel dx="1500" dy="950" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1560" pageHeight="980" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=18;fontStyle=1;" value="主界面避障流程：JSON 配障碍 → 勾选启用 → 一键生成航线 → 俯视图预览确认 → 采用并仿真" vertex="1">
+          <mxGeometry height="28" width="1480" x="40" y="16" as="geometry" />
+        </mxCell>
+
+        <!-- window frame -->
+        <mxCell id="win" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#455A64;strokeWidth=2;verticalAlign=top;align=left;fontSize=12;spacingLeft=10;spacingTop=6;" value="菜单栏：控制监控　帮助" vertex="1">
+          <mxGeometry height="850" width="1480" x="40" y="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== LEFT PANEL ===================== -->
+        <mxCell id="lp" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#90A4AE;strokeWidth=1;verticalAlign=top;align=center;fontSize=12;fontStyle=1;spacingTop=4;" value="左面板 (216px)" vertex="1">
+          <mxGeometry height="780" width="230" x="56" y="118" as="geometry" />
+        </mxCell>
+        <mxCell id="lp_state" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="状态&#10;READY　回报：待命" vertex="1">
+          <mxGeometry height="52" width="206" x="68" y="148" as="geometry" />
+        </mxCell>
+        <mxCell id="lp_cfg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="配置&#10;[选择文件]　base.json（含 obstacles[]）&#10;场景▾　算法▾　时长 60s" vertex="1">
+          <mxGeometry height="74" width="206" x="68" y="206" as="geometry" />
+        </mxCell>
+        <mxCell id="lp_play" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="播放　速度 1.0x　CPU 0%" vertex="1">
+          <mxGeometry height="40" width="206" x="68" y="288" as="geometry" />
+        </mxCell>
+        <mxCell id="lp_dist" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="扰动（现有）" vertex="1">
+          <mxGeometry height="84" width="206" x="68" y="336" as="geometry" />
+        </mxCell>
+        <mxCell id="b_wind" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#90A4AE;fontSize=11;" value="风场" vertex="1"><mxGeometry height="24" width="95" x="74" y="358" as="geometry" /></mxCell>
+        <mxCell id="b_fault" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#90A4AE;fontSize=11;" value="故障" vertex="1"><mxGeometry height="24" width="95" x="173" y="358" as="geometry" /></mxCell>
+        <mxCell id="b_loss" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#90A4AE;fontSize=11;" value="丢包" vertex="1"><mxGeometry height="24" width="95" x="74" y="388" as="geometry" /></mxCell>
+        <mxCell id="b_clr" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#90A4AE;fontSize=11;" value="清除" vertex="1"><mxGeometry height="24" width="95" x="173" y="388" as="geometry" /></mxCell>
+
+        <!-- NEW avoidance group -->
+        <mxCell id="lp_obs" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#EF6C00;strokeWidth=2;align=left;verticalAlign=top;fontSize=11;fontStyle=1;spacingLeft=6;spacingTop=4;" value="避障（新增）　障碍来自 JSON，勾选启用" vertex="1">
+          <mxGeometry height="200" width="206" x="68" y="436" as="geometry" />
+        </mxCell>
+        <mxCell id="ob_list" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#FFB74D;fontSize=11;align=left;verticalAlign=top;spacingLeft=6;spacingTop=4;" value="☑ C1  圆 (600,300) r80&#10;☑ C2  圆 (300,520) r60&#10;☐ R1  矩形 900..1100&#10;☑ R2  矩形 …" vertex="1"><mxGeometry height="92" width="194" x="74" y="462" as="geometry" /></mxCell>
+        <mxCell id="ob_gen" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFB74D;strokeColor=#E65100;strokeWidth=2;fontSize=12;fontStyle=1;" value="⟳ 生成航线" vertex="1"><mxGeometry height="34" width="194" x="74" y="562" as="geometry" /></mxCell>
+        <mxCell id="ob_status" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=10;align=left;verticalAlign=top;spacingLeft=4;spacingTop=2;" value="状态：预览就绪（未确认）&#10;失败时显示 ERR_AVOID_* 原因" vertex="1"><mxGeometry height="34" width="194" x="74" y="600" as="geometry" /></mxCell>
+
+        <!-- ===================== CENTER STAGE ===================== -->
+        <mxCell id="cs_tb" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#CFD8DC;strokeColor=#90A4AE;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" value="工具栏：网格　居中　航段锁　视角　重置视图" vertex="1">
+          <mxGeometry height="30" width="780" x="300" y="118" as="geometry" />
+        </mxCell>
+
+        <!-- top view -->
+        <mxCell id="tv" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#90A4AE;fontSize=12;align=right;verticalAlign=top;spacingTop=4;spacingRight=8;" value="俯视图 TopView（East-North）　— 预览（未确认）" vertex="1">
+          <mxGeometry height="500" width="780" x="300" y="150" as="geometry" />
+        </mxCell>
+
+        <!-- planned route preview: green bending polyline around obstacles -->
+        <mxCell id="rt1" parent="1" style="endArrow=none;html=1;strokeColor=#2E7D32;strokeWidth=3;dashed=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="340" y="600" as="sourcePoint" /><mxPoint x="455" y="470" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="rt2" parent="1" style="endArrow=none;html=1;strokeColor=#2E7D32;strokeWidth=3;dashed=1;curved=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="455" y="470" as="sourcePoint" /><mxPoint x="610" y="470" as="targetPoint" /><Array as="points"><mxPoint x="500" y="380" /></Array></mxGeometry></mxCell>
+        <mxCell id="rt3" parent="1" style="endArrow=none;html=1;strokeColor=#2E7D32;strokeWidth=3;curved=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="610" y="470" as="sourcePoint" /><mxPoint x="820" y="470" as="targetPoint" /><Array as="points"><mxPoint x="720" y="300" /></Array></mxGeometry></mxCell>
+        <mxCell id="rt4" parent="1" style="endArrow=block;html=1;strokeColor=#2E7D32;strokeWidth=3;dashed=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="820" y="470" as="sourcePoint" /><mxPoint x="1040" y="560" as="targetPoint" /></mxGeometry></mxCell>
+
+        <!-- obstacle C2 (enabled) -->
+        <mxCell id="infl2" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#EF6C00;strokeWidth=2;dashed=1;" value="" vertex="1"><mxGeometry height="130" width="130" x="430" y="475" as="geometry" /></mxCell>
+        <mxCell id="obs2" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EF9A9A;strokeColor=#C62828;strokeWidth=2;opacity=80;fontSize=10;fontColor=#B71C1C;" value="C2" vertex="1"><mxGeometry height="80" width="80" x="455" y="500" as="geometry" /></mxCell>
+
+        <!-- obstacle C1 (enabled) -->
+        <mxCell id="infl1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#EF6C00;strokeWidth=2;dashed=1;" value="" vertex="1"><mxGeometry height="170" width="170" x="635" y="425" as="geometry" /></mxCell>
+        <mxCell id="obs1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EF9A9A;strokeColor=#C62828;strokeWidth=2;opacity=80;fontSize=11;fontColor=#B71C1C;" value="C1" vertex="1"><mxGeometry height="110" width="110" x="665" y="455" as="geometry" /></mxCell>
+        <mxCell id="infl_l" parent="1" style="text;html=1;fontSize=10;fontColor=#EF6C00;" value="膨胀 r+clearance" vertex="1"><mxGeometry height="16" width="120" x="690" y="600" as="geometry" /></mxCell>
+
+        <!-- disabled obstacle R1 (not selected → faint, not avoided) -->
+        <mxCell id="obsR1" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#B0BEC5;dashed=1;opacity=60;fontSize=10;fontColor=#90A4AE;" value="R1（未勾选，不避）" vertex="1"><mxGeometry height="70" width="120" x="900" y="200" as="geometry" /></mxCell>
+
+        <!-- aircraft arrow at start -->
+        <mxCell id="ac" parent="1" style="shape=triangle;direction=north;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;rotation=-30;" value="" vertex="1"><mxGeometry height="22" width="16" x="346" y="588" as="geometry" /></mxCell>
+        <mxCell id="ac_l" parent="1" style="text;html=1;fontSize=10;fontColor=#1565C0;" value="长机" vertex="1"><mxGeometry height="16" width="40" x="330" y="612" as="geometry" /></mxCell>
+        <mxCell id="rt_l" parent="1" style="text;html=1;fontSize=11;fontColor=#2E7D32;fontStyle=1;" value="规划航线（虚线=预览，确认后变实线）" vertex="1"><mxGeometry height="16" width="260" x="800" y="500" as="geometry" /></mxCell>
+
+        <!-- side view -->
+        <mxCell id="sv" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#90A4AE;fontSize=11;align=right;verticalAlign=top;spacingTop=4;spacingRight=8;" value="侧视图 SideView（高度不变）" vertex="1">
+          <mxGeometry height="120" width="780" x="300" y="654" as="geometry" />
+        </mxCell>
+        <mxCell id="tl" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#CFD8DC;strokeColor=#90A4AE;fontSize=11;align=left;verticalAlign=middle;spacingLeft=8;" value="时间轴：0.0/60s　[▶ 采用并播放（预览确认后启用）] [单步] [重置]　进度 ▱▱▱▱▱" vertex="1">
+          <mxGeometry height="30" width="780" x="300" y="778" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== RIGHT PANEL ===================== -->
+        <mxCell id="rp" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#90A4AE;verticalAlign=top;align=center;fontSize=12;fontStyle=1;spacingTop=4;" value="右面板 (400px)" vertex="1">
+          <mxGeometry height="690" width="346" x="1096" y="118" as="geometry" />
+        </mxCell>
+        <mxCell id="rp_t1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="整体跟踪表（侧偏/待飞距/高度/地速/天向）" vertex="1"><mxGeometry height="70" width="322" x="1108" y="148" as="geometry" /></mxCell>
+        <mxCell id="rp_t2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="节点跟踪误差表（前向/垂向/侧向/状态）" vertex="1"><mxGeometry height="120" width="322" x="1108" y="228" as="geometry" /></mxCell>
+        <mxCell id="rp_t3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="链路状态表（延迟/丢包/状态）" vertex="1"><mxGeometry height="120" width="322" x="1108" y="358" as="geometry" /></mxCell>
+
+        <!-- ===================== CALLOUTS ===================== -->
+        <mxCell id="n1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EF6C00;strokeColor=#E65100;fontColor=#FFFFFF;fontStyle=1;fontSize=13;" value="1" vertex="1"><mxGeometry height="26" width="26" x="246" y="495" as="geometry" /></mxCell>
+        <mxCell id="n2" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EF6C00;strokeColor=#E65100;fontColor=#FFFFFF;fontStyle=1;fontSize=13;" value="2" vertex="1"><mxGeometry height="26" width="26" x="246" y="566" as="geometry" /></mxCell>
+        <mxCell id="n3" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EF6C00;strokeColor=#E65100;fontColor=#FFFFFF;fontStyle=1;fontSize=13;" value="3" vertex="1"><mxGeometry height="26" width="26" x="700" y="300" as="geometry" /></mxCell>
+        <mxCell id="n4" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;fontColor=#FFFFFF;fontStyle=1;fontSize=13;" value="4" vertex="1"><mxGeometry height="26" width="26" x="306" y="786" as="geometry" /></mxCell>
+
+        <!-- steps legend -->
+        <mxCell id="legend" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDE7;strokeColor=#F9A825;strokeWidth=2;align=left;verticalAlign=top;fontSize=12;spacingLeft=10;spacingTop=8;" value="操作流程（规划与仿真解耦，中间一道人工确认闸）&#10;&#10;①  加载含 obstacles[] 的 JSON 后，左面板“避障”列出全部障碍，勾选本次要避开的子集（未勾选的不参与，如 R1）&#10;②  点【⟳ 生成航线】→ 后端 plan_route(选中障碍) 跑 A* + 可飞性校验（不进仿真）&#10;③  俯视图预览：红=障碍、橙虚线=膨胀、绿虚线=规划航线；失败则左面板显示 ERR_AVOID_* 具体原因，不出航线&#10;④  预览满意 → 点【采用并播放】才按这条航线仿真；不满意就改 JSON / 改勾选，重新“生成航线”" vertex="1">
+          <mxGeometry height="150" width="1390" x="60" y="838" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
