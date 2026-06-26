@@ -1,0 +1,76 @@
+<mxfile host="Electron" agent="Claude">
+  <diagram name="避障几何约束" id="avoid-geom-1">
+    <mxGraphModel dx="1400" dy="900" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1500" pageHeight="820" background="#ffffff" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=18;fontStyle=1;" value="本体约束的两个几何来源：① 障碍膨胀　② 圆弧转弯占用航段长度" vertex="1">
+          <mxGeometry height="30" width="1300" x="40" y="16" as="geometry" />
+        </mxCell>
+
+        <!-- ================= 左：膨胀 ================= -->
+        <mxCell id="lbox" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#90A4AE;dashed=1;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;" value="① 障碍膨胀" vertex="1">
+          <mxGeometry height="430" width="520" x="40" y="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="inflate" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#EF6C00;strokeWidth=2;dashed=1;" value="" vertex="1">
+          <mxGeometry height="320" width="320" x="140" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="obs" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EF9A9A;strokeColor=#C62828;strokeWidth=2;" value="障碍&#10;r_obs" vertex="1">
+          <mxGeometry height="180" width="180" x="210" y="200" as="geometry" />
+        </mxCell>
+
+        <mxCell id="rc" parent="1" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=2;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="300" y="290" as="sourcePoint" /><mxPoint x="390" y="290" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="rcl" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#C62828;" value="r_obs" vertex="1"><mxGeometry height="20" width="60" x="320" y="262" as="geometry" /></mxCell>
+
+        <mxCell id="cl" parent="1" style="endArrow=classic;html=1;strokeColor=#EF6C00;strokeWidth=2;dashed=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="390" y="290" as="sourcePoint" /><mxPoint x="460" y="290" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="cll" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontColor=#EF6C00;" value="clearance" vertex="1"><mxGeometry height="20" width="80" x="392" y="262" as="geometry" /></mxCell>
+
+        <mxCell id="ltext" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=13;spacingLeft=4;" value="膨胀半径 = r_obs + clearance&#10;A* 把膨胀后的圆/矩形当作不可通行。&#10;clearance 吸收圆弧外凸与跟踪误差，&#10;建议与配置的 R 同量级。" vertex="1">
+          <mxGeometry height="90" width="470" x="60" y="380" as="geometry" />
+        </mxCell>
+
+        <!-- ================= 右：航段长度占用 ================= -->
+        <mxCell id="rbox" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#90A4AE;dashed=1;fontSize=14;fontStyle=1;align=left;verticalAlign=top;spacingLeft=8;spacingTop=6;" value="② 圆弧转弯占用航段长度" vertex="1">
+          <mxGeometry height="430" width="760" x="610" y="70" as="geometry" />
+        </mxCell>
+
+        <!-- legs: A -> P (corner) -> B -->
+        <mxCell id="legA" parent="1" style="endArrow=none;html=1;strokeColor=#1565C0;strokeWidth=3;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="700" y="430" as="sourcePoint" /><mxPoint x="960" y="170" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="legB" parent="1" style="endArrow=none;html=1;strokeColor=#1565C0;strokeWidth=3;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="960" y="170" as="sourcePoint" /><mxPoint x="1220" y="430" as="targetPoint" /></mxGeometry></mxCell>
+
+        <!-- arc T1 -> T2 (curved, bulge toward corner P) -->
+        <mxCell id="arc" parent="1" style="endArrow=none;html=1;strokeColor=#2E7D32;strokeWidth=4;curved=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="862" y="268" as="sourcePoint" /><mxPoint x="1058" y="268" as="targetPoint" /><Array as="points"><mxPoint x="960" y="232" /></Array></mxGeometry></mxCell>
+
+        <!-- radii C->T1, C->T2 -->
+        <mxCell id="rad1" parent="1" style="endArrow=none;html=1;strokeColor=#2E7D32;strokeWidth=1;dashed=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="960" y="360" as="sourcePoint" /><mxPoint x="862" y="268" as="targetPoint" /></mxGeometry></mxCell>
+        <mxCell id="rad2" parent="1" style="endArrow=none;html=1;strokeColor=#2E7D32;strokeWidth=1;dashed=1;" edge="1"><mxGeometry relative="1" as="geometry"><mxPoint x="960" y="360" as="sourcePoint" /><mxPoint x="1058" y="268" as="targetPoint" /></mxGeometry></mxCell>
+
+        <!-- nodes -->
+        <mxCell id="ptP" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#000000;strokeWidth=2;" value="" vertex="1"><mxGeometry height="12" width="12" x="954" y="164" as="geometry" /></mxCell>
+        <mxCell id="ptPl" parent="1" style="text;html=1;fontSize=13;fontStyle=1;" value="拐点 P（偏转角 Δψ）" vertex="1"><mxGeometry height="20" width="200" x="900" y="138" as="geometry" /></mxCell>
+        <mxCell id="ptA" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;" value="" vertex="1"><mxGeometry height="12" width="12" x="694" y="424" as="geometry" /></mxCell>
+        <mxCell id="ptAl" parent="1" style="text;html=1;fontSize=12;" value="航点 A" vertex="1"><mxGeometry height="20" width="60" x="660" y="430" as="geometry" /></mxCell>
+        <mxCell id="ptB" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#1565C0;strokeColor=#0D47A1;" value="" vertex="1"><mxGeometry height="12" width="12" x="1214" y="424" as="geometry" /></mxCell>
+        <mxCell id="ptBl" parent="1" style="text;html=1;fontSize=12;" value="航点 B" vertex="1"><mxGeometry height="20" width="60" x="1220" y="430" as="geometry" /></mxCell>
+
+        <mxCell id="ptT1" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;" value="" vertex="1"><mxGeometry height="12" width="12" x="856" y="262" as="geometry" /></mxCell>
+        <mxCell id="ptT1l" parent="1" style="text;html=1;fontSize=12;fontColor=#2E7D32;" value="切点 T1" vertex="1"><mxGeometry height="20" width="60" x="790" y="256" as="geometry" /></mxCell>
+        <mxCell id="ptT2" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#2E7D32;strokeColor=#1B5E20;" value="" vertex="1"><mxGeometry height="12" width="12" x="1052" y="262" as="geometry" /></mxCell>
+        <mxCell id="ptT2l" parent="1" style="text;html=1;fontSize=12;fontColor=#2E7D32;" value="切点 T2" vertex="1"><mxGeometry height="20" width="60" x="1064" y="256" as="geometry" /></mxCell>
+        <mxCell id="ptC" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#000000;strokeColor=#000000;" value="" vertex="1"><mxGeometry height="10" width="10" x="955" y="355" as="geometry" /></mxCell>
+        <mxCell id="ptCl" parent="1" style="text;html=1;fontSize=12;" value="圆心 C，半径 R" vertex="1"><mxGeometry height="20" width="130" x="975" y="352" as="geometry" /></mxCell>
+
+        <!-- d annotations -->
+        <mxCell id="d1" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#7B1FA2;" value="d = R·tan(Δψ/2)" vertex="1"><mxGeometry height="20" width="140" x="838" y="200" as="geometry" /></mxCell>
+        <mxCell id="d2" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontColor=#7B1FA2;" value="d" vertex="1"><mxGeometry height="20" width="20" x="1024" y="206" as="geometry" /></mxCell>
+
+        <mxCell id="rtext" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=13;spacingLeft=4;" value="每个拐点从相邻直线段两端各吃掉切点距离 d = R·tan(Δψ/2)。&#10;一条腿要同时容下两端拐点的圆弧占用，再留直线余度 L：&#10;&#10;　　腿长(i, i+1) ≥ R·tan(Δψ_i /2) + R·tan(Δψ_{i+1} /2) + L&#10;&#10;Δψ 越接近 180°，tan(Δψ/2) 爆炸 → 该拐点不可飞，规划阶段须拒绝。" vertex="1">
+          <mxGeometry height="130" width="740" x="620" y="500" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
