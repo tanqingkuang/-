@@ -263,6 +263,7 @@ class AvoidanceParams:
     turn_radius_m: float = 0.0
     leg_margin_m: float = 0.0
     clearance_m: float = 0.0
+    simplify_clearance_m: float = 0.0
     resolution_m: float = 10.0
     margin_m: float = 0.0
     speed_mps: float = 0.0
@@ -303,6 +304,7 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         turn_radius_m=_safe_float(avoidance.get("turn_radius_m", 0.0)),
         leg_margin_m=_safe_float(avoidance.get("leg_length_margin_m", 0.0)),
         clearance_m=_safe_float(avoidance.get("clearance_m", 0.0)),
+        simplify_clearance_m=_safe_float(avoidance.get("simplify_clearance_m", 0.0)),
         resolution_m=_safe_float(grid.get("resolution_m", 10.0)) if isinstance(grid, dict) else 10.0,
         margin_m=_safe_float(grid.get("margin_m", 0.0)) if isinstance(grid, dict) else 0.0,
         speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
@@ -2446,6 +2448,7 @@ class MainWindow(QMainWindow):
                 turn_radius_m=self.turn_radius_spin.value(),
                 leg_margin_m=self.leg_margin_spin.value(),
                 clearance_m=self.clearance_spin.value(),
+                simplify_clearance_m=params.simplify_clearance_m,
                 speed_mps=params.speed_mps,
                 resolution_m=params.resolution_m,
                 margin_m=params.margin_m,

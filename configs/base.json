@@ -32,6 +32,7 @@
     "turn_radius_m": 300.0,
     "leg_length_margin_m": 80.0,
     "clearance_m": 120.0,
+    "simplify_clearance_m": 120.0,
     "grid": {
       "resolution_m": 20.0,
       "margin_m": 300.0

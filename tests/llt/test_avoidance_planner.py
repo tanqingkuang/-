@@ -13,7 +13,15 @@ from src.algorithm.units.process.tra_plan.avoidance.planner import (
 )
 
 CLEARANCE = 120.0
-COMMON = dict(turn_radius_m=150.0, leg_margin_m=50.0, clearance_m=CLEARANCE, speed_mps=20.0, resolution_m=20.0, margin_m=300.0)
+COMMON = dict(
+    turn_radius_m=150.0,
+    leg_margin_m=50.0,
+    clearance_m=CLEARANCE,
+    simplify_clearance_m=CLEARANCE,
+    speed_mps=20.0,
+    resolution_m=20.0,
+    margin_m=300.0,
+)
 
 
 def _straights_collision_free(route, obstacles, clearance) -> bool:
@@ -41,6 +49,24 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         self.assertTrue(_straights_collision_free(result.route, obstacles, CLEARANCE))
         # 绕行必须偏出原直线（north 抬到膨胀半径量级）。
         self.assertGreaterEqual(max(abs(p[1]) for p in result.simplified_points), 180.0)
+
+    def test_simplify_clearance_independent_from_search_clearance(self) -> None:
+        obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
+        conservative = dict(COMMON)
+        conservative["simplify_clearance_m"] = CLEARANCE
+        relaxed = dict(COMMON)
+        relaxed["simplify_clearance_m"] = 0.0
+
+        conservative_result = plan_avoidance_route(
+            [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **conservative
+        )
+        relaxed_result = plan_avoidance_route(
+            [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **relaxed
+        )
+
+        self.assertTrue(conservative_result.ok, conservative_result.detail)
+        self.assertTrue(relaxed_result.ok, relaxed_result.detail)
+        self.assertLess(len(relaxed_result.simplified_points), len(conservative_result.simplified_points))
 
     def test_multi_leg_route_avoids_both_obstacles(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0), (2000.0, 2000.0, 1000.0)]
