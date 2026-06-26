@@ -48,6 +48,7 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(window.summary_table.rowCount(), 6)
             self.assertEqual(window.summary_table.horizontalHeaderItem(1).text(), "均值")
             self.assertEqual(window.summary_table.horizontalHeaderItem(3).text(), "标准差")
+            self.assertEqual(window.summary_table.verticalScrollBar().maximum(), 0)
             self.assertEqual(window._target_combo.itemText(0), "all")
             self.assertIn("A01", [window._target_combo.itemText(i) for i in range(window._target_combo.count())])
             self.assertEqual(window.summary_table.item(0, 1).text(), "4.00 |")
@@ -56,6 +57,9 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.app.processEvents()
 
             self.assertEqual(window.summary_table.item(0, 1).text(), "4.00 | 5.00")
+            self.assertTrue(window.findChildren(type(window._status_label), "offlineLegendLabelA"))
+            self.assertTrue(window.findChildren(type(window._status_label), "offlineLegendLabelB"))
+            self.assertTrue(all(not view.chart().legend().isVisible() for view in window.findChildren(QChartView)))
             window._target_combo.setCurrentText("A01")
             self.app.processEvents()
             self.assertEqual(window.summary_table.item(0, 1).text(), "3.00 | 4.00")
@@ -66,6 +70,9 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertIsNotNone(window._popup)
             assert window._popup is not None
             self.assertEqual(len(window._popup.findChildren(QChartView)), 4)
+            self.assertTrue(window._popup.findChildren(type(window._status_label), "offlineLegendLabelA"))
+            self.assertTrue(window._popup.findChildren(type(window._status_label), "offlineLegendLabelB"))
+            self.assertTrue(all(not view.chart().legend().isVisible() for view in window._popup.findChildren(QChartView)))
 
             rows = window._metric_rows_for_source(window._sources["A"], 0.0, 1.0)
             self.assertEqual(len(rows), 18)

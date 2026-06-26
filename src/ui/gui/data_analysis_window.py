@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-import csv
-import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 from PySide6.QtCore import QMargins, QPointF, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -35,59 +33,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-
-@dataclass(frozen=True)
-class AnalysisChannel:
-    """单个控制误差分析通道。注意：field_name 必须对应 snapshots.jsonl 的节点字段。"""
-
-    # 内部稳定键，用于缓冲区索引和控件 objectName。
-    key: str
-    # 展示名称直接进入表格、单选框和导出 CSV。
-    label: str
-    # 单位目前只保留给后续图表标题和导出扩展。
-    unit: str
-    # snapshots.jsonl 节点对象中的字段名。
-    field_name: str
-
-
-@dataclass(frozen=True)
-class MetricSummary:
-    """某个样本集合的统计结果。注意：variance 使用总体方差。"""
-
-    # 有效样本数量，导出时用于判断指标可信度。
-    count: int
-    # 有符号均值，可观察误差是否长期偏向某一侧。
-    mean: float
-    # 总体方差，阶段二已明确不使用样本方差。
-    variance: float
-    # 标准差，和方差表达同一离散程度但量纲与原误差一致。
-    std: float
-    # RMS 反映综合误差能量，对零均值误差近似等于标准差。
-    rms: float
-    # 最大绝对误差，用于快速定位最坏情况。
-    max_abs: float
-    # 最大绝对误差首次出现的仿真时刻。
-    max_abs_time_s: float
-
-
-@dataclass
-class SourceData:
-    """单个输入文件解析后的内存数据。注意：samples 按 node_id 和通道 key 分组。"""
-
-    # A 或 B，用于表格左右位置、图例和导出来源。
-    label: str
-    # 原始文件路径，导出时原样保留。
-    path: Path | None = None
-    # 是否参与当前表格、曲线和导出。
-    enabled: bool = False
-    # 解析错误只影响当前输入源，不影响另一份文件。
-    error: str = ""
-    # node_id -> channel_key -> [(time_s, value)]。
-    samples: dict[str, dict[str, list[tuple[float, float]]]] = field(default_factory=dict)
-    # 文件内最早仿真时刻，用于自动填充时间段。
-    t_min: float | None = None
-    # 文件内最晚仿真时刻，用于自动填充时间段。
-    t_max: float | None = None
+from src.data.control_effect_analysis import (
+    DEFAULT_CHANNELS,
+    AnalysisChannel,
+    AnalysisSourceData,
+    MetricSummary,
+    load_snapshot_samples,
+    metric_rows_for_source,
+    node_ids_from_sources,
+    normalized_time_range,
+    points_for,
+    sliding_window,
+    summary_for,
+    write_metrics_csv,
+)
 
 
 @dataclass(frozen=True)
@@ -104,16 +63,38 @@ class CurveSpec:
     points: list[tuple[float, float]]
 
 
-CHANNELS: tuple[AnalysisChannel, ...] = (
-    # 位置误差三个轴按航迹坐标系 x/y/z 顺序展示。
-    AnalysisChannel("pos_x", "前向位置误差 x", "m", "track_pos_err_x_m"),
-    AnalysisChannel("pos_y", "垂向位置误差 y", "m", "track_pos_err_y_m"),
-    AnalysisChannel("pos_z", "侧向位置误差 z", "m", "track_pos_err_z_m"),
-    # 速度误差三个轴保持同样顺序，便于和位置误差对照。
-    AnalysisChannel("vel_x", "前向速度误差 x", "m/s", "track_vel_err_x_mps"),
-    AnalysisChannel("vel_y", "垂向速度误差 y", "m/s", "track_vel_err_y_mps"),
-    AnalysisChannel("vel_z", "侧向速度误差 z", "m/s", "track_vel_err_z_mps"),
-)
+@dataclass
+class InputSource:
+    """GUI 输入源状态。注意：解析后的样本数据由纯分析内核持有。"""
+
+    # A 或 B，用于表格左右位置、图例和导出来源。
+    label: str
+    # 是否参与当前表格、曲线和导出。
+    enabled: bool = False
+    # 用户选择的原始文件路径；解析失败时仍用于显示文件名。
+    path: Path | None = None
+    # 解析成功后的纯数据对象。
+    data: AnalysisSourceData | None = None
+    # 解析错误只影响当前输入源，不影响另一份文件。
+    error: str = ""
+
+    @property
+    def samples(self) -> dict[str, dict[str, list[tuple[float, float]]]]:
+        """返回解析后的样本缓冲；未加载或失败时返回空字典。"""
+        return self.data.samples if self.data is not None else {}
+
+    @property
+    def t_min(self) -> float | None:
+        """返回文件内最早仿真时刻。"""
+        return self.data.t_min if self.data is not None else None
+
+    @property
+    def t_max(self) -> float | None:
+        """返回文件内最晚仿真时刻。"""
+        return self.data.t_max if self.data is not None else None
+
+
+CHANNELS = DEFAULT_CHANNELS
 METRIC_COLUMNS: tuple[tuple[str, str], ...] = (
     # 表格列名统一用中文，导出字段名另保留英文。
     ("mean", "均值"),
@@ -164,9 +145,18 @@ class ChartPopupDialog(QDialog):
             | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowMaximizeButtonHint
         )
-        self._grid = QGridLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
+        self._legend_layout = QHBoxLayout()
+        self._legend_layout.setSpacing(8)
+        self._legend_layout.addStretch()
+        root.addLayout(self._legend_layout)
+        grid_host = QWidget()
+        self._grid = QGridLayout(grid_host)
         self._grid.setContentsMargins(10, 10, 10, 10)
         self._grid.setSpacing(10)
+        root.addWidget(grid_host, stretch=1)
 
     def set_curves(
         self,
@@ -177,6 +167,7 @@ class ChartPopupDialog(QDialog):
         """用最新曲线数据重建弹窗图表。"""
         # 弹窗跟随主窗口刷新，直接重建四图能避免残留旧曲线。
         _clear_layout(self._grid)
+        _fill_source_legend(self._legend_layout, _curve_source_labels(curves_by_metric))
         for index, (metric_key, title, color) in enumerate(WINDOW_METRICS):
             view = _make_chart_view(
                 f"{title} - {channel_label}",
@@ -203,8 +194,8 @@ class DataAnalysisWindow(QDialog):
         )
 
         self._sources = {
-            "A": SourceData("A", enabled=True),
-            "B": SourceData("B", enabled=False),
+            "A": InputSource("A", enabled=True),
+            "B": InputSource("B", enabled=False),
         }
         self._source_checks: dict[str, QCheckBox] = {}
         self._path_labels: dict[str, QLabel] = {}
@@ -216,6 +207,7 @@ class DataAnalysisWindow(QDialog):
         self._channel_buttons: dict[str, QRadioButton] = {}
         self._channel_group: QButtonGroup
         self._chart_grid: QGridLayout
+        self._source_legend_layout: QHBoxLayout
         self._status_label: QLabel
         self._popup: ChartPopupDialog | None = None
         # 初始化期间控件会设置默认值，先屏蔽 valueChanged 触发的刷新。
@@ -237,8 +229,8 @@ class DataAnalysisWindow(QDialog):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
         root.addWidget(self._build_top_panel())
-        root.addWidget(self._build_summary_panel(), stretch=2)
-        root.addWidget(self._build_bottom_panel(), stretch=2)
+        root.addWidget(self._build_summary_panel(), stretch=0)
+        root.addWidget(self._build_bottom_panel(), stretch=1)
 
     def _build_top_panel(self) -> QWidget:
         """构建文件 A/B、对象、时间段和窗口宽度控制区。"""
@@ -337,12 +329,17 @@ class DataAnalysisWindow(QDialog):
         self._summary_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._summary_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._summary_table.setAlternatingRowColors(True)
+        # 汇总表固定 6 行，关闭内部滚动，把高度交给外层布局一次性展示。
+        self._summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._summary_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         for column in range(1, 1 + len(METRIC_COLUMNS)):
             # 指标列等宽拉伸，给 A|B 双值留出空间。
             self._summary_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         self._summary_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         lay.addWidget(self._summary_table, stretch=1)
+        self._fit_summary_table_height()
         return panel
 
     def _build_bottom_panel(self) -> QWidget:
@@ -397,6 +394,12 @@ class DataAnalysisWindow(QDialog):
         self._status_label.setStyleSheet("color: #64748b;")
         header.addWidget(title)
         header.addWidget(popup_btn)
+        legend_host = QWidget()
+        self._source_legend_layout = QHBoxLayout(legend_host)
+        self._source_legend_layout.setContentsMargins(8, 0, 0, 0)
+        self._source_legend_layout.setSpacing(8)
+        # A/B 图例只在标题行显示一次，避免每张子图重复占用绘图区。
+        header.addWidget(legend_host)
         header.addStretch()
         # 右上角显示当前绘图通道，和左侧单选列表形成确认。
         header.addWidget(self._status_label)
@@ -437,59 +440,15 @@ class DataAnalysisWindow(QDialog):
         # 保留文件启用勾选，只替换对应输入源的样本。
         source.path = Path(path)
         source.error = ""
-        source.samples.clear()
-        source.t_min = None
-        source.t_max = None
+        source.data = None
         try:
-            self._parse_snapshot_file(source)
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            source.data = load_snapshot_samples(path, label=label, channels=CHANNELS)
+            source.path = source.data.path
+        except (OSError, ValueError) as exc:
             # 错误挂在当前输入源上，另一份文件仍可继续分析。
             source.error = str(exc)
         self._update_path_label(label)
         self._refresh_all(reset_time=True)
-
-    def _parse_snapshot_file(self, source: SourceData) -> None:
-        """解析 snapshots.jsonl，将六个误差通道写入 source.samples。"""
-        if source.path is None:
-            return
-        times: list[float] = []
-        with source.path.open(encoding="utf-8") as handle:
-            for line_no, raw in enumerate(handle, start=1):
-                stripped = raw.strip()
-                if not stripped:
-                    # 允许日志末尾或人工编辑后留下空行。
-                    continue
-                record = json.loads(stripped)
-                t = float(record.get("time_s", 0.0))
-                times.append(t)
-                nodes = record.get("nodes")
-                if not isinstance(nodes, list):
-                    raise ValueError(f"第 {line_no} 行缺少 nodes 列表")
-                for node in nodes:
-                    # 每个节点独立入库，all 场景在查询时再合并。
-                    self._append_node_samples(source, t, node, line_no)
-        if not times:
-            raise ValueError("文件为空")
-        # 时间范围按所有非空记录计算，不要求每帧都包含同一批节点。
-        source.t_min = min(times)
-        source.t_max = max(times)
-
-    def _append_node_samples(self, source: SourceData, t: float, node: object, line_no: int) -> None:
-        """把单个节点的一帧数据追加到样本缓冲。"""
-        if not isinstance(node, dict):
-            raise ValueError(f"第 {line_no} 行存在非对象节点")
-        node_id = str(node.get("node_id", "")).strip()
-        if not node_id:
-            raise ValueError(f"第 {line_no} 行存在空 node_id")
-        node_samples = source.samples.setdefault(node_id, {})
-        for channel in CHANNELS:
-            # 老日志缺少新误差字段时按控制器默认值 0 处理。
-            raw_value = node.get(channel.field_name, 0.0)
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError):
-                raise ValueError(f"第 {line_no} 行 {node_id}/{channel.label} 不是数值") from None
-            node_samples.setdefault(channel.key, []).append((t, value))
 
     def _update_path_label(self, label: str) -> None:
         """刷新某个输入源的文件名显示和错误提示。"""
@@ -530,7 +489,9 @@ class DataAnalysisWindow(QDialog):
         """根据已加载文件刷新对象下拉框，保留当前选择。"""
         current = self._target_combo.currentText() or "all"
         # 下拉项取已加载文件并集，B 未启用时也能提前选择对象。
-        node_ids = sorted({node_id for source in self._sources.values() for node_id in source.samples})
+        node_ids = node_ids_from_sources(
+            source.data for source in self._sources.values() if source.data is not None
+        )
         options = ["all", *node_ids]
         if current not in options:
             current = "all"
@@ -569,6 +530,17 @@ class DataAnalysisWindow(QDialog):
                     values.append(self._format_metric(summary, metric_key))
                 self._set_table_item(row, column, f"{values[0]} | {values[1]}".strip())
         self._summary_table.resizeRowsToContents()
+        self._fit_summary_table_height()
+
+    def _fit_summary_table_height(self) -> None:
+        """按固定 6 个通道计算汇总表高度，避免表格内部出现滚动条。"""
+        # 高度由表头、所有数据行和边框组成，避免不同系统字体下裁剪最后一行。
+        header_height = self._summary_table.horizontalHeader().height()
+        row_height = sum(self._summary_table.rowHeight(row) for row in range(self._summary_table.rowCount()))
+        frame = self._summary_table.frameWidth() * 2
+        height = header_height + row_height + frame + 2
+        self._summary_table.setMinimumHeight(height)
+        self._summary_table.setMaximumHeight(height)
 
     def _set_table_item(self, row: int, column: int, text: str) -> None:
         """设置表格单元格文本并统一居中。"""
@@ -579,18 +551,17 @@ class DataAnalysisWindow(QDialog):
 
     def _summary_for(
         self,
-        source: SourceData,
+        source: InputSource,
         target: str,
         channel: AnalysisChannel,
         start_s: float,
         end_s: float,
     ) -> MetricSummary | None:
         """计算某个输入源、对象和通道的时间段汇总指标。"""
-        if not source.enabled or source.error or not source.samples:
+        if not source.enabled or source.error or source.data is None:
             # 禁用、加载失败和未加载在表格上都显示为空位。
             return None
-        points = self._points_for(source, target, channel.key, start_s, end_s)
-        return _calc_summary(points)
+        return summary_for(source.data, target, channel.key, start_s, end_s)
 
     def _format_metric(self, summary: MetricSummary | None, metric_key: str) -> str:
         """格式化单个指标；禁用、未加载或无样本时显示空位。"""
@@ -607,6 +578,7 @@ class DataAnalysisWindow(QDialog):
         x_range = self._chart_x_range(curves_by_metric)
         # 主图区直接重建，确保启用状态、虚线样式和坐标轴同步。
         _clear_layout(self._chart_grid)
+        _fill_source_legend(self._source_legend_layout, _curve_source_labels(curves_by_metric))
         for index, (metric_key, title, color) in enumerate(WINDOW_METRICS):
             view = _make_chart_view(title, curves_by_metric.get(metric_key, []), x_range, color)
             self._chart_grid.addWidget(view, index // 2, index % 2)
@@ -631,11 +603,11 @@ class DataAnalysisWindow(QDialog):
         curves_by_metric: dict[str, list[CurveSpec]] = {metric_key: [] for metric_key, _title, _color in WINDOW_METRICS}
         for source_label in ("A", "B"):
             source = self._sources[source_label]
-            if not source.enabled or source.error or not source.samples:
+            if not source.enabled or source.error or source.data is None:
                 continue
-            points = self._points_for(source, target, channel.key, start_s, end_s)
+            points = points_for(source.data, target, channel.key, start_s, end_s)
             # 每个启用文件各自产生一组窗口指标曲线。
-            metrics = _sliding_window(points, start_s, end_s, window_s)
+            metrics = sliding_window(points, start_s, end_s, window_s)
             for metric_key, _title, _color in WINDOW_METRICS:
                 curve_points = [(t, getattr(summary, metric_key)) for t, summary in metrics]
                 curves_by_metric[metric_key].append(
@@ -659,37 +631,22 @@ class DataAnalysisWindow(QDialog):
 
     def _points_for(
         self,
-        source: SourceData,
+        source: InputSource,
         target: str,
         channel_key: str,
         start_s: float,
         end_s: float,
     ) -> list[tuple[float, float]]:
         """提取目标对象在指定时间段内的通道样本。"""
-        result: list[tuple[float, float]] = []
-        node_ids: Iterable[str]
-        if target == "all":
-            # all 合并所有飞机同一通道样本，再整体统计。
-            node_ids = source.samples.keys()
-        else:
-            node_ids = (target,)
-        for node_id in node_ids:
-            channel_points = source.samples.get(node_id, {}).get(channel_key, [])
-            result.extend((t, value) for t, value in channel_points if start_s <= t <= end_s)
-        # 多机合并后按时间排序，保证窗口锚点顺序稳定。
-        result.sort(key=lambda item: item[0])
-        return result
+        if source.data is None:
+            return []
+        return points_for(source.data, target, channel_key, start_s, end_s)
 
     def _time_range(self) -> tuple[float, float]:
         """返回规范化后的开始和结束时间。"""
-        start_s = self._start_input.value()
-        end_s = self._end_input.value()
-        if end_s < start_s:
-            # 用户输反时内部交换，界面不强制弹错。
-            start_s, end_s = end_s, start_s
-        return start_s, end_s
+        return normalized_time_range(self._start_input.value(), self._end_input.value())
 
-    def _enabled_sources(self) -> list[SourceData]:
+    def _enabled_sources(self) -> list[InputSource]:
         """返回当前启用的输入源列表。"""
         return [source for source in self._sources.values() if source.enabled]
 
@@ -709,7 +666,7 @@ class DataAnalysisWindow(QDialog):
 
     def _export_all_metrics(self) -> None:
         """导出启用文件的全机和逐机六通道汇总指标。"""
-        active = [source for source in self._enabled_sources() if source.path is not None and not source.error]
+        active = [source for source in self._enabled_sources() if source.data is not None and not source.error]
         if not active:
             # 导出是显式动作，没有数据时用对话框即时反馈。
             QMessageBox.information(self, "导出全部指标", "没有可导出的已启用文件。")
@@ -723,107 +680,47 @@ class DataAnalysisWindow(QDialog):
         except OSError as exc:
             QMessageBox.warning(self, "导出全部指标", f"写入失败：{exc}")
 
-    def _write_metrics_csv(self, path: Path, sources: list[SourceData]) -> None:
+    def _write_metrics_csv(self, path: Path, sources: list[InputSource]) -> None:
         """把所有启用文件的全机和逐机指标写入 CSV。"""
         start_s, end_s = self._time_range()
-        fields = [
-            "input_label",
-            "source_path",
-            "scope",
-            "node_id",
-            "channel",
-            "count",
-            "mean",
-            "variance",
-            "std",
-            "rms",
-            "max_abs",
-            "max_abs_time_s",
-        ]
-        with path.open("w", encoding="utf-8-sig", newline="") as handle:
-            # utf-8-sig 让 Excel 直接打开 CSV 时能正确识别中文表头。
-            writer = csv.DictWriter(handle, fieldnames=fields)
-            writer.writeheader()
-            for source in sources:
-                # A/B 顺序写入同一个 CSV，input_label 保留来源。
-                for row in self._metric_rows_for_source(source, start_s, end_s):
-                    writer.writerow(row)
+        data_sources = [source.data for source in sources if source.data is not None]
+        write_metrics_csv(path, data_sources, start_s, end_s, channels=CHANNELS)
 
-    def _metric_rows_for_source(self, source: SourceData, start_s: float, end_s: float) -> list[dict[str, object]]:
+    def _metric_rows_for_source(self, source: InputSource, start_s: float, end_s: float) -> list[dict[str, object]]:
         """生成单个输入源的全机和逐机指标行。"""
-        rows: list[dict[str, object]] = []
-        targets = [("all", "all"), *[("node", node_id) for node_id in sorted(source.samples)]]
-        for scope, node_id in targets:
-            target = "all" if scope == "all" else node_id
-            for channel in CHANNELS:
-                # 导出覆盖全部通道，不受绘图通道单选影响。
-                summary = _calc_summary(self._points_for(source, target, channel.key, start_s, end_s))
-                if summary is None:
-                    # 无样本也输出结构化行，便于外部脚本发现缺口。
-                    summary = MetricSummary(0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-                rows.append(
-                    {
-                        "input_label": source.label,
-                        "source_path": str(source.path or ""),
-                        "scope": scope,
-                        "node_id": node_id,
-                        "channel": channel.label,
-                        "count": summary.count,
-                        "mean": f"{summary.mean:.6g}",
-                        "variance": f"{summary.variance:.6g}",
-                        "std": f"{summary.std:.6g}",
-                        "rms": f"{summary.rms:.6g}",
-                        "max_abs": f"{summary.max_abs:.6g}",
-                        "max_abs_time_s": f"{summary.max_abs_time_s:.6g}",
-                    }
-                )
-        return rows
+        if source.data is None:
+            return []
+        return metric_rows_for_source(source.data, start_s, end_s, channels=CHANNELS)
 
 
-def _calc_summary(points: list[tuple[float, float]]) -> MetricSummary | None:
-    """计算样本点的均值、方差、标准差、RMS 和最大绝对值。"""
-    if not points:
-        return None
-    values = [value for _time_s, value in points]
-    count = len(values)
-    mean = sum(values) / count
-    # 阶段二约定使用总体方差，不做 n-1 修正。
-    variance = sum((value - mean) ** 2 for value in values) / count
-    rms = math.sqrt(sum(value * value for value in values) / count)
-    # max 保留首次达到最大绝对值的样本时刻。
-    max_time, max_value = max(points, key=lambda item: abs(item[1]))
-    return MetricSummary(
-        count=count,
-        mean=mean,
-        variance=variance,
-        std=math.sqrt(variance),
-        rms=rms,
-        max_abs=abs(max_value),
-        max_abs_time_s=max_time,
-    )
+def _curve_source_labels(curves_by_metric: dict[str, list[CurveSpec]]) -> list[str]:
+    """从当前窗口曲线中提取已显示的数据源标签。"""
+    labels: list[str] = []
+    for curves in curves_by_metric.values():
+        for curve in curves:
+            if curve.name not in labels:
+                # 保留曲线出现顺序，确保图例总是 A 在前、B 在后。
+                labels.append(curve.name)
+    return labels
 
 
-def _sliding_window(
-    points: list[tuple[float, float]],
-    start_s: float,
-    end_s: float,
-    window_s: float,
-) -> list[tuple[float, MetricSummary]]:
-    """按样本时刻滑动窗口，返回每个窗口起点对应的统计结果。"""
-    if not points or window_s <= 0.0 or end_s < start_s:
-        return []
-    # 只以真实样本时刻做锚点，避免图上出现插值点。
-    anchors = sorted({t for t, _value in points if start_s <= t <= end_s})
-    result: list[tuple[float, MetricSummary]] = []
-    for anchor in anchors:
-        if anchor > end_s:
-            continue
-        window_end = anchor + window_s
-        # 左闭右开窗口减少相邻窗口边界样本重复计入。
-        summary = _calc_summary([(t, value) for t, value in points if anchor <= t < window_end and t <= end_s])
-        if summary is not None:
-            result.append((anchor, summary))
-    return result
+def _fill_source_legend(layout: QHBoxLayout, labels: list[str]) -> None:
+    """填充共享 A/B 图例，避免每张图重复显示图例。"""
+    _clear_layout(layout)
+    for label in labels:
+        # 色块与曲线颜色完全一致，图内只保留曲线本身。
+        swatch = QLabel()
+        swatch.setObjectName(f"offlineLegendSwatch{label}")
+        swatch.setFixedSize(9, 9)
+        swatch.setStyleSheet(
+            f"background: {SOURCE_COLORS.get(label, '#64748b')}; border: 1px solid #111827;"
+        )
+        text = QLabel(label)
+        text.setObjectName(f"offlineLegendLabel{label}")
+        layout.addWidget(swatch)
+        layout.addWidget(text)
+    # 右侧弹性空间让图例紧贴标题，不挤压右侧当前通道文本。
+    layout.addStretch()
 
 
 def _make_chart_view(
@@ -838,8 +735,8 @@ def _make_chart_view(
     chart.setTitleFont(_chart_title_font())
     chart.setMargins(QMargins(4, 4, 8, 4))
     chart.setBackgroundBrush(QColor("#f8fafc"))
-    # 只有 A/B 同时存在时显示图例，单文件场景保持简洁。
-    chart.legend().setVisible(len(curves) > 1)
+    # 图例统一放到图表区标题行，单图内部不再重复显示 A/B。
+    chart.legend().setVisible(False)
     chart.legend().setAlignment(Qt.AlignmentFlag.AlignBottom)
 
     x_axis = QValueAxis()
@@ -920,4 +817,7 @@ def _clear_layout(layout: QGridLayout | QVBoxLayout | QHBoxLayout) -> None:
             _clear_layout(child_layout)
         widget = item.widget()
         if widget is not None:
+            # 先脱离父控件，避免 deleteLater 前旧图表仍参与下一帧绘制。
+            widget.hide()
+            widget.setParent(None)
             widget.deleteLater()
