@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QDialog,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -2265,6 +2266,21 @@ class MainWindow(QMainWindow):
         self.obstacle_list_layout.setContentsMargins(0, 0, 0, 0)
         self.obstacle_list_layout.setSpacing(4)
         avoidance_layout.addWidget(self.obstacle_list_container)
+        # 规划参数（可在界面直接调，生成时覆盖配置值；改动使已有预览失效）。
+        param_form = QFormLayout()
+        param_form.setContentsMargins(0, 0, 0, 0)
+        param_form.setSpacing(6)
+        self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0)
+        self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0)
+        self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0)
+        param_form.addRow("转弯半径 R", self.turn_radius_spin)
+        param_form.addRow("安全间距", self.clearance_spin)
+        param_form.addRow("航段余度 L", self.leg_margin_spin)
+        avoidance_layout.addLayout(param_form)
+        # 航段带圆弧：勾选=拐点输出圆弧；取消=外切线直连原拐点（不支持圆弧的下游）。
+        self.allow_arc_check = QCheckBox("航段带圆弧（取消则外切线直连）")
+        self.allow_arc_check.toggled.connect(self._on_avoidance_param_changed)
+        avoidance_layout.addWidget(self.allow_arc_check)
         # 一键生成航线：跑 A*+去冗余+圆弧+可飞性，得到预览航线。
         self.generate_route_button = QPushButton("⟳ 生成航线")
         self.generate_route_button.clicked.connect(self._generate_route)
@@ -2280,8 +2296,9 @@ class MainWindow(QMainWindow):
         self.avoidance_status.setWordWrap(True)
         avoidance_layout.addWidget(self.avoidance_status)
         layout.addWidget(avoidance_group)
-        # 初始无障碍：同步一次列表与状态显示。
+        # 初始无障碍：同步一次列表、参数控件与状态显示。
         self._rebuild_obstacle_list()
+        self._sync_avoidance_param_widgets()
 
         # 底部弹性占位把上面各分组顶到面板顶部。
         layout.addStretch(1)
@@ -2310,6 +2327,43 @@ class MainWindow(QMainWindow):
             checkbox.toggled.connect(lambda checked, ob=obstacle: self._on_obstacle_toggled(ob, checked))
             self.obstacle_checkboxes.append(checkbox)
             self.obstacle_list_layout.addWidget(checkbox)
+
+    def _make_param_spin(self, *, maximum: float, step: float) -> QDoubleSpinBox:
+        """构造规划参数微调框（米，非负）。注意：值变更即让已有预览失效。"""
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, maximum)
+        spin.setSingleStep(step)
+        spin.setDecimals(1)
+        spin.setSuffix(" m")
+        spin.valueChanged.connect(self._on_avoidance_param_changed)
+        return spin
+
+    def _on_avoidance_param_changed(self, _value: object = None) -> None:
+        """规划参数被用户调整：使已有预览失效（需按新参数重新生成）。注意：安全间距变化同步刷新膨胀圈显示。"""
+        self._invalidate_preview()
+        if self.obstacles:
+            self.top_view.set_obstacles(self.obstacles, self.clearance_spin.value())
+
+    def _sync_avoidance_param_widgets(self) -> None:
+        """把解析到的规划参数灌进界面控件。注意：无 avoidance 配置时禁用；编程赋值屏蔽信号避免误失效。"""
+        params = self._avoidance_params
+        has_params = params is not None
+        widgets = (self.turn_radius_spin, self.clearance_spin, self.leg_margin_spin, self.allow_arc_check)
+        for widget in widgets:
+            widget.setEnabled(has_params)
+        if not has_params:
+            return
+        for spin, value in (
+            (self.turn_radius_spin, params.turn_radius_m),
+            (self.clearance_spin, params.clearance_m),
+            (self.leg_margin_spin, params.leg_margin_m),
+        ):
+            spin.blockSignals(True)
+            spin.setValue(value)
+            spin.blockSignals(False)
+        self.allow_arc_check.blockSignals(True)
+        self.allow_arc_check.setChecked(params.allow_arc)
+        self.allow_arc_check.blockSignals(False)
 
     def _on_obstacle_toggled(self, obstacle: ObstacleView, checked: bool) -> None:
         """勾选/取消某障碍。注意：勾选集变化使已生成的预览失效，需重新生成。"""
@@ -2341,6 +2395,7 @@ class MainWindow(QMainWindow):
         self.top_view.set_obstacles(obstacles, clearance)
         self._invalidate_preview()
         self._rebuild_obstacle_list()
+        self._sync_avoidance_param_widgets()
         self._update_avoidance_status()
 
     def _generate_route(self) -> None:
@@ -2357,17 +2412,18 @@ class MainWindow(QMainWindow):
             self.avoidance_status.setText("未选择障碍 · 维持原航线")
             self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
             return
+        # 规划参数以界面控件为准（用户可现场调），覆盖配置解析值。
         try:
             result = plan_avoidance_route(
                 params.waypoints,
                 enabled,
-                turn_radius_m=params.turn_radius_m,
-                leg_margin_m=params.leg_margin_m,
-                clearance_m=params.clearance_m,
+                turn_radius_m=self.turn_radius_spin.value(),
+                leg_margin_m=self.leg_margin_spin.value(),
+                clearance_m=self.clearance_spin.value(),
                 speed_mps=params.speed_mps,
                 resolution_m=params.resolution_m,
                 margin_m=params.margin_m,
-                allow_arc=params.allow_arc,
+                allow_arc=self.allow_arc_check.isChecked(),
             )
         except ValueError as exc:
             self._invalidate_preview()

@@ -136,6 +136,39 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertFalse(window.adopt_route_button.isEnabled())
         self.assertIn("未选择障碍", window.avoidance_status.text())
 
+    def test_param_widgets_synced_from_config(self) -> None:
+        # 加载配置后参数控件应反映 base.json 的值。
+        window = self._window()
+        params = window._avoidance_params
+        self.assertAlmostEqual(window.turn_radius_spin.value(), params.turn_radius_m)
+        self.assertAlmostEqual(window.clearance_spin.value(), params.clearance_m)
+        self.assertAlmostEqual(window.leg_margin_spin.value(), params.leg_margin_m)
+        self.assertEqual(window.allow_arc_check.isChecked(), params.allow_arc)
+
+    def test_changing_param_invalidates_preview(self) -> None:
+        window = self._window()
+        window._generate_route()
+        self.assertIsNotNone(window._preview_route)
+        window.turn_radius_spin.setValue(window.turn_radius_spin.value() + 50.0)
+        self.assertIsNone(window._preview_route)
+        self.assertFalse(window.adopt_route_button.isEnabled())
+
+    def test_allow_arc_unchecked_generates_straight_only(self) -> None:
+        # 取消“航段带圆弧”后生成的预览应无圆弧段（外切线交付）。
+        window = self._window()
+        window.allow_arc_check.setChecked(False)
+        window._generate_route()
+        self.assertIsNotNone(window._preview_route)
+        self.assertTrue(all(line.radius == 0.0 for line in window._preview_route.lines))
+
+    def test_widget_value_overrides_config_at_generate(self) -> None:
+        # 界面调大 L 到不可飞 → 生成失败，证明用的是控件值而非配置值。
+        window = self._window()
+        window.leg_margin_spin.setValue(5000.0)
+        window._generate_route()
+        self.assertIsNone(window._preview_route)
+        self.assertIn("ERR_AVOID", window.avoidance_status.text())
+
     def test_adopt_without_preview_is_noop(self) -> None:
         window = self._window()
         original = len(window.sim.controller._leader_route.lines)
