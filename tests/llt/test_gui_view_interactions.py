@@ -31,6 +31,7 @@ from src.ui.gui.main_window import (
     Snapshot,
     TOP_VIEW_ORIGIN_MARGIN,
     default_project_root,
+    run_gui,
 )
 
 
@@ -689,6 +690,38 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertFalse(self.window.step_button.isEnabled())
         self.assertFalse(self.window.reset_button.isEnabled())
         self.assertTrue(all(not button.isEnabled() for button in self.window.disturbance_buttons))
+
+    def test_run_gui_opens_main_window_maximized(self) -> None:
+        """验证正式启动入口默认以最大化方式显示主窗口。"""
+        calls: list[str] = []
+
+        class FakeApp:
+            """替代 QApplication，避免测试进入真实事件循环。"""
+
+            def __init__(self, argv: list[str]) -> None:
+                self.argv = argv
+
+            def exec(self) -> int:
+                calls.append("exec")
+                return 7
+
+        class FakeMainWindow:
+            """记录主窗口显示方式，锁定 exe 启动行为。"""
+
+            def show(self) -> None:
+                calls.append("show")
+
+            def showMaximized(self) -> None:
+                calls.append("showMaximized")
+
+        with (
+            patch("src.ui.gui.main_window.QApplication", FakeApp),
+            patch("src.ui.gui.main_window.MainWindow", FakeMainWindow),
+        ):
+            exit_code = run_gui(["--smoke"])
+
+        self.assertEqual(exit_code, 7)
+        self.assertEqual(calls, ["showMaximized", "exec"])
 
     def test_unloaded_window_does_not_draw_reference_route(self) -> None:
         route_color = self.window.theme.route.name()

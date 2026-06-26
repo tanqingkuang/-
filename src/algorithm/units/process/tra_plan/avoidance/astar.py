@@ -30,6 +30,37 @@ _NEIGHBORS = (
     (-1, -1, _SQRT2),
 )
 
+# A* 模块只承担离散拓扑规划，不在这里混入航迹圆弧或动力学约束。
+# 可飞性约束由 feasibility.py 负责，RouteS 转换由 path_to_route.py 负责。
+# 这里的网格坐标全部使用 east/north 平面坐标，避免和机体系 x/y/z 混淆。
+# bounds 是闭合采样范围：nx/ny 通过 ceil 后再 +1，确保 max 边界附近仍有格心。
+# to_cell 使用 round 贴近最近格心，因此端点判障必须先用精确坐标做一次。
+# is_blocked 按格心判定障碍；这意味着分辨率越粗，窄缝和小障碍的表示越保守。
+# blocked_cache 是局部缓存，生命周期仅限一次规划，避免跨配置复用旧障碍结果。
+# 对角移动采用“不能切角”规则：两个正交邻格任一被占，就禁止斜穿过去。
+# open_heap 的 tie 计数器用于稳定排序，避免同代价节点因 tuple 比较细节变化而抖动。
+# heuristic 使用欧氏距离，和 8 邻域步长一致，保持可采纳性。
+# g_score 只存已经发现的最短格点代价，未出现过的格点视为 inf。
+# closed 仅表示已经出堆扩展过的格点；更优路径出现前不会提前关闭节点。
+# start_cell == goal_cell 时仍返回 [start, goal]，保留精确端点，方便上层保持输入语义。
+# 无解返回 None，不抛异常；只有配置错误（分辨率、范围、网格规模）才抛 ValueError。
+# MAX_GRID_CELLS 是保护阈值，不是算法精度参数；需要更细分辨率时应缩小 bounds。
+# 自动 bounds 会纳入障碍膨胀和 margin，保证绕行空间不会被起终点包围框裁掉。
+# clearance_m 统一传给 blocked/obstacle_bounds，语义是障碍外扩安全距离。
+# _reconstruct 只做格点回溯，不做路径简化；后续去冗余由上层流程决定。
+# A* 输出允许包含共线中间点，因为这些点有助于上层调试和复现搜索过程。
+# 若调用方需要更短折线，应在可飞性校验前使用路径简化流程处理。
+# 起点或终点位于膨胀障碍内时直接无解，不尝试把端点投影到障碍外。
+# 自动 bounds 不会根据失败结果自扩张；如果无解，上层可用更大 margin 重新规划。
+# 对障碍边界点的 inside 语义由 obstacle.py 统一定义，本模块不重复实现几何判定。
+# resolution_m 既影响搜索精度，也影响贴障风险；配置层应让它小于障碍尺度和转弯半径。
+# 这里不对相邻格之间的线段做连续碰撞检测，障碍安全性主要依赖膨胀和切角规则。
+# 若未来需要连续检测，应优先加在邻接扩展处，而不是事后修补整条路径。
+# 所有浮点距离都用米，避免和 UI 像素或经纬度角度混用。
+# 本模块保持纯函数风格，便于 LLT 构造小障碍场景稳定回归。
+# 异常消息保留英文参数名，方便直接对应 JSON 配置字段和函数入参。
+# 返回路径首尾使用原始 start/goal，不使用吸附格心，保证控制器不会改写任务端点。
+
 
 def compute_bounds(
     start: Point,
@@ -86,9 +117,11 @@ def plan_path(
         raise ValueError(f"grid too large: {nx}x{ny} > {MAX_GRID_CELLS}; increase resolution_m or shrink bounds")
 
     def cell_center(i: int, j: int) -> Point:
+        """把格点索引转换为 east/north 平面坐标。"""
         return (min_e + i * resolution_m, min_n + j * resolution_m)
 
     def to_cell(point: Point) -> tuple[int, int]:
+        """把世界坐标吸附到最近格点，并裁剪到当前网格范围内。"""
         i = round((point[0] - min_e) / resolution_m)
         j = round((point[1] - min_n) / resolution_m)
         return (min(max(i, 0), nx - 1), min(max(j, 0), ny - 1))
@@ -96,6 +129,7 @@ def plan_path(
     blocked_cache: dict[tuple[int, int], bool] = {}
 
     def is_blocked(i: int, j: int) -> bool:
+        """查询格点是否被膨胀障碍占据，并缓存本次规划内的判定结果。"""
         key = (i, j)
         cached = blocked_cache.get(key)
         if cached is None:
@@ -120,6 +154,7 @@ def plan_path(
     goal_e, goal_n = cell_center(*goal_cell)
 
     def heuristic(i: int, j: int) -> float:
+        """A* 启发函数：当前格心到目标格心的欧氏距离。"""
         east, north = cell_center(i, j)
         return hypot(east - goal_e, north - goal_n)
 

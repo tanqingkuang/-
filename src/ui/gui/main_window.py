@@ -3439,10 +3439,10 @@ class MainWindow(QMainWindow):
 def run_gui(argv: list[str] | None = None) -> int:
     """启动 PySide6 GUI。注意：一个进程只能持有一个 QApplication 主循环。"""
 
-    # 创建 Qt 应用、显示主窗口并进入事件循环；返回值作为进程退出码。
+    # 创建 Qt 应用、最大化显示主窗口并进入事件循环；返回值作为进程退出码。
     app = QApplication(argv or [])
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     return app.exec()
 
 

@@ -28,6 +28,45 @@ ERR_TURN_TOO_SHARP = "ERR_AVOID_TURN_TOO_SHARP"
 ERR_LEG_TOO_SHORT = "ERR_AVOID_LEG_TOO_SHORT"
 ERR_ARC_HITS_OBSTACLE = "ERR_AVOID_ARC_HITS_OBSTACLE"
 
+# 可飞性模块的输入已经是去冗余折线，因此这里不负责删除重复点或平滑路径。
+# 本模块只回答“这条折线按指定转弯半径写成圆弧后能不能飞”，不重新选择绕行拓扑。
+# 与 A* 不同，圆弧触障默认使用真实障碍 clearance=0，这是最后一道安全复核。
+# arc_clearance 仅用于需要额外保守校验的场景，默认不重复叠加 A* 的膨胀量。
+# max_turn_deg 用来拦截近似掉头拐点，避免 tan(|Δψ|/2) 在 π 附近发散。
+# tangent_d[i] 表示第 i 个拐点两侧圆弧各自需要占用的切线距离。
+# 腿长约束把相邻两个拐点的切线占用和直线余度一起纳入，防止圆弧互相重叠。
+# leg_margin_m 是用户配置的额外直线余量，不是障碍安全距离。
+# sample_step 为 None 时从障碍尺寸推导，保证圆弧触障不会因为采样过稀漏掉小障碍。
+# 显式 sample_step 必须大于 0；否则圆弧采样会除零或只采端点，造成假通过。
+# _deflection 返回带符号偏转角，正负只影响圆弧方向；可飞性阈值使用绝对值。
+# 退化短腿会使 _unit 返回 None，此时偏转角视为无效，由腿长约束继续兜底。
+# corner_arc 与 path_to_route 使用同一几何工具，保证校验和实际写 RouteS 的圆弧一致。
+# _arc_sample_points 会包含圆弧两端，端点触障也会被识别为不可飞。
+# _hit_obstacle 返回首个障碍 id，便于 UI 或日志把失败点定位到具体障碍。
+# FeasibilityResult 只返回首个失败原因，调用方可修正后再次规划，不在这里累计全部错误。
+# waypoint_index 对应原始 points 下标；leg_index 对应 points[i] 到 points[i+1]。
+# 当 turn_radius_m 为 0 时圆弧触障阶段跳过，折线按直线腿处理。
+# 入参合法性错误抛 ValueError，几何不可飞则返回 ok=False，二者语义不同。
+# 成功返回 OK 不代表全局最优，只代表当前折线满足转弯、腿长和圆弧触障约束。
+# 本模块不检查直线腿是否穿越障碍，因为 A* 阶段已经在膨胀网格上规避了线段拓扑。
+# 如果未来允许手工输入任意折线，应在这里或上层增加直线腿连续碰撞检测。
+# 可飞性校验先做角度和腿长，再做圆弧采样，顺序上先拦截廉价几何错误。
+# 圆弧采样只在存在障碍且转弯半径为正时运行，避免普通无障碍路径付出额外成本。
+# detail 文案面向中文 GUI/日志，不作为机器可解析接口；机器判断应使用 code 字段。
+# code 字符串保持稳定，便于测试、日志分析和后续 UI 过滤。
+# 浮点比较使用 1e-6 余量，避免边界等式因二进制误差被误判失败。
+# degrees 只用于错误提示，内部判断始终使用弧度。
+# corner_arc 返回 None 时代表该局部几何无法构造圆弧，当前逻辑按不可采样处理并继续兜底。
+# 采样点高度固定为 0，因为障碍规划当前只在 east/north 平面做二维避障。
+# WayLineS 只是复用 arc_swept_rad 的几何载体，不表示这里真的生成航路段。
+# 障碍命中使用首个 id 返回，列表顺序由配置决定，便于复现同一失败提示。
+# turn_radius_m 为负属于配置错误；为 0 则表示无需圆弧化的特殊直线折线模式。
+# len(points)<2 没有可验证的路径语义，因此抛错而不是返回不可飞。
+# 退化点不会立即失败，主要是为了兼容上游去冗余还未完全覆盖的历史数据。
+# 但退化点通常会导致腿长不足或后续路径质量下降，上层仍应尽量清理。
+# 本文件不导入 sim_control，避免避障底层工具反向依赖控制器。
+# 若新增失败类型，应同时补充测试和 UI/日志展示文案，保持诊断闭环。
+
 
 @dataclass
 class FeasibilityResult:
@@ -42,6 +81,7 @@ class FeasibilityResult:
 
 
 def _unit(dx: float, dy: float) -> tuple[float, float] | None:
+    """返回二维向量单位方向；零长度向量返回 None 交由调用方处理退化段。"""
     length = hypot(dx, dy)
     if length <= 1e-9:
         return None
