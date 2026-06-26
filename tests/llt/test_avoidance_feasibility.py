@@ -83,6 +83,15 @@ class FeasibilityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             check_feasibility([(0.0, 0.0), (1.0, 0.0)], [], turn_radius_m=200.0, leg_margin_m=-1.0)
 
+    def test_invalid_sample_step_raises(self) -> None:
+        # sample_step<=0 必须直接报错：=0 会除零，<0 会被 max(1,..) 压成只采两端而漏检触障圆弧。
+        points = [(0.0, 0.0), (500.0, 0.0), (500.0, 500.0)]
+        obstacles = [make_circle("X", 441.0, 59.0, 25.0)]
+        with self.assertRaises(ValueError):
+            check_feasibility(points, obstacles, turn_radius_m=200.0, leg_margin_m=50.0, sample_step=0.0)
+        with self.assertRaises(ValueError):
+            check_feasibility(points, obstacles, turn_radius_m=200.0, leg_margin_m=50.0, sample_step=-1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

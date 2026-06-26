@@ -121,6 +121,9 @@ def check_feasibility(
         raise ValueError("turn_radius_m must be >= 0")
     if leg_margin_m < 0.0:
         raise ValueError("leg_margin_m must be >= 0")
+    # sample_step 必须为正：=0 会在圆弧采样里除零；<0 会被 max(1,...) 压成只采两端，漏检中段触障圆弧。
+    if sample_step is not None and sample_step <= 0.0:
+        raise ValueError("sample_step must be > 0")
     if sample_step is None:
         sample_step = _default_sample_step(obstacles, arc_clearance)
 
