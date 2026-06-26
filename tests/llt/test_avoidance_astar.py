@@ -111,6 +111,38 @@ class AStarPlanPathTests(unittest.TestCase):
             plan_path((0.0, 0.0), (1000.0, 0.0), obstacles, resolution_m=25.0, clearance_m=20.0, margin_m=200.0)
         )
 
+    def test_exact_start_in_small_obstacle_returns_none(self) -> None:
+        # 小障碍：精确起点在障碍内，但最近格心在障碍外，吸附检查会漏 → 必须按精确坐标拦截。
+        obstacles = [make_circle("S", 0.0, 0.0, 1.0)]
+        self.assertIsNone(
+            plan_path((0.0, 0.0), (100.0, 0.0), obstacles, resolution_m=10.0, clearance_m=0.0, margin_m=30.0)
+        )
+
+    def test_exact_goal_in_small_obstacle_returns_none(self) -> None:
+        obstacles = [make_circle("G", 100.0, 0.0, 1.0)]
+        self.assertIsNone(
+            plan_path(
+                (0.0, 0.0), (100.0, 0.0), obstacles,
+                resolution_m=10.0, clearance_m=0.0, bounds=(-10.0, -6.0, 106.0, 30.0),
+            )
+        )
+
+    def test_exact_endpoint_in_clearance_band_returns_none(self) -> None:
+        # 障碍本体不含起点，但加上 clearance 后精确起点落入膨胀带 → 无解。
+        obstacles = [make_circle("S", 0.0, 0.0, 1.0)]
+        self.assertIsNone(
+            plan_path((5.0, 0.0), (100.0, 0.0), obstacles, resolution_m=10.0, clearance_m=8.0, margin_m=30.0)
+        )
+
+    def test_returned_path_endpoints_are_collision_free(self) -> None:
+        # 与上述反例对照：合法场景下返回路径的首尾必须 collision-free。
+        obstacles = [make_circle("C", 500.0, 0.0, 150.0)]
+        clearance = 50.0
+        path = plan_path((0.0, 0.0), (1000.0, 0.0), obstacles, resolution_m=25.0, clearance_m=clearance, margin_m=300.0)
+        self.assertIsNotNone(path)
+        self.assertFalse(blocked(obstacles, *path[0], clearance))
+        self.assertFalse(blocked(obstacles, *path[-1], clearance))
+
     def test_sealed_corridor_returns_none(self) -> None:
         # 一道贯穿上下边界的矩形墙把起终点隔开 → 无解。
         bounds = (-50.0, -300.0, 1050.0, 300.0)

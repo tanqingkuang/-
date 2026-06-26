@@ -104,9 +104,14 @@ def plan_path(
             blocked_cache[key] = cached
         return cached
 
+    # 先按“精确”起点/终点判碰：to_cell 用 round 吸附到最近格心，小障碍可能漏检，
+    # 而 _reconstruct 会把首尾换回精确坐标，必须在此用精确坐标拦截，否则会返回端点落在障碍内的路径。
+    if blocked(obstacles, start[0], start[1], clearance_m) or blocked(obstacles, goal[0], goal[1], clearance_m):
+        return None
+
     start_cell = to_cell(start)
     goal_cell = to_cell(goal)
-    # 起点或终点本身落在（膨胀后的）障碍内 → 拓扑上无从规划。
+    # 吸附后的格心若仍被占（如起点紧贴大障碍）→ 拓扑上无从规划。
     if is_blocked(*start_cell) or is_blocked(*goal_cell):
         return None
     if start_cell == goal_cell:
