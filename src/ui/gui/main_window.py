@@ -264,6 +264,7 @@ class AvoidanceParams:
     leg_margin_m: float = 0.0
     clearance_m: float = 0.0
     simplify_clearance_m: float = 0.0
+    simplify_clearance_explicit: bool = False
     turn_switch_penalty_m: float = 0.0
     turn_angle_weight_m: float = 0.0
     resolution_m: float = 10.0
@@ -302,11 +303,17 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
                 )
     if len(waypoints) < 2:
         return None
+    clearance_m = _safe_float(avoidance.get("clearance_m", 0.0))
+    simplify_clearance_explicit = "simplify_clearance_m" in avoidance
+    simplify_clearance_m = _safe_float(
+        avoidance.get("simplify_clearance_m", clearance_m)
+    )
     return AvoidanceParams(
         turn_radius_m=_safe_float(avoidance.get("turn_radius_m", 0.0)),
         leg_margin_m=_safe_float(avoidance.get("leg_length_margin_m", 0.0)),
-        clearance_m=_safe_float(avoidance.get("clearance_m", 0.0)),
-        simplify_clearance_m=_safe_float(avoidance.get("simplify_clearance_m", 0.0)),
+        clearance_m=clearance_m,
+        simplify_clearance_m=simplify_clearance_m,
+        simplify_clearance_explicit=simplify_clearance_explicit,
         turn_switch_penalty_m=_safe_float(avoidance.get("turn_switch_penalty_m", 0.0)),
         turn_angle_weight_m=_safe_float(avoidance.get("turn_angle_weight_m", 0.0)),
         resolution_m=_safe_float(grid.get("resolution_m", 10.0)) if isinstance(grid, dict) else 10.0,
@@ -2445,14 +2452,17 @@ class MainWindow(QMainWindow):
             self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
             return
         # 规划参数以界面控件为准（用户可现场调），覆盖配置解析值。
+        # 旧配置未显式配置 simplify_clearance_m 时，让去冗余安全距跟随当前安全间距控件，保持旧行为。
+        clearance_m = self.clearance_spin.value()
+        simplify_clearance_m = params.simplify_clearance_m if params.simplify_clearance_explicit else clearance_m
         try:
             result = plan_avoidance_route(
                 params.waypoints,
                 enabled,
                 turn_radius_m=self.turn_radius_spin.value(),
                 leg_margin_m=self.leg_margin_spin.value(),
-                clearance_m=self.clearance_spin.value(),
-                simplify_clearance_m=params.simplify_clearance_m,
+                clearance_m=clearance_m,
+                simplify_clearance_m=simplify_clearance_m,
                 turn_switch_penalty_m=params.turn_switch_penalty_m,
                 turn_angle_weight_m=params.turn_angle_weight_m,
                 speed_mps=params.speed_mps,

@@ -65,7 +65,7 @@ def plan_avoidance_route(
     clearance_m: float,
     speed_mps: float,
     resolution_m: float,
-    simplify_clearance_m: float = 0.0,
+    simplify_clearance_m: float | None = None,
     turn_switch_penalty_m: float = 0.0,
     turn_angle_weight_m: float = 0.0,
     margin_m: float = 0.0,
@@ -81,6 +81,7 @@ def plan_avoidance_route(
         obstacles：本次启用的障碍集（按 clearance_m 膨胀做栅格规划）。
         turn_radius_m / leg_margin_m：配置转弯半径 R 与直线余度 L（可飞性校验用）。
         clearance_m：A* 栅格膨胀安全距离；simplify_clearance_m：A* 后视线去冗余使用的膨胀距离。
+        simplify_clearance_m=None 时回退到 clearance_m，保持旧调用方行为。
         arc_clearance：圆弧触障复核膨胀（默认 0 真实障碍）。
         speed_mps：输出航段地速；resolution_m / margin_m：A* 栅格分辨率与范围外扩。
         turn_switch_penalty_m / turn_angle_weight_m：A* 搜索中用于减少航迹角切换的等效米代价。
@@ -90,6 +91,8 @@ def plan_avoidance_route(
     """
     if len(waypoints) < 2:
         raise ValueError("waypoints must contain at least two points")
+    if simplify_clearance_m is None:
+        simplify_clearance_m = clearance_m
 
     full_xy: list[Point] = []
     full_alt: list[float] = []

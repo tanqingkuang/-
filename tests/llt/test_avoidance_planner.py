@@ -68,6 +68,21 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         self.assertTrue(relaxed_result.ok, relaxed_result.detail)
         self.assertLess(len(relaxed_result.simplified_points), len(conservative_result.simplified_points))
 
+    def test_missing_simplify_clearance_defaults_to_search_clearance(self) -> None:
+        obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
+        explicit = plan_avoidance_route(
+            [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **COMMON
+        )
+        implicit_params = dict(COMMON)
+        implicit_params.pop("simplify_clearance_m")
+        implicit = plan_avoidance_route(
+            [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **implicit_params
+        )
+
+        self.assertTrue(explicit.ok, explicit.detail)
+        self.assertTrue(implicit.ok, implicit.detail)
+        self.assertEqual(implicit.simplified_points, explicit.simplified_points)
+
     def test_multi_leg_route_avoids_both_obstacles(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0), (2000.0, 2000.0, 1000.0)]
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0), make_circle("C2", 2000.0, 1200.0, 180.0)]

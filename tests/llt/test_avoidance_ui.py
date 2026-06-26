@@ -7,6 +7,8 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -57,6 +59,15 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         params = parse_avoidance_params(path)
         self.assertIsNotNone(params)
         self.assertAlmostEqual(params.simplify_clearance_m, 12.5)
+        self.assertTrue(params.simplify_clearance_explicit)
+
+    def test_simplify_clearance_defaults_to_clearance_when_absent(self) -> None:
+        path = self._write({"avoidance": {"enabled": True, "clearance_m": 80.0}, "route": {"waypoints": [
+            {"x_m": 0, "y_m": 0}, {"x_m": 1000, "y_m": 0}]}})
+        params = parse_avoidance_params(path)
+        self.assertIsNotNone(params)
+        self.assertAlmostEqual(params.simplify_clearance_m, 80.0)
+        self.assertFalse(params.simplify_clearance_explicit)
 
     def test_heading_penalties_parsed(self) -> None:
         path = self._write({"avoidance": {
@@ -114,6 +125,13 @@ class AvoidanceUiFlowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def _write(self, payload: object) -> str:
+        handle = tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8", delete=False)
+        json.dump(payload, handle)
+        handle.close()
+        self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
+        return handle.name
 
     def _window(self) -> MainWindow:
         window = MainWindow(auto_load_config=False)
@@ -198,6 +216,42 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._generate_route()
         self.assertIsNone(window._preview_route)
         self.assertIn("ERR_AVOID", window.avoidance_status.text())
+
+    def test_generate_uses_current_clearance_for_implicit_simplify_clearance(self) -> None:
+        # 旧配置没有 simplify_clearance_m 时，界面调整安全间距后，去冗余安全间距应同步跟随。
+        path = self._write({
+            "route": {
+                "speed_mps": 20.0,
+                "waypoints": [{"x_m": 0, "y_m": 0}, {"x_m": 1000, "y_m": 0}],
+            },
+            "avoidance": {
+                "enabled": True,
+                "clearance_m": 80.0,
+                "turn_radius_m": 150.0,
+                "leg_length_margin_m": 50.0,
+                "grid": {"resolution_m": 20.0, "margin_m": 100.0},
+                "obstacles": [{
+                    "id": "C1",
+                    "type": "circle",
+                    "enabled": True,
+                    "center": {"east_m": 500.0, "north_m": 0.0},
+                    "radius_m": 120.0,
+                }],
+            },
+        })
+        window = MainWindow(auto_load_config=False)
+        self.addCleanup(window.close)
+        window._apply_config_path(path)
+        window.clearance_spin.setValue(110.0)
+
+        with patch(
+            "src.ui.gui.main_window.plan_avoidance_route",
+            return_value=SimpleNamespace(ok=False, route=None, code="ERR_TEST", detail="captured"),
+        ) as planner:
+            window._generate_route()
+
+        self.assertAlmostEqual(planner.call_args.kwargs["clearance_m"], 110.0)
+        self.assertAlmostEqual(planner.call_args.kwargs["simplify_clearance_m"], 110.0)
 
     def test_adopt_without_preview_is_noop(self) -> None:
         window = self._window()
