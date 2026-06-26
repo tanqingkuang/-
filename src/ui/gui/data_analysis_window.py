@@ -396,6 +396,8 @@ class DataAnalysisWindow(QDialog):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             # 默认绘制第一个通道；汇总表仍显示全部通道。
             button.setChecked(index == 0)
+            button.pressed.connect(lambda channel_key=channel.key: self._set_plot_channel(channel_key))
+            button.clicked.connect(lambda _checked=False, channel_key=channel.key: self._set_plot_channel(channel_key))
             button.toggled.connect(
                 lambda checked, channel_key=channel.key: self._set_plot_channel(channel_key) if checked else None
             )
@@ -407,8 +409,19 @@ class DataAnalysisWindow(QDialog):
 
     def _set_plot_channel(self, channel_key: str) -> None:
         """切换当前绘图通道，并刷新滑动窗口曲线。"""
+        channel_label = self._channel_label(channel_key)
+        if self._selected_channel_key == channel_key and self._status_label.text() == channel_label:
+            # pressed/clicked/toggled 会形成多路保险，重复信号不应重复刷新。
+            return
         self._selected_channel_key = channel_key
         self._refresh_all()
+
+    def _channel_label(self, channel_key: str) -> str:
+        """按通道 key 返回展示名称，未知 key 返回空字符串。"""
+        for channel in CHANNELS:
+            if channel.key == channel_key:
+                return channel.label
+        return ""
 
     def _build_chart_panel(self) -> QWidget:
         """构建右侧滑动窗口曲线面板。"""

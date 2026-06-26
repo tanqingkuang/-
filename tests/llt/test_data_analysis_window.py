@@ -133,6 +133,20 @@ class DataAnalysisWindowTests(unittest.TestCase):
         self.assertEqual(window._selected_channel().key, "pos_y")
         self.assertTrue(button.isChecked())
 
+    def test_channel_click_repairs_stale_chart_title(self) -> None:
+        """通道 key 已变化但图表未刷新时，同通道点击仍应补刷新。"""
+        window = DataAnalysisWindow()
+        window.show()
+        self.app.processEvents()
+
+        window._selected_channel_key = "pos_y"
+        window._status_label.setText("前向位置误差 x")
+        window._set_plot_channel("pos_y")
+        self.app.processEvents()
+
+        self.assertEqual(window._selected_channel().key, "pos_y")
+        self.assertEqual(window._status_label.text(), "垂向位置误差 y")
+
     def test_loaded_file_displays_relative_path_when_under_workspace(self) -> None:
         """工作区内文件应在顶栏显示相对路径，而不是只显示文件名。"""
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmp:
