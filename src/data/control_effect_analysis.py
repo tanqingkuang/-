@@ -105,6 +105,7 @@ CSV_FIELD_NAMES: tuple[str, ...] = (
     "scope",
     "node_id",
     "channel",
+    "channel_label",
     "count",
     *METRIC_FIELD_NAMES,
 )
@@ -289,8 +290,10 @@ def sliding_window(
     if any(relevant[index][0] < relevant[index - 1][0] for index in range(1, len(relevant))):
         # 公共函数允许脚本传入无序点；GUI 路径来自 points_for，通常已排序。
         relevant.sort(key=lambda item: item[0])
-    # 只以真实样本时刻做锚点，避免图上出现插值点。
-    anchors = sorted({t for t, _value in relevant})
+    # 只以真实样本时刻做锚点，且跳过超过 end 的尾部半窗口。
+    anchors = sorted({t for t, _value in relevant if t + window_s <= end + 1e-12})
+    if not anchors:
+        return []
     result: list[tuple[float, MetricSummary]] = []
     # left/right 定义当前窗口在 relevant 中的半开区间 [left, right)。
     left = 0
@@ -405,7 +408,8 @@ def _metric_row(
         "source_path": str(source.path),
         "scope": scope,
         "node_id": node_id,
-        "channel": channel.label,
+        "channel": channel.field_name,
+        "channel_label": channel.label,
         "count": filled.count,
         "mean": f"{filled.mean:.6g}",
         "variance": f"{filled.variance:.6g}",

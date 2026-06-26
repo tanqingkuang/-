@@ -50,14 +50,15 @@ class ControlEffectAnalysisTests(unittest.TestCase):
 
             narrow_window = sliding_window(node_points, 1.0, 2.0, 0.5)
             wide_window = sliding_window(node_points, 1.0, 2.0, 2.0)
-            self.assertEqual([summary.count for _t, summary in narrow_window], [1, 1])
-            self.assertEqual([summary.count for _t, summary in wide_window], [2, 1])
+            self.assertEqual([summary.count for _t, summary in narrow_window], [1])
+            self.assertEqual(wide_window, [])
 
             rows = metric_rows_for_source(source, 0.0, 2.0)
             self.assertEqual(len(rows), 18)
             self.assertEqual(rows[0]["scope"], "all")
             self.assertEqual(rows[0]["node_id"], "all")
-            self.assertEqual(rows[0]["channel"], "前向位置误差 x")
+            self.assertEqual(rows[0]["channel"], "track_pos_err_x_m")
+            self.assertEqual(rows[0]["channel_label"], "前向位置误差 x")
 
             result = analyze_source(source, 2.0, 0.0)
             self.assertEqual(result.source, source)
@@ -74,6 +75,8 @@ class ControlEffectAnalysisTests(unittest.TestCase):
             with export_path.open(encoding="utf-8-sig", newline="") as handle:
                 exported = list(csv.DictReader(handle))
             self.assertEqual(len(exported), 18)
+            self.assertEqual(exported[0]["channel"], "track_pos_err_x_m")
+            self.assertEqual(exported[0]["channel_label"], "前向位置误差 x")
             self.assertIn("max_abs_time_s", exported[0])
 
     def test_load_rejects_missing_channel_field(self) -> None:
@@ -93,12 +96,22 @@ class ControlEffectAnalysisTests(unittest.TestCase):
 
         windows = sliding_window(points, 0.0, 3.0, 2.0)
 
-        self.assertEqual([time_s for time_s, _summary in windows], [0.0, 1.0, 2.0, 3.0])
-        self.assertEqual([summary.count for _time_s, summary in windows], [3, 2, 2, 1])
-        self.assertEqual([summary.max_abs_time_s for _time_s, summary in windows], [1.0, 1.0, 3.0, 3.0])
-        self.assertEqual([summary.max_abs for _time_s, summary in windows], [4.0, 4.0, 5.0, 5.0])
+        self.assertEqual([time_s for time_s, _summary in windows], [0.0, 1.0])
+        self.assertEqual([summary.count for _time_s, summary in windows], [3, 2])
+        self.assertEqual([summary.max_abs_time_s for _time_s, summary in windows], [1.0, 1.0])
+        self.assertEqual([summary.max_abs for _time_s, summary in windows], [4.0, 4.0])
         self.assertAlmostEqual(windows[0][1].mean, 0.0)
         self.assertAlmostEqual(windows[0][1].rms, (26.0 / 3.0) ** 0.5)
+
+    def test_sliding_window_skips_tail_shorter_than_window(self) -> None:
+        """滑窗不应输出超过 end_s 的尾部半窗口。"""
+        points = [(0.0, 1.0), (1.0, 10.0), (2.0, 100.0)]
+
+        windows = sliding_window(points, 0.0, 2.0, 2.0)
+
+        self.assertEqual([time_s for time_s, _summary in windows], [0.0])
+        self.assertEqual(windows[0][1].count, 2)
+        self.assertAlmostEqual(windows[0][1].mean, 5.5)
 
     def test_load_rejects_empty_or_bad_line(self) -> None:
         """空文件和坏 JSON 行应报告可定位错误。"""

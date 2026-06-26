@@ -92,7 +92,8 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(len(rows), 18)
             self.assertEqual(rows[0]["input_label"], "A")
             self.assertEqual(rows[0]["scope"], "all")
-            self.assertEqual(rows[0]["channel"], "前向位置误差 x")
+            self.assertEqual(rows[0]["channel"], "track_pos_err_x_m")
+            self.assertEqual(rows[0]["channel_label"], "前向位置误差 x")
 
     def test_vertical_channel_buttons_switch_plot_channel(self) -> None:
         """垂向位置和垂向速度按钮应能切换当前绘图通道。"""
