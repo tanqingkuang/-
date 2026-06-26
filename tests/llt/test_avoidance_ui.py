@@ -37,6 +37,20 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         self.assertEqual(params.waypoints[0], (0.0, 0.0, 1000.0))
         self.assertGreater(params.turn_radius_m, 0.0)
 
+    def test_allow_arc_defaults_true_when_absent(self) -> None:
+        path = self._write({"avoidance": {"enabled": True}, "route": {"waypoints": [
+            {"x_m": 0, "y_m": 0}, {"x_m": 1000, "y_m": 0}]}})
+        params = parse_avoidance_params(path)
+        self.assertIsNotNone(params)
+        self.assertTrue(params.allow_arc)
+
+    def test_allow_arc_false_parsed(self) -> None:
+        path = self._write({"avoidance": {"enabled": True, "allow_arc": False}, "route": {"waypoints": [
+            {"x_m": 0, "y_m": 0}, {"x_m": 1000, "y_m": 0}]}})
+        params = parse_avoidance_params(path)
+        self.assertIsNotNone(params)
+        self.assertFalse(params.allow_arc)
+
     def test_missing_avoidance_returns_none(self) -> None:
         self.assertIsNone(parse_avoidance_params(self._write({"route": {"waypoints": []}})))
 

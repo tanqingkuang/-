@@ -94,6 +94,26 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         self.assertIsNotNone(result.feasibility)
         self.assertGreaterEqual(len(result.simplified_points), 2)
 
+    def test_allow_arc_false_outputs_only_straight_but_still_avoids(self) -> None:
+        # 外切线交付：无圆弧段，但绕障与避障一致；直线段仍在障碍外。
+        obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
+        params = dict(COMMON)
+        params["allow_arc"] = False
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **params)
+        self.assertTrue(result.ok, result.detail)
+        self.assertTrue(all(line.radius == 0.0 for line in result.route.lines))
+        self.assertTrue(_straights_collision_free(result.route, obstacles, CLEARANCE))
+
+    def test_allow_arc_false_still_rejects_infeasible(self) -> None:
+        # §3.2 始终按真实 R 校验：外切线交付下不可飞场景照样拒（不被编码绕过）。
+        obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
+        params = dict(COMMON)
+        params["allow_arc"] = False
+        params["leg_margin_m"] = 5000.0
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **params)
+        self.assertFalse(result.ok)
+        self.assertEqual(result.code, ERR_LEG_TOO_SHORT)
+
     def test_too_few_waypoints_raises(self) -> None:
         with self.assertRaises(ValueError):
             plan_avoidance_route([(0.0, 0.0, 1000.0)], [], **COMMON)

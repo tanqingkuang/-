@@ -69,6 +69,7 @@ def plan_avoidance_route(
     arc_clearance: float = 0.0,
     sample_step: float | None = None,
     max_turn_deg: float = 150.0,
+    allow_arc: bool = True,
 ) -> PlanResult:
     """对长机原航线逐段腿规划绕障，返回可飞的 RouteS 或带原因码的失败。
 
@@ -78,6 +79,8 @@ def plan_avoidance_route(
         turn_radius_m / leg_margin_m：配置转弯半径 R 与直线余度 L（可飞性校验用）。
         clearance_m：A* 栅格膨胀安全距离；arc_clearance：圆弧触障复核膨胀（默认 0 真实障碍）。
         speed_mps：输出航段地速；resolution_m / margin_m：A* 栅格分辨率与范围外扩。
+        allow_arc：交付编码开关。True=拐点输出相切圆弧段；False=外切线，直连原拐点（不支持圆弧的下游）。
+            注意：无论取值，check_feasibility 都按真实 R 校验转弯可飞性，不可飞两种编码都拒。
     返回：PlanResult（ok+route 或 ERR_AVOID_* 原因码 + 定位 + 诊断点）。
     """
     if len(waypoints) < 2:
@@ -131,7 +134,9 @@ def plan_avoidance_route(
             obstacle_id=feasibility.obstacle_id, simplified_points=full_xy, feasibility=feasibility,
         )
 
-    route = points_to_route(full_xy, turn_radius_m=turn_radius_m, speed_mps=speed_mps, altitudes=full_alt)
+    route = points_to_route(
+        full_xy, turn_radius_m=turn_radius_m, speed_mps=speed_mps, altitudes=full_alt, insert_arcs=allow_arc
+    )
     return PlanResult(ok=True, route=route, simplified_points=full_xy, feasibility=feasibility)
 
 

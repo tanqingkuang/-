@@ -107,6 +107,22 @@ class PointsToRouteTests(unittest.TestCase):
         # 圆弧段长 = R·|扫掠角|，90° 转弯 ≈ R·pi/2。
         self.assertAlmostEqual(segment_length(arc), 200.0 * math.pi / 2.0, places=3)
 
+    def test_insert_arcs_false_keeps_all_straight_through_corners(self) -> None:
+        # 外切线交付：拐点不插圆弧，全直线段且穿过原拐点（含中间拐点）。
+        corners = [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)]
+        route = points_to_route(corners, turn_radius_m=200.0, speed_mps=20.0, insert_arcs=False)
+        self.assertTrue(all(ln.radius == 0.0 for ln in route.lines))
+        # n 个拐点 → n-1 段直线，逐段端点正好是原拐点序列。
+        self.assertEqual(len(route.lines), len(corners) - 1)
+        for i, line in enumerate(route.lines):
+            self.assertEqual((line.start.pos.east, line.start.pos.north), corners[i])
+            self.assertEqual((line.end.pos.east, line.end.pos.north), corners[i + 1])
+
+    def test_insert_arcs_true_default_inserts_arc(self) -> None:
+        # 默认 insert_arcs=True 仍插圆弧（与 false 形成对照）。
+        route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0)
+        self.assertTrue(any(ln.radius > 0.0 for ln in route.lines))
+
     def test_corner_radius_too_large_falls_back_to_straight(self) -> None:
         # R 远大于腿长 → 切点超出腿，退化为直线，无圆弧。
         route = points_to_route(

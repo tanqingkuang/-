@@ -128,11 +128,14 @@ def points_to_route(
     speed_mps: float,
     altitude_m: float = 0.0,
     altitudes: list[float] | None = None,
+    insert_arcs: bool = True,
 ) -> RouteS:
-    """把（去冗余后的）拐点折线转成带圆弧的 RouteS。
+    """把（去冗余后的）拐点折线转成 RouteS。
 
-    内部拐点写 r=turn_radius_m，复用 corner_arc 生成相切圆弧；切点须落在相邻两腿内，
+    insert_arcs=True：内部拐点写 r=turn_radius_m，复用 corner_arc 生成相切圆弧；切点须落在相邻两腿内，
     否则该拐点回退为直线（退化保护，与 sim_control._waylines_from_waypoints 同口径）。
+    insert_arcs=False：所有拐点直连（外切线交付），全部直线航段穿过原拐点，供不支持圆弧航段的下游使用；
+    转弯可飞性由上游 check_feasibility 按真实 R 校验，与编码无关。
     高度：默认整条用 altitude_m；传入 altitudes（与 points 等长）则逐点取值，用于保持原航线高度剖面。
     """
     if len(points) < 2:
@@ -157,7 +160,7 @@ def points_to_route(
     for index in range(1, n):
         corner = pts[index]
         arc = None
-        if index < n - 1 and radii[index] > 0.0:
+        if insert_arcs and index < n - 1 and radii[index] > 0.0:
             arc = corner_arc(pts[index - 1], corner, pts[index + 1], radii[index])
         if arc is not None:
             t1, t2, center, turn_sign = arc

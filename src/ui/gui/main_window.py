@@ -264,6 +264,7 @@ class AvoidanceParams:
     resolution_m: float = 10.0
     margin_m: float = 0.0
     speed_mps: float = 0.0
+    allow_arc: bool = True  # 交付编码：True=圆弧段；False=外切线直连原拐点（不支持圆弧的下游）
     waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
 
 
@@ -303,6 +304,7 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         resolution_m=_safe_float(grid.get("resolution_m", 10.0)) if isinstance(grid, dict) else 10.0,
         margin_m=_safe_float(grid.get("margin_m", 0.0)) if isinstance(grid, dict) else 0.0,
         speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
+        allow_arc=bool(avoidance.get("allow_arc", True)),
         waypoints=waypoints,
     )
 
@@ -2365,6 +2367,7 @@ class MainWindow(QMainWindow):
                 speed_mps=params.speed_mps,
                 resolution_m=params.resolution_m,
                 margin_m=params.margin_m,
+                allow_arc=params.allow_arc,
             )
         except ValueError as exc:
             self._invalidate_preview()
