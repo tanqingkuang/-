@@ -7,12 +7,14 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCharts import QChartView
 from PySide6.QtWidgets import QApplication
 
+from src.ui.gui import data_analysis_window as data_analysis_window_module
 from src.ui.gui.data_analysis_window import DataAnalysisWindow
 
 
@@ -79,6 +81,36 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(rows[0]["input_label"], "A")
             self.assertEqual(rows[0]["scope"], "all")
             self.assertEqual(rows[0]["channel"], "前向位置误差 x")
+
+    def test_toggling_b_reuses_a_window_curve_cache(self) -> None:
+        """B 图层显隐不应触发 A 图层的滑窗重复计算。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            a_path = self._write_snapshots(Path(tmp) / "a.snapshots.jsonl", offset=0.0)
+            b_path = self._write_snapshots(Path(tmp) / "b.snapshots.jsonl", offset=1.0)
+            window = DataAnalysisWindow()
+            window.show()
+            self.app.processEvents()
+
+            with patch.object(
+                data_analysis_window_module,
+                "sliding_window",
+                wraps=data_analysis_window_module.sliding_window,
+            ) as sliding_window_mock:
+                window._load_file("A", a_path)
+                self.app.processEvents()
+                self.assertEqual(sliding_window_mock.call_count, 1)
+
+                window._load_file("B", b_path)
+                self.app.processEvents()
+                self.assertEqual(sliding_window_mock.call_count, 1)
+
+                window._source_checks["B"].setChecked(True)
+                self.app.processEvents()
+                self.assertEqual(sliding_window_mock.call_count, 2)
+
+                window._source_checks["B"].setChecked(False)
+                self.app.processEvents()
+                self.assertEqual(sliding_window_mock.call_count, 2)
 
     def _write_snapshots(self, path: Path, *, offset: float) -> Path:
         """写入两帧两机的最小 snapshots.jsonl 测试数据。"""

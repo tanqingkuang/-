@@ -64,6 +64,20 @@ class CurveSpec:
 
 
 @dataclass
+class ChartLayerState:
+    """单个指标图表的持久化图层状态。注意：A/B 曲线是独立 series。"""
+
+    # 图表视图由布局持有，刷新时不销毁重建。
+    view: QChartView
+    # X 轴随当前时间段更新。
+    x_axis: QValueAxis
+    # Y 轴随可见曲线数据更新。
+    y_axis: QValueAxis
+    # 每个输入源一条独立曲线，启停时只显隐对应图层。
+    series_by_source: dict[str, QLineSeries]
+
+
+@dataclass
 class InputSource:
     """GUI 输入源状态。注意：解析后的样本数据由纯分析内核持有。"""
 
@@ -207,9 +221,15 @@ class DataAnalysisWindow(QDialog):
         self._channel_buttons: dict[str, QRadioButton] = {}
         self._channel_group: QButtonGroup
         self._chart_grid: QGridLayout
+        self._chart_layers: dict[str, ChartLayerState] = {}
         self._source_legend_layout: QHBoxLayout
         self._status_label: QLabel
         self._popup: ChartPopupDialog | None = None
+        # 缓存粒度绑定输入源和分析参数，避免 A/B 显隐导致另一侧重复滑窗。
+        self._window_curve_cache: dict[
+            tuple[str, str, str, float, float, float],
+            dict[str, list[tuple[float, float]]],
+        ] = {}
         # 初始化期间控件会设置默认值，先屏蔽 valueChanged 触发的刷新。
         self._refreshing = True
 
@@ -414,14 +434,18 @@ class DataAnalysisWindow(QDialog):
         self._chart_grid.setColumnStretch(1, 1)
         self._chart_grid.setRowStretch(0, 1)
         self._chart_grid.setRowStretch(1, 1)
+        for index, (metric_key, title, color) in enumerate(WINDOW_METRICS):
+            layer = _make_chart_layer(title, color)
+            self._chart_layers[metric_key] = layer
+            self._chart_grid.addWidget(layer.view, index // 2, index % 2)
         lay.addWidget(chart_host, stretch=1)
         return panel
 
     def _set_source_enabled(self, label: str, enabled: bool) -> None:
         """更新输入文件启用状态，并立即刷新表格和曲线。"""
         self._sources[label].enabled = enabled
-        # 启用源改变会影响默认时间段，因此允许同步范围。
-        self._refresh_all(reset_time=True)
+        # 启停输入源只改变 A/B 图层显隐，不能隐式改变当前时间段。
+        self._refresh_all()
 
     def _choose_file(self, label: str) -> None:
         """弹出文件选择框并加载指定 A/B 输入文件。"""
@@ -447,6 +471,7 @@ class DataAnalysisWindow(QDialog):
         except (OSError, ValueError) as exc:
             # 错误挂在当前输入源上，另一份文件仍可继续分析。
             source.error = str(exc)
+        self._clear_window_cache(label)
         self._update_path_label(label)
         self._refresh_all(reset_time=True)
 
@@ -572,16 +597,14 @@ class DataAnalysisWindow(QDialog):
         return f"{value:.3f}" if metric_key == "max_abs_time_s" else f"{value:.2f}"
 
     def _refresh_window_charts(self) -> None:
-        """按当前绘图通道重建四个滑动窗口曲线。"""
+        """按当前绘图通道刷新四个滑动窗口曲线图层。"""
         channel = self._selected_channel()
         curves_by_metric = self._window_curves(channel)
         x_range = self._chart_x_range(curves_by_metric)
-        # 主图区直接重建，确保启用状态、虚线样式和坐标轴同步。
-        _clear_layout(self._chart_grid)
         _fill_source_legend(self._source_legend_layout, _curve_source_labels(curves_by_metric))
         for index, (metric_key, title, color) in enumerate(WINDOW_METRICS):
-            view = _make_chart_view(title, curves_by_metric.get(metric_key, []), x_range, color)
-            self._chart_grid.addWidget(view, index // 2, index % 2)
+            # 图层在构造时已放入布局，刷新时只替换曲线点和显隐状态。
+            _apply_chart_layer(self._chart_layers[metric_key], curves_by_metric.get(metric_key, []), x_range)
         self._status_label.setText(channel.label)
         if self._popup is not None:
             # 弹窗打开时始终镜像主窗口当前通道和数据。
@@ -605,15 +628,46 @@ class DataAnalysisWindow(QDialog):
             source = self._sources[source_label]
             if not source.enabled or source.error or source.data is None:
                 continue
-            points = points_for(source.data, target, channel.key, start_s, end_s)
-            # 每个启用文件各自产生一组窗口指标曲线。
-            metrics = sliding_window(points, start_s, end_s, window_s)
+            metrics_by_key = self._cached_window_metrics(source_label, source, target, channel.key, start_s, end_s, window_s)
             for metric_key, _title, _color in WINDOW_METRICS:
-                curve_points = [(t, getattr(summary, metric_key)) for t, summary in metrics]
                 curves_by_metric[metric_key].append(
-                    CurveSpec(source_label, SOURCE_COLORS[source_label], source_label == "B", curve_points)
+                    CurveSpec(source_label, SOURCE_COLORS[source_label], source_label == "B", metrics_by_key[metric_key])
                 )
         return curves_by_metric
+
+    def _cached_window_metrics(
+        self,
+        source_label: str,
+        source: InputSource,
+        target: str,
+        channel_key: str,
+        start_s: float,
+        end_s: float,
+        window_s: float,
+    ) -> dict[str, list[tuple[float, float]]]:
+        """返回某个输入源的滑窗曲线缓存，避免 A/B 图层显隐时重复计算。"""
+        key = (source_label, target, channel_key, start_s, end_s, window_s)
+        cached = self._window_curve_cache.get(key)
+        if cached is not None:
+            # 命中缓存时直接复用曲线点，图表层只负责显隐和替换 series。
+            return cached
+        if source.data is None:
+            return {metric_key: [] for metric_key, _title, _color in WINDOW_METRICS}
+        # 缓存未命中才从样本提取当前通道数据并执行滑窗统计。
+        points = points_for(source.data, target, channel_key, start_s, end_s)
+        metrics = sliding_window(points, start_s, end_s, window_s)
+        computed = {
+            metric_key: [(t, getattr(summary, metric_key)) for t, summary in metrics]
+            for metric_key, _title, _color in WINDOW_METRICS
+        }
+        self._window_curve_cache[key] = computed
+        return computed
+
+    def _clear_window_cache(self, source_label: str) -> None:
+        """清理指定输入源的滑窗缓存，避免换文件后沿用旧曲线。"""
+        self._window_curve_cache = {
+            key: value for key, value in self._window_curve_cache.items() if key[0] != source_label
+        }
 
     def _chart_x_range(self, curves_by_metric: dict[str, list[CurveSpec]]) -> tuple[float, float]:
         """根据窗口曲线点和输入时间段确定图表 X 轴范围。"""
@@ -780,6 +834,75 @@ def _make_chart_view(
     view.setMinimumWidth(240)
     view.setMinimumHeight(155)
     return view
+
+
+def _make_chart_layer(title: str, accent_color: str) -> ChartLayerState:
+    """创建主窗口持久化图表图层，A/B 各占一条曲线。"""
+    chart = QChart()
+    chart.setTitle(title)
+    chart.setTitleFont(_chart_title_font())
+    chart.setMargins(QMargins(4, 4, 8, 4))
+    chart.setBackgroundBrush(QColor("#f8fafc"))
+    # 主窗口图例统一放标题行，单图内部只保留坐标和曲线。
+    chart.legend().setVisible(False)
+
+    x_axis = QValueAxis()
+    # 初始范围给一个最小跨度，后续刷新再写入真实时间范围。
+    x_axis.setRange(0.0, 0.001)
+    x_axis.setTitleText("t (s)")
+    x_axis.setGridLineColor(QColor("#e2e8f0"))
+    chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
+
+    y_axis = QValueAxis()
+    y_axis.setGridLineColor(QColor("#e2e8f0"))
+    chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
+
+    series_by_source: dict[str, QLineSeries] = {}
+    for source_label in ("A", "B"):
+        series = QLineSeries()
+        series.setName(source_label)
+        pen = QPen(QColor(SOURCE_COLORS.get(source_label, accent_color)), 2.0)
+        if source_label == "B":
+            # B 文件使用虚线，和表格右侧数据对应。
+            pen.setStyle(Qt.PenStyle.DashLine)
+        series.setPen(pen)
+        # 初始隐藏，直到对应输入源启用且曲线数据写入。
+        series.setVisible(False)
+        chart.addSeries(series)
+        series.attachAxis(x_axis)
+        series.attachAxis(y_axis)
+        series_by_source[source_label] = series
+
+    _apply_chart_y_range(y_axis, [])
+    view = QChartView(chart)
+    view.setRenderHint(QPainter.RenderHint.Antialiasing)
+    view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+    view.setMinimumWidth(240)
+    view.setMinimumHeight(155)
+    return ChartLayerState(view=view, x_axis=x_axis, y_axis=y_axis, series_by_source=series_by_source)
+
+
+def _apply_chart_layer(
+    layer: ChartLayerState,
+    curves: list[CurveSpec],
+    x_range: tuple[float, float],
+) -> None:
+    """把最新曲线数据写入既有图层，只显隐对应 A/B series。"""
+    layer.x_axis.setRange(x_range[0], max(x_range[0] + 0.001, x_range[1]))
+    curves_by_name = {curve.name: curve for curve in curves}
+    all_y: list[float] = []
+    for source_label, series in layer.series_by_source.items():
+        # 每个输入源只操作自己的 series，符合 A/B 图层独立显隐语义。
+        curve = curves_by_name.get(source_label)
+        if curve is None:
+            # 禁用源只隐藏自己的图层，曲线点留在 series 内等待下次显隐。
+            series.setVisible(False)
+            continue
+        # 启用源替换自身曲线点；另一条曲线不会被重新计算。
+        series.replace([QPointF(t, value) for t, value in curve.points])
+        series.setVisible(True)
+        all_y.extend(value for _t, value in curve.points)
+    _apply_chart_y_range(layer.y_axis, all_y)
 
 
 def _chart_title_font() -> QFont:
