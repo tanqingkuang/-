@@ -2267,59 +2267,61 @@ class MainWindow(QMainWindow):
         self.obstacle_list_layout.setContentsMargins(0, 0, 0, 0)
         self.obstacle_list_layout.setSpacing(4)
         avoidance_layout.addWidget(self.obstacle_list_container)
-        # 规划参数小标题：把障碍勾选区与参数区在视觉上分开。
-        param_title = QLabel("规划参数")
-        param_title.setObjectName("paramTitle")
-        avoidance_layout.addWidget(param_title)
-        # 规划参数（界面可调，生成时覆盖配置；改动使预览失效）。
-        # 每个参数：中文标签在上、整宽数值框在下——与障碍行/按钮左对齐，窄面板下整齐不挤。
+        # 规划参数（界面可调，生成时覆盖配置；改动使预览失效）。左描述右输入，列对齐。
         tip_r = "转弯半径 R（米）：拐弯圆弧的半径。取大可降低偏航角速率，但圆弧鼓出更远、每个拐点占用航段更长。"
         tip_clear = "安全间距（米）：障碍向外膨胀的安全距离，航线与障碍至少保持这个间隔。"
         tip_leg = "航段余度 L（米）：相邻两个拐点之间保留的最短直线长度，保证两段转弯圆弧之间留有直线过渡。"
         self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_r)
         self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_clear)
         self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_leg)
-        for text, tip, spin in (
-            ("转弯半径 R", tip_r, self.turn_radius_spin),
-            ("安全间距", tip_clear, self.clearance_spin),
-            ("航段余度 L", tip_leg, self.leg_margin_spin),
+        param_grid = QGridLayout()
+        param_grid.setContentsMargins(0, 2, 0, 2)
+        param_grid.setHorizontalSpacing(8)
+        param_grid.setVerticalSpacing(8)
+        param_grid.setColumnStretch(1, 1)  # 输入列吃掉剩余宽度，描述列定宽对齐。
+        for row, (text, tip, spin) in enumerate(
+            (
+                ("转弯半径 R", tip_r, self.turn_radius_spin),
+                ("安全间距", tip_clear, self.clearance_spin),
+                ("航段余度 L", tip_leg, self.leg_margin_spin),
+            )
         ):
             label = QLabel(text)
             label.setObjectName("paramLabel")
             label.setToolTip(tip)
-            # 标签紧贴其数值框（间距 2），各参数组之间由外层 spacing 分隔。
-            field = QVBoxLayout()
-            field.setContentsMargins(0, 0, 0, 0)
-            field.setSpacing(2)
-            field.addWidget(label)
-            field.addWidget(spin)
-            avoidance_layout.addLayout(field)
+            label.setMinimumWidth(72)  # 定宽，保证三行输入框左边对齐、描述不被裁。
+            param_grid.addWidget(label, row, 0)
+            param_grid.addWidget(spin, row, 1)
+        avoidance_layout.addLayout(param_grid)
         # 航段带圆弧：勾选=拐点输出圆弧；取消=外切线直连原拐点（不支持圆弧的下游）。
         self.allow_arc_check = QCheckBox("航段带圆弧")
         self.allow_arc_check.setToolTip("勾选：拐点输出圆弧段；取消：外切线直连原拐点（供不支持圆弧航段的下游）")
         self.allow_arc_check.toggled.connect(self._on_avoidance_param_changed)
         avoidance_layout.addWidget(self.allow_arc_check)
-        # 一键生成航线：跑 A*+去冗余+圆弧+可飞性，得到预览航线。
+        # 生成航线 / 采用航线并排一行，平分宽度，把横向空间用满。
+        button_row = QHBoxLayout()
+        button_row.setSpacing(8)
         self.generate_route_button = QPushButton("⟳ 生成航线")
         self.generate_route_button.clicked.connect(self._generate_route)
-        avoidance_layout.addWidget(self.generate_route_button)
-        # 采用航线：把预览航线下发控制器替换长机航线（采用后点播放仿真）。
         self.adopt_route_button = QPushButton("✓ 采用航线")
         self.adopt_route_button.clicked.connect(self._adopt_route)
         self.adopt_route_button.setEnabled(False)
-        avoidance_layout.addWidget(self.adopt_route_button)
+        button_row.addWidget(self.generate_route_button, 1)
+        button_row.addWidget(self.adopt_route_button, 1)
+        avoidance_layout.addLayout(button_row)
         # 状态行：仅在生成成功/失败时显示（空闲留空，不常驻提示）。
         self.avoidance_status = QLabel("")
         self.avoidance_status.setObjectName("avoidHint")
         self.avoidance_status.setWordWrap(True)
         avoidance_layout.addWidget(self.avoidance_status)
-        layout.addWidget(avoidance_group)
+        # 占位拉伸：把上面内容顶到组顶部，余下空间留给状态行/避免控件被纵向拉伸变形。
+        avoidance_layout.addStretch(1)
+        layout.addWidget(avoidance_group, 1)
         # 初始无障碍：同步一次列表、参数控件与状态显示。
         self._rebuild_obstacle_list()
         self._sync_avoidance_param_widgets()
 
-        # 底部弹性占位把上面各分组顶到面板顶部。
-        layout.addStretch(1)
+        # 避障组 stretch=1 已吃掉底部余量（把空间用满），无需再加面板级弹性占位。
         return panel
 
     def _rebuild_obstacle_list(self) -> None:
@@ -2798,11 +2800,6 @@ class MainWindow(QMainWindow):
             }}
             QLabel#paramLabel {{
                 color: {theme.ink.name()};
-            }}
-            QLabel#paramTitle {{
-                color: {theme.muted.name()};
-                font-weight: 700;
-                padding: 4px 0 0 0;
             }}
             QLabel#avoidHint {{
                 color: {theme.muted.name()};
