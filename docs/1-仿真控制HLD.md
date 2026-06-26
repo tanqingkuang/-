@@ -89,8 +89,8 @@ ResultCode = Literal[
 | `cmd_vel_east_mps/cmd_vel_north_mps/cmd_vel_up_mps` | `float` | 位置解算得到的目标速度，东北天坐标系 |
 | `pos_err_east_m/pos_err_north_m/pos_err_h_m` | `float` | 控制过程中的位置误差，东北天坐标系 |
 | `vel_err_east_mps/vel_err_north_mps/vel_err_up_mps` | `float` | 控制过程中的速度误差，东北天坐标系 |
-| `track_pos_err_x_m/track_pos_err_y_m/track_pos_err_z_m` | `float` | 控制过程中的位置误差，航迹坐标系；`x/y/z` 分别为前向、垂向、右侧向 |
-| `track_vel_err_x_mps/track_vel_err_y_mps/track_vel_err_z_mps` | `float` | 控制过程中的速度误差，航迹坐标系；`x/y/z` 分别为前向、垂向、右侧向 |
+| `track_pos_err_x_m/track_pos_err_y_m/track_pos_err_z_m` | `float` | 控制过程中的位置误差诊断，航迹坐标系；`x/y/z` 分别为前向、垂向、右侧向；对应轴位置误差未被控制参数使用时输出 0 |
+| `track_vel_err_x_mps/track_vel_err_y_mps/track_vel_err_z_mps` | `float` | 控制过程中的速度误差诊断，航迹坐标系；`x/y/z` 分别为前向、垂向、右侧向；对应轴速度误差未被控制参数使用时输出 0 |
 
 坐标命名约定：
 
