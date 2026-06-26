@@ -42,6 +42,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.algorithm.context.leaf_types import RouteS, WayLineS
+from src.algorithm.units.algo.arc_path import arc_swept_rad
+from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
+from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 
@@ -248,6 +252,97 @@ def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
                 )
             )
     return obstacles, clearance
+
+
+@dataclass
+class AvoidanceParams:
+    """避障规划参数与长机原航线，从配置 JSON 解析，供 plan_avoidance_route 调用。"""
+
+    turn_radius_m: float = 0.0
+    leg_margin_m: float = 0.0
+    clearance_m: float = 0.0
+    resolution_m: float = 10.0
+    margin_m: float = 0.0
+    speed_mps: float = 0.0
+    waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
+
+
+def parse_avoidance_params(path: str) -> AvoidanceParams | None:
+    """从配置 JSON 解析避障规划参数与长机航点。注意：安全解析；缺 avoidance/航点不足时返回 None。"""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    avoidance = data.get("avoidance")
+    if not isinstance(avoidance, dict) or not avoidance.get("enabled", True):
+        return None
+    grid = avoidance.get("grid") if isinstance(avoidance.get("grid"), dict) else {}
+    route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    raw_waypoints = route.get("waypoints", []) if isinstance(route, dict) else []
+    waypoints: list[tuple[float, float, float]] = []
+    if isinstance(raw_waypoints, list):
+        for raw in raw_waypoints:
+            if isinstance(raw, dict):
+                # 与控制器 _route_point_from_config 一致：兼容 x_m/east、y_m/north、altitude_m/h 两套字段名。
+                waypoints.append(
+                    (
+                        _safe_float(raw.get("x_m", raw.get("east", 0.0))),
+                        _safe_float(raw.get("y_m", raw.get("north", 0.0))),
+                        _safe_float(raw.get("altitude_m", raw.get("h", 0.0))),
+                    )
+                )
+    if len(waypoints) < 2:
+        return None
+    return AvoidanceParams(
+        turn_radius_m=_safe_float(avoidance.get("turn_radius_m", 0.0)),
+        leg_margin_m=_safe_float(avoidance.get("leg_length_margin_m", 0.0)),
+        clearance_m=_safe_float(avoidance.get("clearance_m", 0.0)),
+        resolution_m=_safe_float(grid.get("resolution_m", 10.0)) if isinstance(grid, dict) else 10.0,
+        margin_m=_safe_float(grid.get("margin_m", 0.0)) if isinstance(grid, dict) else 0.0,
+        speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
+        waypoints=waypoints,
+    )
+
+
+def _obstacle_view_to_backend(view: "ObstacleView") -> ObstacleS:
+    """把 UI 障碍转成后端 ObstacleS（供规划调用）。"""
+    if view.kind == "rect":
+        return make_rect(view.obstacle_id, view.min_x, view.min_y, view.max_x, view.max_y)
+    return make_circle(view.obstacle_id, view.center_x, view.center_y, view.radius)
+
+
+def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[float, float]]:
+    """采样圆弧航段为折线点（含两端）。注意：复用 arc_swept_rad 求扫掠角。"""
+    center = line.center
+    a_start = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
+    swept = arc_swept_rad(line)
+    segments = max(1, int(abs(math.degrees(swept)) / step_deg))
+    return [
+        (
+            center.east + line.radius * math.cos(a_start + swept * (k / segments)),
+            center.north + line.radius * math.sin(a_start + swept * (k / segments)),
+        )
+        for k in range(segments + 1)
+    ]
+
+
+def route_to_polyline(route: RouteS) -> list[tuple[float, float]]:
+    """把 RouteS（直线+圆弧）展开为折线点，供俯视图绘制预览航线。"""
+    raw: list[tuple[float, float]] = []
+    for line in route.lines:
+        if line.radius > 0.0:
+            raw.extend(_sample_wayline_arc(line))
+        else:
+            raw.append((line.start.pos.east, line.start.pos.north))
+            raw.append((line.end.pos.east, line.end.pos.north))
+    polyline: list[tuple[float, float]] = []
+    for point in raw:
+        if not polyline or math.hypot(point[0] - polyline[-1][0], point[1] - polyline[-1][1]) > 1e-6:
+            polyline.append(point)
+    return polyline
 
 
 @dataclass
@@ -553,6 +648,26 @@ class ControllerSimulationAdapter:
                 "loss": "链路丢包",
                 "clear": "无",
             }[kind]
+        return self.snapshot()
+
+    def apply_avoidance_route(self, route: RouteS) -> Snapshot:
+        """采用一条避障规划航线，替换长机航线。注意：成功后清空尾迹缓存（航线已变）。"""
+        result = self.controller.apply_avoidance_route(route)
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        if result.code == "OK":
+            self._trail_by_node.clear()
+            self._last_xy_by_node.clear()
+        return self.snapshot()
+
+    def clear_avoidance_route(self) -> Snapshot:
+        """清除避障航线覆盖，恢复配置原始长机航线。"""
+        result = self.controller.clear_avoidance_route()
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        if result.code == "OK":
+            self._trail_by_node.clear()
+            self._last_xy_by_node.clear()
         return self.snapshot()
 
     def set_speed(self, speed: float) -> None:
@@ -907,6 +1022,8 @@ class TopView(QGraphicsView):
         # 避障障碍（来自配置，独立于仿真快照）：加载配置后由主窗口注入，仅用于显示。
         self.obstacles: list[ObstacleView] = []
         self.obstacle_clearance = 0.0
+        # 避障规划预览航线（折线点），由“生成航线”注入；None 表示无预览。
+        self.preview_route_polyline: list[tuple[float, float]] | None = None
         # 视图变换由 scale_value(缩放) 与 offset(平移) 两个量描述：屏幕 = 世界*scale + offset。
         self.scale_value = 1.0
         self.offset = self._default_offset()
@@ -933,6 +1050,11 @@ class TopView(QGraphicsView):
         """设置用于显示的避障障碍集与膨胀间距。注意：只更新显示，不推进仿真。"""
         self.obstacles = obstacles
         self.obstacle_clearance = clearance
+        self.viewport().update()
+
+    def set_preview_route(self, polyline: list[tuple[float, float]] | None) -> None:
+        """设置避障预览航线折线（None 清除）。注意：只更新显示，不推进仿真。"""
+        self.preview_route_polyline = polyline
         self.viewport().update()
 
     def set_snapshot(self, snapshot: Snapshot, *, fit_view: bool = False) -> None:
@@ -1071,6 +1193,8 @@ class TopView(QGraphicsView):
             self._draw_grid(painter)
         # 障碍画在网格之上、航线/节点之下，避免遮挡飞机与航线。
         self._draw_obstacles(painter)
+        # 避障预览航线画在障碍之上、节点之下。
+        self._draw_preview_route(painter)
         if self.snapshot:
             # 绘制顺序：航线在底，链路其次，节点最上，保证遮挡关系正确。
             if self.snapshot.nodes:
@@ -1312,6 +1436,18 @@ class TopView(QGraphicsView):
             text = obstacle.obstacle_id if obstacle.enabled else f"{obstacle.obstacle_id}（未勾选）"
             painter.drawText(QPointF(-10.0, 4.0), text)
             painter.restore()
+
+    def _draw_preview_route(self, painter: QPainter) -> None:
+        """绘制避障预览航线（绿色虚线折线）。注意：只做渲染，不修改仿真状态。"""
+        polyline = self.preview_route_polyline
+        if not polyline or len(polyline) < 2:
+            return
+        pen = QPen(QColor("#2E7D32"), 2.6 / self.scale_value)
+        pen.setDashPattern([7, 5])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for start, end in zip(polyline, polyline[1:]):
+            painter.drawLine(QPointF(start[0], start[1]), QPointF(end[0], end[1]))
 
     def _draw_route(self, painter: QPainter) -> None:
         """绘制 route 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -1949,6 +2085,9 @@ class MainWindow(QMainWindow):
         # 避障障碍（来自配置）与其勾选框，加载配置后填充。
         self.obstacles: list[ObstacleView] = []
         self.obstacle_checkboxes: list[QCheckBox] = []
+        # 避障规划参数（来自配置）与“生成航线”得到的预览航线（采用前）。
+        self._avoidance_params: AvoidanceParams | None = None
+        self._preview_route: RouteS | None = None
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
@@ -2124,10 +2263,15 @@ class MainWindow(QMainWindow):
         self.obstacle_list_layout.setContentsMargins(0, 0, 0, 0)
         self.obstacle_list_layout.setSpacing(4)
         avoidance_layout.addWidget(self.obstacle_list_container)
-        # 一键生成航线：当前为占位，规划内核在后续步骤接入。
+        # 一键生成航线：跑 A*+去冗余+圆弧+可飞性，得到预览航线。
         self.generate_route_button = QPushButton("⟳ 生成航线")
         self.generate_route_button.clicked.connect(self._generate_route)
         avoidance_layout.addWidget(self.generate_route_button)
+        # 采用航线：把预览航线下发控制器替换长机航线（采用后点播放仿真）。
+        self.adopt_route_button = QPushButton("✓ 采用航线")
+        self.adopt_route_button.clicked.connect(self._adopt_route)
+        self.adopt_route_button.setEnabled(False)
+        avoidance_layout.addWidget(self.adopt_route_button)
         # 状态行：显示启用障碍数 / 生成结果 / 失败原因。
         self.avoidance_status = QLabel("（未加载障碍）")
         self.avoidance_status.setObjectName("reportPill")
@@ -2166,10 +2310,18 @@ class MainWindow(QMainWindow):
             self.obstacle_list_layout.addWidget(checkbox)
 
     def _on_obstacle_toggled(self, obstacle: ObstacleView, checked: bool) -> None:
-        """勾选/取消某障碍。注意：仅更新启用标志与显示，不触发规划。"""
+        """勾选/取消某障碍。注意：勾选集变化使已生成的预览失效，需重新生成。"""
         obstacle.enabled = checked
+        self._invalidate_preview()
         self.top_view.viewport().update()
         self._update_avoidance_status()
+
+    def _invalidate_preview(self) -> None:
+        """清除当前预览航线并禁用“采用”。注意：障碍勾选/配置变化后调用。"""
+        self._preview_route = None
+        self.top_view.set_preview_route(None)
+        if hasattr(self, "adopt_route_button"):
+            self.adopt_route_button.setEnabled(False)
 
     def _update_avoidance_status(self) -> None:
         """刷新避障状态文本。注意：只读当前障碍集，不触发规划。"""
@@ -2180,18 +2332,69 @@ class MainWindow(QMainWindow):
         self.avoidance_status.setText(f"启用 {enabled}/{len(self.obstacles)} 个障碍 · 待生成航线")
 
     def _set_obstacles_from_config(self, path: str) -> None:
-        """从配置文件解析障碍并刷新显示。注意：解析失败时清空障碍，保持界面一致。"""
+        """从配置文件解析障碍与规划参数并刷新显示。注意：解析失败时清空，保持界面一致。"""
         obstacles, clearance = parse_avoidance_config(path)
         self.obstacles = obstacles
+        self._avoidance_params = parse_avoidance_params(path)
         self.top_view.set_obstacles(obstacles, clearance)
+        self._invalidate_preview()
         self._rebuild_obstacle_list()
         self._update_avoidance_status()
 
     def _generate_route(self) -> None:
-        """响应“生成航线”。注意：规划内核（A*+可飞性校验）在后续步骤接入，当前仅占位提示。"""
-        enabled = [obstacle for obstacle in self.obstacles if obstacle.enabled]
-        self.avoidance_status.setText(f"已选 {len(enabled)} 个障碍 · 规划后端待实现（步骤2-5）")
-        self._log("Avoid", f"生成航线请求：启用障碍 {[obstacle.obstacle_id for obstacle in enabled]}（规划后端待实现）")
+        """响应“生成航线”：跑 plan_avoidance_route，成功则预览，失败则显示 ERR_AVOID_* 原因。"""
+        if self._avoidance_params is None or len(self._avoidance_params.waypoints) < 2:
+            self._invalidate_preview()
+            self.avoidance_status.setText("当前配置无可规划航线（缺 route.waypoints 或 avoidance）")
+            return
+        params = self._avoidance_params
+        enabled = [_obstacle_view_to_backend(ob) for ob in self.obstacles if ob.enabled]
+        if not enabled:
+            # 未选择任何障碍：等价于维持原航线，不生成 R 圆弧航线，也不允许采用。
+            self._invalidate_preview()
+            self.avoidance_status.setText("未选择障碍 · 维持原航线")
+            self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
+            return
+        try:
+            result = plan_avoidance_route(
+                params.waypoints,
+                enabled,
+                turn_radius_m=params.turn_radius_m,
+                leg_margin_m=params.leg_margin_m,
+                clearance_m=params.clearance_m,
+                speed_mps=params.speed_mps,
+                resolution_m=params.resolution_m,
+                margin_m=params.margin_m,
+            )
+        except ValueError as exc:
+            self._invalidate_preview()
+            self.avoidance_status.setText(f"参数错误：{exc}")
+            self._log("WARN", f"生成航线参数错误：{exc}")
+            return
+        if result.ok and result.route is not None:
+            self._preview_route = result.route
+            self.top_view.set_preview_route(route_to_polyline(result.route))
+            arcs = sum(1 for line in result.route.lines if line.radius > 0.0)
+            self.adopt_route_button.setEnabled(True)
+            self.avoidance_status.setText(f"预览就绪：{len(result.route.lines)} 段（{arcs} 圆弧）· 可采用")
+            self._log("Avoid", f"生成航线成功：{len(result.route.lines)} 段，{arcs} 圆弧")
+        else:
+            self._invalidate_preview()
+            self.avoidance_status.setText(f"{result.code}：{result.detail}")
+            self._log("Avoid", f"生成航线失败 {result.code}: {result.detail}")
+
+    def _adopt_route(self) -> None:
+        """响应“采用航线”：把预览航线下发控制器替换长机航线（采用后点播放仿真）。"""
+        if self._preview_route is None:
+            return
+        snapshot = self.sim.apply_avoidance_route(self._preview_route)
+        self._update_snapshot(snapshot, fit_top_view=False)
+        if self.sim.last_result_code == "OK":
+            self.avoidance_status.setText("已采用避障航线 · 点播放仿真")
+            self._log("Avoid", "已采用避障航线，长机航线已替换")
+        else:
+            self.avoidance_status.setText(f"采用失败 {self.sim.last_result_code}")
+            self._log("WARN", f"采用航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}")
 
     def _build_stage(self) -> QWidget:
         """构建中央仿真画布区域。注意：俯视图和侧视图需要共享横向视野。"""

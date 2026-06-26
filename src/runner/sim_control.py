@@ -1159,6 +1159,8 @@ class SimulationController:
         self._configured_links: list[_ConfiguredLink] = []
         self._leader_route: RouteS | None = None
         self._display_route: RouteS | None = None  # 显示用原始航线(不插圆弧)，仅供 GUI 画航段
+        # 避障“采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
+        self._leader_route_override: RouteS | None = None
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
         self._config: dict[str, object] | None = None
@@ -1214,6 +1216,8 @@ class SimulationController:
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
             if self._run_state == "RUNNING":
                 return CommandResult("ERR_BUSY", "pause or reset before loading a new config")
+            # 新配置：清除上一个配置遗留的避障航线覆盖，回到该配置的原始长机航线。
+            self._leader_route_override = None
             try:
                 self._init_modules_unlocked(config)
             except Exception as exc:  # noqa: BLE001 - 首版统一映射模块初始化失败
@@ -1358,6 +1362,61 @@ class SimulationController:
             snapshot = self._latest_snapshot
         self._notify_subscribers(snapshot)
         return CommandResult("OK", "reset")
+
+    def apply_avoidance_route(self, route: RouteS) -> CommandResult:
+        """采用一条避障规划航线，替换长机航线并重置到 READY。注意：运行中需先暂停。"""
+        if not isinstance(route, RouteS) or not route.lines:
+            return CommandResult("ERR_CONFIG_INVALID", "avoidance route must be a non-empty RouteS")
+        with self._lock:
+            if self._closed:
+                return CommandResult("ERR_INVALID_STATE", "controller is closed")
+            if self._config is None:
+                return CommandResult("ERR_NO_CONFIG", "load config before applying a route")
+            if self._run_state == "RUNNING":
+                return CommandResult("ERR_BUSY", "pause or reset before applying a route")
+            config = dict(self._config)
+        # 先停后台线程（锁外），再持锁带覆盖重建模块（时间归零，等价一次 reset）。
+        self._stop_worker()
+        with self._lock:
+            self._leader_route_override = route
+            try:
+                self._init_modules_unlocked(config)
+            except Exception as exc:  # noqa: BLE001
+                return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
+            self._run_state = "READY"
+            self._control_report = "待命"
+            self._latest_snapshot = self._make_snapshot_unlocked()
+            self._append_event_unlocked("INFO", "SimControl", "已采用避障航线")
+            snapshot = self._latest_snapshot
+        self._notify_subscribers(snapshot)
+        return CommandResult("OK", "avoidance route applied")
+
+    def clear_avoidance_route(self) -> CommandResult:
+        """清除避障航线覆盖，恢复配置原始长机航线并重置到 READY。"""
+        with self._lock:
+            if self._closed:
+                return CommandResult("ERR_INVALID_STATE", "controller is closed")
+            if self._config is None:
+                return CommandResult("ERR_NO_CONFIG", "load config first")
+            if self._run_state == "RUNNING":
+                return CommandResult("ERR_BUSY", "pause or reset before clearing the route")
+            if self._leader_route_override is None:
+                return CommandResult("OK", "no avoidance route to clear")
+            config = dict(self._config)
+        self._stop_worker()
+        with self._lock:
+            self._leader_route_override = None
+            try:
+                self._init_modules_unlocked(config)
+            except Exception as exc:  # noqa: BLE001
+                return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
+            self._run_state = "READY"
+            self._control_report = "待命"
+            self._latest_snapshot = self._make_snapshot_unlocked()
+            self._append_event_unlocked("INFO", "SimControl", "已清除避障航线")
+            snapshot = self._latest_snapshot
+        self._notify_subscribers(snapshot)
+        return CommandResult("OK", "avoidance route cleared")
 
     def close(self) -> None:
         """释放 SimulationController 持有的资源。注意：关闭后不应继续调用运行接口。"""
@@ -1664,12 +1723,20 @@ class SimulationController:
             if initial_leader_state is not None
             else None
         )
-        leader_route = _build_leader_route(config)
+        # 避障“采用”后用覆盖航线替换配置航线；否则按配置生成。
+        if self._leader_route_override is not None:
+            leader_route = self._leader_route_override
+        else:
+            leader_route = _build_leader_route(config)
         self._leader_route = leader_route
         # 前向/垂向速度指令限幅(串级 P+PI 外环输出)，由配置注入各节点实体。
         vel_cmd_limit = _build_vel_cmd_limit(config)
-        # 显示用航线不插圆弧：界面只体现 base 里的原始航段(圆弧仅长机跟踪内部使用)。
-        self._display_route = _build_leader_route(config, insert_arcs=False)
+        # 显示用航线：覆盖时直接用避障航线(已含圆弧)，否则用配置原始航段(不插圆弧)。
+        self._display_route = (
+            self._leader_route_override
+            if self._leader_route_override is not None
+            else _build_leader_route(config, insert_arcs=False)
+        )
         # 为每个节点创建算法适配器（长机/僚机实体由角色决定）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(

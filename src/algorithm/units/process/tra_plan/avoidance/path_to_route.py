@@ -127,12 +127,13 @@ def points_to_route(
     turn_radius_m: float,
     speed_mps: float,
     altitude_m: float = 0.0,
+    altitudes: list[float] | None = None,
 ) -> RouteS:
     """把（去冗余后的）拐点折线转成带圆弧的 RouteS。
 
     内部拐点写 r=turn_radius_m，复用 corner_arc 生成相切圆弧；切点须落在相邻两腿内，
     否则该拐点回退为直线（退化保护，与 sim_control._waylines_from_waypoints 同口径）。
-    altitude_m：本期二维避障保持水平，整条用同一高度（高度剖面映射留待步骤5接入）。
+    高度：默认整条用 altitude_m；传入 altitudes（与 points 等长）则逐点取值，用于保持原航线高度剖面。
     """
     if len(points) < 2:
         raise ValueError("points_to_route needs at least two points")
@@ -140,8 +141,13 @@ def points_to_route(
         raise ValueError("turn_radius_m must be >= 0")
     if speed_mps < 0.0:
         raise ValueError("speed_mps must be >= 0")
+    if altitudes is not None and len(altitudes) != len(points):
+        raise ValueError("altitudes length must match points")
 
-    pts = [PosInEarthS(east, north, altitude_m) for east, north in points]
+    pts = [
+        PosInEarthS(east, north, altitudes[i] if altitudes is not None else altitude_m)
+        for i, (east, north) in enumerate(points)
+    ]
     n = len(pts)
     # 首末拐点不做圆弧；内部拐点用配置 R。
     radii = [0.0] + [turn_radius_m] * (n - 2) + [0.0]

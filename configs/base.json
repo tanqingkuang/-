@@ -28,7 +28,7 @@
   },
   "avoidance": {
     "enabled": true,
-    "turn_radius_m": 400.0,
+    "turn_radius_m": 200.0,
     "leg_length_margin_m": 80.0,
     "clearance_m": 120.0,
     "grid": {
