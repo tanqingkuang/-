@@ -14,6 +14,7 @@ from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath,
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
+    QAbstractSpinBox,
     QApplication,
     QCheckBox,
     QDialog,
@@ -2277,14 +2278,23 @@ class MainWindow(QMainWindow):
         param_grid.setHorizontalSpacing(8)
         param_grid.setVerticalSpacing(6)
         param_grid.setColumnStretch(1, 1)
-        self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0)
-        self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0)
-        self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0)
-        for row, (text, spin) in enumerate(
-            (("转弯半径 R", self.turn_radius_spin), ("安全间距", self.clearance_spin), ("航段余度 L", self.leg_margin_spin))
+        # 每个参数：中文标签 + 数值框 + 悬停说明（解释物理含义与影响）。
+        tip_r = "转弯半径 R（米）：拐弯圆弧的半径。取大可降低偏航角速率，但圆弧鼓出更远、每个拐点占用航段更长。"
+        tip_clear = "安全间距（米）：障碍向外膨胀的安全距离，航线与障碍至少保持这个间隔。"
+        tip_leg = "航段余度 L（米）：相邻两个拐点之间保留的最短直线长度，保证两段转弯圆弧之间留有直线过渡。"
+        self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_r)
+        self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_clear)
+        self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tip_leg)
+        for row, (text, tip, spin) in enumerate(
+            (
+                ("转弯半径 R", tip_r, self.turn_radius_spin),
+                ("安全间距", tip_clear, self.clearance_spin),
+                ("航段余度 L", tip_leg, self.leg_margin_spin),
+            )
         ):
             label = QLabel(text)
             label.setObjectName("paramLabel")
+            label.setToolTip(tip)
             param_grid.addWidget(label, row, 0)
             param_grid.addWidget(spin, row, 1)
         avoidance_layout.addLayout(param_grid)
@@ -2340,13 +2350,17 @@ class MainWindow(QMainWindow):
             self.obstacle_checkboxes.append(checkbox)
             self.obstacle_list_layout.addWidget(checkbox)
 
-    def _make_param_spin(self, *, maximum: float, step: float) -> QDoubleSpinBox:
-        """构造规划参数微调框（米，非负）。注意：值变更即让已有预览失效。"""
+    def _make_param_spin(self, *, maximum: float, step: float, tooltip: str = "") -> QDoubleSpinBox:
+        """构造规划参数数值框（米，非负，无上下按钮，直接键入）。注意：值变更即让已有预览失效。"""
         spin = QDoubleSpinBox()
         spin.setRange(0.0, maximum)
         spin.setSingleStep(step)
         spin.setDecimals(1)
         spin.setSuffix(" m")
+        # 去掉上下微调按钮：直接键入数值。
+        spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        if tooltip:
+            spin.setToolTip(tooltip)
         spin.valueChanged.connect(self._on_avoidance_param_changed)
         return spin
 

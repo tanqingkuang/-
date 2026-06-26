@@ -102,12 +102,20 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._apply_config_path(CONFIG)
         return window
 
+    @staticmethod
+    def _set_feasible_params(window: MainWindow) -> None:
+        # 用一组已知可飞的参数覆盖控件值，使“生成成功”相关用例不依赖 base.json 的具体 R/L。
+        window.turn_radius_spin.setValue(150.0)
+        window.clearance_spin.setValue(120.0)
+        window.leg_margin_spin.setValue(50.0)
+        window.allow_arc_check.setChecked(True)
+
     def test_generate_then_adopt_replaces_route(self) -> None:
         window = self._window()
+        self._set_feasible_params(window)
         original = len(window.sim.controller._leader_route.lines)
         self.assertFalse(window.adopt_route_button.isEnabled())
         window._generate_route()
-        # 默认 base.json 障碍场景应可生成。
         self.assertIsNotNone(window._preview_route)
         self.assertTrue(window.adopt_route_button.isEnabled())
         self.assertIsNotNone(window.top_view.preview_route_polyline)
@@ -117,6 +125,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
     def test_toggle_obstacle_invalidates_preview(self) -> None:
         window = self._window()
+        self._set_feasible_params(window)
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
         window._on_obstacle_toggled(window.obstacles[0], not window.obstacles[0].enabled)
@@ -147,6 +156,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
     def test_changing_param_invalidates_preview(self) -> None:
         window = self._window()
+        self._set_feasible_params(window)
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
         window.turn_radius_spin.setValue(window.turn_radius_spin.value() + 50.0)
@@ -156,6 +166,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
     def test_allow_arc_unchecked_generates_straight_only(self) -> None:
         # 取消“航段带圆弧”后生成的预览应无圆弧段（外切线交付）。
         window = self._window()
+        self._set_feasible_params(window)
         window.allow_arc_check.setChecked(False)
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
