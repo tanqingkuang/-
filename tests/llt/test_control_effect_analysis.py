@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -102,6 +103,25 @@ class ControlEffectAnalysisTests(unittest.TestCase):
         self.assertEqual([summary.max_abs for _time_s, summary in windows], [4.0, 4.0])
         self.assertAlmostEqual(windows[0][1].mean, 0.0)
         self.assertAlmostEqual(windows[0][1].rms, (26.0 / 3.0) ** 0.5)
+
+    def test_sliding_window_rms_handles_negative_square_total_drift(self) -> None:
+        """误差趋零的窗口里增量平方和会消差成极小负数，rms 不能因此抛 math domain error。"""
+        # 前段是量级 O(1) 的有符号误差，后段是收敛到 0 的稳态；当大误差滑出窗口后，
+        # 增量维护的 square_total 会留下约 -3.6e-15 的负残差，旧实现直接开方会崩溃。
+        head = [3.68, -3.24, 2.34, 4.95, -3.41, 2.8, -4.03]
+        points = [(round(index * 0.1, 4), value) for index, value in enumerate(head + [0.0] * 9)]
+
+        windows = sliding_window(points, 0.0, 1.5, 0.8)
+
+        self.assertTrue(windows)
+        for _time_s, summary in windows:
+            # 任何窗口的 rms 都必须是有限非负数，不能出现 nan 或异常。
+            self.assertGreaterEqual(summary.rms, 0.0)
+            self.assertTrue(math.isfinite(summary.rms))
+        # 全零稳态窗口的真实 rms 就是 0，夹断负残差后应精确回到 0。
+        steady = [summary for _time_s, summary in windows if abs(summary.mean) < 1e-9 and summary.count >= 8]
+        self.assertTrue(steady)
+        self.assertEqual(max(summary.rms for summary in steady), 0.0)
 
     def test_sliding_window_skips_tail_shorter_than_window(self) -> None:
         """滑窗不应输出超过 end_s 的尾部半窗口。"""

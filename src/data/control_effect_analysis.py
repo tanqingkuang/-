@@ -332,6 +332,9 @@ def sliding_window(
         mean = total / count
         # 浮点消差可能产生极小负数，用 max 保护 sqrt。
         variance = max(0.0, square_total / count - mean * mean)
+        # square_total 是增量维护的平方和，误差趋零的窗口可能消差成极小负数，
+        # 同样要在开方前夹到非负，否则 rms 会抛 math domain error。
+        mean_square = max(0.0, square_total / count)
         max_index = max_abs_indexes[0]
         max_time, max_value = relevant[max_index]
         result.append(
@@ -342,7 +345,7 @@ def sliding_window(
                     mean=mean,
                     variance=variance,
                     std=math.sqrt(variance),
-                    rms=math.sqrt(square_total / count),
+                    rms=math.sqrt(mean_square),
                     max_abs=abs(max_value),
                     max_abs_time_s=max_time,
                 ),
