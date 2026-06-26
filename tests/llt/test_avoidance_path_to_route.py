@@ -127,6 +127,17 @@ class PointsToRouteTests(unittest.TestCase):
         self.assertEqual(route.lines[0].start.pos.h, 1000.0)
         self.assertEqual(route.lines[0].end.pos.h, 1000.0)
 
+    def test_per_point_altitudes_applied(self) -> None:
+        route = points_to_route(
+            [(0.0, 0.0), (100.0, 0.0)], turn_radius_m=0.0, speed_mps=20.0, altitudes=[1000.0, 1200.0]
+        )
+        self.assertEqual(route.lines[0].start.pos.h, 1000.0)
+        self.assertEqual(route.lines[0].end.pos.h, 1200.0)
+
+    def test_altitudes_length_mismatch_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            points_to_route([(0.0, 0.0), (100.0, 0.0)], turn_radius_m=0.0, speed_mps=20.0, altitudes=[1000.0])
+
     def test_invalid_inputs_raise(self) -> None:
         with self.assertRaises(ValueError):
             points_to_route([(0.0, 0.0)], turn_radius_m=20.0, speed_mps=20.0)
