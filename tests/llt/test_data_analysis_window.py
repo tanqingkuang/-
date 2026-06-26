@@ -12,7 +12,8 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCharts import QChartView
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from src.ui.gui import data_analysis_window as data_analysis_window_module
@@ -113,6 +114,24 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(window._selected_channel().key, "vel_y")
             self.assertEqual(window._status_label.text(), "垂向速度误差 y")
             self.assertIn(("A", "all", "vel_y", 0.0, 1.0, 5.0), window._window_curve_cache)
+
+    def test_channel_button_row_blank_area_is_clickable(self) -> None:
+        """点击通道按钮右侧空白区域也应切换绘图通道。"""
+        window = DataAnalysisWindow()
+        window.show()
+        self.app.processEvents()
+        button = window._channel_buttons["pos_y"]
+
+        QTest.mouseClick(
+            button,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            QPoint(button.width() - 2, button.height() // 2),
+        )
+        self.app.processEvents()
+
+        self.assertEqual(window._selected_channel().key, "pos_y")
+        self.assertTrue(button.isChecked())
 
     def test_loaded_file_displays_relative_path_when_under_workspace(self) -> None:
         """工作区内文件应在顶栏显示相对路径，而不是只显示文件名。"""

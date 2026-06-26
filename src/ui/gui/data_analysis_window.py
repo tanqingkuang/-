@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
-from PySide6.QtCore import QMargins, QPointF, QSignalBlocker, Qt
+from PySide6.QtCore import QMargins, QPoint, QPointF, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -106,6 +106,14 @@ class InputSource:
     def t_max(self) -> float | None:
         """返回文件内最晚仿真时刻。"""
         return self.data.t_max if self.data is not None else None
+
+
+class FullRowRadioButton(QRadioButton):
+    """整行可点击的单选按钮，用于绘图通道列表。"""
+
+    def hitButton(self, pos: QPoint) -> bool:
+        """把按钮整块矩形都作为点击命中区域。"""
+        return self.rect().contains(pos)
 
 
 CHANNELS = DEFAULT_CHANNELS
@@ -383,8 +391,9 @@ class DataAnalysisWindow(QDialog):
         self._channel_group = QButtonGroup(self)
         self._channel_group.setExclusive(True)
         for index, channel in enumerate(CHANNELS):
-            button = QRadioButton(channel.label)
+            button = FullRowRadioButton(channel.label)
             button.setObjectName(f"offlineChannel_{channel.key}")
+            button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             # 默认绘制第一个通道；汇总表仍显示全部通道。
             button.setChecked(index == 0)
             button.toggled.connect(
