@@ -589,7 +589,14 @@ class PosTrackTests(unittest.TestCase):
         """验证 PosTrack 通过 diag 输出目标指令和控制误差，不把诊断量写入 Context。"""
 
         tracker = PidCompose()
-        tracker.init(PidComposeInitS(vMin=3.0))
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainForward=CtrlInitS(kp=0.1, ki=0.0, kd=0.5, dt=0.1),
+                gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.25, dt=0.1),
+                gainVertical=CtrlInitS(kp=0.25, ki=0.0, kd=0.75, dt=0.1),
+            )
+        )
         ctx = FormContextS()
         ctx.selfState = _motion(east=0.0, north=0.0, h=1000.0, v_east=10.0)
         ctx.selfCmd = _motion(east=50.0, north=4.0, h=1008.0, v_east=12.0)
@@ -612,6 +619,58 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(diag.track_pos_err_y_m, 8.0)
         self.assertAlmostEqual(diag.track_pos_err_z_m, -4.0)
         self.assertAlmostEqual(diag.track_vel_err_x_mps, 2.0)
+
+    def test_pid_compose_masks_unused_control_error_diagnostics(self) -> None:
+        """未被控制参数使用的航迹系误差诊断应输出 0，避免把无效通道纳入效果分析。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainForward=PPIInitS(kpPos=0.0, kpVel=1.0, kiVel=0.0, dt=0.1),
+                gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.25, dt=0.1),
+                gainVertical=CtrlInitS(kp=0.25, ki=0.0, kd=0.75, dt=0.1),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=1000.0, v_east=10.0)
+        ctx.selfCmd = _motion(east=50.0, north=4.0, h=1008.0, v_east=12.0, v_north=-3.0, v_up=5.0)
+        diag = PosTrackDiagS()
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
+        )
+
+        self.assertAlmostEqual(diag.track_pos_err_x_m, 0.0)
+        self.assertAlmostEqual(diag.track_pos_err_y_m, 8.0)
+        self.assertAlmostEqual(diag.track_pos_err_z_m, -4.0)
+        self.assertAlmostEqual(diag.track_vel_err_x_mps, math.hypot(12.0, -3.0) - 10.0)
+        self.assertAlmostEqual(diag.track_vel_err_y_mps, 5.0)
+        self.assertAlmostEqual(diag.track_vel_err_z_mps, 3.0)
+
+    def test_pid_compose_masks_unused_velocity_error_diagnostics(self) -> None:
+        """未配置速度环增益时，航迹系速度误差诊断应输出 0。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainForward=CtrlInitS(kp=0.1, ki=0.0, kd=0.0, kiv=0.0, dt=0.1),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, h=1000.0, v_east=10.0)
+        ctx.selfCmd = _motion(east=50.0, h=1000.0, v_east=12.0)
+        diag = PosTrackDiagS()
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
+        )
+
+        self.assertAlmostEqual(diag.track_pos_err_x_m, 50.0)
+        self.assertAlmostEqual(diag.track_vel_err_x_mps, 0.0)
 
     def test_pid_compose_rejects_low_speed_without_overwriting_output(self) -> None:
         """验证低于 vMin 时航迹系奇异状态会 fail-fast，且不会覆盖已有输出。"""
