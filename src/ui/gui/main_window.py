@@ -2301,25 +2301,25 @@ class MainWindow(QMainWindow):
         # 生成航线 / 采用航线并排一行，平分宽度，把横向空间用满。
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
-        self.generate_route_button = QPushButton("⟳ 生成航线")
+        self.generate_route_button = QPushButton("生成航线")
         self.generate_route_button.clicked.connect(self._generate_route)
-        self.adopt_route_button = QPushButton("✓ 采用航线")
+        self.adopt_route_button = QPushButton("采用航线")
         self.adopt_route_button.clicked.connect(self._adopt_route)
         self.adopt_route_button.setEnabled(False)
         button_row.addWidget(self.generate_route_button, 1)
         button_row.addWidget(self.adopt_route_button, 1)
         avoidance_layout.addLayout(button_row)
-        # 状态行：仅在生成成功/失败时显示（空闲留空，不常驻提示）。
+        # 反馈区：填满按钮下方剩余空间，显示操作提示 / 生成结果 / 失败原因（顶端对齐、自动换行）。
         self.avoidance_status = QLabel("")
         self.avoidance_status.setObjectName("avoidHint")
         self.avoidance_status.setWordWrap(True)
-        avoidance_layout.addWidget(self.avoidance_status)
-        # 占位拉伸：把上面内容顶到组顶部，余下空间留给状态行/避免控件被纵向拉伸变形。
-        avoidance_layout.addStretch(1)
+        self.avoidance_status.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        avoidance_layout.addWidget(self.avoidance_status, 1)
         layout.addWidget(avoidance_group, 1)
         # 初始无障碍：同步一次列表、参数控件与状态显示。
         self._rebuild_obstacle_list()
         self._sync_avoidance_param_widgets()
+        self._update_avoidance_status()
 
         # 避障组 stretch=1 已吃掉底部余量（把空间用满），无需再加面板级弹性占位。
         return panel
@@ -2404,8 +2404,14 @@ class MainWindow(QMainWindow):
             self.adopt_route_button.setEnabled(False)
 
     def _update_avoidance_status(self) -> None:
-        """清空避障状态文本。注意：空闲不常驻提示，状态仅在生成成功/失败时填充。"""
-        self.avoidance_status.setText("")
+        """空闲时在反馈区显示操作提示（生成成功/失败时由 _generate_route 覆盖）。"""
+        if not self.obstacles:
+            self.avoidance_status.setText("未加载障碍：当前配置无 avoidance.obstacles。")
+            return
+        enabled = sum(1 for obstacle in self.obstacles if obstacle.enabled)
+        self.avoidance_status.setText(
+            f"已勾选 {enabled}/{len(self.obstacles)} 个障碍。\n设置参数后点「生成航线」预览，满意再「采用航线」。"
+        )
 
     def _set_obstacles_from_config(self, path: str) -> None:
         """从配置文件解析障碍与规划参数并刷新显示。注意：解析失败时清空，保持界面一致。"""
@@ -2803,7 +2809,10 @@ class MainWindow(QMainWindow):
             }}
             QLabel#avoidHint {{
                 color: {theme.muted.name()};
-                padding: 2px 0;
+                background: {theme.field.name()};
+                border: 1px solid {theme.line.name()};
+                border-radius: 6px;
+                padding: 8px 10px;
             }}
             QMenu {{
                 background: {theme.field.name()};
