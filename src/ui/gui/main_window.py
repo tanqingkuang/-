@@ -2106,6 +2106,13 @@ class MainWindow(QMainWindow):
         else:
             table.setFixedHeight(height)
 
+    @staticmethod
+    def _centered_table_item(value: str) -> QTableWidgetItem:
+        """创建居中显示的表格单元格。注意：三张状态表都保持一致对齐。"""
+        item = QTableWidgetItem(value)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        return item
+
     def _install_button_cursors(self) -> None:
         """为按钮安装手型光标。注意：只影响交互提示，不改变按钮逻辑。"""
         for button in self.findChildren(QPushButton):
@@ -2346,7 +2353,7 @@ class MainWindow(QMainWindow):
                 status,
             ]
             for column, value in enumerate(values):
-                self.node_table.setItem(row, column, QTableWidgetItem(value))
+                self.node_table.setItem(row, column, self._centered_table_item(value))
 
         # 整体跟踪表：用长机代表当前全局航线跟踪情况，缺少显式长机时才回退首节点。
         self.overall_table.setRowCount(1 if snapshot.nodes else 0)
@@ -2363,7 +2370,7 @@ class MainWindow(QMainWindow):
             ground_speed = math.hypot(leader.vx, leader.vy)
             values = [f"{side_offset:.0f}", f"{distance_to_go:.0f}", f"{leader.altitude:.0f}", f"{ground_speed:.0f}"]
             for column, value in enumerate(values):
-                self.overall_table.setItem(0, column, QTableWidgetItem(value))
+                self.overall_table.setItem(0, column, self._centered_table_item(value))
 
         # 链路表：丢包率换算成百分比，ok 标志映射为正常/丢包文案。
         self.link_table.setRowCount(len(snapshot.links))
@@ -2376,7 +2383,7 @@ class MainWindow(QMainWindow):
                 "正常" if link.ok else "丢包",
             ]
             for column, value in enumerate(values):
-                self.link_table.setItem(row, column, QTableWidgetItem(value))
+                self.link_table.setItem(row, column, self._centered_table_item(value))
 
     def _toggle_play_pause(self) -> None:
         """响应播放/暂停按钮。注意：按钮文案显示下一步动作。"""
