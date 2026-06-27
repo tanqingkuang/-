@@ -438,6 +438,9 @@ def _build_leader_route(config: dict[str, object] | None = None, *, insert_arcs:
         wl = _wayline_from_config(segment, index, f"route.segments[{index}]", route_config)
         if not wpi_list:
             wpi_list.append(WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd))
+        else:
+            # 衔接航点的 vdCmd 描述“该点之后一段”，因此取下一航段速度。
+            wpi_list[-1].vdCmd = wl.start.vdCmd
         wpi_list.append(WayPointInputS(idx=len(wpi_list), pos=wl.end.pos, vdCmd=wl.start.vdCmd))
     return wpi_list
 

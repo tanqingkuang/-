@@ -230,6 +230,31 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(lines[1].end.pos.north, 80.0)
         self.assertTrue(all(line.start.vdCmd == 12.0 for line in lines))
 
+    def test_route_segments_preserve_per_segment_speed(self) -> None:
+        """route.segments 相邻航段速度不同时，每段应使用自己的速度。"""
+
+        route = _build_leader_route(
+            {
+                "route": {
+                    "segments": [
+                        {
+                            "speed_mps": 10.0,
+                            "start": {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                            "end": {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
+                        },
+                        {
+                            "speed_mps": 20.0,
+                            "start": {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
+                            "end": {"x_m": 100.0, "y_m": 80.0, "altitude_m": 1000.0},
+                        },
+                    ]
+                }
+            }
+        )
+        lines = waypoint_inputs_to_waylines(route)
+
+        self.assertEqual([line.start.vdCmd for line in lines], [10.0, 20.0])
+
     def test_route_waypoints_radius_inserts_tangent_arc(self) -> None:
         """内部拐点 R>0 时应在直线段间插入与两腿相切的圆弧段(东->北左转)。"""
 

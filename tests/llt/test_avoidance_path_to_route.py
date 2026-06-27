@@ -117,6 +117,21 @@ class PointsToRouteTests(unittest.TestCase):
         # 圆弧段长 = R·|扫掠角|，90° 转弯 ≈ R·pi/2。
         self.assertAlmostEqual(segment_length(arc), 200.0 * math.pi / 2.0, places=3)
 
+    def test_oversized_corner_radius_falls_back_to_straight_lines(self) -> None:
+        """圆弧切点超出相邻腿长时，应退回原始折线而不是插入腿外圆弧。"""
+
+        wpi = points_to_route(
+            [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], turn_radius_m=100.0, speed_mps=20.0
+        )
+        lines = waypoint_inputs_to_waylines(wpi)
+
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(all(line.start.turnSign == 0.0 for line in lines))
+        self.assertAlmostEqual(lines[0].end.pos.east, 10.0)
+        self.assertAlmostEqual(lines[0].end.pos.north, 0.0)
+        self.assertAlmostEqual(lines[1].start.pos.east, 10.0)
+        self.assertAlmostEqual(lines[1].start.pos.north, 0.0)
+
     def test_insert_arcs_false_all_r_zero(self) -> None:
         wpi = points_to_route(
             [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0, insert_arcs=False

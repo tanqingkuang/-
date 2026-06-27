@@ -133,11 +133,11 @@ class LeaderEntity(EntityBase):
 
 
 def waypoint_inputs_to_waylines(inputs: list[WayPointInputS]) -> list[WayLineS]:
-    """Convert raw waypoint inputs to internal WayLineS sequence with arc geometry resolved.
+    """将原始航点转换为内部 WayLineS 序列，并按需展开圆弧几何。
 
-    Case 1 (turnSign != 0): pre-computed arc (e.g. from A*), mapped directly.
-    Case 2 (turnSign == 0, r > 0, not first/last): compute corner arc via corner_arc().
-    Default: straight segment, direct mapping.
+    情况 1：turnSign != 0 表示外部已算好的圆弧，直接映射。
+    情况 2：内部拐点 r > 0 时用 corner_arc() 计算相切圆弧。
+    默认：按普通折线直连。
     """
     if len(inputs) < 2:
         raise ValueError("at least 2 waypoints required")
@@ -149,13 +149,29 @@ def waypoint_inputs_to_waylines(inputs: list[WayPointInputS]) -> list[WayLineS]:
             arc = corner_arc(inputs[i - 1].pos, wpi.pos, inputs[i + 1].pos, wpi.r)
             if arc is not None:
                 t1, t2, center, turn_sign = arc
-                nodes.append(WayPointS(idx=wpi.idx, pos=t1, vdCmd=inputs[i - 1].vdCmd, turnSign=turn_sign, center=center))
-                nodes.append(WayPointS(idx=wpi.idx, pos=t2, vdCmd=wpi.vdCmd))
+                # corner_arc 只负责几何求解，调用方需保证切点仍落在两条原始航腿内。
+                in_leg = _horizontal_distance(inputs[i - 1].pos, wpi.pos)
+                out_leg = _horizontal_distance(wpi.pos, inputs[i + 1].pos)
+                tangent_in = _horizontal_distance(t1, wpi.pos)
+                tangent_out = _horizontal_distance(t2, wpi.pos)
+                if tangent_in <= in_leg + 1e-9 and tangent_out <= out_leg + 1e-9:
+                    nodes.append(
+                        WayPointS(idx=wpi.idx, pos=t1, vdCmd=inputs[i - 1].vdCmd, turnSign=turn_sign, center=center)
+                    )
+                    nodes.append(WayPointS(idx=wpi.idx, pos=t2, vdCmd=wpi.vdCmd))
+                else:
+                    # 半径过大时切点会越过相邻航点，保持折线比插入反向圆弧更安全。
+                    nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
             else:
                 nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
         else:
             nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
     return [WayLineS(idx=j, start=nodes[j], end=nodes[j + 1]) for j in range(len(nodes) - 1)]
+
+
+def _horizontal_distance(a: PosInEarthS, b: PosInEarthS) -> float:
+    """计算两点水平距离。注意：圆弧切点合法性只看东/北平面。"""
+    return math.hypot(a.east - b.east, a.north - b.north)
 
 
 def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: VelCmdLimitS) -> PidComposeInitS:
