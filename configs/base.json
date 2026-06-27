@@ -30,9 +30,9 @@
     "enabled": true,
     "allow_arc": false,
     "turn_radius_m": 300.0,
-    "leg_length_margin_m": 80.0,
-    "clearance_m": 120.0,
-    "simplify_clearance_m": 120.0,
+    "leg_length_margin_m": 0.0,
+    "clearance_m": 100.0,
+    "simplify_clearance_m": 100.0,
     "turn_switch_penalty_m": 0.0,
     "turn_angle_weight_m": 0.0,
     "grid": {
