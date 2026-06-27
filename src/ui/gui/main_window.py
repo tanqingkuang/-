@@ -9,6 +9,34 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+# 该模块既支持 `python -m src.ui.gui.main_window`，也支持 IDE 直接运行文件。
+# 直接运行文件时，解释器默认只把 src/ui/gui 加入 sys.path。
+# 下面的自修正只处理这种入口差异，不改变正式包结构。
+# 继续保留绝对导入，便于测试、打包和跨模块重构时保持一致。
+# 不依赖 VS Code 的 PYTHONPATH，是为了兼容终端、Run Code 和调试器差异。
+# 不在 src/main.py 中转发，是因为当前正式 GUI 入口已经在本模块底部。
+# 路径注入发生在 PySide6 导入之后也可以，但放在 src 包导入之前更直观。
+# 若后续改为安装型包运行，这段逻辑会因 __package__ 非空自动跳过。
+# 这里不创建 QApplication，避免单元测试加载模块时意外进入 GUI 生命周期。
+def _ensure_project_root_on_path() -> None:
+    """确保直接执行本文件时也能导入项目包。注意：包导入场景不修改 sys.path。"""
+
+    # 包方式启动时 Python 已经知道顶层包，避免重复改写导入搜索路径。
+    if __package__:
+        return
+
+    # 本文件位于 src/ui/gui/main_window.py，向上三层正好回到项目根目录。
+    project_root = Path(__file__).resolve().parents[3]
+    # 只有确实看到 src 目录时才注入，避免误把无关父目录加入 sys.path。
+    if (project_root / "src").is_dir() and str(project_root) not in sys.path:
+        # VS Code 直接调试当前文件时只会加入脚本目录，这里补入项目根目录。
+        sys.path.insert(0, str(project_root))
+
+
+_ensure_project_root_on_path()
+
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
@@ -1538,8 +1566,8 @@ class TopView(QGraphicsView):
 
     def _draw_trail(self, painter: QPainter, node: NodeState, is_leader: bool, current_time: float) -> None:
         """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
-        # 少于 3 个点无法连成有意义的尾迹，直接跳过。
-        if len(node.trail) <= 2:
+        # 两个采样点即可表达刚启动后的位移，避免运行初期看起来像静止。
+        if len(node.trail) <= 1:
             return
         base = self.theme.leader if is_leader else self.theme.wingman
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
@@ -1550,7 +1578,8 @@ class TopView(QGraphicsView):
             color = QColor(base)
             # 长机尾迹整体比僚机略浓。
             color.setAlphaF((0.52 if is_leader else 0.44) * alpha)
-            painter.setPen(QPen(color, 2))
+            # 世界坐标已整体缩放，线宽反向缩放才能在长航线低缩放下保持可见。
+            painter.setPen(QPen(color, 2.4 / self.scale_value))
             painter.drawLine(QPointF(previous.x, previous.y), QPointF(current.x, current.y))
 
 

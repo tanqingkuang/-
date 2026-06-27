@@ -10,6 +10,7 @@
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },
+            "python": "${command:python.interpreterPath}",
             "console": "integratedTerminal",
             "justMyCode": true
         },
@@ -22,6 +23,7 @@
             "env": {
                 "PYTHONPATH": "${workspaceFolder}"
             },
+            "python": "${command:python.interpreterPath}",
             "console": "integratedTerminal",
             "justMyCode": true
         }

@@ -30,6 +30,7 @@ from src.ui.gui.main_window import (
     ReferenceRoute,
     Snapshot,
     TOP_VIEW_ORIGIN_MARGIN,
+    TrailPoint,
     default_project_root,
     run_gui,
 )
@@ -564,6 +565,50 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreaterEqual(start_y, 5.0)
         self.assertLessEqual(end_x, rect.width() - 5.0)
         self.assertGreaterEqual(end_y, 5.0)
+
+    def test_low_zoom_two_point_trail_remains_visible(self) -> None:
+        """低缩放长航线下，刚开始运行产生的两点尾迹也应清晰可见。"""
+
+        view = self.window.top_view
+        view.show_grid = False
+        view.snapshot = Snapshot(
+            time=0.2,
+            duration=10.0,
+            step=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            disturbance="无",
+            nodes=[
+                NodeState(
+                    "A01",
+                    "leader",
+                    160.0,
+                    220.0,
+                    20.0,
+                    0.0,
+                    trail=[
+                        TrailPoint(120.0, 20.0, 1200.0, 0.1),
+                        TrailPoint(160.0, 20.0, 1200.0, 0.2),
+                    ],
+                )
+            ],
+            links=[],
+        )
+        view.scale_value = 0.2
+        view.offset = QPointF(120.0, 120.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        canvas = self.window.theme.canvas.name()
+        y = round(20.0 * view.scale_value + view.offset.y())
+        touched = [
+            x
+            for x in range(image.width())
+            if image.pixelColor(x, y).name() != canvas
+        ]
+
+        self.assertGreaterEqual(len(touched), 6)
 
     def test_multi_segment_route_is_available_to_views_after_load(self) -> None:
         route_config = {
