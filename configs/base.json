@@ -44,22 +44,34 @@
         "id": "C1",
         "type": "circle",
         "enabled": true,
-        "center": { "east_m": 900.0, "north_m": 0.0 },
+        "center": {
+          "east_m": 900.0,
+          "north_m": 0.0
+        },
         "radius_m": 200.0
       },
       {
         "id": "C2",
         "type": "circle",
         "enabled": true,
-        "center": { "east_m": 2000.0, "north_m": 1200.0 },
+        "center": {
+          "east_m": 2000.0,
+          "north_m": 1200.0
+        },
         "radius_m": 200.0
       },
       {
         "id": "R1",
         "type": "rect",
         "enabled": false,
-        "min": { "east_m": 350.0, "north_m": -180.0 },
-        "max": { "east_m": 650.0, "north_m": 180.0 }
+        "min": {
+          "east_m": 350.0,
+          "north_m": -180.0
+        },
+        "max": {
+          "east_m": 650.0,
+          "north_m": 180.0
+        }
       }
     ]
   },
