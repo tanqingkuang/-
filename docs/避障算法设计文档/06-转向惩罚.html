@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>06 转向惩罚</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>06 转向惩罚</h1>
+    <p>普通 A* 会偏向最短距离，但栅格路径可能频繁锯齿。项目提供转向惩罚，让路径更愿意保持方向，减少后续去冗余和圆弧阶段的压力。</p>
+  </header>
+  <main>
+    <section>
+      <h2>代价公式</h2>
+      <pre><code>def _heading_transition_penalty(previous_dir, current_dir,
+                                turn_switch_penalty_m,
+                                turn_angle_weight_m):
+    if previous_dir is None or previous_dir == current_dir:
+        return 0.0
+    return turn_switch_penalty_m \
+        + turn_angle_weight_m * (delta_deg / 45.0)</code></pre>
+      <p><code>turn_switch_penalty_m</code> 是只要换方向就加的固定成本。<code>turn_angle_weight_m</code> 是按转角大小加的成本，45° 为一个单位。</p>
+    </section>
+    <section>
+      <h2>为什么状态要变复杂</h2>
+      <div class="grid-2">
+        <div>
+          <p>无转向惩罚时，状态就是格点：</p>
+          <pre><code>cell = (i, j)</code></pre>
+          <p>启用转向惩罚后，同一个格点从东边进入和从南边进入，下一步继续前进的代价不一样，所以状态必须包含进入方向：</p>
+          <pre><code>State = tuple[int, int, int | None]
+state = (i, j, previous_dir)</code></pre>
+        </div>
+        <svg class="diagram" viewBox="0 0 520 310" role="img" aria-label="不同入射方向">
+          <g stroke="#d8d2c6" stroke-width="1">
+            <path d="M90 50 H410 M90 110 H410 M90 170 H410 M90 230 H410"></path>
+            <path d="M110 30 V250 M170 30 V250 M230 30 V250 M290 30 V250 M350 30 V250"></path>
+          </g>
+          <circle cx="230" cy="170" r="13" fill="#2f6fed"></circle>
+          <path d="M110 170 H217" stroke="#0f7b75" stroke-width="6"></path>
+          <path d="M230 50 V157" stroke="#c35a2e" stroke-width="6"></path>
+          <text x="170" y="155" text-anchor="middle" fill="#0f7b75">从西进入</text>
+          <text x="270" y="90" fill="#c35a2e">从北进入</text>
+          <text x="230" y="205" text-anchor="middle" fill="#2f6fed">同一格点</text>
+        </svg>
+      </div>
+    </section>
+    <section>
+      <h2>搜索分支对照</h2>
+      <table>
+        <thead><tr><th>条件</th><th>open 元素</th><th>g_score key</th><th>适合场景</th></tr></thead>
+        <tbody>
+          <tr><td>两个惩罚都为 0</td><td><code>(f, tie, cell)</code></td><td><code>(i, j)</code></td><td>追求传统最短格点路。</td></tr>
+          <tr><td>任一惩罚大于 0</td><td><code>(f, tie, state)</code></td><td><code>(i, j, previous_dir)</code></td><td>希望路径更少换向、更平顺。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>影响与取舍</h2>
+      <div class="grid-3">
+        <div class="note"><strong>优点</strong><br>减少方向抖动，路径更像飞机愿意飞的骨架。</div>
+        <div class="note warning"><strong>代价</strong><br>状态数量变多，同一个格点可能按不同入射方向重复存在。</div>
+        <div class="note"><strong>边界</strong><br>它只是等效米代价，不替代真正的转弯半径校验。</div>
+      </div>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li>为什么转向惩罚不是直接加到 h，而是加到 tentative g？</li>
+        <li>为什么启用惩罚后 <code>closed</code> 也要按 state 存，而不是只按格点存？</li>
+        <li>转向惩罚能不能保证圆弧一定可飞？</li>
+      </ol>
+      <div class="nav"><a href="05-工程安全规则.html">上一页：05 工程安全规则</a><a href="07-去冗余与航线转换.html">下一页：07 去冗余与航线转换</a></div>
+    </section>
+  </main>
+</body>
+</html>

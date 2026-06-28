@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>02 障碍物建模与判障</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>02 障碍物建模与判障</h1>
+    <p>避障的第一个核心不是 A*，而是“什么算被障碍挡住”。项目把这个判断集中在 `obstacle.py`，A* 和可飞性校验都复用它。</p>
+  </header>
+  <main>
+    <section>
+      <h2>数据结构</h2>
+      <pre><code>@dataclass
+class ObstacleS:
+    id: str
+    kind: str  # "circle" | "rect"
+    center: PosInEarthS
+    radius: float
+    min_e: float
+    min_n: float
+    max_e: float
+    max_n: float</code></pre>
+      <p>圆形障碍用圆心和半径；矩形障碍用 east/north 方向上的最小最大边界。高度字段不参与避障，因为本期只做水平面避障。</p>
+    </section>
+    <section>
+      <h2>膨胀判障</h2>
+      <div class="grid-2">
+        <div>
+          <p><code>inside()</code> 的语义是：点是否落在“障碍 + clearance”里面，边界算内。</p>
+          <pre><code>if obstacle.kind == "circle":
+    return hypot(east - center.east, north - center.north) \
+        <= obstacle.radius + clearance
+
+return (
+    min_e - clearance <= east <= max_e + clearance
+    and min_n - clearance <= north <= max_n + clearance
+)</code></pre>
+        </div>
+        <svg class="diagram" viewBox="0 0 560 320" role="img" aria-label="障碍膨胀示意">
+          <g font-family="Microsoft YaHei, sans-serif">
+            <circle cx="155" cy="160" r="52" fill="#30363d" opacity="0.85"></circle>
+            <circle cx="155" cy="160" r="88" fill="none" stroke="#c35a2e" stroke-width="4" stroke-dasharray="8 7"></circle>
+            <text x="155" y="275" text-anchor="middle" fill="#63717d">圆形：半径 + clearance</text>
+            <rect x="330" y="110" width="100" height="90" fill="#30363d" opacity="0.85"></rect>
+            <rect x="294" y="74" width="172" height="162" fill="none" stroke="#c35a2e" stroke-width="4" stroke-dasharray="8 7"></rect>
+            <text x="380" y="275" text-anchor="middle" fill="#63717d">矩形：四边外扩 clearance</text>
+            <text x="155" y="160" text-anchor="middle" fill="#fff" font-size="15">真实障碍</text>
+            <text x="380" y="160" text-anchor="middle" fill="#fff" font-size="15">真实障碍</text>
+          </g>
+        </svg>
+      </div>
+      <div class="note">A* 实际绕开的不是黑色真实障碍，而是橙色虚线代表的膨胀障碍。这样路径即使贴着膨胀边界走，也和真实障碍留出安全距离。</div>
+    </section>
+    <section>
+      <h2>为什么要有 blocked()</h2>
+      <pre><code>def blocked(obstacles, east, north, clearance=0.0):
+    return any(inside(obstacle, east, north, clearance)
+               for obstacle in obstacles)</code></pre>
+      <p>A* 要判断格心是否可通行，可飞性要判断圆弧采样点是否触障。两者如果各写一套几何判断，很容易出现“A* 认为安全、圆弧校验认为不安全”的不一致。所以工程把形状判断收敛到同一个函数。</p>
+    </section>
+    <section>
+      <h2>配置到对象</h2>
+      <table>
+        <thead><tr><th>配置字段</th><th>对象字段</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td><code>type: circle</code></td><td><code>kind="circle"</code></td><td>使用圆心和半径。</td></tr>
+          <tr><td><code>type: rect</code></td><td><code>kind="rect"</code></td><td>使用 east/north 上下界。</td></tr>
+          <tr><td><code>enabled</code></td><td>UI 勾选状态</td><td>未启用的障碍不会传给规划。</td></tr>
+          <tr><td><code>clearance_m</code></td><td><code>clearance</code></td><td>规划判障时统一传入。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li>为什么边界点也算障碍内？</li>
+        <li>如果 <code>clearance_m</code> 调大，A* 搜索空间会变宽还是变窄？</li>
+        <li>为什么新增一种障碍形状时，优先改 <code>inside()</code> 而不是改 A*？</li>
+      </ol>
+      <div class="nav"><a href="01-避障总览.html">上一页：01 避障总览</a><a href="03-栅格化与坐标转换.html">下一页：03 栅格化与坐标转换</a></div>
+    </section>
+  </main>
+</body>
+</html>

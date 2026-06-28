@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>07 去冗余与航线转换</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>07 去冗余与航线转换</h1>
+    <p>A* 输出的是格点折线，通常又密又锯齿。工程接着用视线可达检查删除不必要的中间点，再把拐点变成 `WayPointInputS`。</p>
+  </header>
+  <main>
+    <section>
+      <h2>为什么不能直接用 A* 原始路径</h2>
+      <p>原始格点路径适合解释搜索过程，但不适合直接给长机飞：点太多、方向变化频繁、圆弧转换会变复杂。去冗余的目标是保留必要拐点，把能拉直的锯齿段拉成一条直线。</p>
+      <svg class="diagram" viewBox="0 0 820 260" role="img" aria-label="去冗余示意">
+        <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M60 180 L110 130 L160 180 L210 130 L260 180 L310 130 L360 180" stroke="#2f6fed" stroke-width="5"></path>
+          <path d="M460 180 L760 130" stroke="#0f7b75" stroke-width="5"></path>
+        </g>
+        <g fill="#2f6fed">
+          <circle cx="60" cy="180" r="6"></circle><circle cx="110" cy="130" r="6"></circle><circle cx="160" cy="180" r="6"></circle><circle cx="210" cy="130" r="6"></circle><circle cx="260" cy="180" r="6"></circle><circle cx="310" cy="130" r="6"></circle><circle cx="360" cy="180" r="6"></circle>
+        </g>
+        <g fill="#0f7b75">
+          <circle cx="460" cy="180" r="7"></circle><circle cx="760" cy="130" r="7"></circle>
+        </g>
+        <text x="210" y="220" text-anchor="middle" fill="#63717d">A* 原始格点折线</text>
+        <text x="610" y="220" text-anchor="middle" fill="#63717d">视线可达后保留两端</text>
+      </svg>
+    </section>
+    <section>
+      <h2>视线可达检查</h2>
+      <pre><code>def line_of_sight_clear(start, end, obstacles, clearance=0.0):
+    length = hypot(end[0] - start[0], end[1] - start[1])
+    steps = max(1, ceil(length / sample_step))
+    for k in range(steps + 1):
+        t = k / steps
+        east = start[0] + (end[0] - start[0]) * t
+        north = start[1] + (end[1] - start[1]) * t
+        if blocked(obstacles, east, north, clearance):
+            return False
+    return True</code></pre>
+      <p>注意这里用 <code>ceil</code>，保证采样间距不超过 <code>sample_step</code>。如果用向下取整，短线段中间的细障碍可能被漏掉。</p>
+    </section>
+    <section>
+      <h2>贪心去冗余</h2>
+      <pre><code>result = [points[0]]
+anchor = 0
+for i in range(1, len(points) - 1):
+    if not line_of_sight_clear(points[anchor], points[i + 1], obstacles):
+        result.append(points[i])
+        anchor = i
+result.append(points[-1])</code></pre>
+      <p>从锚点开始尽量往远处看。如果锚点看不到下一个点，就说明当前点必须保留；否则当前点可以跳过。</p>
+      <div class="note">去冗余不是“删掉所有共线点”这么简单。即使不共线，只要从锚点到远点的直线不穿障碍，也可以删掉中间点。</div>
+    </section>
+    <section>
+      <h2>转换为 WayPointInputS</h2>
+      <table>
+        <thead><tr><th>函数</th><th>职责</th><th>重要限制</th></tr></thead>
+        <tbody>
+          <tr><td><code>points_to_route()</code></td><td>把二维点摆成航点，写入速度和高度。</td><td>不决策 r，所有 <code>r=0</code>。</td></tr>
+          <tr><td><code>assign_transition_radius()</code></td><td>给直线-直线内部拐点补 <code>r=turn_radius_m</code>。</td><td>首末点不补；邻段已有曲线则不补。</td></tr>
+          <tr><td><code>bake_transition_arcs()</code></td><td>当 <code>allow_arc=True</code> 时把交接半径烘焙成曲率航段。</td><td>半径过大导致切点越出腿长时保留原折线。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>simplify_clearance_m 的意义</h2>
+      <p>A* 搜索用 <code>clearance_m</code>，去冗余可以用 <code>simplify_clearance_m</code>。两者默认相同，但允许分开：搜索时可以保守一点，去冗余时可以按另一套安全边界判断拉直线段。</p>
+      <div class="warning note">如果去冗余的 clearance 太小，折线可能被拉得更直，但也更接近真实障碍；如果太大，路径会保留更多拐点。</div>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li>为什么 <code>points_to_route()</code> 不直接设置转弯半径？</li>
+        <li>视线去冗余为什么要逐点采样，而不是只检查两端？</li>
+        <li><code>simplify_clearance_m</code> 小于 <code>clearance_m</code> 时，拐点数量通常会怎么变？</li>
+      </ol>
+      <div class="nav"><a href="06-转向惩罚.html">上一页：06 转向惩罚</a><a href="08-圆弧与可飞性.html">下一页：08 圆弧与可飞性</a></div>
+    </section>
+  </main>
+</body>
+</html>

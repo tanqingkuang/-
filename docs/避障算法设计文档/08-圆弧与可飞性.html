@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>08 圆弧与可飞性</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>08 圆弧与可飞性</h1>
+    <p>A* 和去冗余只能说明“几何通道存在”。飞机能不能按转弯半径飞出来，还要检查急拐点、腿长和圆弧触障。</p>
+  </header>
+  <main>
+    <section>
+      <h2>三类失败</h2>
+      <table>
+        <thead><tr><th>原因码</th><th>检查对象</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>ERR_AVOID_TURN_TOO_SHARP</code></td><td>拐点偏转角</td><td>接近掉头，圆弧几何不稳定或不可接受。</td></tr>
+          <tr><td><code>ERR_AVOID_LEG_TOO_SHORT</code></td><td>相邻拐点之间的腿长</td><td>一条腿容不下两端圆弧切线占用和直线余度 L。</td></tr>
+          <tr><td><code>ERR_AVOID_ARC_HITS_OBSTACLE</code></td><td>圆弧采样点</td><td>直线骨架安全，但圆弧外凸后碰到障碍。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>腿长约束</h2>
+      <div class="grid-2">
+        <div>
+          <p>每个内部拐点按转弯半径 R 计算切点到拐点距离：</p>
+          <pre><code>d = R * tan(abs(deflection) / 2)</code></pre>
+          <p>每条腿必须装下前后两个拐点的切线占用，再加直线余度 L：</p>
+          <pre><code>leg_len >= tangent_d[i] + tangent_d[i + 1] + leg_margin_m</code></pre>
+        </div>
+        <svg class="diagram" viewBox="0 0 560 320" role="img" aria-label="腿长约束示意">
+          <path d="M80 230 L250 90 L460 230" fill="none" stroke="#2f6fed" stroke-width="5" stroke-linejoin="round"></path>
+          <circle cx="250" cy="90" r="8" fill="#c35a2e"></circle>
+          <path d="M186 143 Q250 90 326 141" fill="none" stroke="#0f7b75" stroke-width="5"></path>
+          <line x1="186" y1="143" x2="250" y2="90" stroke="#c35a2e" stroke-width="2" stroke-dasharray="6 5"></line>
+          <line x1="250" y1="90" x2="326" y2="141" stroke="#c35a2e" stroke-width="2" stroke-dasharray="6 5"></line>
+          <text x="217" y="128" fill="#c35a2e">d</text>
+          <text x="288" y="128" fill="#c35a2e">d</text>
+          <text x="275" y="245" text-anchor="middle" fill="#63717d">腿长必须容纳相邻圆弧切线占用 + L</text>
+        </svg>
+      </div>
+    </section>
+    <section>
+      <h2>圆弧触障为什么必要</h2>
+      <p>A* 和去冗余检查的是折线骨架。飞机实际转弯时，拐点附近不是尖角，而是外切圆弧。这个圆弧可能向障碍一侧外凸，所以可飞性模块会重建圆弧并采样检查。</p>
+      <pre><code>arc = corner_arc(p_prev, p_corner, p_next, turn_radius_m)
+for east, north in _arc_sample_points(arc, turn_radius_m, sample_step):
+    obstacle_id = _hit_obstacle(obstacles, east, north, arc_clearance)
+    if obstacle_id is not None:
+        return FeasibilityResult(ok=False, code=ERR_ARC_HITS_OBSTACLE)</code></pre>
+    </section>
+    <section>
+      <h2>planner.py 如何收口</h2>
+      <pre><code>raw = plan_path(...)
+simplified = simplify_path(raw, obstacles, clearance=simplify_clearance_m)
+feasibility = check_feasibility(full_xy, obstacles, turn_radius_m=...)
+route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)
+assign_transition_radius(route, turn_radius_m)
+if allow_arc:
+    route = bake_transition_arcs(route)
+return PlanResult(ok=True, route=route, simplified_points=full_xy)</code></pre>
+      <p><code>PlanResult</code> 是上层 UI 最关心的边界：成功时带 route；失败时带原因码、详情、腿序号或障碍 id。</p>
+    </section>
+    <section>
+      <h2>高度怎么处理</h2>
+      <p>二维避障只改变水平路径。<code>planner.py</code> 会按水平里程在原始航点高度之间线性插值，保持原航线高度剖面，而不是为了避障新增爬升或下降。</p>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li>为什么 A* 成功不等于 <code>PlanResult.ok=True</code>？</li>
+        <li><code>allow_arc=False</code> 时，长机实际还会不会平滑过弯？</li>
+        <li>为什么圆弧触障默认按真实障碍检查，而不是再次叠加 A* 的 clearance？</li>
+      </ol>
+      <div class="nav"><a href="07-去冗余与航线转换.html">上一页：07 去冗余与航线转换</a><a href="避障学习目录.html">回到目录</a></div>
+    </section>
+  </main>
+</body>
+</html>

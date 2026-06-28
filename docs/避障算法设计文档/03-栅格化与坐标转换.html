@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>03 栅格化与坐标转换</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>03 栅格化与坐标转换</h1>
+    <p>A* 不能直接在连续坐标上搜索，工程先把 east/north 平面切成格点。理解这一步，后面的 open heap 才有落脚点。</p>
+  </header>
+  <main>
+    <section>
+      <h2>从世界坐标到格点</h2>
+      <div class="grid-2">
+        <div>
+          <pre><code>nx = ceil((max_e - min_e) / resolution_m) + 1
+ny = ceil((max_n - min_n) / resolution_m) + 1
+
+def cell_center(i, j):
+    return (min_e + i * resolution_m,
+            min_n + j * resolution_m)
+
+def to_cell(point):
+    i = round((point[0] - min_e) / resolution_m)
+    j = round((point[1] - min_n) / resolution_m)
+    return clamp(i, j)</code></pre>
+          <p><code>resolution_m</code> 是每个格点之间的米数。分辨率越小，地图越细，搜索越慢；分辨率越大，地图越粗，路径更粗糙，也更容易错过窄通道。</p>
+        </div>
+        <svg class="diagram" viewBox="0 0 520 360" role="img" aria-label="栅格化示意">
+          <g stroke="#d8d2c6" stroke-width="1">
+            <path d="M60 40 V300 M100 40 V300 M140 40 V300 M180 40 V300 M220 40 V300 M260 40 V300 M300 40 V300 M340 40 V300 M380 40 V300 M420 40 V300 M460 40 V300"></path>
+            <path d="M60 40 H460 M60 80 H460 M60 120 H460 M60 160 H460 M60 200 H460 M60 240 H460 M60 280 H460"></path>
+          </g>
+          <circle cx="112" cy="192" r="8" fill="#0f7b75"></circle>
+          <circle cx="100" cy="200" r="6" fill="#2f6fed"></circle>
+          <line x1="112" y1="192" x2="100" y2="200" stroke="#2f6fed" stroke-width="2" stroke-dasharray="5 4"></line>
+          <circle cx="406" cy="91" r="8" fill="#c35a2e"></circle>
+          <circle cx="420" cy="80" r="6" fill="#2f6fed"></circle>
+          <line x1="406" y1="91" x2="420" y2="80" stroke="#2f6fed" stroke-width="2" stroke-dasharray="5 4"></line>
+          <text x="112" y="220" text-anchor="middle" fill="#0f7b75">真实起点</text>
+          <text x="100" y="232" text-anchor="middle" fill="#2f6fed">吸附格点</text>
+          <text x="406" y="118" text-anchor="middle" fill="#c35a2e">真实终点</text>
+          <text x="420" y="130" text-anchor="middle" fill="#2f6fed">吸附格点</text>
+        </svg>
+      </div>
+    </section>
+    <section>
+      <h2>bounds 从哪里来</h2>
+      <p>如果调用者没有传 <code>bounds</code>，工程用 <code>compute_bounds()</code> 自动从起点、终点、障碍包围盒推导搜索范围，并额外加 <code>margin_m + resolution_m</code>。</p>
+      <pre><code>bounds = compute_bounds(
+    start,
+    goal,
+    obstacles,
+    clearance_m,
+    margin_m + resolution_m,
+)</code></pre>
+      <table>
+        <thead><tr><th>参与因素</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>起点 / 终点</td><td>至少要把任务端点放进搜索范围。</td></tr>
+          <tr><td>障碍包围盒</td><td>绕障空间不能只看起终点连线，否则障碍旁边没路可走。</td></tr>
+          <tr><td><code>clearance_m</code></td><td>障碍会膨胀，搜索范围也要覆盖膨胀后的外边界。</td></tr>
+          <tr><td><code>margin_m</code></td><td>给绕行留额外空间。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>网格规模保护</h2>
+      <pre><code>MAX_GRID_CELLS = 4_000_000
+
+if nx * ny > MAX_GRID_CELLS:
+    raise ValueError("grid too large")</code></pre>
+      <p>这是工程保护，不是算法参数。用户把分辨率调得过小或者范围调得过大时，网格数量会爆炸，A* 的内存和耗时都会失控，所以这里直接把配置错误暴露出来。</p>
+      <div class="warning note">粗略感受：同一范围内，分辨率减半，横向格点约翻倍、纵向格点约翻倍，总格点约变成 4 倍。</div>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li><code>resolution_m=20</code> 改成 <code>resolution_m=10</code>，网格数量大约如何变化？</li>
+        <li>为什么 <code>to_cell()</code> 使用 <code>round</code> 后，源码仍要对真实起终点做精确判障？</li>
+        <li><code>margin_m</code> 太小可能导致什么问题？</li>
+      </ol>
+      <div class="nav"><a href="02-障碍物建模与判障.html">上一页：02 障碍物建模与判障</a><a href="04-A星搜索核心.html">下一页：04 A* 搜索核心</a></div>
+    </section>
+  </main>
+</body>
+</html>

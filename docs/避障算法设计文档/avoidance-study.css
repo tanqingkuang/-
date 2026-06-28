@@ -1,0 +1,321 @@
+/* 避障学习页公共样式：保持章节视觉一致，便于长期追加内容。 */
+:root {
+  color-scheme: light;
+  --bg: #f6f4ef;
+  --panel: #fffefa;
+  --ink: #1d252c;
+  --muted: #63717d;
+  --line: #d8d2c6;
+  --accent: #0f7b75;
+  --accent-2: #c35a2e;
+  --blue: #2f6fed;
+  --green: #4f9a68;
+  --yellow: #f7c948;
+  --red: #de3d3d;
+  --dark: #30363d;
+  --code-bg: #17202a;
+  --code-ink: #edf4f8;
+  --shadow: 0 10px 30px rgba(29, 37, 44, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", system-ui, sans-serif;
+  line-height: 1.65;
+}
+
+header {
+  padding: 46px min(7vw, 76px) 40px;
+  color: #fff;
+  background: linear-gradient(135deg, #143642 0%, #0f7b75 56%, #d98841 100%);
+}
+
+header a {
+  color: #fff;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(30px, 5vw, 52px);
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+header p {
+  max-width: 920px;
+  margin: 14px 0 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 17px;
+}
+
+main {
+  width: min(1180px, calc(100% - 32px));
+  margin: 28px auto 64px;
+}
+
+section,
+.chapter-card {
+  margin: 22px 0;
+  padding: 26px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+h2 {
+  margin: 0 0 16px;
+  font-size: 26px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+h3 {
+  margin: 24px 0 10px;
+  font-size: 19px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+
+p {
+  margin: 10px 0;
+}
+
+a {
+  color: #0a6f69;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 0.95em;
+  background: #eee9df;
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+pre {
+  overflow: auto;
+  margin: 14px 0 0;
+  padding: 16px;
+  background: var(--code-bg);
+  color: var(--code-ink);
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+pre code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 0;
+  font-size: 15px;
+}
+
+th,
+td {
+  border: 1px solid var(--line);
+  padding: 9px 10px;
+  vertical-align: top;
+  text-align: left;
+}
+
+th {
+  background: #f0ece3;
+  font-weight: 700;
+}
+
+ol,
+ul {
+  padding-left: 22px;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.95fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.note {
+  margin: 14px 0;
+  padding: 14px 16px;
+  border-left: 4px solid var(--accent);
+  background: #eef8f6;
+  color: #21423e;
+  border-radius: 4px;
+}
+
+.warning {
+  border-left-color: var(--accent-2);
+  background: #fff3e9;
+  color: #59311c;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.diagram {
+  width: 100%;
+  min-height: 280px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfaf7;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 3px;
+}
+
+.chapter-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.chapter-card {
+  display: block;
+  margin: 0;
+  color: inherit;
+  text-decoration: none;
+}
+
+.chapter-card strong {
+  display: block;
+  font-size: 19px;
+  color: var(--accent);
+}
+
+.chapter-card span {
+  display: block;
+  margin-top: 7px;
+  color: var(--muted);
+}
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+.nav a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #eef8f6;
+  color: #0a6f69;
+  font-size: 13px;
+}
+
+.canvas-wrap {
+  background: #fbfaf7;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #fffdf8;
+  border: 1px solid #c9c2b6;
+  border-radius: 6px;
+}
+
+button {
+  appearance: none;
+  border: 1px solid #0b5d59;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 6px;
+  padding: 8px 13px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #fff;
+  color: #0b5d59;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.step-log {
+  max-height: 310px;
+  overflow: auto;
+  margin-top: 12px;
+  padding: 12px;
+  background: #f5f2eb;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  .grid-2,
+  .grid-3,
+  .chapter-list {
+    grid-template-columns: 1fr;
+  }
+
+  section,
+  .chapter-card {
+    padding: 20px;
+  }
+}

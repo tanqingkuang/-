@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>避障学习目录</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <h1>避障学习目录</h1>
+    <p>这组页面按工程真实调用链讲解避障：配置与 UI 入口、障碍建模、栅格化、A*、工程规则、转向惩罚、去冗余、圆弧与可飞性。每章都尽量用代码片段、图表和小例子对应源码。</p>
+  </header>
+  <main>
+    <section>
+      <h2>章节列表</h2>
+      <div class="chapter-list">
+        <a class="chapter-card" href="01-避障总览.html">
+          <strong>01 避障总览</strong>
+          <span>从配置和 UI 入口开始，看避障如何一路生成可采用的长机航线。</span>
+        </a>
+        <a class="chapter-card" href="02-障碍物建模与判障.html">
+          <strong>02 障碍物建模与判障</strong>
+          <span>理解圆形、矩形障碍，膨胀安全距离，以及 `blocked()` 为什么是共享基元。</span>
+        </a>
+        <a class="chapter-card" href="03-栅格化与坐标转换.html">
+          <strong>03 栅格化与坐标转换</strong>
+          <span>把连续的 east/north 坐标变成 A* 可搜索的离散格点。</span>
+        </a>
+        <a class="chapter-card" href="04-A星搜索核心.html">
+          <strong>04 A* 搜索核心</strong>
+          <span>逐步看 open、closed、g、h、f、came_from 如何协作。</span>
+        </a>
+        <a class="chapter-card" href="05-工程安全规则.html">
+          <strong>05 工程安全规则</strong>
+          <span>端点精确判障、禁止对角切角、网格规模保护等非教材但关键的实现细节。</span>
+        </a>
+        <a class="chapter-card" href="06-转向惩罚.html">
+          <strong>06 转向惩罚</strong>
+          <span>理解为什么同一个格点从不同方向进入，后续代价可能不同。</span>
+        </a>
+        <a class="chapter-card" href="07-去冗余与航线转换.html">
+          <strong>07 去冗余与航线转换</strong>
+          <span>把 A* 锯齿格点拉直，并转换为 `WayPointInputS`。</span>
+        </a>
+        <a class="chapter-card" href="08-圆弧与可飞性.html">
+          <strong>08 圆弧与可飞性</strong>
+          <span>解释转弯半径、腿长约束、圆弧触障和最终 `PlanResult`。</span>
+        </a>
+      </div>
+    </section>
+    <section>
+      <h2>源码地图</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>文件</th>
+            <th>学习重点</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>src/ui/gui/main_window.py</code></td><td>配置解析、避障窗口、生成航线、采用航线。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/obstacle.py</code></td><td>障碍数据结构、膨胀判障。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/astar.py</code></td><td>栅格化与 A* 内核。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/path_to_route.py</code></td><td>视线去冗余、航点转换、交接半径、圆弧烘焙。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/feasibility.py</code></td><td>转弯角、腿长、圆弧触障可飞性校验。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/planner.py</code></td><td>把所有步骤串成 `plan_avoidance_route()`。</td></tr>
+          <tr><td><code>src/runner/sim_control.py</code></td><td>采用避障航线后替换长机原航线，清除时恢复。</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>04 A* 搜索核心</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>04 A* 搜索核心</h1>
+    <p>本章只看无转向惩罚的普通分支。这是最标准、最容易理解的一条路径：open 里取 f 最小的格点，扩展邻居，更新 g 和 came_from。</p>
+  </header>
+  <main>
+    <section>
+      <h2>主循环骨架</h2>
+      <pre><code>open_heap = [(heuristic(*start_cell), counter, start_cell)]
+g_score = {start_cell: 0.0}
+came_from = {}
+closed = set()
+
+while open_heap:
+    _, _, current = heapq.heappop(open_heap)
+    if current == goal_cell:
+        return _reconstruct(came_from, current, start, goal, cell_center)
+    if current in closed:
+        continue
+    closed.add(current)
+
+    for di, dj, step in _NEIGHBORS:
+        tentative = g_score[current] + step * resolution_m
+        if tentative < g_score.get((ni, nj), float("inf")):
+            came_from[(ni, nj)] = current
+            g_score[(ni, nj)] = tentative
+            heappush(open_heap, (tentative + heuristic(ni, nj), counter, (ni, nj)))</code></pre>
+    </section>
+    <section>
+      <h2>变量关系</h2>
+      <table>
+        <thead><tr><th>名词</th><th>在源码里的形态</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td>g</td><td><code>g_score[cell]</code></td><td>起点到当前格点的已知最短距离。</td></tr>
+          <tr><td>h</td><td><code>heuristic(i, j)</code></td><td>当前格心到目标格心的欧氏距离估计。</td></tr>
+          <tr><td>f</td><td><code>tentative + heuristic(...)</code></td><td>A* 排序依据，越小越优先扩展。</td></tr>
+          <tr><td>open</td><td><code>open_heap</code></td><td>已经发现、等待扩展的候选。</td></tr>
+          <tr><td>closed</td><td><code>closed</code></td><td>已经出堆并扩展过的格点。</td></tr>
+          <tr><td>父节点</td><td><code>came_from[next] = current</code></td><td>用于最终从终点倒推路径。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>单步演示</h2>
+      <div class="grid-2">
+        <div class="canvas-wrap">
+          <canvas id="astarCanvas" width="560" height="560" aria-label="A* 单步演示"></canvas>
+          <div class="controls">
+            <button id="stepBtn">单步</button>
+            <button id="resetBtn" class="secondary">重置</button>
+          </div>
+          <div class="legend">
+            <span><i class="swatch" style="background:#0f7b75"></i>起点</span>
+            <span><i class="swatch" style="background:#c35a2e"></i>终点</span>
+            <span><i class="swatch" style="background:#f7c948"></i>open</span>
+            <span><i class="swatch" style="background:#93c5ad"></i>closed</span>
+            <span><i class="swatch" style="background:#2f6fed"></i>路径</span>
+            <span><i class="swatch" style="background:#30363d"></i>障碍</span>
+          </div>
+        </div>
+        <div>
+          <p>这个动画保留项目里的几个关键点：8 邻域、欧氏距离 h、open/closed、came_from 回溯，以及对角切角禁止。每点一次“单步”，相当于源码里一次 <code>heappop()</code> 后的扩展。</p>
+          <div class="step-log" id="stepLog"></div>
+        </div>
+      </div>
+    </section>
+    <section>
+      <h2>为什么能找到较短路</h2>
+      <p>Dijkstra 只看已经走了多远，也就是 <code>g</code>。A* 同时看 <code>g</code> 和估计剩余距离 <code>h</code>，所以它会更偏向目标方向。项目使用欧氏距离作为 h，和 8 邻域步长一致，通常不会高估剩余最短路。</p>
+      <div class="note">当 <code>h=0</code> 时，A* 退化成 Dijkstra；当 h 过大时，搜索会更贪心，但可能牺牲最优性。</div>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li>为什么入堆元素要包含 <code>tie</code> 计数器？</li>
+        <li><code>came_from</code> 是在发现邻居时更新，还是在终点找到后才更新？</li>
+        <li>如果 open 空了还没到终点，返回什么？</li>
+      </ol>
+      <div class="nav"><a href="03-栅格化与坐标转换.html">上一页：03 栅格化与坐标转换</a><a href="05-工程安全规则.html">下一页：05 工程安全规则</a></div>
+    </section>
+  </main>
+  <script>
+    const canvas = document.getElementById("astarCanvas");
+    const ctx = canvas.getContext("2d");
+    const stepBtn = document.getElementById("stepBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const stepLog = document.getElementById("stepLog");
+    const cols = 11;
+    const rows = 11;
+    const start = { x: 1, y: 5 };
+    const goal = { x: 9, y: 5 };
+    const blocks = new Set(["4,2", "4,3", "4,4", "4,5", "4,6", "4,7", "6,3", "6,4", "6,5", "6,6", "6,7", "6,8"]);
+    const dirs = [[1,0,1],[-1,0,1],[0,1,1],[0,-1,1],[1,1,Math.SQRT2],[1,-1,Math.SQRT2],[-1,1,Math.SQRT2],[-1,-1,Math.SQRT2]];
+    let open;
+    let closed;
+    let gScore;
+    let cameFrom;
+    let current;
+    let path;
+    let step;
+    let done;
+
+    function key(n) { return `${n.x},${n.y}`; }
+    function parse(k) { const [x, y] = k.split(",").map(Number); return { x, y }; }
+    function h(n) { return Math.hypot(n.x - goal.x, n.y - goal.y); }
+    function inside(x, y) { return x >= 0 && x < cols && y >= 0 && y < rows; }
+    function blocked(x, y) { return blocks.has(`${x},${y}`); }
+    function canMove(n, dx, dy) {
+      const nx = n.x + dx;
+      const ny = n.y + dy;
+      if (!inside(nx, ny) || blocked(nx, ny)) return false;
+      if (dx !== 0 && dy !== 0 && (blocked(n.x + dx, n.y) || blocked(n.x, n.y + dy))) return false;
+      return true;
+    }
+    function best() {
+      open.sort((a, b) => a.f - b.f || a.tie - b.tie);
+      return open.shift();
+    }
+    function rebuild(n) {
+      const out = [n];
+      let k = key(n);
+      while (cameFrom.has(k)) {
+        const p = parse(cameFrom.get(k));
+        out.push(p);
+        k = key(p);
+      }
+      return out.reverse();
+    }
+    function reset() {
+      open = [{ ...start, f: h(start), tie: 0 }];
+      closed = new Set();
+      gScore = new Map([[key(start), 0]]);
+      cameFrom = new Map();
+      current = null;
+      path = [];
+      step = 0;
+      done = false;
+      stepLog.textContent = "准备开始：open 里只有起点。";
+      draw();
+    }
+    function runStep() {
+      if (done) return;
+      if (open.length === 0) {
+        done = true;
+        stepLog.textContent = "open 已空，没有找到路径。";
+        draw();
+        return;
+      }
+      step += 1;
+      current = best();
+      if (current.x === goal.x && current.y === goal.y) {
+        path = rebuild(current);
+        done = true;
+        stepLog.textContent = `步骤 ${step}：取出终点，沿 came_from 回溯得到路径。`;
+        draw();
+        return;
+      }
+      const ck = key(current);
+      closed.add(ck);
+      const base = gScore.get(ck);
+      const updates = [];
+      for (const [dx, dy, cost] of dirs) {
+        const next = { x: current.x + dx, y: current.y + dy };
+        const nk = key(next);
+        if (!canMove(current, dx, dy) || closed.has(nk)) continue;
+        const tentative = base + cost;
+        if (tentative < (gScore.get(nk) ?? Infinity)) {
+          cameFrom.set(nk, ck);
+          gScore.set(nk, tentative);
+          const f = tentative + h(next);
+          const found = open.find((n) => n.x === next.x && n.y === next.y);
+          if (found) found.f = f;
+          else open.push({ ...next, f, tie: step });
+          updates.push(`(${next.x},${next.y}) g=${tentative.toFixed(2)} h=${h(next).toFixed(2)} f=${f.toFixed(2)}`);
+        }
+      }
+      stepLog.textContent = [`步骤 ${step}：扩展 (${current.x},${current.y})`, `open=${open.length} closed=${closed.size}`, ...updates].join("\n");
+      draw();
+    }
+    function cell(x, y, fill, stroke = "#d8d2c6") {
+      const size = canvas.width / cols;
+      ctx.fillStyle = fill;
+      ctx.fillRect(x * size, y * size, size, size);
+      ctx.strokeStyle = stroke;
+      ctx.strokeRect(x * size, y * size, size, size);
+    }
+    function label(n, text) {
+      const size = canvas.width / cols;
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 18px Microsoft YaHei";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, n.x * size + size / 2, n.y * size + size / 2);
+    }
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let y = 0; y < rows; y += 1) for (let x = 0; x < cols; x += 1) cell(x, y, "#fffdf8");
+      for (const b of blocks) { const n = parse(b); cell(n.x, n.y, "#30363d", "#30363d"); }
+      for (const c of closed) { const n = parse(c); cell(n.x, n.y, "#93c5ad"); }
+      for (const n of open) cell(n.x, n.y, "#f7c948");
+      for (const n of path) cell(n.x, n.y, "#2f6fed", "#1f51c8");
+      if (current && !done) cell(current.x, current.y, "#de3d3d", "#b12b2b");
+      cell(start.x, start.y, "#0f7b75", "#0b5d59");
+      cell(goal.x, goal.y, "#c35a2e", "#9f421f");
+      label(start, "S");
+      label(goal, "G");
+      stepBtn.disabled = done;
+    }
+    stepBtn.addEventListener("click", runStep);
+    resetBtn.addEventListener("click", reset);
+    reset();
+  </script>
+</body>
+</html>

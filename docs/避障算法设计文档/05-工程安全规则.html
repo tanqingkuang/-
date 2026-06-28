@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>05 工程安全规则</title>
+  <link rel="stylesheet" href="avoidance-study.css">
+</head>
+<body>
+  <header>
+    <a href="避障学习目录.html">返回目录</a>
+    <h1>05 工程安全规则</h1>
+    <p>真实项目里的 A* 不只是教材公式。这里有几条安全规则，用来避免“算法看似有路，工程上却不可信”的情况。</p>
+  </header>
+  <main>
+    <section>
+      <h2>规则一：端点用精确坐标先判障</h2>
+      <pre><code>if blocked(obstacles, start[0], start[1], clearance_m) \
+        or blocked(obstacles, goal[0], goal[1], clearance_m):
+    return None</code></pre>
+      <p><code>to_cell()</code> 会把真实端点吸附到最近格心。如果端点本身在障碍里，但最近格心碰巧在障碍外，只判格心就会漏掉非法输入。源码先判真实端点，再判吸附后的格心。</p>
+    </section>
+    <section>
+      <h2>规则二：禁止对角切角</h2>
+      <div class="grid-2">
+        <div>
+          <pre><code>if di != 0 and dj != 0 and (
+    is_blocked(ci + di, cj)
+    or is_blocked(ci, cj + dj)
+):
+    continue</code></pre>
+          <p>对角移动时，如果横向邻格或纵向邻格有障碍，就不能从角上斜穿过去。否则路径会像从障碍夹缝里切过去，视觉上可能不穿格心，但物理上不安全。</p>
+        </div>
+        <svg class="diagram" viewBox="0 0 420 320" role="img" aria-label="禁止对角切角示意">
+          <g stroke="#d8d2c6" stroke-width="2">
+            <rect x="80" y="60" width="80" height="80" fill="#fffdf8"></rect>
+            <rect x="160" y="60" width="80" height="80" fill="#30363d"></rect>
+            <rect x="80" y="140" width="80" height="80" fill="#30363d"></rect>
+            <rect x="160" y="140" width="80" height="80" fill="#fffdf8"></rect>
+          </g>
+          <circle cx="120" cy="100" r="12" fill="#0f7b75"></circle>
+          <circle cx="200" cy="180" r="12" fill="#c35a2e"></circle>
+          <line x1="120" y1="100" x2="200" y2="180" stroke="#de3d3d" stroke-width="5" stroke-dasharray="8 6"></line>
+          <text x="120" y="48" text-anchor="middle" fill="#0f7b75">当前</text>
+          <text x="200" y="250" text-anchor="middle" fill="#c35a2e">对角邻格</text>
+          <text x="210" y="110" text-anchor="middle" fill="#fff">障碍</text>
+          <text x="120" y="190" text-anchor="middle" fill="#fff">障碍</text>
+        </svg>
+      </div>
+    </section>
+    <section>
+      <h2>规则三：缓存判障结果</h2>
+      <pre><code>blocked_cache = {}
+
+def is_blocked(i, j):
+    cached = blocked_cache.get((i, j))
+    if cached is None:
+        east, north = cell_center(i, j)
+        cached = blocked(obstacles, east, north, clearance_m)
+        blocked_cache[(i, j)] = cached
+    return cached</code></pre>
+      <p>搜索过程中同一个格点可能被不同方向多次检查。缓存只在一次规划内有效，避免跨配置复用旧障碍结果。</p>
+    </section>
+    <section>
+      <h2>规则四：无解和配置错误分开处理</h2>
+      <table>
+        <thead><tr><th>情况</th><th>行为</th><th>原因</th></tr></thead>
+        <tbody>
+          <tr><td>起点终点在障碍里、通道封死</td><td><code>return None</code></td><td>这是规划无解，由上层转成 <code>ERR_AVOID_*</code>。</td></tr>
+          <tr><td>分辨率非正、bounds 非法、网格过大</td><td><code>raise ValueError</code></td><td>这是输入配置错误，需要明确暴露。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>本章检查题</h2>
+      <ol>
+        <li>为什么吸附后的起点格心也要再判障？</li>
+        <li>禁止切角会让路径更短还是更保守？</li>
+        <li>为什么 <code>blocked_cache</code> 不应该做成全局缓存？</li>
+      </ol>
+      <div class="nav"><a href="04-A星搜索核心.html">上一页：04 A* 搜索核心</a><a href="06-转向惩罚.html">下一页：06 转向惩罚</a></div>
+    </section>
+  </main>
+</body>
+</html>
