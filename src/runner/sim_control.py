@@ -1408,6 +1408,9 @@ class SimulationController:
             )
         with self._lock:
             self._playback_rate = float(rate)
+            if self._config is not None:
+                # reset 会用当前配置副本重建模块，需同步运行期倍率避免回退到文件默认值。
+                self._config["playback_rate"] = self._playback_rate
         return CommandResult("OK", "playback rate updated")
 
     def set_duration(self, duration_s: float) -> CommandResult:

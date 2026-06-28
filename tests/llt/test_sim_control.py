@@ -30,11 +30,17 @@ from src.runner.sim_control import (
 )
 
 
-def _write_config(directory: Path, *, duration_s: float = 0.03, step_s: float = 0.005) -> Path:
+def _write_config(
+    directory: Path,
+    *,
+    duration_s: float = 0.03,
+    step_s: float = 0.005,
+    playback_rate: float = 10.0,
+) -> Path:
     config = {
         "duration_s": duration_s,
         "step_s": step_s,
-        "playback_rate": 10.0,
+        "playback_rate": playback_rate,
         "nodes": [
             {"node_id": "A01", "role": "leader", "x_m": 0, "y_m": 0, "altitude_m": 1200},
             {"node_id": "A02", "role": "wingman", "x_m": -45, "y_m": 50, "altitude_m": 1215},
@@ -1402,6 +1408,21 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(controller.playback_rate, 10.0)
             self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
             self.assertAlmostEqual(controller.playback_rate, 20.0)
+            controller.close()
+
+    def test_reset_preserves_runtime_playback_rate_update(self) -> None:
+        """运行期调整播放倍率后 reset 不应退回配置文件默认值。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_config(Path(tmp), playback_rate=1.0)
+            controller = SimulationController()
+
+            self.assertEqual(controller.load_config(str(path)).code, "OK")
+            self.assertEqual(controller.set_playback_rate(9.0).code, "OK")
+            self.assertAlmostEqual(controller.playback_rate, 9.0)
+
+            self.assertEqual(controller.reset().code, "OK")
+
+            self.assertAlmostEqual(controller.playback_rate, 9.0)
             controller.close()
 
     def test_run_loop_batches_ticks_after_wall_clock_delay(self) -> None:
