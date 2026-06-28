@@ -20,7 +20,10 @@ from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.ui.gui.main_window import (
     MainWindow,
+    ReferenceRoute,
     parse_avoidance_params,
+    preview_route_marker_points,
+    reference_route_points,
     route_to_polyline,
 )
 
@@ -122,6 +125,43 @@ class RouteToPolylineTests(unittest.TestCase):
         poly = route_to_polyline(route)
         self.assertEqual(poly, [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)])
 
+    def test_reference_straight_segment_two_points(self) -> None:
+        seg = ReferenceRoute(0.0, 0.0, 1000.0, 100.0, 0.0, 1000.0)
+        self.assertEqual(reference_route_points(seg), [(0.0, 0.0), (100.0, 0.0)])
+
+    def test_reference_arc_segment_is_sampled(self) -> None:
+        # committed 航段若是圆弧(radius>0)，应采样成多点(与预览一致)，而非切弦两点。
+        import math
+
+        seg = ReferenceRoute(
+            start_x=400.0, start_y=0.0, start_altitude=1000.0,
+            end_x=0.0, end_y=400.0, end_altitude=1000.0,
+            radius=400.0, center_x=0.0, center_y=0.0, turn_sign=1.0,
+        )
+        pts = reference_route_points(seg)
+        self.assertGreater(len(pts), 2)
+        self.assertAlmostEqual(pts[0][0], 400.0, places=6)
+        self.assertAlmostEqual(pts[-1][1], 400.0, places=6)
+        # 每个采样点到圆心距离≈半径。
+        for east, north in pts:
+            self.assertAlmostEqual(math.hypot(east, north), 400.0, places=6)
+
+    def test_preview_marker_points_use_route_waypoints(self) -> None:
+        # 预览航线的黑点只标记航段端点，圆弧中间采样点不额外画黑点。
+        t1, t2, center, sign = corner_arc(
+            PosInEarthS(0.0, 0.0, 0.0), PosInEarthS(1000.0, 0.0, 0.0), PosInEarthS(1000.0, 1000.0, 0.0), 200.0
+        )
+        route = [
+            WayPointInputS(idx=0, pos=t1, turnSign=sign, center=center),
+            WayPointInputS(idx=1, pos=t2),
+        ]
+        markers = preview_route_marker_points(route)
+        self.assertEqual(len(markers), 2)
+        self.assertAlmostEqual(markers[0][0], 800.0, places=6)
+        self.assertAlmostEqual(markers[0][1], 0.0, places=6)
+        self.assertAlmostEqual(markers[1][0], 1000.0, places=6)
+        self.assertAlmostEqual(markers[1][1], 200.0, places=6)
+
     def test_curved_segment_is_sampled(self) -> None:
         # 真正的曲率航段(turnSign!=0)是“航段信息”，显示要画成弧 → 采样成多点。
         t1, t2, center, sign = corner_arc(
@@ -172,9 +212,14 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertIsNotNone(window._preview_route)
         self.assertTrue(window.adopt_route_button.isEnabled())
         self.assertIsNotNone(window.top_view.preview_route_polyline)
+        self.assertIsNotNone(window.top_view.preview_route_markers)
         window._adopt_route()
         self.assertEqual(window.sim.last_result_code, "OK")
         self.assertNotEqual(len(window.sim.controller._leader_route), original)
+        self.assertIsNone(window._preview_route)
+        self.assertIsNone(window.top_view.preview_route_polyline)
+        self.assertIsNone(window.top_view.preview_route_markers)
+        self.assertFalse(window.adopt_route_button.isEnabled())
 
     def test_toggle_obstacle_invalidates_preview(self) -> None:
         window = self._window()

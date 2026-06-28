@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 
 from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
-from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
+from src.algorithm.units.process.tra_plan.avoidance.path_to_route import (
+    assign_transition_radius,
+    bake_transition_arcs,
+    points_to_route,
+)
 from src.runner.sim_control import SimulationController
 
 CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
@@ -83,6 +87,16 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
         assert display is not None
         self.assertTrue(all(line.start.turnSign == 0.0 for line in display))
         self.assertTrue(any(wpi.r > 0.0 for wpi in self.controller._leader_route))
+
+    def test_adopted_baked_arc_route_carries_radius_to_snapshot(self) -> None:
+        # allow_arc=True 烘焙的圆弧航段(turnSign!=0)采用后，committed 快照航段须带 radius_m，
+        # 俯视图才能按弧采样(而非切弦)，与预览一致。
+        route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0, altitude_m=1000.0)
+        assign_transition_radius(route, 200.0)
+        route = bake_transition_arcs(route)
+        self.assertEqual(self.controller.apply_avoidance_route(route).code, "OK")
+        segments = self.controller.get_snapshot().route_segments
+        self.assertTrue(any(seg.radius_m > 0.0 for seg in segments))
 
     def test_apply_runs_after_adopt(self) -> None:
         self.controller.apply_avoidance_route(_sample_route())
