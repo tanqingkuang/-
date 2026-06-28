@@ -28,6 +28,7 @@ from src.ui.gui.main_window import (
 )
 
 CONFIG = str(Path(__file__).resolve().parent / "fixtures" / "test.json")
+BASE_CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
 
 
 class ParseAvoidanceParamsTests(unittest.TestCase):
@@ -86,6 +87,20 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         self.assertIsNotNone(params)
         self.assertAlmostEqual(params.turn_switch_penalty_m, 40.0)
         self.assertAlmostEqual(params.turn_angle_weight_m, 20.0)
+
+    def test_base_config_exposes_all_tunable_params(self) -> None:
+        # base.json 应作为正式示例覆盖界面可调的全部避障参数，避免新窗口出现空默认值。
+        params = parse_avoidance_params(BASE_CONFIG)
+        self.assertIsNotNone(params)
+        self.assertTrue(params.allow_arc)
+        self.assertAlmostEqual(params.turn_radius_m, 200.0)
+        self.assertAlmostEqual(params.leg_margin_m, 80.0)
+        self.assertAlmostEqual(params.clearance_m, 120.0)
+        self.assertAlmostEqual(params.resolution_m, 20.0)
+        self.assertAlmostEqual(params.margin_m, 300.0)
+        self.assertAlmostEqual(params.simplify_clearance_m, 120.0)
+        self.assertAlmostEqual(params.turn_switch_penalty_m, 0.0)
+        self.assertAlmostEqual(params.turn_angle_weight_m, 0.0)
 
     def test_missing_avoidance_returns_none(self) -> None:
         self.assertIsNone(parse_avoidance_params(self._write({"route": {"waypoints": []}})))
@@ -248,9 +263,62 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window = self._window()
         params = window._avoidance_params
         self.assertAlmostEqual(window.turn_radius_spin.value(), params.turn_radius_m)
-        self.assertAlmostEqual(window.clearance_spin.value(), params.clearance_m)
         self.assertAlmostEqual(window.leg_margin_spin.value(), params.leg_margin_m)
+        self.assertAlmostEqual(window.clearance_spin.value(), params.clearance_m)
+        self.assertAlmostEqual(window.resolution_spin.value(), params.resolution_m)
+        self.assertAlmostEqual(window.margin_spin.value(), params.margin_m)
+        self.assertAlmostEqual(window.simplify_clearance_spin.value(), params.simplify_clearance_m)
+        self.assertAlmostEqual(window.turn_switch_penalty_spin.value(), params.turn_switch_penalty_m)
+        self.assertAlmostEqual(window.turn_angle_weight_spin.value(), params.turn_angle_weight_m)
         self.assertEqual(window.allow_arc_check.isChecked(), params.allow_arc)
+
+    def test_avoidance_menu_opens_subwindow(self) -> None:
+        # 避障入口放到菜单栏，子窗口默认隐藏，点击菜单后显示。
+        window = self._window()
+        self.assertFalse(window.avoidance_window.isVisible())
+        menu_titles = [action.text() for action in window.menuBar().actions()]
+        self.assertIn("避障规划(&O)", menu_titles)
+        window.avoidance_action.trigger()
+        self.assertTrue(window.avoidance_window.isVisible())
+        self.assertEqual(window.avoidance_window.windowTitle(), "避障规划")
+
+    def test_param_order_matches_design_document(self) -> None:
+        # 参数顺序必须与 docs/避障-A星-设计文档.md 第 8 节一致。
+        window = self._window()
+        self.assertEqual(
+            window.avoidance_window.param_order,
+            [
+                "turn_radius_m",
+                "leg_length_margin_m",
+                "clearance_m",
+                "grid.resolution_m",
+                "grid.margin_m",
+                "simplify_clearance_m",
+                "turn_switch_penalty_m",
+                "turn_angle_weight_m",
+            ],
+        )
+
+    def test_param_tooltips_focus_on_effect_and_advice(self) -> None:
+        # 参数 tooltip 不重复参数名，直接说明作用、影响和建议，方便现场调参。
+        window = self._window()
+        for spin in (
+            window.turn_radius_spin,
+            window.leg_margin_spin,
+            window.clearance_spin,
+            window.resolution_spin,
+            window.margin_spin,
+            window.simplify_clearance_spin,
+            window.turn_switch_penalty_spin,
+            window.turn_angle_weight_spin,
+        ):
+            tooltip = spin.toolTip()
+            self.assertIn("作用：", tooltip)
+            self.assertIn("影响：", tooltip)
+            self.assertIn("建议：", tooltip)
+            self.assertNotRegex(tooltip, r"^[^：]{2,12}（.*?）：")
+        self.assertIn("安全间距 + 转弯半径", window.margin_spin.toolTip())
+        self.assertNotIn("clearance", window.margin_spin.toolTip())
 
     def test_changing_param_invalidates_preview(self) -> None:
         window = self._window()
@@ -314,6 +382,45 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
         self.assertAlmostEqual(planner.call_args.kwargs["clearance_m"], 110.0)
         self.assertAlmostEqual(planner.call_args.kwargs["simplify_clearance_m"], 110.0)
+
+    def test_generate_uses_all_current_param_widgets(self) -> None:
+        # 子窗口里新增的 A* 参数必须在生成时覆盖配置，而不是只显示不可生效。
+        window = self._window()
+        window.resolution_spin.setValue(35.0)
+        window.margin_spin.setValue(480.0)
+        window.simplify_clearance_spin.setValue(25.0)
+        window.turn_switch_penalty_spin.setValue(12.0)
+        window.turn_angle_weight_spin.setValue(3.0)
+
+        with patch(
+            "src.ui.gui.main_window.plan_avoidance_route",
+            return_value=SimpleNamespace(ok=False, route=None, code="ERR_TEST", detail="captured"),
+        ) as planner:
+            window._generate_route()
+
+        self.assertAlmostEqual(planner.call_args.kwargs["resolution_m"], 35.0)
+        self.assertAlmostEqual(planner.call_args.kwargs["margin_m"], 480.0)
+        self.assertAlmostEqual(planner.call_args.kwargs["simplify_clearance_m"], 25.0)
+        self.assertAlmostEqual(planner.call_args.kwargs["turn_switch_penalty_m"], 12.0)
+        self.assertAlmostEqual(planner.call_args.kwargs["turn_angle_weight_m"], 3.0)
+
+    def test_reset_restores_default_route_after_adopt(self) -> None:
+        # “重置”语义是清除已采用避障航线，恢复配置默认航线。
+        window = self._window()
+        self._set_feasible_params(window)
+        original_count = len(window.sim.controller._leader_route)
+        window._generate_route()
+        window._adopt_route()
+        self.assertEqual(window.sim.last_result_code, "OK")
+        self.assertNotEqual(len(window.sim.controller._leader_route), original_count)
+
+        window._reset_avoidance_route()
+
+        self.assertEqual(window.sim.last_result_code, "OK")
+        self.assertEqual(len(window.sim.controller._leader_route), original_count)
+        self.assertIsNone(window._preview_route)
+        self.assertFalse(window.adopt_route_button.isEnabled())
+        self.assertIn("已恢复默认航线", window.avoidance_status.text())
 
     def test_adopt_without_preview_is_noop(self) -> None:
         window = self._window()
