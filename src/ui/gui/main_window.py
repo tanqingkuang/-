@@ -428,6 +428,24 @@ def route_to_polyline(route: list[WayPointInputS]) -> list[tuple[float, float]]:
     return polyline
 
 
+def preview_route_marker_points(route: list[WayPointInputS]) -> list[tuple[float, float]]:
+    """把预览航线转换为航点标记坐标。注意：圆弧只标记端点，不标记中间采样点。"""
+    if len(route) < 2:
+        return []
+    # 与预览折线一致先转 display inputs，避免把过渡半径 r 当成真实航点。
+    lines = waypoint_inputs_to_waylines(to_display_inputs(route))
+    if not lines:
+        return []
+    raw = [(lines[0].start.pos.east, lines[0].start.pos.north)]
+    raw.extend((line.end.pos.east, line.end.pos.north) for line in lines)
+    markers: list[tuple[float, float]] = []
+    for point in raw:
+        # 相邻航段共用端点只画一个黑点，避免连接处显得更粗。
+        if not markers or math.hypot(point[0] - markers[-1][0], point[1] - markers[-1][1]) > 1e-6:
+            markers.append(point)
+    return markers
+
+
 @dataclass
 class Snapshot:
     """面向 UI 的仿真快照。注意：由真实控制器或 mock 数据适配得到。"""
@@ -1111,6 +1129,8 @@ class TopView(QGraphicsView):
         self.obstacle_clearance = 0.0
         # 避障规划预览航线（折线点），由“生成航线”注入；None 表示无预览。
         self.preview_route_polyline: list[tuple[float, float]] | None = None
+        # 预览航线的航点黑点，独立于折线采样点，避免圆弧采样点被误画成航点。
+        self.preview_route_markers: list[tuple[float, float]] | None = None
         # 视图变换由 scale_value(缩放) 与 offset(平移) 两个量描述：屏幕 = 世界*scale + offset。
         self.scale_value = 1.0
         self.offset = self._default_offset()
@@ -1139,9 +1159,14 @@ class TopView(QGraphicsView):
         self.obstacle_clearance = clearance
         self.viewport().update()
 
-    def set_preview_route(self, polyline: list[tuple[float, float]] | None) -> None:
-        """设置避障预览航线折线（None 清除）。注意：只更新显示，不推进仿真。"""
+    def set_preview_route(
+        self,
+        polyline: list[tuple[float, float]] | None,
+        markers: list[tuple[float, float]] | None = None,
+    ) -> None:
+        """设置避障预览航线折线和航点标记（None 清除）。注意：只更新显示，不推进仿真。"""
         self.preview_route_polyline = polyline
+        self.preview_route_markers = markers
         self.viewport().update()
 
     def set_snapshot(self, snapshot: Snapshot, *, fit_view: bool = False) -> None:
@@ -1284,7 +1309,8 @@ class TopView(QGraphicsView):
         self._draw_preview_route(painter)
         if self.snapshot:
             # 绘制顺序：航线在底，链路其次，节点最上，保证遮挡关系正确。
-            if self.snapshot.nodes:
+            # 有预览时只显示绿色预览线和预览黑点，避免与 committed 航线形成两根线。
+            if self.snapshot.nodes and self.preview_route_polyline is None:
                 self._draw_route(painter)
             self._draw_links(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
@@ -1525,7 +1551,7 @@ class TopView(QGraphicsView):
             painter.restore()
 
     def _draw_preview_route(self, painter: QPainter) -> None:
-        """绘制避障预览航线（绿色虚线折线）。注意：只做渲染，不修改仿真状态。"""
+        """绘制避障预览航线（绿色虚线折线）和航点黑点。注意：只做渲染，不修改仿真状态。"""
         polyline = self.preview_route_polyline
         if not polyline or len(polyline) < 2:
             return
@@ -1535,6 +1561,7 @@ class TopView(QGraphicsView):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for start, end in zip(polyline, polyline[1:]):
             painter.drawLine(QPointF(start[0], start[1]), QPointF(end[0], end[1]))
+        self._draw_route_markers(painter, self.preview_route_markers or [])
 
     def _draw_route(self, painter: QPainter) -> None:
         """绘制 route 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -1549,13 +1576,20 @@ class TopView(QGraphicsView):
             points = reference_route_points(route)
             for start, end in zip(points, points[1:]):
                 painter.drawLine(QPointF(start[0], start[1]), QPointF(end[0], end[1]))
-        # 再画航点圆点：起点一个 + 每段终点各一个（半径随缩放归一）。
+        self._draw_route_markers(
+            painter,
+            [(routes[0].start_x, routes[0].start_y)] + [(route.end_x, route.end_y) for route in routes],
+        )
+
+    def _draw_route_markers(self, painter: QPainter, markers: list[tuple[float, float]]) -> None:
+        """绘制航点黑点。注意：仅画端点标记，不包含圆弧折线采样点。"""
+        if not markers:
+            return
         painter.setBrush(self.theme.ink)
         painter.setPen(Qt.PenStyle.NoPen)
         marker_radius = 5.0 / self.scale_value
-        painter.drawEllipse(QPointF(routes[0].start_x, routes[0].start_y), marker_radius, marker_radius)
-        for route in routes:
-            painter.drawEllipse(QPointF(route.end_x, route.end_y), marker_radius, marker_radius)
+        for east, north in markers:
+            painter.drawEllipse(QPointF(east, north), marker_radius, marker_radius)
 
     def _route_segments(self) -> list[ReferenceRoute]:
         """返回需要绘制的航段列表。注意：优先使用多航段快照，缺省时退回当前航段。"""
@@ -2550,7 +2584,7 @@ class MainWindow(QMainWindow):
             return
         if result.ok and result.route is not None:
             self._preview_route = result.route
-            self.top_view.set_preview_route(route_to_polyline(result.route))
+            self.top_view.set_preview_route(route_to_polyline(result.route), preview_route_marker_points(result.route))
             _preview_lines = waypoint_inputs_to_waylines(result.route)
             arcs = sum(1 for line in _preview_lines if line.start.turnSign != 0.0)
             self.adopt_route_button.setEnabled(True)
@@ -2565,7 +2599,11 @@ class MainWindow(QMainWindow):
         """响应“采用航线”：把预览航线下发控制器替换长机航线（采用后点播放仿真）。"""
         if self._preview_route is None:
             return
-        snapshot = self.sim.apply_avoidance_route(self._preview_route)
+        preview_route = self._preview_route
+        snapshot = self.sim.apply_avoidance_route(preview_route)
+        if self.sim.last_result_code == "OK":
+            # 采用成功后 committed 航线已更新，绿色预览线必须清掉，避免同线重复绘制。
+            self._invalidate_preview()
         self._update_snapshot(snapshot, fit_top_view=False)
         if self.sim.last_result_code == "OK":
             self.avoidance_status.setText("已采用避障航线 · 点播放仿真")
