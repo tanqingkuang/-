@@ -129,31 +129,34 @@ class PosTrackDiagS:
 
 @dataclass
 class WayPointS:
-    """单个航路点。注意：idx 用于航段内首尾点的稳定标识。"""
+    """单个航路点，携带该点之后一段的航段属性。注意：turnSign!=0 表示该点起始处为圆弧段。"""
 
     idx: int = 0  # 航路点序号
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 航路点地理系位置
-    r: float = 0.0  # 该航点交接处的预期转弯半径，米；0 表示该拐点不做圆弧过渡
+    vdCmd: float = 0.0  # 该点之后一段的地速指令，米每秒
+    turnSign: float = 0.0  # 该点之后一段的转向：+1 左转/逆时针、-1 右转/顺时针、0 直线
+    center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心(仅 turnSign!=0 有意义)
 
 
 @dataclass
 class WayLineS:
-    """单段航段：radius=0 为直线，radius>0 为圆弧。注意：圆弧用 start/end=切点、center=圆心、turnSign=转向。"""
+    """单段航段。注意：start.* 描述本段属性，end.* 描述下一段属性(供前瞻)。"""
 
     idx: int = 0  # 航段序号
-    start: WayPointS = field(default_factory=WayPointS)  # 航段起点(圆弧为切入点)
-    end: WayPointS = field(default_factory=WayPointS)  # 航段终点(圆弧为切出点)
-    vdCmd: float = 0.0  # 该航段地速指令，米每秒
-    radius: float = 0.0  # 转弯半径，米；0 表示直线，>0 表示圆弧
-    center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心(仅 radius>0 有意义)
-    turnSign: float = 0.0  # 转向：+1 左转/逆时针、-1 右转/顺时针、0 直线
+    start: WayPointS = field(default_factory=WayPointS)  # 航段起点；start.turnSign!=0 表示本段为圆弧
+    end: WayPointS = field(default_factory=WayPointS)  # 航段终点；end.turnSign/vdCmd 描述下一段
 
 
 @dataclass
-class RouteS:
-    """整条航线，由若干有序航段拼成。注意：航段顺序即飞行顺序。"""
+class WayPointInputS:
+    """用户输入的原始航点，供长机 init 转换为内部 WayLineS 序列。"""
 
-    lines: list[WayLineS] = field(default_factory=list)  # 有序航段列表
+    idx: int = 0  # 航点编号，从 0 开始
+    pos: PosInEarthS = field(default_factory=PosInEarthS)  # 航点位置
+    vdCmd: float = 0.0  # 该航点之后一段的地速指令，米每秒
+    r: float = 0.0  # 该拐点处的期望圆弧半径(米)；0=不做圆弧；首末点无意义
+    turnSign: float = 0.0  # 该点之后一段的转向(已知圆弧时填入)；0 表示直线或待按 r 计算
+    center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心(turnSign!=0 时有意义)
 
 
 @dataclass
@@ -207,14 +210,14 @@ def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
     dst.idx = src.idx
     dst.start.idx = src.start.idx
     copy_position(src.start.pos, dst.start.pos)
-    dst.start.r = src.start.r
+    dst.start.vdCmd = src.start.vdCmd
+    dst.start.turnSign = src.start.turnSign
+    copy_position(src.start.center, dst.start.center)
     dst.end.idx = src.end.idx
     copy_position(src.end.pos, dst.end.pos)
-    dst.end.r = src.end.r
-    dst.vdCmd = src.vdCmd
-    dst.radius = src.radius
-    copy_position(src.center, dst.center)
-    dst.turnSign = src.turnSign
+    dst.end.vdCmd = src.end.vdCmd
+    dst.end.turnSign = src.end.turnSign
+    copy_position(src.end.center, dst.end.center)
 
 
 def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:

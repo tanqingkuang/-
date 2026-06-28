@@ -11,7 +11,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosTrackDiagS,
     RemoteCmdS,
-    RouteS,
+    WayPointInputS,
 )
 from src.common.envelope import MessageEnvelope
 
@@ -35,7 +35,7 @@ class EntityInitS:
 
     selfInit: FormSelfInitS = field(default_factory=FormSelfInitS)  # 本机标识
     commInit: FormCommInitS = field(default_factory=FormCommInitS)  # 通信拓扑与队形配置
-    route: RouteS | None = None  # 预置航线，僚机无需航线时为 None
+    route: list[WayPointInputS] = field(default_factory=list)  # 预置航点输入，由长机 init 转换；僚机忽略
     control_period_s: float = DEFAULT_CONTROL_PERIOD_S  # 控制算法处理周期，单位 s
     velCmdLimit: VelCmdLimitS = field(default_factory=VelCmdLimitS)  # 前向/垂向速度指令限幅
 

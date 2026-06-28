@@ -5,22 +5,24 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import RouteS
+from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import points_to_route
 from src.runner.sim_control import SimulationController
 
 CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
 
 
-def _sample_route() -> RouteS:
-    # 一条带一个拐点的简单航线（直线+圆弧+直线）。
+def _sample_route() -> list[WayPointInputS]:
+    # 一条带一个拐点的简单航线。
     return points_to_route(
         [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=150.0, speed_mps=20.0, altitude_m=1000.0
     )
 
 
 def _route_end(controller: SimulationController) -> tuple[float, float]:
-    pos = controller._leader_route.lines[-1].end.pos
+    route = controller._leader_route
+    assert route is not None
+    pos = route[-1].pos
     return (round(pos.east, 3), round(pos.north, 3))
 
 
@@ -40,7 +42,7 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
         route = _sample_route()
         result = self.controller.apply_avoidance_route(route)
         self.assertEqual(result.code, "OK")
-        self.assertEqual(len(self.controller._leader_route.lines), len(route.lines))
+        self.assertEqual(len(self.controller._leader_route), len(route))
         self.assertEqual(_route_end(self.controller), SAMPLE_END)
         self.assertEqual(self.controller.get_snapshot().run_state, "READY")
 
@@ -65,7 +67,11 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
         self.assertEqual(result.code, "ERR_BUSY")
 
     def test_apply_empty_route_rejected(self) -> None:
-        self.assertEqual(self.controller.apply_avoidance_route(RouteS(lines=[])).code, "ERR_CONFIG_INVALID")
+        self.assertEqual(self.controller.apply_avoidance_route([]).code, "ERR_CONFIG_INVALID")
+
+    def test_apply_single_point_rejected(self) -> None:
+        single = [WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0)]
+        self.assertEqual(self.controller.apply_avoidance_route(single).code, "ERR_CONFIG_INVALID")
 
     def test_apply_runs_after_adopt(self) -> None:
         self.controller.apply_avoidance_route(_sample_route())

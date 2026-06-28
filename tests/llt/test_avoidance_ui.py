@@ -14,6 +14,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import points_to_route
 from src.ui.gui.main_window import (
     MainWindow,
@@ -116,7 +117,7 @@ class RouteToPolylineTests(unittest.TestCase):
         route = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0)
         poly = route_to_polyline(route)
         # 圆弧被采样为多点，折线点数应明显多于航段数。
-        self.assertGreater(len(poly), len(route.lines))
+        self.assertGreater(len(poly), len(waypoint_inputs_to_waylines(route)))
 
 
 class AvoidanceUiFlowTests(unittest.TestCase):
@@ -150,7 +151,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
     def test_generate_then_adopt_replaces_route(self) -> None:
         window = self._window()
         self._set_feasible_params(window)
-        original = len(window.sim.controller._leader_route.lines)
+        original = len(window.sim.controller._leader_route)
         self.assertFalse(window.adopt_route_button.isEnabled())
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
@@ -158,7 +159,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertIsNotNone(window.top_view.preview_route_polyline)
         window._adopt_route()
         self.assertEqual(window.sim.last_result_code, "OK")
-        self.assertNotEqual(len(window.sim.controller._leader_route.lines), original)
+        self.assertNotEqual(len(window.sim.controller._leader_route), original)
 
     def test_toggle_obstacle_invalidates_preview(self) -> None:
         window = self._window()
@@ -207,7 +208,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.allow_arc_check.setChecked(False)
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
-        self.assertTrue(all(line.radius == 0.0 for line in window._preview_route.lines))
+        self.assertTrue(all(wpi.r == 0.0 for wpi in window._preview_route))
 
     def test_widget_value_overrides_config_at_generate(self) -> None:
         # 界面调大 L 到不可飞 → 生成失败，证明用的是控件值而非配置值。
@@ -255,9 +256,9 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
     def test_adopt_without_preview_is_noop(self) -> None:
         window = self._window()
-        original = len(window.sim.controller._leader_route.lines)
+        original = len(window.sim.controller._leader_route)
         window._adopt_route()  # 无预览
-        self.assertEqual(len(window.sim.controller._leader_route.lines), original)
+        self.assertEqual(len(window.sim.controller._leader_route), original)
 
 
 if __name__ == "__main__":

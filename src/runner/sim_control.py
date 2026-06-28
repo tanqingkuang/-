@@ -30,16 +30,15 @@ from src.algorithm.context.leaf_types import (
     PosInEarthS,
     PosTrackDiagS,
     RemoteCmdS,
-    RouteS,
     VdInEarthS,
     WayLineS,
+    WayPointInputS,
     WayPointS,
     copy_motion,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
-from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
+from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity, waypoint_inputs_to_waylines
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
 from src.common.envelope import MessageEnvelope
 from src.environment.comm import CommunicationChannel
@@ -411,31 +410,39 @@ def _float_from_keys(
     raise ValueError(f"{prefix}[{index}].{keys[0]} is required")
 
 
-def _build_leader_route(config: dict[str, object] | None = None, *, insert_arcs: bool = True) -> RouteS:
-    """根据配置生成长机航线。注意：insert_arcs=False 时拐点不插圆弧(用于显示原始航段)。"""
+def _build_leader_route(config: dict[str, object] | None = None, *, insert_arcs: bool = True) -> list[WayPointInputS]:
+    """根据配置生成长机航线。注意：insert_arcs=False 时拐点 r=0，不插圆弧(用于显示原始航段)。"""
     # 无 route 配置时用默认直线航线兜底。
     route_config = (config or {}).get("route")
     if route_config is None:
-        return _default_leader_route()
+        return _default_leader_wpi()
     if not isinstance(route_config, dict):
         raise ValueError("route must be an object")
 
     # 三种写法优先级：waypoints（航点序列）> segments/lines（航段列表）> 单段。
     waypoints = route_config.get("waypoints")
     if waypoints is not None:
-        return RouteS(lines=_waylines_from_waypoints(waypoints, route_config, insert_arcs=insert_arcs))
+        return _wpi_from_waypoints(waypoints, route_config, insert_arcs=insert_arcs)
 
     segments = route_config.get("segments", route_config.get("lines"))
     if segments is None:
-        return RouteS(lines=[_wayline_from_config(route_config, 0, "route")])
+        wl = _wayline_from_config(route_config, 0, "route")
+        return [
+            WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd),
+            WayPointInputS(idx=1, pos=wl.end.pos, vdCmd=wl.start.vdCmd),
+        ]
     if not isinstance(segments, list) or not segments:
         raise ValueError("route.segments must be a non-empty list")
-    return RouteS(
-        lines=[
-            _wayline_from_config(segment, index, f"route.segments[{index}]", route_config)
-            for index, segment in enumerate(segments)
-        ]
-    )
+    wpi_list: list[WayPointInputS] = []
+    for index, segment in enumerate(segments):
+        wl = _wayline_from_config(segment, index, f"route.segments[{index}]", route_config)
+        if not wpi_list:
+            wpi_list.append(WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd))
+        else:
+            # 衔接航点的 vdCmd 描述“该点之后一段”，因此取下一航段速度。
+            wpi_list[-1].vdCmd = wl.start.vdCmd
+        wpi_list.append(WayPointInputS(idx=len(wpi_list), pos=wl.end.pos, vdCmd=wl.start.vdCmd))
+    return wpi_list
 
 
 def _waypoint_radius(raw_point: object, default_radius: float, field_name: str) -> float:
@@ -453,43 +460,15 @@ def _same_xy(a: PosInEarthS, b: PosInEarthS) -> bool:
     return abs(a.east - b.east) <= 1e-9 and abs(a.north - b.north) <= 1e-9
 
 
-def _straight_wayline(idx: int, start: PosInEarthS, end: PosInEarthS, speed: float) -> WayLineS:
-    """构造直线航段。注意：首末点深拷贝，避免与相邻段共享引用。"""
-    return WayLineS(
-        idx=idx,
-        start=WayPointS(idx=idx, pos=PosInEarthS(start.east, start.north, start.h)),
-        end=WayPointS(idx=idx + 1, pos=PosInEarthS(end.east, end.north, end.h)),
-        vdCmd=speed,
-        radius=0.0,
-    )
-
-
-def _arc_wayline(
-    idx: int, t1: PosInEarthS, t2: PosInEarthS, speed: float, radius: float, center: PosInEarthS, turn_sign: float
-) -> WayLineS:
-    """构造圆弧航段。注意：start/end 为切点，center 为圆心，turnSign 为转向。"""
-    return WayLineS(
-        idx=idx,
-        start=WayPointS(idx=idx, pos=PosInEarthS(t1.east, t1.north, t1.h)),
-        end=WayPointS(idx=idx + 1, pos=PosInEarthS(t2.east, t2.north, t2.h)),
-        vdCmd=speed,
-        radius=radius,
-        center=PosInEarthS(center.east, center.north, center.h),
-        turnSign=turn_sign,
-    )
-
-
-def _waylines_from_waypoints(
+def _wpi_from_waypoints(
     raw_waypoints: object, route_defaults: dict[str, object], *, insert_arcs: bool = True
-) -> list[WayLineS]:
-    """把航点序列转换为航段序列。注意：insert_arcs 时内部拐点 R>0 插入相切圆弧，否则只连直线。"""
-    # 至少两个航点才能连成航线。
+) -> list[WayPointInputS]:
+    """把航点序列转换为 WayPointInputS 列表。注意：insert_arcs=True 时内部拐点设 r=R，由 leader.init() 插圆弧。"""
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise ValueError("route.waypoints must contain at least two points")
     speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))
     if speed < 0.0:
         raise ValueError("route.speed_mps must be non-negative")
-    # 全局默认转弯半径(可被单航点 R 覆盖)；首末航点的 R 无意义、被忽略。
     default_r = float(route_defaults.get("radius_m", route_defaults.get("radius", 0.0)))
     if default_r < 0.0:
         raise ValueError("route.radius_m must be >= 0")
@@ -501,36 +480,19 @@ def _waylines_from_waypoints(
         _waypoint_radius(raw_point, default_r, f"route.waypoints[{index}]")
         for index, raw_point in enumerate(raw_waypoints)
     ]
-    # 相邻原始航点不得重合。
     for index in range(len(points) - 1):
         if _same_xy(points[index], points[index + 1]) and points[index].h == points[index + 1].h:
             raise ValueError(f"route.waypoints[{index}] and route.waypoints[{index + 1}] must be different")
-
-    lines: list[WayLineS] = []
-    cur_start = points[0]
     n = len(points)
-    for index in range(1, n):
-        corner = points[index]
-        arc = None
-        # 仅在启用插弧、内部拐点且 R>0 时才尝试插圆弧(显示用航线 insert_arcs=False 跳过)。
-        if insert_arcs and index < n - 1 and radii[index] > 0.0:
-            arc = corner_arc(points[index - 1], corner, points[index + 1], radii[index])
-        if arc is not None:
-            t1, t2, center, turn_sign = arc
-            tangent_d = math.hypot(corner.east - t1.east, corner.north - t1.north)
-            in_leg = math.hypot(corner.east - cur_start.east, corner.north - cur_start.north)
-            out_leg = math.hypot(points[index + 1].east - corner.east, points[index + 1].north - corner.north)
-            # 切点须落在两条腿内，否则回退为普通拐点(直线)。
-            if tangent_d <= in_leg + 1e-6 and tangent_d <= out_leg + 1e-6:
-                if not _same_xy(cur_start, t1):
-                    lines.append(_straight_wayline(len(lines), cur_start, t1, speed))
-                lines.append(_arc_wayline(len(lines), t1, t2, speed, radii[index], center, turn_sign))
-                cur_start = t2
-                continue
-        # 无圆弧(直线/退化/不适配)：直接连到拐点。
-        lines.append(_straight_wayline(len(lines), cur_start, corner, speed))
-        cur_start = corner
-    return lines
+    return [
+        WayPointInputS(
+            idx=index,
+            pos=points[index],
+            vdCmd=speed,
+            r=radii[index] if (insert_arcs and 0 < index < n - 1) else 0.0,
+        )
+        for index in range(n)
+    ]
 
 
 def _wayline_from_config(
@@ -568,26 +530,17 @@ def _wayline_from_config(
         raise ValueError(f"{field_name} start and end must be different")
     return WayLineS(
         idx=index,
-        start=WayPointS(idx=index, pos=start),
+        start=WayPointS(idx=index, pos=start, vdCmd=speed),
         end=WayPointS(idx=index + 1, pos=end),
-        vdCmd=speed,
-        radius=radius,
     )
 
 
-def _default_leader_route() -> RouteS:
-    """生成默认长机航线。注意：只作为配置缺省兜底。"""
-    return RouteS(
-        lines=[
-            WayLineS(
-                idx=0,
-                start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
-                end=WayPointS(idx=1, pos=PosInEarthS(1000.0, 0.0, 1000.0)),
-                vdCmd=8.0,
-                radius=0.0,
-            )
-        ]
-    )
+def _default_leader_wpi() -> list[WayPointInputS]:
+    """生成默认长机航点输入。注意：只作为配置缺省兜底。"""
+    return [
+        WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0),
+        WayPointInputS(idx=1, pos=PosInEarthS(1000.0, 0.0, 1000.0), vdCmd=8.0),
+    ]
 
 
 def _route_point_from_config(raw: object, field_name: str) -> PosInEarthS:
@@ -617,7 +570,8 @@ def _leader_id_from_nodes(nodes: list[object]) -> str:
 
 def _route_state_from_wayline(route: WayLineS) -> RouteState:
     """根据当前航段生成航线状态。注意：用于快照显示和航段跟踪。"""
-    # 从航段首末航点抽取 ENU 坐标，构造面向 UI 的航线状态。
+    from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius
+    radius_m = _arc_radius(route) if route.start.turnSign != 0.0 else 0.0
     return RouteState(
         start_x_m=route.start.pos.east,
         start_y_m=route.start.pos.north,
@@ -625,10 +579,10 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
         end_x_m=route.end.pos.east,
         end_y_m=route.end.pos.north,
         end_altitude_m=route.end.pos.h,
-        radius_m=route.radius,
-        center_x_m=route.center.east,
-        center_y_m=route.center.north,
-        turn_sign=route.turnSign,
+        radius_m=radius_m,
+        center_x_m=route.start.center.east,
+        center_y_m=route.start.center.north,
+        turn_sign=route.start.turnSign,
     )
 
 
@@ -726,14 +680,13 @@ class _NodeAlgorithm:
         role: str,
         comm_init: FormCommInitS,
         initial_leader_state: MotionProfS | None,
-        leader_route: RouteS | None,
+        leader_route: list[WayPointInputS] | None,
         control_period_s: float,
         vel_cmd_limit: VelCmdLimitS | None = None,
     ) -> None:
         """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
         self._role = role
-        self._leader_route = leader_route
         # 标记长机是否已执行过算法步：未跑前 current_route 回退到航线首段。
         self._has_route_step = False
         # 按角色选择编队实体：长机跑航线，僚机跟随保持。
@@ -745,11 +698,17 @@ class _NodeAlgorithm:
             EntityInitS(
                 selfInit=FormSelfInitS(node_id),
                 commInit=comm_init,
-                route=leader_route,
+                route=leader_route or [],
                 control_period_s=control_period_s,
                 velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
             )
         )
+        # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。
+        self._initial_route_lines: list[WayLineS] = []
+        if role == "leader":
+            tra_plan = getattr(self._entity, "_tra_plan", None)
+            if tra_plan is not None and hasattr(tra_plan, "get_route"):
+                self._initial_route_lines = tra_plan.get_route()
         # 僚机预置：直接进入 HOLD/三角队形并写入长机初态，避免冷启动时无参考。
         if role != "leader" and initial_leader_state is not None and hasattr(self._entity, "cxt"):
             self._entity.cxt.cmd.stage = FormStageE.HOLD  # type: ignore[attr-defined]
@@ -818,8 +777,8 @@ class _NodeAlgorithm:
         if cxt is None or self._role != "leader":
             return None
         # 算法尚未跑过时上下文 wayLine 未初始化，回退到航线首段用于初始显示。
-        if not self._has_route_step and self._leader_route is not None and self._leader_route.lines:
-            return self._leader_route.lines[0]
+        if not self._has_route_step and self._initial_route_lines:
+            return self._initial_route_lines[0]
         return cxt.wayLine
 
 
@@ -1157,10 +1116,10 @@ class SimulationController:
         self._node_algorithms: dict[str, _NodeAlgorithm] = {}
         self._node_roles: dict[str, str] = {}
         self._configured_links: list[_ConfiguredLink] = []
-        self._leader_route: RouteS | None = None
-        self._display_route: RouteS | None = None  # 显示用原始航线(不插圆弧)，仅供 GUI 画航段
-        # 避障“采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
-        self._leader_route_override: RouteS | None = None
+        self._leader_route: list[WayPointInputS] | None = None
+        self._display_route: list[WayLineS] | None = None  # 显示用航线(WayLineS)，仅供 GUI 画航段
+        # 避障”采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
+        self._leader_route_override: list[WayPointInputS] | None = None
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
         self._config: dict[str, object] | None = None
@@ -1363,10 +1322,10 @@ class SimulationController:
         self._notify_subscribers(snapshot)
         return CommandResult("OK", "reset")
 
-    def apply_avoidance_route(self, route: RouteS) -> CommandResult:
+    def apply_avoidance_route(self, route: list[WayPointInputS]) -> CommandResult:
         """采用一条避障规划航线，替换长机航线并重置到 READY。注意：运行中需先暂停。"""
-        if not isinstance(route, RouteS) or not route.lines:
-            return CommandResult("ERR_CONFIG_INVALID", "avoidance route must be a non-empty RouteS")
+        if not isinstance(route, list) or len(route) < 2:
+            return CommandResult("ERR_CONFIG_INVALID", "avoidance route must be a list of at least 2 WayPointInputS")
         with self._lock:
             if self._closed:
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
@@ -1723,7 +1682,7 @@ class SimulationController:
             if initial_leader_state is not None
             else None
         )
-        # 避障“采用”后用覆盖航线替换配置航线；否则按配置生成。
+        # 避障”采用”后用覆盖航线替换配置航线；否则按配置生成。
         if self._leader_route_override is not None:
             leader_route = self._leader_route_override
         else:
@@ -1731,12 +1690,12 @@ class SimulationController:
         self._leader_route = leader_route
         # 前向/垂向速度指令限幅(串级 P+PI 外环输出)，由配置注入各节点实体。
         vel_cmd_limit = _build_vel_cmd_limit(config)
-        # 显示用航线：覆盖时直接用避障航线(已含圆弧)，否则用配置原始航段(不插圆弧)。
-        self._display_route = (
-            self._leader_route_override
-            if self._leader_route_override is not None
-            else _build_leader_route(config, insert_arcs=False)
-        )
+        # 显示用航线(list[WayLineS])：覆盖时含圆弧，否则按配置原始航段(不插圆弧)。
+        if self._leader_route_override is not None:
+            _display_wpi = self._leader_route_override
+        else:
+            _display_wpi = _build_leader_route(config, insert_arcs=False)
+        self._display_route = waypoint_inputs_to_waylines(_display_wpi) if len(_display_wpi) >= 2 else None
         # 为每个节点创建算法适配器（长机/僚机实体由角色决定）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
@@ -1971,12 +1930,12 @@ class SimulationController:
 
     def _make_route_segment_snapshots(self) -> list[RouteState]:
         """生成全部航段快照。注意：用于 GUI 绘制多航段轨迹。"""
-        # 无算法或无长机航线时无航段可绘。
         if not self._node_algorithms or self._leader_route is None:
             return []
-        # 显示用原始航段(不插圆弧的航点折线)：圆弧仅长机内部跟踪用，界面只画 base 里的航段。
-        display_route = self._display_route if self._display_route is not None else self._leader_route
-        return [_route_state_from_wayline(line) for line in display_route.lines]
+        display_route = self._display_route
+        if not display_route:
+            return []
+        return [_route_state_from_wayline(line) for line in display_route]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:

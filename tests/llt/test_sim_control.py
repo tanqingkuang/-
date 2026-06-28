@@ -12,6 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from src.algorithm.context.leaf_types import FormPatE
+from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.units.algo.arc_path import arc_radius
 from src.environment.model import AircraftState
 from src.runner.sim_control import (
     DisturbanceCommand,
@@ -219,13 +221,39 @@ class SimulationControllerTests(unittest.TestCase):
                 }
             }
         )
+        lines = waypoint_inputs_to_waylines(route)
 
-        self.assertEqual(len(route.lines), 2)
-        self.assertAlmostEqual(route.lines[0].start.pos.east, 0.0)
-        self.assertAlmostEqual(route.lines[0].end.pos.east, 100.0)
-        self.assertAlmostEqual(route.lines[1].start.pos.east, 100.0)
-        self.assertAlmostEqual(route.lines[1].end.pos.north, 80.0)
-        self.assertTrue(all(line.vdCmd == 12.0 for line in route.lines))
+        self.assertEqual(len(lines), 2)
+        self.assertAlmostEqual(lines[0].start.pos.east, 0.0)
+        self.assertAlmostEqual(lines[0].end.pos.east, 100.0)
+        self.assertAlmostEqual(lines[1].start.pos.east, 100.0)
+        self.assertAlmostEqual(lines[1].end.pos.north, 80.0)
+        self.assertTrue(all(line.start.vdCmd == 12.0 for line in lines))
+
+    def test_route_segments_preserve_per_segment_speed(self) -> None:
+        """route.segments 相邻航段速度不同时，每段应使用自己的速度。"""
+
+        route = _build_leader_route(
+            {
+                "route": {
+                    "segments": [
+                        {
+                            "speed_mps": 10.0,
+                            "start": {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                            "end": {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
+                        },
+                        {
+                            "speed_mps": 20.0,
+                            "start": {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
+                            "end": {"x_m": 100.0, "y_m": 80.0, "altitude_m": 1000.0},
+                        },
+                    ]
+                }
+            }
+        )
+        lines = waypoint_inputs_to_waylines(route)
+
+        self.assertEqual([line.start.vdCmd for line in lines], [10.0, 20.0])
 
     def test_route_waypoints_radius_inserts_tangent_arc(self) -> None:
         """内部拐点 R>0 时应在直线段间插入与两腿相切的圆弧段(东->北左转)。"""
@@ -242,21 +270,22 @@ class SimulationControllerTests(unittest.TestCase):
                 }
             }
         )
+        lines = waypoint_inputs_to_waylines(route)
 
         # 直线(0,0)->(1600,0) + 圆弧(1600,0)->(2000,400) + 直线(2000,400)->(2000,2000)
-        self.assertEqual(len(route.lines), 3)
-        leg_in, arc, leg_out = route.lines
-        self.assertEqual(leg_in.radius, 0.0)
+        self.assertEqual(len(lines), 3)
+        leg_in, arc, leg_out = lines
+        self.assertEqual(leg_in.start.turnSign, 0.0)
         self.assertAlmostEqual(leg_in.end.pos.east, 1600.0)
         self.assertAlmostEqual(leg_in.end.pos.north, 0.0)
-        self.assertAlmostEqual(arc.radius, 400.0)
-        self.assertAlmostEqual(arc.turnSign, 1.0)  # 左转/逆时针
+        self.assertAlmostEqual(arc_radius(arc), 400.0)
+        self.assertAlmostEqual(arc.start.turnSign, 1.0)  # 左转/逆时针
         self.assertAlmostEqual(arc.start.pos.east, 1600.0)
         self.assertAlmostEqual(arc.end.pos.east, 2000.0)
         self.assertAlmostEqual(arc.end.pos.north, 400.0)
-        self.assertAlmostEqual(arc.center.east, 1600.0)
-        self.assertAlmostEqual(arc.center.north, 400.0)
-        self.assertEqual(leg_out.radius, 0.0)
+        self.assertAlmostEqual(arc.start.center.east, 1600.0)
+        self.assertAlmostEqual(arc.start.center.north, 400.0)
+        self.assertEqual(leg_out.start.turnSign, 0.0)
         self.assertAlmostEqual(leg_out.start.pos.north, 400.0)
         self.assertAlmostEqual(leg_out.end.pos.north, 2000.0)
 
@@ -275,12 +304,12 @@ class SimulationControllerTests(unittest.TestCase):
                 }
             }
         )
-        arc = route.lines[1]
+        arc = waypoint_inputs_to_waylines(route)[1]
         current_route = _route_state_from_wayline(arc)
         on_arc_midpoint = _aircraft_state(
             "A01",
-            arc.center.east + arc.radius / math.sqrt(2.0),
-            arc.center.north - arc.radius / math.sqrt(2.0),
+            arc.start.center.east + arc_radius(arc) / math.sqrt(2.0),
+            arc.start.center.north - arc_radius(arc) / math.sqrt(2.0),
             1000.0,
         )
 
@@ -322,7 +351,7 @@ class SimulationControllerTests(unittest.TestCase):
     def test_arc_route_cross_track_error_positive_to_track_right_side(self) -> None:
         """圆弧段侧偏也应保持右侧向为正，避免转弯段和直线段反号。"""
 
-        left_arc = _build_leader_route(
+        left_arc = waypoint_inputs_to_waylines(_build_leader_route(
             {
                 "route": {
                     "speed_mps": 20.0,
@@ -333,8 +362,8 @@ class SimulationControllerTests(unittest.TestCase):
                     ],
                 }
             }
-        ).lines[1]
-        right_arc = _build_leader_route(
+        ))[1]
+        right_arc = waypoint_inputs_to_waylines(_build_leader_route(
             {
                 "route": {
                     "speed_mps": 20.0,
@@ -345,31 +374,31 @@ class SimulationControllerTests(unittest.TestCase):
                     ],
                 }
             }
-        ).lines[1]
+        ))[1]
         left_route = _route_state_from_wayline(left_arc)
         right_route = _route_state_from_wayline(right_arc)
         left_outside = _aircraft_state(
             "A01",
-            left_arc.center.east + (left_arc.radius + 10.0) / math.sqrt(2.0),
-            left_arc.center.north - (left_arc.radius + 10.0) / math.sqrt(2.0),
+            left_arc.start.center.east + (arc_radius(left_arc) + 10.0) / math.sqrt(2.0),
+            left_arc.start.center.north - (arc_radius(left_arc) + 10.0) / math.sqrt(2.0),
             1000.0,
         )
         left_inside = _aircraft_state(
             "A01",
-            left_arc.center.east + (left_arc.radius - 10.0) / math.sqrt(2.0),
-            left_arc.center.north - (left_arc.radius - 10.0) / math.sqrt(2.0),
+            left_arc.start.center.east + (arc_radius(left_arc) - 10.0) / math.sqrt(2.0),
+            left_arc.start.center.north - (arc_radius(left_arc) - 10.0) / math.sqrt(2.0),
             1000.0,
         )
         right_inside = _aircraft_state(
             "A01",
-            right_arc.center.east + (right_arc.radius - 10.0) / math.sqrt(2.0),
-            right_arc.center.north + (right_arc.radius - 10.0) / math.sqrt(2.0),
+            right_arc.start.center.east + (arc_radius(right_arc) - 10.0) / math.sqrt(2.0),
+            right_arc.start.center.north + (arc_radius(right_arc) - 10.0) / math.sqrt(2.0),
             1000.0,
         )
         right_outside = _aircraft_state(
             "A01",
-            right_arc.center.east + (right_arc.radius + 10.0) / math.sqrt(2.0),
-            right_arc.center.north + (right_arc.radius + 10.0) / math.sqrt(2.0),
+            right_arc.start.center.east + (arc_radius(right_arc) + 10.0) / math.sqrt(2.0),
+            right_arc.start.center.north + (arc_radius(right_arc) + 10.0) / math.sqrt(2.0),
             1000.0,
         )
 
@@ -391,13 +420,13 @@ class SimulationControllerTests(unittest.TestCase):
             }
         }
         # 跟踪航线插圆弧(3 段)，显示航线不插(原始 2 直线段、含尖角)。
-        self.assertEqual(len(_build_leader_route(config).lines), 3)
-        display = _build_leader_route(config, insert_arcs=False)
-        self.assertEqual(len(display.lines), 2)
-        self.assertTrue(all(line.radius == 0.0 for line in display.lines))
-        self.assertAlmostEqual(display.lines[0].end.pos.east, 2000.0)
-        self.assertAlmostEqual(display.lines[0].end.pos.north, 0.0)
-        self.assertAlmostEqual(display.lines[1].end.pos.north, 2000.0)
+        self.assertEqual(len(waypoint_inputs_to_waylines(_build_leader_route(config))), 3)
+        display = waypoint_inputs_to_waylines(_build_leader_route(config, insert_arcs=False))
+        self.assertEqual(len(display), 2)
+        self.assertTrue(all(line.start.turnSign == 0.0 for line in display))
+        self.assertAlmostEqual(display[0].end.pos.east, 2000.0)
+        self.assertAlmostEqual(display[0].end.pos.north, 0.0)
+        self.assertAlmostEqual(display[1].end.pos.north, 2000.0)
 
     def test_snapshot_exposes_full_reference_route_segments(self) -> None:
         """Snapshot should expose the complete configured route for UI drawing, not only the active segment."""

@@ -113,24 +113,30 @@ class PosTrackDiagS:                       # 位置跟踪诊断量，不进 Cont
 
 # ===================== 和航线相关 =====================
 @dataclass
-class WayPointS:                           # 航点
+class WayPointS:                           # 内部航路点，携带该点起始段的属性
+    idx: int = 0                           # 航路点编号，从0开始
+    pos: PosInEarthS = field(default_factory=PosInEarthS)   # 航路点位置
+    vdCmd: float = 0.0                     # 该点起始段的地速指令，m/s
+    turnSign: float = 0.0                  # 该点起始段转向：+1 左转/逆时针、-1 右转/顺时针、0 直线
+    center: PosInEarthS = field(default_factory=PosInEarthS) # 圆弧圆心(仅 turnSign!=0 有意义)
+
+@dataclass
+class WayLineS:                            # 单段航段；start.* 描述本段属性，end.* 描述下一段属性
+    idx: int = 0                           # 航段编号
+    start: WayPointS = field(default_factory=WayPointS)     # 起点；start.turnSign!=0 表示本段为圆弧
+    end: WayPointS = field(default_factory=WayPointS)       # 终点；end.turnSign/vdCmd 描述下一段
+
+# 辅助：圆弧半径 = hypot(start.pos.east - start.center.east, start.pos.north - start.center.north)
+# RouteS 已删除；内部用 list[WayLineS]，外部输入用 list[WayPointInputS]
+
+@dataclass
+class WayPointInputS:                      # 用户/A* 输入的原始航点，由 leader.init() 转换为 WayLineS 序列
     idx: int = 0                           # 航点编号，从0开始
     pos: PosInEarthS = field(default_factory=PosInEarthS)   # 航点位置
-    r: float = 0.0                         # 该航点交接处的预期转弯半径(米)，0=该拐点不做圆弧；首末航点无意义
-
-@dataclass
-class WayLineS:                            # 航段：radius=0 直线，radius>0 圆弧
-    idx: int = 0                           # 航段编号，0-1的航点组成航段0
-    start: WayPointS = field(default_factory=WayPointS)     # 起始航点(圆弧为切入点)
-    end: WayPointS = field(default_factory=WayPointS)       # 终点航点(圆弧为切出点)
-    vdCmd: float = 0.0                     # 航段速度指令，单位 m/s
-    radius: float = 0.0                    # 转弯半径(米)，0=直线，>0=圆弧
-    center: PosInEarthS = field(default_factory=PosInEarthS) # 圆弧圆心(仅 radius>0 有意义)
-    turnSign: float = 0.0                  # 转向：+1 左转/逆时针、-1 右转/顺时针、0 直线
-
-@dataclass
-class RouteS:                              # 航线
-    lines: list[WayLineS] = field(default_factory=list)      # 多个航段
+    vdCmd: float = 0.0                     # 该点起始段的地速指令，m/s
+    r: float = 0.0                         # 拐点处的期望转弯半径(米)；0=不插圆弧；首末点无意义
+    turnSign: float = 0.0                  # 已知圆弧时填入；0 表示直线或待按 r 计算
+    center: PosInEarthS = field(default_factory=PosInEarthS) # 圆弧圆心(turnSign!=0 时有意义)
 
 # ===================== 和编队相关 =====================
 @dataclass

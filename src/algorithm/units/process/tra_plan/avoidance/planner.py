@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from math import hypot
 
-from src.algorithm.context.leaf_types import RouteS
+from src.algorithm.context.leaf_types import WayPointInputS
 
 from .astar import plan_path
 from .feasibility import FeasibilityResult, check_feasibility
@@ -34,7 +34,7 @@ class PlanResult:
     """避障规划结论。注意：ok=True 时 route 可用；失败时带 ERR_AVOID_* 原因码与定位/诊断。"""
 
     ok: bool
-    route: RouteS | None = None
+    route: list[WayPointInputS] | None = None
     code: str = "OK"
     detail: str = ""
     leg_index: int | None = None  # 触发失败的原航线腿序号（waypoints[i]→[i+1]）

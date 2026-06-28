@@ -6,7 +6,7 @@
 
 ## 1. 目标与范围
 
-给现有编队仿真引入**二维水平面避障**：把风险区视为**三维无限高的柱体**，因此只在 East-North 水平面上规划，高度剖面保持不变。用 **A\*** 在栅格上求绕障拓扑路径，再翻译成项目现有的可飞航线（`RouteS`）喂给长机。
+给现有编队仿真引入**二维水平面避障**：把风险区视为**三维无限高的柱体**，因此只在 East-North 水平面上规划，高度剖面保持不变。用 **A\*** 在栅格上求绕障拓扑路径，再翻译成 `list[WayPointInputS]` 喂给长机（由 `waypoint_inputs_to_waylines()` 在 `leader.init()` 里统一转换为内部 `list[WayLineS]`）。
 
 ### 1.1 第一版定位
 
@@ -17,7 +17,7 @@
 | 障碍形状 | **圆形** + **轴对齐矩形**，均原生保留、互不转换 |
 | 高度 | 保持原航线高度剖面，只改水平 East-North（按水平里程线性插值） |
 | 失败处理 | 无解 / 不可飞 → **报具体原因码、回退原始航线，绝不崩** |
-| 下游影响 | 不改主循环 `_tick`、跟踪环、编队、模型；只要产出合法 `RouteS`，下游零改动 |
+| 下游影响 | 不改主循环 `_tick`、跟踪环、编队、模型；只要产出合法 `list[WayPointInputS]`，下游零改动 |
 | 障碍来源 | **离线写 JSON**，界面只做"勾选 + 生成航线 + 预览确认 + 采用并仿真"，不做地图鼠标绘制 |
 
 ### 1.2 已知约束声明（第一版未处理，留待在线动态版）
@@ -37,7 +37,7 @@ A\* 只负责"从障碍哪一边绕"（**拓扑**）；飞机本体约束由"膨
 
 > 图源：[避障-A星-数据流.drawio](./避障-A星-数据流.drawio)
 
-链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余 → 可飞性校验 → corner_arc 圆弧 → RouteS`。只要出口产出合法 `RouteS`，**下游链路（`LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
+链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余 → 可飞性校验 → points_to_route → list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
 
 ---
 
@@ -47,7 +47,7 @@ A\* 只负责"从障碍哪一边绕"（**拓扑**）；飞机本体约束由"膨
 
 | 量 | 字段 / 来源 | 默认 | 地位 |
 | --- | --- | --- | --- |
-| **转弯半径 R** | `avoidance.turn_radius_m` → `WayLineS.radius`（人工配置，见 3.1） | 见下 | **唯一支配约束**：决定膨胀、航段长度占用、圆弧外凸是否触障 |
+| **转弯半径 R** | `avoidance.turn_radius_m` → `WayPointInputS.r`（人工配置，见 3.1） | 见下 | **唯一支配约束**：决定膨胀、航段长度占用、圆弧外凸是否触障 |
 | 前向速度 | `control.velocity_command_limits.forward_*` | 14~25 m/s | 非约束。R 不由速度反算，速度只影响绕障**耗时** |
 | 加速度幅值 | `model.limits.acceleration_command_mps2` | 6.0 m/s² | 非独立约束。跟踪能力，影响被 `clearance` 吸收 |
 | 滚转角 | `model.limits.phi_*_deg` | ±70°（作业 40°） | 非约束（仅作 R 下界哨兵语义，见 3.1）。按配置 R 飞，不命令到极限 |
@@ -108,7 +108,7 @@ class ObstacleS:
     max_e: float = 0.0; max_n: float = 0.0   # rect 右上
 ```
 
-构造辅助：`make_circle(id, east, north, radius)`、`make_rect(id, min_e, min_n, max_e, max_n)`。规划结果直接复用现有 `RouteS` / `WayLineS` / `WayPointS`，不新增路径类型。
+构造辅助：`make_circle(id, east, north, radius)`、`make_rect(id, min_e, min_n, max_e, max_n)`。规划结果输出 `list[WayPointInputS]`（由 `points_to_route()` 生成），经 `waypoint_inputs_to_waylines()` 转换为内部 `list[WayLineS]`，不新增路径类型。
 
 **统一抽象——每形状只需一个"点到障碍"基元**。形状相关代码全部收敛到 `inside()`，供 A\* 与可飞性校验共用，新增形状只补这一处：
 
@@ -169,7 +169,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 
 | | `allow_arc: true`（默认） | `allow_arc: false`（外切线） |
 | --- | --- | --- |
-| 拐点编码 | 相切**圆弧** `WayLineS`（`radius=R`） | **外切线**：直连原拐点的两条直线（`radius=0`） |
+| 拐点编码 | `WayPointInputS.r=R` → 转换后得相切**圆弧** `WayLineS`（`start.turnSign≠0`） | `WayPointInputS.r=0` → 转换后为直线（`start.turnSign=0`），直连原拐点 |
 | §3.2 可飞性校验 | 按真实 R 校验（急拐 / 腿长 / 圆弧触障） | **同样按真实 R 校验**，不可飞两种编码都拒 |
 | 几何关系 | 圆弧内切于拐角，贴近被绕障碍一侧 | 顶点在转弯**外侧**，离障碍更远，更保守 |
 
@@ -216,7 +216,7 @@ def plan_avoidance_route(
 @dataclass
 class PlanResult:
     ok: bool
-    route: RouteS | None = None
+    route: list[WayPointInputS] | None = None  # 规划结果；由 waypoint_inputs_to_waylines() 转为 list[WayLineS]
     code: str = "OK"           # 失败时为 ERR_AVOID_*
     detail: str = ""           # 人读定位信息
     leg_index: int | None = None       # 触发失败的原航线腿序号
@@ -229,7 +229,7 @@ class PlanResult:
 
 `sim_control.py` 通过**长机航线覆盖**机制接入，不复用 `DisturbanceCommand`（那是带时长的扰动），障碍是空间持久对象：
 
-- `apply_avoidance_route(route) -> CommandResult`：把预览 `RouteS` 设为 `_leader_route_override`，替换长机航线（运行中拒绝 `ERR_BUSY`，未加载配置 `ERR_NO_CONFIG`，空航线 `ERR_CONFIG_INVALID`）。
+- `apply_avoidance_route(route: list[WayPointInputS]) -> CommandResult`：把预览航线设为 `_leader_route_override`，替换长机航线（运行中拒绝 `ERR_BUSY`，未加载配置 `ERR_NO_CONFIG`，航线长度不足 `ERR_CONFIG_INVALID`）。
 - `clear_avoidance_route() -> CommandResult`：清除覆盖，回退到配置原航线。
 - 生命周期：`reset()` **保留**覆盖（重置仍飞绕障航线）；`load_config()` **清除**覆盖（重新加载回到配置原航线）。
 

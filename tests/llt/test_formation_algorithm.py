@@ -20,7 +20,6 @@ from src.algorithm.context.leaf_types import (
     PosInEarthS,
     PosTrackDiagS,
     RemoteCmdS,
-    RouteS,
     VdInEarthS,
     WayLineS,
     WayPointS,
@@ -222,9 +221,8 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=3.0, north=4.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
-            vdCmd=7.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
@@ -243,9 +241,8 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=3.0, north=4.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
-            vdCmd=7.0,
         )
         route = RouteInterp()
         route.init(RouteInterpInitS(lookAheadDistance=2.0))
@@ -265,9 +262,8 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=5.0, north=0.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(5.0, 5.0, 5.0)),
+            start=WayPointS(pos=PosInEarthS(5.0, 5.0, 5.0), vdCmd=10.0),
             end=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
-            vdCmd=10.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
@@ -286,9 +282,8 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=15.0, north=3.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
-            vdCmd=7.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
@@ -308,9 +303,8 @@ class PosCalcTests(unittest.TestCase):
         # 起点放在航段起点，专注校验速度分解；航段水平 3-4-5、爬升 30m。
         ctx.selfState = _motion(east=0.0, north=0.0, h=1000.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0)),
+            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
             end=WayPointS(pos=PosInEarthS(30.0, 40.0, 1030.0)),
-            vdCmd=50.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
@@ -332,9 +326,8 @@ class PosCalcTests(unittest.TestCase):
         u = RouteInterpInputS(
             selfState=_motion(h=1000.0),
             wayLine=WayLineS(
-                start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0)),
+                start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
                 end=WayPointS(pos=PosInEarthS(0.0, 0.0, 1100.0)),
-                vdCmd=50.0,
             ),
         )
         with self.assertRaisesRegex(ValueError, "horizontal"):
@@ -345,12 +338,13 @@ class PosCalcTests(unittest.TestCase):
 
         # 东->南右转圆弧，R=400：切入(1600,0)、切出(2000,-400)、圆心(1600,-400)、turnSign=-1。
         line = WayLineS(
-            start=WayPointS(pos=PosInEarthS(1600.0, 0.0, 1000.0)),
+            start=WayPointS(
+                pos=PosInEarthS(1600.0, 0.0, 1000.0),
+                vdCmd=20.0,
+                turnSign=-1.0,
+                center=PosInEarthS(1600.0, -400.0, 1000.0),
+            ),
             end=WayPointS(pos=PosInEarthS(2000.0, -400.0, 1000.0)),
-            vdCmd=20.0,
-            radius=400.0,
-            center=PosInEarthS(1600.0, -400.0, 1000.0),
-            turnSign=-1.0,
         )
         # 飞机恰在弧中点(进度 0.5)，航向东南(-45°)。
         mid_e = 1600.0 + 400.0 * math.cos(math.pi / 4.0)
@@ -708,22 +702,18 @@ class ProcessUnitTests(unittest.TestCase):
         planner = LeaderRoute()
         planner.init(
             LeaderRouteInitS(
-                RouteS(
-                    lines=[
-                        WayLineS(
-                            idx=0,
-                            start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
-                            end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
-                            vdCmd=8.0,
-                        ),
-                        WayLineS(
-                            idx=1,
-                            start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
-                            end=WayPointS(idx=2, pos=PosInEarthS(200.0, 0.0, 1000.0)),
-                            vdCmd=8.0,
-                        ),
-                    ]
-                )
+                [
+                    WayLineS(
+                        idx=0,
+                        start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0),
+                        end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                    ),
+                    WayLineS(
+                        idx=1,
+                        start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=8.0),
+                        end=WayPointS(idx=2, pos=PosInEarthS(200.0, 0.0, 1000.0)),
+                    ),
+                ]
             )
         )
         ctx.selfState = _motion(east=50.0, h=1000.0)
@@ -755,22 +745,18 @@ class ProcessUnitTests(unittest.TestCase):
         planner = LeaderRoute()
         planner.init(
             LeaderRouteInitS(
-                RouteS(
-                    lines=[
-                        WayLineS(
-                            idx=0,
-                            start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
-                            end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
-                            vdCmd=10.0,
-                        ),
-                        WayLineS(
-                            idx=1,
-                            start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
-                            end=WayPointS(idx=2, pos=PosInEarthS(100.0, 100.0, 1000.0)),
-                            vdCmd=10.0,
-                        ),
-                    ]
-                )
+                [
+                    WayLineS(
+                        idx=0,
+                        start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=10.0),
+                        end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                    ),
+                    WayLineS(
+                        idx=1,
+                        start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=10.0),
+                        end=WayPointS(idx=2, pos=PosInEarthS(100.0, 100.0, 1000.0)),
+                    ),
+                ]
             )
         )
 
@@ -795,22 +781,18 @@ class ProcessUnitTests(unittest.TestCase):
         planner = LeaderRoute()
         planner.init(
             LeaderRouteInitS(
-                RouteS(
-                    lines=[
-                        WayLineS(
-                            idx=0,
-                            start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0)),
-                            end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
-                            vdCmd=10.0,
-                        ),
-                        WayLineS(
-                            idx=1,
-                            start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
-                            end=WayPointS(idx=2, pos=PosInEarthS(186.6, 50.0, 1000.0)),
-                            vdCmd=10.0,
-                        ),
-                    ]
-                )
+                [
+                    WayLineS(
+                        idx=0,
+                        start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=10.0),
+                        end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                    ),
+                    WayLineS(
+                        idx=1,
+                        start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=10.0),
+                        end=WayPointS(idx=2, pos=PosInEarthS(186.6, 50.0, 1000.0)),
+                    ),
+                ]
             )
         )
 

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import unittest
 
+from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import blocked, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import (
     ERR_ENDPOINT_IN_OBSTACLE,
     ERR_NO_PATH,
+    PlanResult,
     plan_avoidance_route,
 )
 
@@ -24,9 +26,15 @@ COMMON = dict(
 )
 
 
-def _straights_collision_free(route, obstacles, clearance) -> bool:
-    for line in route.lines:
-        if line.radius == 0.0:
+def _route_lines(result: PlanResult):
+    """Convert PlanResult.route (list[WayPointInputS]) to list[WayLineS] for inspection."""
+    assert result.route is not None
+    return waypoint_inputs_to_waylines(result.route)
+
+
+def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
+    for line in _route_lines(result):
+        if line.start.turnSign == 0.0:
             if blocked(obstacles, line.start.pos.east, line.start.pos.north, clearance):
                 return False
             if blocked(obstacles, line.end.pos.east, line.end.pos.north, clearance):
@@ -39,14 +47,15 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)]
         result = plan_avoidance_route(wps, [], **COMMON)
         self.assertTrue(result.ok, result.detail)
-        self.assertEqual(result.route.lines[0].start.pos.east, 0.0)
-        self.assertEqual(result.route.lines[-1].end.pos.east, 2000.0)
+        lines = _route_lines(result)
+        self.assertEqual(lines[0].start.pos.east, 0.0)
+        self.assertEqual(lines[-1].end.pos.east, 2000.0)
 
     def test_single_circle_on_leg_is_detoured(self) -> None:
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
         result = plan_avoidance_route([(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **COMMON)
         self.assertTrue(result.ok, result.detail)
-        self.assertTrue(_straights_collision_free(result.route, obstacles, CLEARANCE))
+        self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
         # 绕行必须偏出原直线（north 抬到膨胀半径量级）。
         self.assertGreaterEqual(max(abs(p[1]) for p in result.simplified_points), 180.0)
 
@@ -88,17 +97,19 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0), make_circle("C2", 2000.0, 1200.0, 180.0)]
         result = plan_avoidance_route(wps, obstacles, **COMMON)
         self.assertTrue(result.ok, result.detail)
-        self.assertTrue(any(line.radius > 0.0 for line in result.route.lines))
-        self.assertTrue(_straights_collision_free(result.route, obstacles, CLEARANCE))
+        lines = _route_lines(result)
+        self.assertTrue(any(line.start.turnSign != 0.0 for line in lines))
+        self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
 
     def test_altitude_profile_preserved(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1400.0)]
         result = plan_avoidance_route(wps, [make_circle("C1", 900.0, 0.0, 180.0)], **COMMON)
         self.assertTrue(result.ok, result.detail)
-        self.assertAlmostEqual(result.route.lines[0].start.pos.h, 1000.0)
-        self.assertAlmostEqual(result.route.lines[-1].end.pos.h, 1400.0)
+        lines = _route_lines(result)
+        self.assertAlmostEqual(lines[0].start.pos.h, 1000.0)
+        self.assertAlmostEqual(lines[-1].end.pos.h, 1400.0)
         # 高度沿航线单调上升。
-        heights = [line.start.pos.h for line in result.route.lines] + [result.route.lines[-1].end.pos.h]
+        heights = [line.start.pos.h for line in lines] + [lines[-1].end.pos.h]
         self.assertTrue(all(b >= a - 1e-6 for a, b in zip(heights, heights[1:])))
 
     def test_endpoint_in_obstacle_reports_code(self) -> None:
@@ -142,8 +153,9 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         params["allow_arc"] = False
         result = plan_avoidance_route([(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **params)
         self.assertTrue(result.ok, result.detail)
-        self.assertTrue(all(line.radius == 0.0 for line in result.route.lines))
-        self.assertTrue(_straights_collision_free(result.route, obstacles, CLEARANCE))
+        lines = _route_lines(result)
+        self.assertTrue(all(line.start.turnSign == 0.0 for line in lines))
+        self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
 
     def test_allow_arc_false_still_rejects_infeasible(self) -> None:
         # §3.2 始终按真实 R 校验：外切线交付下不可飞场景照样拒（不被编码绕过）。

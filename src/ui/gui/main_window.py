@@ -72,8 +72,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.algorithm.context.leaf_types import RouteS, WayLineS
-from src.algorithm.units.algo.arc_path import arc_swept_rad
+from src.algorithm.context.leaf_types import WayLineS, WayPointInputS
+from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_swept_rad
+from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
 from src.runner.sim_control import SimulationController
@@ -361,24 +362,28 @@ def _obstacle_view_to_backend(view: "ObstacleView") -> ObstacleS:
 
 def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[float, float]]:
     """采样圆弧航段为折线点（含两端）。注意：复用 arc_swept_rad 求扫掠角。"""
-    center = line.center
+    center = line.start.center
+    radius = _arc_radius_fn(line)
     a_start = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
     swept = arc_swept_rad(line)
     segments = max(1, int(abs(math.degrees(swept)) / step_deg))
     return [
         (
-            center.east + line.radius * math.cos(a_start + swept * (k / segments)),
-            center.north + line.radius * math.sin(a_start + swept * (k / segments)),
+            center.east + radius * math.cos(a_start + swept * (k / segments)),
+            center.north + radius * math.sin(a_start + swept * (k / segments)),
         )
         for k in range(segments + 1)
     ]
 
 
-def route_to_polyline(route: RouteS) -> list[tuple[float, float]]:
-    """把 RouteS（直线+圆弧）展开为折线点，供俯视图绘制预览航线。"""
+def route_to_polyline(route: list[WayPointInputS]) -> list[tuple[float, float]]:
+    """把 WayPointInputS 列表展开为折线点，供俯视图绘制预览航线。"""
+    if len(route) < 2:
+        return []
+    lines = waypoint_inputs_to_waylines(route)
     raw: list[tuple[float, float]] = []
-    for line in route.lines:
-        if line.radius > 0.0:
+    for line in lines:
+        if line.start.turnSign != 0.0:
             raw.extend(_sample_wayline_arc(line))
         else:
             raw.append((line.start.pos.east, line.start.pos.north))
@@ -695,7 +700,7 @@ class ControllerSimulationAdapter:
             }[kind]
         return self.snapshot()
 
-    def apply_avoidance_route(self, route: RouteS) -> Snapshot:
+    def apply_avoidance_route(self, route: list[WayPointInputS]) -> Snapshot:
         """采用一条避障规划航线，替换长机航线。注意：成功后清空尾迹缓存（航线已变）。"""
         result = self.controller.apply_avoidance_route(route)
         self.last_result_code = result.code
@@ -2133,7 +2138,7 @@ class MainWindow(QMainWindow):
         self.obstacle_checkboxes: list[QCheckBox] = []
         # 避障规划参数（来自配置）与“生成航线”得到的预览航线（采用前）。
         self._avoidance_params: AvoidanceParams | None = None
-        self._preview_route: RouteS | None = None
+        self._preview_route: list[WayPointInputS] | None = None
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
@@ -2507,10 +2512,11 @@ class MainWindow(QMainWindow):
         if result.ok and result.route is not None:
             self._preview_route = result.route
             self.top_view.set_preview_route(route_to_polyline(result.route))
-            arcs = sum(1 for line in result.route.lines if line.radius > 0.0)
+            _preview_lines = waypoint_inputs_to_waylines(result.route)
+            arcs = sum(1 for line in _preview_lines if line.start.turnSign != 0.0)
             self.adopt_route_button.setEnabled(True)
-            self.avoidance_status.setText(f"预览就绪：{len(result.route.lines)} 段（{arcs} 圆弧）· 可采用")
-            self._log("Avoid", f"生成航线成功：{len(result.route.lines)} 段，{arcs} 圆弧")
+            self.avoidance_status.setText(f"预览就绪：{len(_preview_lines)} 段（{arcs} 圆弧）· 可采用")
+            self._log("Avoid", f"生成航线成功：{len(_preview_lines)} 段，{arcs} 圆弧")
         else:
             self._invalidate_preview()
             self.avoidance_status.setText(f"{result.code}：{result.detail}")
