@@ -16,6 +16,7 @@ from src.algorithm.units.process.tra_plan.avoidance.obstacle import (
 from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import (
     assign_transition_radius,
+    bake_transition_arcs,
     line_of_sight_clear,
     points_to_route,
     simplify_path,
@@ -215,6 +216,37 @@ class AssignTransitionRadiusTests(unittest.TestCase):
     def test_negative_radius_raises(self) -> None:
         with self.assertRaises(ValueError):
             assign_transition_radius([self._wpi(0.0, 0.0), self._wpi(1.0, 0.0)], -1.0)
+
+
+class BakeTransitionArcsTests(unittest.TestCase):
+    """allow_arc=True 时把带交接半径 r 的直线-直线拐点烘焙成相切圆弧段(turnSign!=0)。"""
+
+    def _route(self, pts, r):
+        wpi = points_to_route(pts, speed_mps=20.0)
+        assign_transition_radius(wpi, r)
+        return wpi
+
+    def test_straight_corner_baked_to_arc(self) -> None:
+        baked = bake_transition_arcs(self._route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], 200.0))
+        # 一个拐点 → 两切点替换，航点数 3→4。
+        self.assertEqual(len(baked), 4)
+        arc_nodes = [w for w in baked if w.turnSign != 0.0]
+        self.assertEqual(len(arc_nodes), 1)
+        self.assertEqual(arc_nodes[0].turnSign, 1.0)  # 东→北 左转
+        # 烘焙后不再留 r(转弯信息已变成航段曲率)。
+        self.assertTrue(all(w.r == 0.0 for w in baked))
+
+    def test_oversized_radius_stays_sharp(self) -> None:
+        # 半径过大、切点越出腿长 → 保持尖角，不烘焙。
+        baked = bake_transition_arcs(self._route([(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], 100.0))
+        self.assertEqual(len(baked), 3)
+        self.assertTrue(all(w.turnSign == 0.0 for w in baked))
+
+    def test_zero_radius_untouched(self) -> None:
+        wpi = points_to_route([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], speed_mps=20.0)  # 全 r=0
+        baked = bake_transition_arcs(wpi)
+        self.assertEqual(len(baked), 3)
+        self.assertTrue(all(w.turnSign == 0.0 for w in baked))
 
 
 class AStarToRouteIntegrationTests(unittest.TestCase):

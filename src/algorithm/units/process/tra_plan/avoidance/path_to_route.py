@@ -14,6 +14,7 @@ from __future__ import annotations
 from math import ceil, hypot
 
 from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
+from src.algorithm.units.algo.arc_path import corner_arc
 
 from .obstacle import ObstacleS, blocked, obstacle_bounds
 
@@ -134,3 +135,36 @@ def assign_transition_radius(inputs: list[WayPointInputS], turn_radius_m: float)
         is_interior = 0 < i < n - 1
         inputs[i].r = turn_radius_m if (is_interior and in_straight and out_straight) else 0.0
     return inputs
+
+
+def bake_transition_arcs(route: list[WayPointInputS]) -> list[WayPointInputS]:
+    """把带交接半径 r 的直线-直线拐点烘焙成相切圆弧段（turnSign!=0），供 allow_arc=True 使用。
+
+    使航段本身成为圆弧（可被显示/下游当作曲率航段画弧）；turnSign==0 且 r<=0 的航点原样保留。
+    与 leader.waypoint_inputs_to_waylines 情况2 同源：求相切圆弧，切点须落在两条腿内才烘焙，
+    半径过大越出腿长时保留尖角。注意：烘焙后该拐点 r 清零（转弯信息已变成航段曲率）。
+    """
+    n = len(route)
+    out: list[WayPointInputS] = []
+    for i, wpi in enumerate(route):
+        baked = False
+        # 仅烘焙"内部、直线-直线、带 r"的拐点；其余原样保留。
+        if 0 < i < n - 1 and wpi.r > 0.0 and wpi.turnSign == 0.0 and route[i - 1].turnSign == 0.0:
+            arc = corner_arc(route[i - 1].pos, wpi.pos, route[i + 1].pos, wpi.r)
+            if arc is not None:
+                t1, t2, center, turn_sign = arc
+                in_leg = hypot(wpi.pos.east - route[i - 1].pos.east, wpi.pos.north - route[i - 1].pos.north)
+                out_leg = hypot(route[i + 1].pos.east - wpi.pos.east, route[i + 1].pos.north - wpi.pos.north)
+                tangent_in = hypot(wpi.pos.east - t1.east, wpi.pos.north - t1.north)
+                tangent_out = hypot(wpi.pos.east - t2.east, wpi.pos.north - t2.north)
+                if tangent_in <= in_leg + 1e-9 and tangent_out <= out_leg + 1e-9:
+                    out.append(
+                        WayPointInputS(idx=len(out), pos=t1, vdCmd=route[i - 1].vdCmd, turnSign=turn_sign, center=center)
+                    )
+                    out.append(WayPointInputS(idx=len(out), pos=t2, vdCmd=wpi.vdCmd))
+                    baked = True
+        if not baked:
+            out.append(
+                WayPointInputS(idx=len(out), pos=wpi.pos, vdCmd=wpi.vdCmd, r=wpi.r, turnSign=wpi.turnSign, center=wpi.center)
+            )
+    return out

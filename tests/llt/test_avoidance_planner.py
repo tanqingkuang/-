@@ -146,8 +146,8 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         self.assertIsNotNone(result.feasibility)
         self.assertGreaterEqual(len(result.simplified_points), 2)
 
-    def test_corner_gets_transition_arc_regardless_of_allow_arc(self) -> None:
-        # allow_arc 只管航段自身是否曲线；直线-直线拐点的交接圆弧恒按 R 补，与 allow_arc 无关。
+    def test_leader_flies_smooth_corners_regardless_of_allow_arc(self) -> None:
+        # 长机实际飞的航段(经 waypoint_inputs_to_waylines 展开)两种取值都有圆弧——平滑过弯始终成立。
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)]
         for allow_arc in (True, False):
@@ -156,12 +156,32 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
             result = plan_avoidance_route(wps, obstacles, **params)
             self.assertTrue(result.ok, result.detail)
             lines = _route_lines(result)
-            # 绕障产生直线-直线拐点 → 交接处必有圆弧段。
             self.assertTrue(
                 any(line.start.turnSign != 0.0 for line in lines),
-                f"allow_arc={allow_arc} 应在拐点生成交接圆弧",
+                f"allow_arc={allow_arc} 长机展开后应有圆弧段(平滑过弯)",
             )
             self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
+
+    def test_allow_arc_true_bakes_arc_segments_into_route(self) -> None:
+        # 勾选：航段本身即圆弧 → 输出航点带 turnSign!=0(可被显示当作曲率航段画弧)。
+        obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
+        params = dict(COMMON)
+        params["allow_arc"] = True
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **params)
+        self.assertTrue(result.ok, result.detail)
+        assert result.route is not None
+        self.assertTrue(any(wpi.turnSign != 0.0 for wpi in result.route))
+
+    def test_allow_arc_false_keeps_straight_skeleton_with_radius(self) -> None:
+        # 不勾选：航段是直线骨架(turnSign==0)，拐点只带交接半径 r(转弯信息，飞行时平滑、显示画尖角)。
+        obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
+        params = dict(COMMON)
+        params["allow_arc"] = False
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)], obstacles, **params)
+        self.assertTrue(result.ok, result.detail)
+        assert result.route is not None
+        self.assertTrue(all(wpi.turnSign == 0.0 for wpi in result.route))
+        self.assertTrue(any(wpi.r > 0.0 for wpi in result.route))
 
     def test_allow_arc_false_still_rejects_infeasible(self) -> None:
         # §3.2 始终按真实 R 校验：外切线交付下不可飞场景照样拒（不被编码绕过）。
