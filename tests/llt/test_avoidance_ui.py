@@ -283,7 +283,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertEqual(window.avoidance_window.windowTitle(), "避障规划")
 
     def test_param_order_matches_design_document(self) -> None:
-        # 参数顺序必须与 docs/避障-A星-设计文档.md 第 8 节一致。
+        # 参数顺序必须与 docs/避障算法设计文档/避障-A星-设计文档.md 第 8 节一致。
         window = self._window()
         self.assertEqual(
             window.avoidance_window.param_order,
