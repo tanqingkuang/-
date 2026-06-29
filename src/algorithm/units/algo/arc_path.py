@@ -62,6 +62,88 @@ def corner_arc(
     return t1, t2, center, turn_sign
 
 
+def tangent_point(
+    ext: PosInEarthS,
+    center: PosInEarthS,
+    radius: float,
+    turn_sign: float,
+    *,
+    leaving: bool,
+) -> tuple[float, float] | None:
+    """求外点 ext 对圆(center,radius)的切点；两切点中取"切线方向与该圆弧(转向 turn_sign)切向一致"的那个。
+
+    leaving=False：ext 是进入切点前的来点，行进方向取 ext→T；
+    leaving=True：ext 是离开切点后的去点，行进方向取 T→ext。
+    返回 (east, north) 切点；ext 落在圆内/圆上无法外切，返回 None。
+    """
+    dx = ext.east - center.east
+    dy = ext.north - center.north
+    d = math.hypot(dx, dy)
+    if d <= radius + 1e-9:
+        return None
+    base = math.atan2(dy, dx)
+    beta = math.acos(max(-1.0, min(1.0, radius / d)))
+    best: tuple[float, float] | None = None
+    best_dot = -2.0
+    for ang in (base + beta, base - beta):
+        rx, ry = math.cos(ang), math.sin(ang)
+        tx = center.east + radius * rx
+        ty = center.north + radius * ry
+        # 该处圆弧切向(转向 turn_sign)：径向转 90°·sign。
+        vx = -ry * turn_sign
+        vy = rx * turn_sign
+        if leaving:
+            wx, wy = ext.east - tx, ext.north - ty
+        else:
+            wx, wy = tx - ext.east, ty - ext.north
+        wn = math.hypot(wx, wy)
+        if wn <= 1e-9:
+            continue
+        dot = (vx * wx + vy * wy) / wn
+        if dot > best_dot:
+            best_dot = dot
+            best = (tx, ty)
+    return best
+
+
+def common_tangent(
+    c1: PosInEarthS,
+    r1: float,
+    s1: float,
+    c2: PosInEarthS,
+    r2: float,
+    s2: float,
+) -> tuple[tuple[float, float], tuple[float, float]] | None:
+    """求两圆相切公切线的两切点 (T1 on 圆1, T2 on 圆2)，按沿圆1转向 s1 离开后能前进到圆2来选唯一一条。
+
+    s1==s2(同向绕)→外公切线(法向同侧)；s1!=s2(反向，S 形)→内公切线(法向异侧)。
+    供相邻两段贴障弧用一条两端相切的直线衔接（无拐点）。一圆含于另一圆等无解时返回 None。
+    """
+    vx, vy = c2.east - c1.east, c2.north - c1.north
+    d = math.hypot(vx, vy)
+    if d < 1e-9:
+        return None
+    ux, uy = vx / d, vy / d
+    sign2 = 1.0 if s1 == s2 else -1.0  # 外切法向同侧、内切异侧
+    target = r1 - r2 if s1 == s2 else r1 + r2  # 法向在圆心连线上的投影
+    c = target / d
+    if abs(c) > 1.0:
+        return None
+    h = math.sqrt(max(0.0, 1.0 - c * c))
+    for hs in (h, -h):
+        # 单位法向 n = c·u + hs·u⊥（u⊥ = u 逆时针 90°）
+        nx = c * ux + hs * (-uy)
+        ny = c * uy + hs * ux
+        # 沿圆1转向 s1 在切点处的前进方向（切向）= 法向转 90°·s1
+        fx, fy = -ny * s1, nx * s1
+        t1x, t1y = c1.east + r1 * nx, c1.north + r1 * ny
+        t2x, t2y = c2.east + sign2 * r2 * nx, c2.north + sign2 * r2 * ny
+        # 取"从 T1 走向 T2 与前进方向同向"的那条
+        if (t2x - t1x) * fx + (t2y - t1y) * fy > 0.0:
+            return (t1x, t1y), (t2x, t2y)
+    return None
+
+
 def arc_radius(line: WayLineS) -> float:
     """从 start.pos 到 start.center 距离推导圆弧半径。注意：仅对 start.turnSign!=0 的圆弧段有意义。"""
     return math.hypot(

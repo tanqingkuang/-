@@ -33,11 +33,14 @@ def _route_lines(result: PlanResult):
 
 
 def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
+    # 贴障弧会让直线段端点(切点)正好落在膨胀边界(r+clearance)上——这是"贴着安全间距飞"的预期，
+    # 属于允许的边界相切。因此把判定半径收一个 epsilon：允许贴边界，但仍拦截真正穿入安全间距的点。
+    margin = max(0.0, clearance - 1e-6)
     for line in _route_lines(result):
         if line.start.turnSign == 0.0:
-            if blocked(obstacles, line.start.pos.east, line.start.pos.north, clearance):
+            if blocked(obstacles, line.start.pos.east, line.start.pos.north, margin):
                 return False
-            if blocked(obstacles, line.end.pos.east, line.end.pos.north, clearance):
+            if blocked(obstacles, line.end.pos.east, line.end.pos.north, margin):
                 return False
     return True
 

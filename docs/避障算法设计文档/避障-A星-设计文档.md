@@ -37,7 +37,7 @@ A\* 只负责"从障碍哪一边绕"（**拓扑**）；飞机本体约束由"膨
 
 > 图源：[避障-A星-数据流.drawio](./避障-A星-数据流.drawio)
 
-链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余 → 可飞性校验 → points_to_route（只摆点）→ assign_transition_radius（补交接半径）→ list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
+链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余（带 cause 标签）→ 可飞性校验 → points_to_route（只摆点）→ bake_obstacle_hug_arcs（贴障弧，仅 allow_arc）→ assign_transition_radius（补交接半径）→ bake_transition_arcs（拐点烘焙，仅 allow_arc）→ list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
 
 ---
 
@@ -131,7 +131,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 ```jsonc
 "avoidance": {
   "enabled": true,
-  "allow_arc": true,             // 航段自身是否可为曲线（贴障弧线段，预留）；不影响拐点交接圆弧（见 §4.3）
+  "allow_arc": true,             // 航段自身是否可为曲线（贴障弧线段，见 §4.4）；不影响拐点交接圆弧（见 §4.3）
   "turn_radius_m": 200.0,        // R，人工配置（见 3.1）
   "leg_length_margin_m": 80.0,   // L，拐点间最短直线余度
   "clearance_m": 120.0,          // 障碍膨胀安全距离
@@ -158,8 +158,8 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 - 顶层 `enabled=false` 或 `obstacles` 为空 → 完全跳过避障，等价于现状。
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。JSON 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
 - 长机原航线取自 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
-- `allow_arc`（默认 `true`）：航段自身是否可为曲线（贴障弧线段）的预留开关，**不影响**直线-直线拐点的交接圆弧（后者由补充函数无条件按 R 补），见 §4.3。
-- `simplify_clearance_m`（缺省等于 `clearance_m`）：只影响 A* 输出后的 `simplify_path` 视线拉直。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
+- `allow_arc`（默认 `true`）：航段自身是否可为曲线。`true` 时启用贴障弧（§4.4）——绕障被折叠成沿膨胀圆的大弧；**不影响**直线-直线拐点的交接圆弧（后者由补充函数无条件按 R 补），见 §4.3。
+- `simplify_clearance_m`（缺省等于 `clearance_m`）：影响 A* 输出后的 `simplify_path` 视线拉直，**也是贴障弧的贴行半径**（膨胀半径 = `r_obs + simplify_clearance_m`，见 §4.4）。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
 - `turn_switch_penalty_m`（默认 `0.0`）：A* 搜索中每次 8 邻域方向切换的固定等效米代价，用于减少方向频繁切换导致的小直线段。
 - `turn_angle_weight_m`（默认 `0.0`）：A* 搜索中每 45° 航迹角变化的线性等效米代价，用于抑制少数过硬的大角度换向。两个航迹角惩罚都为 0 时，代码走旧 A* 分支，路径逐点兼容。
 
@@ -180,11 +180,27 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 
 **补充函数的航段关系判定**：内部拐点 `i`，若入段 `(i-1→i)` 与出段 `(i→i+1)` 都是直线（其起点 `turnSign==0`）→ `r=R`；任一邻段为曲线（`turnSign≠0`，如将来的贴障弧线段）→ `r=0`，交接交给曲线自身；首末点不补。
 
-**现状**：当前 A\* / 去冗余只产出直线折线，尚无"贴障弧线段"产生者，故 `allow_arc` 暂无实际效果（两种取值输出一致），它是为将来贴障曲率预留的开关。无论取值，`check_feasibility`（§3.2、§7.2）始终按真实 R 校验，先校验后补 R——直线段本就是该圆弧的外切线、半径即配置值，校验既过，补 R 必不触障。
+**现状**：`allow_arc=true` 时由 `bake_obstacle_hug_arcs()`（见 §4.4）产出"贴障弧线段"——这是"航段自身曲率"的实际产生者，两种取值不再一致。补充函数 `assign_transition_radius()` 已预留协作：贴障弧两端是 `turnSign≠0` 的曲线段，相邻拐点据此自动设 `r=0`，把交接交给弧自身。无论取值，`check_feasibility`（§3.2、§7.2）始终按真实 R 校验。
 
 **作用域仅避障输出**：`allow_arc` 与补充函数都只作用于避障航线；长机配置航线的逐点 `R` 由用户在 `route.waypoints[*].R` 显式给定，经 `sim_control._build_leader_route(insert_arcs=...)` 各自管理，不走补充函数。
 
-> 实现：`points_to_route(...)` 只摆点（`r` 一律 0），随后 `assign_transition_radius(route, turn_radius_m)` 按航段关系补 R；`plan_avoidance_route(..., allow_arc=...)` 透传该开关（当前不影响交接圆弧）。
+> 实现：`points_to_route(...)` 只摆点（`r` 一律 0）；`allow_arc=true` 时先 `bake_obstacle_hug_arcs()` 折叠贴障大弧，再 `assign_transition_radius(route, turn_radius_m)` 给剩余直线-直线拐点补 R，最后 `bake_transition_arcs()` 烘焙这些拐点；`allow_arc=false` 时只补 R、不烘焙。
+
+### 4.4 贴障弧（`bake_obstacle_hug_arcs`，沿障碍膨胀圆走一段大弧）
+
+**问题**：§3.1 的 R 是飞机**最小**转弯半径。当 `R < 障碍膨胀半径 = r_obs + 拉直安全间距` 时，绕障路径本应贴着膨胀圆（半径 = 膨胀半径）走一段干净大弧，但若对去冗余折线每个拐点都按固定 R 倒角，会把这段路切成"弧（R）—直—弧—直"的碎段（R 比路径该有的曲率更弯）。
+
+**做法**（仅 `allow_arc=true`，放在 `assign_transition_radius` 之前）：识别"连续贴同一圆同一侧"的拐点串，整串折叠成**一段真圆弧航段**——`turnSign≠0`、`center=障碍中心`、半径=膨胀半径（即 `r_obs + simplify_clearance_m`，UI 的"拉直安全间距"）。R 退化为可行性约束：仅当`膨胀半径 ≥ R`时才贴，否则保留固定 R 倒角。
+
+**贴障串识别**（方案 B，记账而非距离反推）：`simplify_path_with_causes()` 在视线拉直时，对每个保留拐点记录"被哪个障碍逼停"的 `cause` 标签（`line_of_sight_clear` 内部本就知道命中的障碍）。极大串 = 连续 `cause` 同一圆 + 沿圆心极角单调同向（转向一致）+ 串长 ≥ 2（单顶点擦边交给固定 R 倒角）。
+
+**几何**（`arc_path.py`）：
+- 自由点 → 圆：`tangent_point()` 在两切点中取"切线方向与该弧转向切向一致"的那个；
+- 相邻两段贴障弧之间：`common_tangent()` 求两圆公切线（同向 sweep→外公切线、反向→内公切线，按转向选唯一一条），**两端相切、无拐点衔接**。
+
+**安全与退化**：每段弧采样 + 每条衔接直线都按**真实障碍**（`clearance=0`）触障复核。优先走"相邻段公切线"方案（要求整体可飞，否则放弃）；不可飞时退化为"各圆独立、逐段折叠"（失败的段保留原顶点），恒返回一条可飞航线。仅圆形障碍走贴障弧；矩形维持固定 R 倒角。
+
+> 已知边界（留待后续）：可飞性校验仍跑在贴障折叠**之前**（校的是固定 R 中间态），故"固定 R 判腿太短、但贴障弧本可救活"的解会被先拒；相邻贴障弧公切线为局部几何精修，拓扑仍由 A* 决定。
 
 ---
 
@@ -198,7 +214,7 @@ src/algorithm/units/process/tra_plan/
 └── avoidance/
     ├── obstacle.py                # ObstacleS + 唯一形状基元 inside() / blocked()（圆 / 矩形）
     ├── astar.py                   # 栅格化 + A* 内核 plan_path()，格子判定调 inside()
-    ├── path_to_route.py           # line_of_sight_clear + simplify_path + points_to_route（只摆点）+ assign_transition_radius（补交接半径）
+    ├── path_to_route.py           # line_of_sight_clear + simplify_path(_with_causes) + points_to_route（只摆点）+ assign_transition_radius（补交接半径）+ bake_obstacle_hug_arcs（贴障弧，§4.4）
     ├── feasibility.py             # check_feasibility（腿长 + 圆弧采样逐点调 inside()）
     └── planner.py                 # plan_avoidance_route：逐腿编排上面四步，产出 PlanResult
 ```
@@ -217,7 +233,7 @@ def plan_avoidance_route(
 ) -> PlanResult
 ```
 
-**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path`，再拼接（丢掉相邻腿重合的衔接点）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route()` 摆点（`r=0`）、`assign_transition_radius()` 给直线-直线拐点补交接半径 R（见 §4.3）。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`，保证旧调用方不传新参数时仍使用原来的去冗余安全距离。
+**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path_with_causes`（带 cause 标签，供贴障弧识别），再拼接（丢掉相邻腿重合的衔接点，cause 随点一并拼接/去重）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route()` 摆点（`r=0`）。`allow_arc=true` 时依次 `bake_obstacle_hug_arcs()`（折叠贴障大弧，见 §4.4）→ `assign_transition_radius()`（给剩余直线-直线拐点补 R，见 §4.3）→ `bake_transition_arcs()`（烘焙拐点圆弧）；`allow_arc=false` 时只补 R、不烘焙。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`。
 
 ```python
 @dataclass

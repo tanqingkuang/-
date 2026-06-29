@@ -11,12 +11,13 @@
 
 from __future__ import annotations
 
-from math import ceil, hypot
+from dataclasses import replace
+from math import atan2, ceil, cos, hypot, sin
 
-from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
-from src.algorithm.units.algo.arc_path import corner_arc
+from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS
+from src.algorithm.units.algo.arc_path import arc_swept_rad, common_tangent, corner_arc, tangent_point
 
-from .obstacle import ObstacleS, blocked, obstacle_bounds
+from .obstacle import ObstacleS, blocked, inside, obstacle_bounds
 
 Point = tuple[float, float]
 
@@ -36,19 +37,22 @@ def _default_sample_step(obstacles: list[ObstacleS], clearance: float) -> float:
     return max(0.5, smallest / 4.0)
 
 
-def line_of_sight_clear(
+def _first_blocker(
     start: Point,
     end: Point,
     obstacles: list[ObstacleS],
     *,
     clearance: float = 0.0,
     sample_step: float | None = None,
-) -> bool:
-    """线段 start→end 是否全程在（膨胀后的）障碍之外。注意：按 sample_step 密集采样逐点判定。"""
+) -> ObstacleS | None:
+    """线段 start→end 沿密采样首个命中（膨胀 clearance 后）的障碍；全程在外返回 None。
+
+    返回的障碍即"逼停这条腿的那个"，供 simplify_path_with_causes 标记拐点来源。
+    """
     if sample_step is not None and sample_step <= 0.0:
         raise ValueError("sample_step must be > 0")
     if not obstacles:
-        return True
+        return None
     if sample_step is None:
         sample_step = _default_sample_step(obstacles, clearance)
     length = hypot(end[0] - start[0], end[1] - start[1])
@@ -58,9 +62,55 @@ def line_of_sight_clear(
         t = k / steps
         east = start[0] + (end[0] - start[0]) * t
         north = start[1] + (end[1] - start[1]) * t
-        if blocked(obstacles, east, north, clearance):
-            return False
-    return True
+        for obstacle in obstacles:
+            if inside(obstacle, east, north, clearance):
+                return obstacle
+    return None
+
+
+def line_of_sight_clear(
+    start: Point,
+    end: Point,
+    obstacles: list[ObstacleS],
+    *,
+    clearance: float = 0.0,
+    sample_step: float | None = None,
+) -> bool:
+    """线段 start→end 是否全程在（膨胀后的）障碍之外。注意：按 sample_step 密集采样逐点判定。"""
+    return _first_blocker(start, end, obstacles, clearance=clearance, sample_step=sample_step) is None
+
+
+def simplify_path_with_causes(
+    points: list[Point],
+    obstacles: list[ObstacleS],
+    *,
+    clearance: float = 0.0,
+    sample_step: float | None = None,
+) -> tuple[list[Point], list[ObstacleS | None]]:
+    """同 simplify_path，并额外返回每个保留拐点"被哪个障碍逼出"的来源标签 cause（与返回点等长）。
+
+    cause[i]=障碍：拉直 anchor→i+1 被该障碍挡住、从而把 i 留作拐点；首末点与无障碍点为 None。
+    供贴障弧识别：连续 cause 同一圆即"正在绕该圆"，无需用到圆心距离容差。
+    """
+    if len(points) <= 2:
+        return list(points), [None] * len(points)
+    if sample_step is None:
+        sample_step = _default_sample_step(obstacles, clearance)
+    result: list[Point] = [points[0]]
+    causes: list[ObstacleS | None] = [None]
+    anchor = 0
+    for i in range(1, len(points) - 1):
+        # 锚点若看不到下一点，则当前点 i 是必须保留的转折；否则可跳过 i 继续拉直。
+        blocker = _first_blocker(
+            points[anchor], points[i + 1], obstacles, clearance=clearance, sample_step=sample_step
+        )
+        if blocker is not None:
+            result.append(points[i])
+            causes.append(blocker)
+            anchor = i
+    result.append(points[-1])
+    causes.append(None)
+    return result, causes
 
 
 def simplify_path(
@@ -74,21 +124,10 @@ def simplify_path(
 
     保留首点，从锚点尽量往前看；锚点看不到下一点时，当前点成为必须保留的拐点；末点恒保留。
     """
-    if len(points) <= 2:
-        return list(points)
-    if sample_step is None:
-        sample_step = _default_sample_step(obstacles, clearance)
-    result: list[Point] = [points[0]]
-    anchor = 0
-    for i in range(1, len(points) - 1):
-        # 锚点若看不到下一点，则当前点 i 是必须保留的转折；否则可跳过 i 继续拉直。
-        if not line_of_sight_clear(
-            points[anchor], points[i + 1], obstacles, clearance=clearance, sample_step=sample_step
-        ):
-            result.append(points[i])
-            anchor = i
-    result.append(points[-1])
-    return result
+    points_only, _ = simplify_path_with_causes(
+        points, obstacles, clearance=clearance, sample_step=sample_step
+    )
+    return points_only
 
 
 def points_to_route(
@@ -168,3 +207,246 @@ def bake_transition_arcs(route: list[WayPointInputS]) -> list[WayPointInputS]:
                 WayPointInputS(idx=len(out), pos=wpi.pos, vdCmd=wpi.vdCmd, r=wpi.r, turnSign=wpi.turnSign, center=wpi.center)
             )
     return out
+
+
+def _hug_run(
+    route: list[WayPointInputS],
+    causes: list[ObstacleS | None],
+    k: int,
+    *,
+    turn_radius_m: float,
+    hug_clearance: float,
+) -> tuple[int, int, ObstacleS, float] | None:
+    """从 k 起找"连续贴同一圆同一侧"的极大顶点串；返回 (i0, j0, obstacle, turn_sign) 或 None。
+
+    条件：k 为内部点、cause 为圆形障碍、膨胀半径≥R（贴得住）；沿圆心极角单调同向推进。
+    串长须≥2（单顶点擦边交给固定 R 倒角），turn_sign 由角度推进方向给出。
+    """
+    n = len(route)
+    if not (1 <= k <= n - 2):
+        return None
+    obstacle = causes[k]
+    if obstacle is None or obstacle.kind != "circle":
+        return None
+    radius = obstacle.radius + hug_clearance
+    if radius + 1e-9 < turn_radius_m:  # 膨胀圆比最小转弯半径还紧，贴不住，退回固定 R
+        return None
+    center = obstacle.center
+
+    def ang(idx: int) -> float:
+        return atan2(route[idx].pos.north - center.north, route[idx].pos.east - center.east)
+
+    j = k
+    sign = 0.0
+    while j < n - 2 and causes[j + 1] is not None and causes[j + 1].id == obstacle.id:
+        delta = atan2(sin(ang(j + 1) - ang(j)), cos(ang(j + 1) - ang(j)))  # wrap 到 (-pi,pi]
+        if abs(delta) < 1e-9:  # 退化重合，停止
+            break
+        step_sign = 1.0 if delta > 0.0 else -1.0
+        if sign == 0.0:
+            sign = step_sign
+        elif step_sign != sign:  # 转向反号：贴一下→绕回，断成两段
+            break
+        j += 1
+    if j == k:  # 只有单个顶点，不合弧
+        return None
+    return k, j, obstacle, sign
+
+
+def _sample_hug_arc(
+    t1: PosInEarthS,
+    t2: PosInEarthS,
+    center: PosInEarthS,
+    turn_sign: float,
+    radius: float,
+    step: float,
+) -> list[Point]:
+    """采样贴障弧 T1→T2 上的点（含两端），用于触障复核。复用 arc_swept_rad 求扫掠角后按弧长密采。"""
+    line = WayLineS(
+        start=WayPointS(
+            pos=PosInEarthS(t1.east, t1.north, 0.0),
+            turnSign=turn_sign,
+            center=PosInEarthS(center.east, center.north, 0.0),
+        ),
+        end=WayPointS(pos=PosInEarthS(t2.east, t2.north, 0.0)),
+    )
+    swept = arc_swept_rad(line)
+    segments = max(1, ceil(radius * abs(swept) / step))
+    a_start = atan2(t1.north - center.north, t1.east - center.east)
+    points: list[Point] = []
+    for m in range(segments + 1):
+        angle = a_start + swept * (m / segments)
+        points.append((center.east + radius * cos(angle), center.north + radius * sin(angle)))
+    return points
+
+
+def _arc_clear(
+    t1: PosInEarthS,
+    t2: PosInEarthS,
+    center: PosInEarthS,
+    turn_sign: float,
+    radius: float,
+    obstacles: list[ObstacleS],
+    sample_step: float,
+) -> bool:
+    """贴障弧采样点对真实障碍(clearance=0)的触障复核。贴的那个圆因半径=r+间距，自身不会误命中。"""
+    for east, north in _sample_hug_arc(t1, t2, center, turn_sign, radius, sample_step):
+        if blocked(obstacles, east, north, 0.0):
+            return False
+    return True
+
+
+def _collect_hug_runs(
+    route: list[WayPointInputS],
+    causes: list[ObstacleS | None],
+    *,
+    turn_radius_m: float,
+    hug_clearance: float,
+) -> list[tuple[int, int, ObstacleS, float]]:
+    """从左到右收集所有"连续贴同一圆同一侧"的极大顶点串(互不重叠)。"""
+    runs: list[tuple[int, int, ObstacleS, float]] = []
+    n = len(route)
+    k = 0
+    while k < n:
+        run = _hug_run(route, causes, k, turn_radius_m=turn_radius_m, hug_clearance=hug_clearance)
+        if run is not None:
+            runs.append(run)
+            k = run[1] + 1
+        else:
+            k += 1
+    return runs
+
+
+def _hug_endpoints(
+    route: list[WayPointInputS],
+    runs: list[tuple[int, int, ObstacleS, float]],
+    hug_clearance: float,
+    *,
+    use_common_tangent: bool,
+) -> list[tuple[PosInEarthS | None, PosInEarthS | None]]:
+    """为每段贴障弧算入/出切点。相邻两段(同串无自由顶点间隔)用两圆公切线衔接，否则对相邻自由点作点-圆切线。
+
+    use_common_tangent=False 时退化为全部按点-圆切线(各圆独立，不做公切线)。
+    任一切点求解失败置 None，交由调用方决定跳过或整体回退。
+    """
+    m_count = len(runs)
+    endpoints: list[tuple[PosInEarthS | None, PosInEarthS | None]] = []
+    for m in range(m_count):
+        i0, j0, obstacle, sign = runs[m]
+        center, radius = obstacle.center, obstacle.radius + hug_clearance
+        left_adj = use_common_tangent and m > 0 and runs[m - 1][1] + 1 == i0
+        right_adj = use_common_tangent and m < m_count - 1 and j0 + 1 == runs[m + 1][0]
+        if left_adj:
+            p_obs, p_sign = runs[m - 1][2], runs[m - 1][3]
+            ct = common_tangent(p_obs.center, p_obs.radius + hug_clearance, p_sign, center, radius, sign)
+            t_in = PosInEarthS(ct[1][0], ct[1][1], route[i0].pos.h) if ct else None
+        else:
+            tp = tangent_point(route[i0 - 1].pos, center, radius, sign, leaving=False)
+            t_in = PosInEarthS(tp[0], tp[1], route[i0].pos.h) if tp else None
+        if right_adj:
+            n_obs, n_sign = runs[m + 1][2], runs[m + 1][3]
+            ct = common_tangent(center, radius, sign, n_obs.center, n_obs.radius + hug_clearance, n_sign)
+            t_out = PosInEarthS(ct[0][0], ct[0][1], route[j0].pos.h) if ct else None
+        else:
+            tp = tangent_point(route[j0 + 1].pos, center, radius, sign, leaving=True)
+            t_out = PosInEarthS(tp[0], tp[1], route[j0].pos.h) if tp else None
+        endpoints.append((t_in, t_out))
+    return endpoints
+
+
+def _assemble_hug_arcs(
+    route: list[WayPointInputS],
+    runs: list[tuple[int, int, ObstacleS, float]],
+    obstacles: list[ObstacleS],
+    *,
+    hug_clearance: float,
+    sample_step: float,
+    use_common_tangent: bool,
+) -> list[WayPointInputS] | None:
+    """按 runs 折叠贴障弧并组装新航点序列。每段弧+其衔接直线做真实障碍触障复核。
+
+    use_common_tangent=True：相邻段用公切线，要求所有段都通过校验，否则返回 None(让上层退化重试)；
+    use_common_tangent=False：各圆独立，逐段校验，失败的段保留原顶点(部分折叠)，恒返回一条航线。
+    """
+    n = len(route)
+    endpoints = _hug_endpoints(route, runs, hug_clearance, use_common_tangent=use_common_tangent)
+    collapse = [False] * len(runs)
+    for m in range(len(runs)):
+        i0, j0, obstacle, sign = runs[m]
+        t_in, t_out = endpoints[m]
+        if t_in is None or t_out is None:
+            if use_common_tangent:
+                return None
+            continue
+        center, radius = obstacle.center, obstacle.radius + hug_clearance
+        # 入弧直线起点：左邻为相邻段则取其出切点(公切线另一端)，否则取相邻自由点。
+        left_adj = use_common_tangent and m > 0 and runs[m - 1][1] + 1 == i0
+        right_adj = use_common_tangent and m < len(runs) - 1 and j0 + 1 == runs[m + 1][0]
+        src = endpoints[m - 1][1] if left_adj else route[i0 - 1].pos
+        ok = (
+            src is not None
+            and _arc_clear(t_in, t_out, center, sign, radius, obstacles, sample_step)
+            and _first_blocker((src.east, src.north), (t_in.east, t_in.north), obstacles, sample_step=sample_step) is None
+        )
+        # 出弧直线仅在"自由尾"时校验(相邻段那条衔接线由下一段的入弧直线负责)。
+        if ok and not right_adj:
+            tail = route[j0 + 1].pos
+            ok = _first_blocker((t_out.east, t_out.north), (tail.east, tail.north), obstacles, sample_step=sample_step) is None
+        if not ok:
+            if use_common_tangent:
+                return None
+            continue
+        collapse[m] = True
+
+    start_to_run = {runs[m][0]: m for m in range(len(runs))}
+    out: list[WayPointInputS] = []
+    k = 0
+    while k < n:
+        m = start_to_run.get(k, -1)
+        if m >= 0 and collapse[m]:
+            i0, j0, obstacle, sign = runs[m]
+            t_in, t_out = endpoints[m]
+            arc_center = PosInEarthS(obstacle.center.east, obstacle.center.north, route[i0].pos.h)
+            out.append(WayPointInputS(idx=len(out), pos=t_in, vdCmd=route[i0 - 1].vdCmd, turnSign=sign, center=arc_center))
+            out.append(WayPointInputS(idx=len(out), pos=t_out, vdCmd=route[j0].vdCmd))
+            k = j0 + 1
+        else:
+            out.append(replace(route[k], idx=len(out)))
+            k += 1
+    return out
+
+
+def bake_obstacle_hug_arcs(
+    route: list[WayPointInputS],
+    causes: list[ObstacleS | None],
+    obstacles: list[ObstacleS],
+    *,
+    turn_radius_m: float,
+    hug_clearance: float,
+    sample_step: float | None = None,
+) -> list[WayPointInputS]:
+    """把"连续贴同一圆同一侧"的拐点串折叠成一段真圆弧航段(turnSign!=0、圆心=障碍中心、半径=膨胀半径)。
+
+    解决"最小转弯半径 R < 障碍膨胀半径"时，贴障路径被一串固定 R 小圆弧切碎的问题：
+    既然 R 只是最小转弯半径，飞机可沿更大的膨胀圆贴飞，整段绕障归一为一条干净大弧。
+    仅圆形障碍；膨胀半径<R 时贴不住，跳过。生成弧与衔接直线做真实障碍触障复核。
+    相邻两段贴障弧之间优先用两圆公切线衔接(无拐点)；公切线方案整体不可飞时退化为各圆独立的部分折叠。
+    供 allow_arc=True 在 assign_transition_radius 之前调用：弧两端 turnSign!=0，相邻交接半径会被自动清零。
+    """
+    n = len(route)
+    if n < 3 or len(causes) != n:
+        return route
+    if sample_step is None:
+        sample_step = _default_sample_step(obstacles, 0.0)
+    runs = _collect_hug_runs(route, causes, turn_radius_m=turn_radius_m, hug_clearance=hug_clearance)
+    if not runs:
+        return route
+    smooth = _assemble_hug_arcs(
+        route, runs, obstacles, hug_clearance=hug_clearance, sample_step=sample_step, use_common_tangent=True
+    )
+    if smooth is not None:
+        return smooth
+    # 公切线方案整体不可飞：退化为各圆独立、逐段折叠（恒返回一条航线）。
+    return _assemble_hug_arcs(
+        route, runs, obstacles, hug_clearance=hug_clearance, sample_step=sample_step, use_common_tangent=False
+    )
