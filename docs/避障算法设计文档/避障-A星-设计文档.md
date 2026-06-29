@@ -37,7 +37,7 @@ A\* 只负责"从障碍哪一边绕"（**拓扑**）；飞机本体约束由"膨
 
 > 图源：[避障-A星-数据流.drawio](./避障-A星-数据流.drawio)
 
-链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余（带 cause 标签）→ 可飞性校验 → points_to_route（只摆点）→ bake_obstacle_hug_arcs（贴障弧，仅 allow_arc）→ assign_transition_radius（补交接半径）→ bake_transition_arcs（拐点烘焙，仅 allow_arc）→ list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。
+链路：`原航线航点 → 逐腿 A*（栅格折线）→ 视线去冗余（带 cause 标签）→ points_to_route（只摆点）→ bake_obstacle_hug_arcs（贴障弧，仅 allow_arc）→ 可飞性校验（check_route_feasibility，校折叠后航线）→ assign_transition_radius（补交接半径）→ bake_transition_arcs（拐点烘焙，仅 allow_arc）→ list[WayPointInputS]`。只要出口产出合法 `list[WayPointInputS]`，**下游链路（`waypoint_inputs_to_waylines → LeaderRoute` 选段 → 位置跟踪环 → 三自由度模型、僚机编队、俯视图）全部零改动**。注意：可飞性校验已**后置到贴障折叠之后**（见 §4.4），校的是真正要飞的航线。
 
 ---
 
@@ -180,7 +180,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 
 **补充函数的航段关系判定**：内部拐点 `i`，若入段 `(i-1→i)` 与出段 `(i→i+1)` 都是直线（其起点 `turnSign==0`）→ `r=R`；任一邻段为曲线（`turnSign≠0`，如将来的贴障弧线段）→ `r=0`，交接交给曲线自身；首末点不补。
 
-**现状**：`allow_arc=true` 时由 `bake_obstacle_hug_arcs()`（见 §4.4）产出"贴障弧线段"——这是"航段自身曲率"的实际产生者，两种取值不再一致。补充函数 `assign_transition_radius()` 已预留协作：贴障弧两端是 `turnSign≠0` 的曲线段，相邻拐点据此自动设 `r=0`，把交接交给弧自身。无论取值，`check_feasibility`（§3.2、§7.2）始终按真实 R 校验。
+**现状**：`allow_arc=true` 时由 `bake_obstacle_hug_arcs()`（见 §4.4）产出"贴障弧线段"——这是"航段自身曲率"的实际产生者，两种取值不再一致。补充函数 `assign_transition_radius()` 已预留协作：贴障弧两端是 `turnSign≠0` 的曲线段，相邻拐点据此自动设 `r=0`，把交接交给弧自身。无论取值，可飞性校验（`check_route_feasibility`，§4.4）始终按真实 R 校验折叠后航线。
 
 **作用域仅避障输出**：`allow_arc` 与补充函数都只作用于避障航线；长机配置航线的逐点 `R` 由用户在 `route.waypoints[*].R` 显式给定，经 `sim_control._build_leader_route(insert_arcs=...)` 各自管理，不走补充函数。
 
@@ -200,7 +200,12 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 
 **安全与退化**：每段弧采样 + 每条衔接直线都按**真实障碍**（`clearance=0`）触障复核。优先走"相邻段公切线"方案（要求整体可飞，否则放弃）；不可飞时退化为"各圆独立、逐段折叠"（失败的段保留原顶点），恒返回一条可飞航线。仅圆形障碍走贴障弧；矩形维持固定 R 倒角。
 
-> 已知边界（留待后续）：可飞性校验仍跑在贴障折叠**之前**（校的是固定 R 中间态），故"固定 R 判腿太短、但贴障弧本可救活"的解会被先拒；相邻贴障弧公切线为局部几何精修，拓扑仍由 A* 决定。
+**可飞性校验已后置（已落地）**：`check_route_feasibility` 校的是**贴障折叠之后**真正要飞的航线，而非"固定 R 倒角"的中间态。做法：在贴障弧处把航线切成若干**直线骨架子折线**，每段照旧 `check_feasibility`（固定 R 校转角/腿长/触障），贴障弧段另做触障复核。于是被贴障弧合并掉的拐点**不再受固定 R 腿长约束**，"R>膨胀半径致固定 R 判腿太短、但贴障弧本可救活"的解不再被误杀（回归测试 `test_hug_arc_rescues_fixed_radius_leg_too_short`）。无贴障弧时（如 `allow_arc=false`）退化为对整条折线跑一次，与旧行为一致。
+
+**已知遗留 / TODO**：
+
+1. **可选简化——角点大 r 倒角表示**：贴障大弧在几何上等价于"其两条切线、用膨胀半径做的固定倒角"，故可不造独立曲线段，而是在两切线交点放一个航点、`r=膨胀半径`，复用 `assign_transition_radius`/`bake`/长机平滑——可进一步消除 `allow_arc` 分叉、统一表示。**代价**：角点倒角扫掠角 <180°，故"绕障超过半圈（扫掠 >180°）"无法用单个倒角表示，仍需保留当前显式弧段（现状显式弧段已支持 >180°，实测可生成 ~204° 单段弧）。概率低，留待评估。
+2. **圆-圆公切线**：仅"两障碍近到被连续贴、中间无自由顶点"时触发，属窄场景；运行上**可通过扩大避障区域规避**，不依赖算法硬解。当前已实现公切线衔接作为兜底。
 
 ---
 
@@ -215,7 +220,7 @@ src/algorithm/units/process/tra_plan/
     ├── obstacle.py                # ObstacleS + 唯一形状基元 inside() / blocked()（圆 / 矩形）
     ├── astar.py                   # 栅格化 + A* 内核 plan_path()，格子判定调 inside()
     ├── path_to_route.py           # line_of_sight_clear + simplify_path(_with_causes) + points_to_route（只摆点）+ assign_transition_radius（补交接半径）+ bake_obstacle_hug_arcs（贴障弧，§4.4）
-    ├── feasibility.py             # check_feasibility（腿长 + 圆弧采样逐点调 inside()）
+    ├── feasibility.py             # check_feasibility（折线+固定R：腿长+圆弧采样）+ check_route_feasibility（折叠后航线：拆直线骨架逐段校 + 贴障弧触障）
     └── planner.py                 # plan_avoidance_route：逐腿编排上面四步，产出 PlanResult
 ```
 
@@ -233,7 +238,7 @@ def plan_avoidance_route(
 ) -> PlanResult
 ```
 
-**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path_with_causes`（带 cause 标签，供贴障弧识别），再拼接（丢掉相邻腿重合的衔接点，cause 随点一并拼接/去重）、去重，整体做一次 `check_feasibility`（始终按真实 R），最后 `points_to_route()` 摆点（`r=0`）。`allow_arc=true` 时依次 `bake_obstacle_hug_arcs()`（折叠贴障大弧，见 §4.4）→ `assign_transition_radius()`（给剩余直线-直线拐点补 R，见 §4.3）→ `bake_transition_arcs()`（烘焙拐点圆弧）；`allow_arc=false` 时只补 R、不烘焙。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`。
+**逐腿规划**保形：对原航线每条腿 `waypoints[i]→[i+1]` 独立跑 `plan_path → simplify_path_with_causes`（带 cause 标签，供贴障弧识别），再拼接（丢掉相邻腿重合的衔接点，cause 随点一并拼接/去重）、去重，`points_to_route()` 摆点（`r=0`）。`allow_arc=true` 时先 `bake_obstacle_hug_arcs()` 折叠贴障大弧（见 §4.4）。随后对**折叠后的航线**做 `check_route_feasibility()`（始终按真实 R；被贴障弧合并的拐点不再受固定 R 腿长约束），通过后 `assign_transition_radius()`（给剩余直线-直线拐点补 R，见 §4.3）、`allow_arc=true` 再 `bake_transition_arcs()` 烘焙拐点圆弧；`allow_arc=false` 时只补 R、不烘焙。高度按水平里程在腿两端间线性插值。`simplify_clearance_m=None` 时回退到 `clearance_m`。
 
 ```python
 @dataclass

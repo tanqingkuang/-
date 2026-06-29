@@ -16,7 +16,7 @@ from math import hypot
 from src.algorithm.context.leaf_types import WayPointInputS
 
 from .astar import plan_path
-from .feasibility import FeasibilityResult, check_feasibility
+from .feasibility import FeasibilityResult, check_route_feasibility
 from .obstacle import ObstacleS, blocked
 from .path_to_route import (
     assign_transition_radius,
@@ -143,8 +143,17 @@ def plan_avoidance_route(
     if len(full_xy) < 2:
         return PlanResult(ok=False, code=ERR_NO_PATH, detail="规划结果退化为单点")
 
-    feasibility = check_feasibility(
-        full_xy, obstacles,
+    # 先摆点、折叠贴障弧，再对"折叠后真正要飞的航线"做可飞性校验：
+    # allow_arc=True 时把"连续贴同一圆"的拐点串折叠成一段沿膨胀圆的大弧(turnSign!=0)，避免 R<膨胀半径
+    # 时被一串固定 R 小弧切碎；这些被合并的拐点不再受固定 R 腿长约束（校验后置的关键意义）。
+    route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)
+    if allow_arc:
+        route = bake_obstacle_hug_arcs(
+            route, full_causes, obstacles,
+            turn_radius_m=turn_radius_m, hug_clearance=simplify_clearance_m, sample_step=sample_step,
+        )
+    feasibility = check_route_feasibility(
+        route, obstacles,
         turn_radius_m=turn_radius_m, leg_margin_m=leg_margin_m,
         arc_clearance=arc_clearance, sample_step=sample_step, max_turn_deg=max_turn_deg,
     )
@@ -154,15 +163,8 @@ def plan_avoidance_route(
             obstacle_id=feasibility.obstacle_id, simplified_points=full_xy, feasibility=feasibility,
         )
 
-    # 可飞性校验通过后，再补交接半径：直线段是圆弧的外切线、R 即配置值，此处补 R 必不触障。
-    route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)
-    # allow_arc=True：先把"连续贴同一圆"的拐点串折叠成一段沿膨胀圆的大弧(turnSign!=0)，
-    # 避免 R<膨胀半径时被一串固定 R 小弧切碎；放在补交接半径之前，弧两端相邻的 r 会被自动清零。
-    if allow_arc:
-        route = bake_obstacle_hug_arcs(
-            route, full_causes, obstacles,
-            turn_radius_m=turn_radius_m, hug_clearance=simplify_clearance_m, sample_step=sample_step,
-        )
+    # 校验通过后补交接半径：直线段是圆弧的外切线、R 即配置值，此处补 R 必不触障。
+    # 弧两端相邻拐点的 r 会被 assign_transition_radius 自动清零（交接交给弧自身）。
     assign_transition_radius(route, turn_radius_m)
     # allow_arc=True：把剩余直线-直线拐点烘焙成圆弧航段(turnSign!=0)，航段本身即曲线，显示画弧；
     # allow_arc=False：保留直线骨架+交接半径 r(显示画尖角、飞行时长机按 r 平滑过弯)。

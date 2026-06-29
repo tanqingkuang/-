@@ -104,6 +104,26 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         self.assertTrue(any(line.start.turnSign != 0.0 for line in lines))
         self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
 
+    def test_hug_arc_rescues_fixed_radius_leg_too_short(self) -> None:
+        # #2：R 大于障碍膨胀半径会让"固定 R 倒角"判腿太短，但这些拐点会被贴障弧合并、不再受腿长约束。
+        # 可飞性后置（校折叠后航线）后，该场景应规划成功，并贴出 R=膨胀半径(=200+400=600) 的大弧。
+        obs = [make_circle("C1", 900.0, 0.0, 200.0), make_circle("C2", 1900.0, 1200.0, 200.0)]
+        params = dict(
+            turn_radius_m=400.0, leg_margin_m=10.0, clearance_m=400.0, simplify_clearance_m=400.0,
+            speed_mps=20.0, resolution_m=20.0, margin_m=300.0,
+        )
+        result = plan_avoidance_route(
+            [(300.0, -400.0, 1000.0), (2600.0, 1600.0, 1000.0)], obs, allow_arc=True, **params
+        )
+        self.assertTrue(result.ok, result.detail)
+        assert result.route is not None
+        from src.algorithm.units.algo.arc_path import arc_radius
+
+        arcs = [ln for ln in _route_lines(result) if ln.start.turnSign != 0.0]
+        self.assertTrue(arcs, "应折叠出贴障弧")
+        # 至少有一段弧的半径是障碍膨胀半径(600)，而不是最小转弯半径(400)。
+        self.assertTrue(any(abs(arc_radius(a) - 600.0) < 1.0 for a in arcs))
+
     def test_altitude_profile_preserved(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1400.0)]
         result = plan_avoidance_route(wps, [make_circle("C1", 900.0, 0.0, 180.0)], **COMMON)
