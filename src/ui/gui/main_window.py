@@ -1259,7 +1259,7 @@ class TopView(QGraphicsView):
         self.preview_route_polyline: list[tuple[float, float]] | None = None
         # 预览航线的航点黑点，独立于折线采样点，避免圆弧采样点被误画成航点。
         self.preview_route_markers: list[tuple[float, float]] | None = None
-        # 视图变换由 scale_value(缩放) 与 offset(平移) 两个量描述：屏幕 = 世界*scale + offset。
+        # 视图变换由 scale_value(缩放) 与 offset(世界原点屏幕位置) 描述：x 向右、north/y 向上。
         self.scale_value = 1.0
         self.offset = self._default_offset()
         self.auto_center = False
@@ -1349,17 +1349,14 @@ class TopView(QGraphicsView):
             return
         cursor = event.position()
         # 记录缩放前光标对应的世界坐标，作为缩放锚点。
-        before = QPointF(
-            (cursor.x() - self.offset.x()) / self.scale_value,
-            (cursor.y() - self.offset.y()) / self.scale_value,
-        )
+        before = self._viewport_to_world(cursor)
         # 指数因子使每格滚动产生固定比例缩放，手感线性；再夹到上下限。
         factor = math.pow(1.001, delta)
         self.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.scale_value * factor))
         # 反解 offset，使锚点世界坐标缩放后仍落在光标处（“以光标为中心缩放”）。
         self.offset = QPointF(
             cursor.x() - before.x() * self.scale_value,
-            cursor.y() - before.y() * self.scale_value,
+            cursor.y() + before.y() * self.scale_value,
         )
         self._manual_view = True
         self.viewport().update()
@@ -1426,9 +1423,9 @@ class TopView(QGraphicsView):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         # 先铺画布底色。
         painter.fillRect(self.rect(), self.theme.canvas)
-        # 把 offset/scale 装进画家变换：之后均按世界坐标绘制，线宽需除以 scale 保持视觉粗细。
+        # 把 offset/scale 装进画家变换：之后均按 ENU 世界坐标绘制，north/y 正方向显示在屏幕上方。
         painter.translate(self.offset)
-        painter.scale(self.scale_value, self.scale_value)
+        painter.scale(self.scale_value, -self.scale_value)
         if self.show_grid:
             self._draw_grid(painter)
         # 障碍画在网格之上、航线/节点之下，避免遮挡飞机与航线。
@@ -1451,8 +1448,23 @@ class TopView(QGraphicsView):
         """把视口坐标转换为世界坐标。注意：依赖当前缩放和平移状态。"""
         return QPointF(
             (point.x() - self.offset.x()) / self.scale_value,
-            (point.y() - self.offset.y()) / self.scale_value,
+            (self.offset.y() - point.y()) / self.scale_value,
         )
+
+    def _world_to_viewport(self, point: QPointF) -> QPointF:
+        """把世界坐标转换为视口坐标。注意：north/y 正方向映射到屏幕上方。"""
+        return QPointF(
+            point.x() * self.scale_value + self.offset.x(),
+            self.offset.y() - point.y() * self.scale_value,
+        )
+
+    def _draw_screen_text(self, painter: QPainter, x: float, y: float, dx: float, dy: float, text: str) -> None:
+        """按屏幕坐标绘制文本。注意：避免世界 y 轴翻转导致文字倒置。"""
+        screen = self._world_to_viewport(QPointF(x, y))
+        painter.save()
+        painter.resetTransform()
+        painter.drawText(QPointF(screen.x() + dx, screen.y() + dy), text)
+        painter.restore()
 
     def _zoom_to_selection(self) -> None:
         """执行 to selection 缩放。注意：保持选区或鼠标焦点附近的世界坐标稳定。"""
@@ -1483,7 +1495,7 @@ class TopView(QGraphicsView):
         center_y = (world_start.y() + world_end.y()) / 2.0
         self.offset = QPointF(
             viewport.width() / 2.0 - center_x * self.scale_value,
-            viewport.height() / 2.0 - center_y * self.scale_value,
+            viewport.height() / 2.0 + center_y * self.scale_value,
         )
         self._manual_view = True
         if self.auto_center:
@@ -1528,7 +1540,7 @@ class TopView(QGraphicsView):
         # 只平移不缩放：把质心移到视口正中。
         self.offset = QPointF(
             rect.width() / 2.0 - center_x * self.scale_value,
-            rect.height() / 2.0 - center_y * self.scale_value,
+            rect.height() / 2.0 + center_y * self.scale_value,
         )
         self.viewChanged.emit()
 
@@ -1561,7 +1573,7 @@ class TopView(QGraphicsView):
         center_y = (min_y + max_y) / 2.0
         self.offset = QPointF(
             rect.width() / 2.0 - center_x * self.scale_value,
-            rect.height() / 2.0 - center_y * self.scale_value,
+            rect.height() / 2.0 + center_y * self.scale_value,
         )
 
     def _route_and_node_bounds(self) -> tuple[float, float, float, float] | None:
@@ -1596,18 +1608,20 @@ class TopView(QGraphicsView):
 
     def _draw_grid(self, painter: QPainter) -> None:
         """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
-        # 反解视口四角对应的世界坐标范围（画家已应用 offset/scale）。
+        # 反解视口四角对应的世界坐标范围（画家已应用 offset/scale，north/y 向上）。
         rect = self.viewport().rect()
-        left = (rect.left() - self.offset.x()) / self.scale_value
-        right = (rect.right() - self.offset.x()) / self.scale_value
-        top = (rect.top() - self.offset.y()) / self.scale_value
-        bottom = (rect.bottom() - self.offset.y()) / self.scale_value
+        top_left = self._viewport_to_world(QPointF(rect.left(), rect.top()))
+        bottom_right = self._viewport_to_world(QPointF(rect.right(), rect.bottom()))
+        left = min(top_left.x(), bottom_right.x())
+        right = max(top_left.x(), bottom_right.x())
+        bottom = min(top_left.y(), bottom_right.y())
+        top = max(top_left.y(), bottom_right.y())
         spacing = self._grid_world_spacing()
         # 把可见范围对齐到网格间距的整数倍，确定起止网格线坐标。
         start_x = math.floor(left / spacing) * spacing
         end_x = math.ceil(right / spacing) * spacing
-        start_y = math.floor(top / spacing) * spacing
-        end_y = math.ceil(bottom / spacing) * spacing
+        start_y = math.floor(bottom / spacing) * spacing
+        end_y = math.ceil(top / spacing) * spacing
 
         # 线宽除以 scale，使网格线在任意缩放下都呈现 1px 视觉粗细。
         painter.setPen(QPen(self.theme.grid, 1.0 / self.scale_value))
@@ -1682,13 +1696,9 @@ class TopView(QGraphicsView):
                 self._stroke_obstacle_shape(painter, obstacle, 0.0)
             # 在障碍中心标注 id（标签不随缩放，保持屏幕尺寸）。
             center_x, center_y = self._obstacle_center(obstacle)
-            painter.save()
-            painter.translate(center_x, center_y)
-            painter.scale(1.0 / self.scale_value, 1.0 / self.scale_value)
             painter.setPen(QPen(self.theme.ink if obstacle.enabled else self.theme.muted, 1))
             text = obstacle.obstacle_id if obstacle.enabled else f"{obstacle.obstacle_id}（未勾选）"
-            painter.drawText(QPointF(-10.0, 4.0), text)
-            painter.restore()
+            self._draw_screen_text(painter, center_x, center_y, -10.0, 4.0, text)
 
     def _draw_preview_route(self, painter: QPainter) -> None:
         """绘制避障预览航线（绿色虚线折线）和航点黑点。注意：只做渲染，不修改仿真状态。"""
@@ -1780,7 +1790,7 @@ class TopView(QGraphicsView):
             painter.restore()
             # 在机体左上方标注节点 ID（标签不随机体旋转）。
             painter.setPen(QPen(self.theme.ink, 1))
-            painter.drawText(QPointF(node.x - 13, node.y - 18), node.node_id)
+            self._draw_screen_text(painter, node.x, node.y, -13.0, -18.0, node.node_id)
 
     def _draw_slot_targets(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制僚机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态。"""

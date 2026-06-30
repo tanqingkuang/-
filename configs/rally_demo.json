@@ -70,7 +70,7 @@
     {
       "node_id": "R02",
       "role": "rally_follower",
-      "rally_target": { "x_m": 4838.0, "y_m": 5174.0, "altitude_m": 500.0 },
+      "rally_target": { "x_m": 0.0, "y_m": 100.0, "altitude_m": 500.0 },
       "x_m": 3200.0,
       "y_m": 2174.0,
       "altitude_m": 500.0,
@@ -82,7 +82,7 @@
     {
       "node_id": "R03",
       "role": "rally_follower",
-      "rally_target": { "x_m": 4838.0, "y_m": 4826.0, "altitude_m": 500.0 },
+      "rally_target": { "x_m": 0.0, "y_m": -100.0, "altitude_m": 500.0 },
       "x_m": 3000.0,
       "y_m": 4026.0,
       "altitude_m": 500.0,
