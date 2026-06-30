@@ -10,6 +10,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from src.data.config_loader import resolve_config_references
 from src.ui.gui.main_window import ObstacleView, parse_avoidance_config
 
 
@@ -171,6 +172,49 @@ class ParseAvoidanceConfigTests(unittest.TestCase):
         self.assertEqual(clearance, 12.0)
         self.assertEqual([o.obstacle_id for o in obstacles], ["C1"])
         self.assertEqual((obstacles[0].center_x, obstacles[0].center_y, obstacles[0].radius), (10.0, 20.0, 30.0))
+
+    def test_bad_route_file_does_not_clear_obstacle_display(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            element = root / "element"
+            element.mkdir()
+            (element / "obstacles.json").write_text(
+                json.dumps([
+                    {
+                        "id": "C1",
+                        "type": "circle",
+                        "center": {"east_m": 10.0, "north_m": 20.0},
+                        "radius_m": 30.0,
+                    }
+                ]),
+                encoding="utf-8",
+            )
+            config = root / "base.json"
+            config.write_text(
+                json.dumps({
+                    "route_file": "missing-line.json",
+                    "avoidance": {"enabled": True, "clearance_m": 12.0, "obstacles_file": "element/obstacles.json"},
+                }),
+                encoding="utf-8",
+            )
+
+            obstacles, clearance = parse_avoidance_config(str(config))
+
+        self.assertEqual(clearance, 12.0)
+        self.assertEqual([o.obstacle_id for o in obstacles], ["C1"])
+
+    def test_obstacles_file_object_without_obstacles_is_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            element = root / "element"
+            element.mkdir()
+            (element / "obstacles.json").write_text(json.dumps({"items": []}), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "must contain obstacles"):
+                resolve_config_references(
+                    {"avoidance": {"enabled": True, "obstacles_file": "element/obstacles.json"}},
+                    root / "base.json",
+                )
 
     def test_missing_id_gets_generated_default(self) -> None:
         path = self._write(

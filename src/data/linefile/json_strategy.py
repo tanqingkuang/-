@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.ui.gui.linefile.strategy import LineFileStrategy
+from src.data.linefile.strategy import LineFileStrategy
 
 
 class JsonLineFileStrategy(LineFileStrategy):

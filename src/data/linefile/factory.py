@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.ui.gui.linefile.json_strategy import JsonLineFileStrategy
-from src.ui.gui.linefile.strategy import LineFileStrategy
+from src.data.linefile.json_strategy import JsonLineFileStrategy
+from src.data.linefile.strategy import LineFileStrategy
 
 
 class LineFileStrategyFactory:

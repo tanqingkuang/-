@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.ui.gui.linefile import LineFileManager, LineFileStrategyFactory
+from src.data.linefile import LineFileManager, LineFileStrategyFactory
 
 
 class LineFileTests(unittest.TestCase):

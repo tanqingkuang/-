@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.ui.gui.linefile.factory import LineFileStrategyFactory
+from src.data.linefile.factory import LineFileStrategyFactory
 
 
 class LineFileManager:

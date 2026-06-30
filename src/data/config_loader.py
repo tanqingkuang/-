@@ -6,20 +6,10 @@ import copy
 import json
 from pathlib import Path
 
-from src.ui.gui.linefile import LineFileManager
+from src.data.linefile import LineFileManager
 
 
 _LINE_FILE_MANAGER = LineFileManager()
-
-
-def load_config(path: str) -> dict[str, object]:
-    """读取 JSON 仿真配置并展开外部元素引用。注意：文件路径由调用方保证存在且可读。"""
-    config_path = Path(path)
-    # 顶层加载器只负责根配置；外部元素由 resolve_config_references 统一展开。
-    data = json.loads(config_path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("config root must be an object")
-    return resolve_config_references(data, config_path)
 
 
 def resolve_config_references(config: dict[str, object], config_path: str | Path) -> dict[str, object]:
@@ -47,7 +37,9 @@ def resolve_config_references(config: dict[str, object], config_path: str | Path
             obstacles_data = _load_referenced_json(base_path, obstacles_file, "avoidance.obstacles_file")
             if isinstance(obstacles_data, dict):
                 # 兼容将来把障碍数组包进对象并附带说明字段的写法。
-                obstacles_data = obstacles_data.get("obstacles", [])
+                if "obstacles" not in obstacles_data:
+                    raise ValueError("avoidance.obstacles_file object must contain obstacles")
+                obstacles_data = obstacles_data["obstacles"]
             if not isinstance(obstacles_data, list):
                 raise ValueError("avoidance.obstacles_file must point to an obstacles array")
             avoidance["obstacles"] = obstacles_data

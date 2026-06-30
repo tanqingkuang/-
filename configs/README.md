@@ -14,7 +14,7 @@
 
 - 默认基础航线文件，结构与原 `base.json.route` 完全一致。
 - 当前仍使用 ENU 坐标：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度。
-- `route_file` 的解析和生成由 `src/ui/gui/linefile/` 下的策略工厂负责，设计说明见 `src/ui/gui/linefile/航线文件设计.md`。
+- `route_file` 的解析和生成由 `src/data/linefile/` 下的策略工厂负责，设计说明见 `src/data/linefile/航线文件设计.md`。
 
 ## `element/obstacles.json`
 
