@@ -298,6 +298,29 @@ def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[
         return None
 
 
+def route_inputs_to_config(route: list[WayPointInputS], speed_mps: float) -> dict[str, object]:
+    """把避障航点转换为航线文件对象。注意：保留已烘焙圆弧，便于 route_file 再读回。"""
+    waypoints: list[dict[str, object]] = []
+    for point in route:
+        # 普通字段保持与 configs/element/line.json 一致，方便人工编辑和复用。
+        waypoint: dict[str, object] = {
+            "x_m": point.pos.east,
+            "y_m": point.pos.north,
+            "altitude_m": point.pos.h,
+            "R": point.r,
+        }
+        if point.turnSign != 0.0:
+            # 已烘焙圆弧必须带圆心，否则再次加载时无法恢复同一几何。
+            waypoint["turn_sign"] = point.turnSign
+            waypoint["center"] = {
+                "x_m": point.center.east,
+                "y_m": point.center.north,
+                "altitude_m": point.center.h,
+            }
+        waypoints.append(waypoint)
+    return {"speed_mps": speed_mps, "waypoints": waypoints}
+
+
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
     """从配置 JSON 解析 avoidance 障碍与膨胀间距，供 UI 显示。
 
@@ -2687,11 +2710,20 @@ class MainWindow(QMainWindow):
         button_row.addWidget(self.generate_route_button, 1)
         button_row.addWidget(self.adopt_route_button, 1)
         layout.addLayout(button_row)
+        # 第二行放重置和航线输出，按钮宽度与上排保持一致。
+        secondary_row = QHBoxLayout()
+        secondary_row.setSpacing(8)
         # 重置的语义是清除覆盖航线，而不是把参数恢复成配置值。
         self.reset_route_button = QPushButton("重置")
         self.reset_route_button.setToolTip("清除已采用的避障航线，恢复配置中的默认长机航线。")
         self.reset_route_button.clicked.connect(self._reset_avoidance_route)
-        layout.addWidget(self.reset_route_button)
+        self.export_route_button = QPushButton("航线输出")
+        self.export_route_button.setToolTip("把当前预览避障航线输出为 route_file 可读取的航线文件。")
+        self.export_route_button.clicked.connect(self._export_route)
+        self.export_route_button.setEnabled(False)
+        secondary_row.addWidget(self.reset_route_button, 1)
+        secondary_row.addWidget(self.export_route_button, 1)
+        layout.addLayout(secondary_row)
         # 状态区承载规划成功、失败原因和重置结果，避免弹窗打断调参。
         self.avoidance_status = QLabel("")
         self.avoidance_status.setObjectName("avoidHint")
@@ -2794,7 +2826,9 @@ class MainWindow(QMainWindow):
         if not has_params:
             # 没有 avoidance 或有效航点时，采用按钮也必须保持禁用。
             self.adopt_route_button.setEnabled(False)
+            self.export_route_button.setEnabled(False)
             return
+        self.export_route_button.setEnabled(self._preview_route is not None)
         # 配置值灌入控件时屏蔽信号，避免加载配置被误判为用户调参。
         for spin, value in (
             (self.turn_radius_spin, params.turn_radius_m),
@@ -2827,6 +2861,8 @@ class MainWindow(QMainWindow):
         self.top_view.set_preview_route(None)
         if hasattr(self, "adopt_route_button"):
             self.adopt_route_button.setEnabled(False)
+        if hasattr(self, "export_route_button"):
+            self.export_route_button.setEnabled(False)
 
     def _update_avoidance_status(self) -> None:
         """空闲时在反馈区显示操作提示（生成成功/失败时由 _generate_route 覆盖）。"""
@@ -2898,12 +2934,44 @@ class MainWindow(QMainWindow):
             _preview_lines = waypoint_inputs_to_waylines(result.route)
             arcs = sum(1 for line in _preview_lines if line.start.turnSign != 0.0)
             self.adopt_route_button.setEnabled(True)
+            self.export_route_button.setEnabled(True)
             self.avoidance_status.setText(f"预览就绪：{len(_preview_lines)} 段（{arcs} 圆弧）· 可采用")
             self._log("Avoid", f"生成航线成功：{len(_preview_lines)} 段，{arcs} 圆弧")
         else:
             self._invalidate_preview()
             self.avoidance_status.setText(f"{result.code}：{result.detail}")
             self._log("Avoid", f"生成航线失败 {result.code}: {result.detail}")
+
+    def _export_route(self) -> None:
+        """响应“航线输出”：把当前预览航线写成 route_file 文件。注意：只输出已生成但未失效的预览。"""
+        if self._preview_route is None:
+            self.avoidance_status.setText("请先生成航线，再输出。")
+            return
+        config_path = self.current_config_path or (self.project_root / "configs" / "base.json")
+        default_path = config_path.parent / "avoidance_route.json"
+        selected, _ = QFileDialog.getSaveFileName(
+            self.avoidance_window or self,
+            "输出避障航线",
+            str(default_path),
+            "JSON 文件 (*.json)",
+        )
+        if not selected:
+            return
+        route_path = Path(selected)
+        if not route_path.suffix:
+            # QFileDialog 在部分平台不会自动追加过滤器后缀，这里统一补成 JSON。
+            route_path = route_path.with_suffix(".json")
+        speed_mps = self._avoidance_params.speed_mps if self._avoidance_params is not None else self._preview_route[0].vdCmd
+        route_config = route_inputs_to_config(self._preview_route, speed_mps)
+        try:
+            # 通过 LineFileManager 保存，确保输出路径和后缀策略与 route_file 加载链路一致。
+            written = _LINE_FILE_MANAGER.save_route(config_path, str(route_path), route_config)
+        except (OSError, ValueError) as exc:
+            self.avoidance_status.setText(f"航线输出失败：{exc}")
+            self._log("WARN", f"航线输出失败：{exc}")
+            return
+        self.avoidance_status.setText(f"已输出航线：{written}")
+        self._log("Avoid", f"已输出避障航线：{written}")
 
     def _adopt_route(self) -> None:
         """响应“采用航线”：把预览航线下发控制器替换长机航线（采用后点播放仿真）。"""

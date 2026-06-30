@@ -153,7 +153,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 - `avoidance.obstacles_file` 是相对主配置文件目录的路径，由 `src/data/obstaclefile/` 策略工厂解析，指向障碍数组，或包含 `obstacles` 字段的对象；加载时展开为 `avoidance.obstacles[]`。
 - 顶层 `enabled=false` 或展开后的 `obstacles` 为空 → 完全跳过避障，等价于现状。
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。`element/obstacles.json` 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
-- 长机原航线取自展开后的 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
+- 长机原航线取自展开后的 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。航线文件还可携带 `turn_sign` 与 `center` 表示已烘焙圆弧航段，供避障航线输出后再次作为 `route_file` 读回。
 - `allow_arc`（默认 `true`）：航段自身是否可为曲线。`true` 时启用贴障弧（§4.4）——绕障被折叠成沿膨胀圆的大弧；**不影响**直线-直线拐点的交接圆弧（后者由补充函数无条件按 R 补），见 §4.3。
 - `simplify_clearance_m`（缺省等于 `clearance_m`）：影响 A* 输出后的 `simplify_path` 视线拉直，**也是贴障弧的贴行半径**（膨胀半径 = `r_obs + simplify_clearance_m`，见 §4.4）。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
 - `turn_switch_penalty_m`（默认 `0.0`）：A* 搜索中每次 8 邻域方向切换的固定等效米代价，用于减少方向频繁切换导致的小直线段。
@@ -271,7 +271,7 @@ class PlanResult:
 2. 点 **【⟳ 生成航线】** → 后端 `plan_avoidance_route(选中障碍)` 跑逐腿 A\* + 可飞性校验（**不进仿真**）。
    - 若一个障碍都没勾选 → 维持原航线：清空预览、禁用「采用」、状态显示"未选择障碍 · 维持原航线"。
 3. 俯视图**预览**：红=障碍、橙虚线=膨胀、绿虚线=规划航线；失败则面板显示 **`ERR_AVOID_*` 具体原因**，不出航线、不可采用。
-4. 预览满意 → 点 **【采用航线】** 才把预览 `RouteS` 下发控制器替换长机航线，再点播放仿真；不满意就改 JSON / 改勾选，重新"生成航线"。
+4. 预览满意 → 可点 **【航线输出】** 将当前预览航线写成 `route_file` 可读的 JSON 文件；也可点 **【采用航线】** 把预览 `RouteS` 下发控制器替换长机航线，再点播放仿真；不满意就改 JSON / 改勾选，重新"生成航线"。
 5. 任意障碍勾选变更 → 预览立即失效（`_invalidate_preview`），需重新生成，避免预览与勾选集不一致。
 
 > 预览航线先**只在内存中**，确认即用。

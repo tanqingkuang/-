@@ -18,12 +18,15 @@ from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
+from src.data.linefile import LineFileManager
+from src.runner.sim_control import _build_leader_route
 from src.ui.gui.main_window import (
     MainWindow,
     ReferenceRoute,
     parse_avoidance_params,
     preview_route_marker_points,
     reference_route_points,
+    route_inputs_to_config,
     route_to_polyline,
 )
 
@@ -253,6 +256,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
         self.assertTrue(window.adopt_route_button.isEnabled())
+        self.assertTrue(window.export_route_button.isEnabled())
         self.assertIsNotNone(window.top_view.preview_route_polyline)
         self.assertIsNotNone(window.top_view.preview_route_markers)
         window._adopt_route()
@@ -262,6 +266,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertIsNone(window.top_view.preview_route_polyline)
         self.assertIsNone(window.top_view.preview_route_markers)
         self.assertFalse(window.adopt_route_button.isEnabled())
+        self.assertFalse(window.export_route_button.isEnabled())
 
     def test_toggle_obstacle_invalidates_preview(self) -> None:
         window = self._window()
@@ -454,6 +459,38 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         original = len(window.sim.controller._leader_route)
         window._adopt_route()  # 无预览
         self.assertEqual(len(window.sim.controller._leader_route), original)
+
+    def test_export_route_uses_linefile_manager_and_preserves_arc(self) -> None:
+        # 航线输出走同一个 LineFileManager.save_route，并保留已烘焙圆弧字段，保证文件可读回。
+        window = self._window()
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        output = Path(temp_dir.name) / "avoidance_output"
+        route = [
+            WayPointInputS(
+                idx=0,
+                pos=PosInEarthS(10.0, 20.0, 1000.0),
+                vdCmd=18.0,
+                turnSign=1.0,
+                center=PosInEarthS(10.0, 120.0, 1000.0),
+            ),
+            WayPointInputS(idx=1, pos=PosInEarthS(110.0, 120.0, 1000.0), vdCmd=18.0),
+        ]
+        window._preview_route = route
+        window.export_route_button.setEnabled(True)
+
+        with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=(str(output), "JSON 文件 (*.json)")) as dialog:
+            window._export_route()
+
+        saved = output.with_suffix(".json")
+        payload = json.loads(saved.read_text(encoding="utf-8"))
+        self.assertEqual(dialog.call_args.args[2], str(window.current_config_path.parent / "avoidance_route.json"))
+        self.assertEqual(payload, route_inputs_to_config(route, window._avoidance_params.speed_mps))
+        loaded = LineFileManager().load_route(window.current_config_path, str(saved))
+        parsed = _build_leader_route({"route": loaded})
+        self.assertAlmostEqual(parsed[0].turnSign, 1.0)
+        self.assertAlmostEqual(parsed[0].center.east, 10.0)
+        self.assertAlmostEqual(parsed[0].center.north, 120.0)
 
 
 if __name__ == "__main__":

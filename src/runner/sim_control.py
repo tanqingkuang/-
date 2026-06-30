@@ -464,6 +464,36 @@ def _waypoint_radius(raw_point: object, default_radius: float, field_name: str) 
     return radius
 
 
+def _waypoint_turn_sign(raw_point: object, field_name: str) -> float:
+    """读取已烘焙圆弧的转向符号。注意：普通折线航点缺省为 0。"""
+    if not isinstance(raw_point, dict):
+        return 0.0
+    # 导出航线使用 snake_case；历史/内部对象字段使用 camelCase，两者都兼容。
+    turn_sign = float(raw_point.get("turn_sign", raw_point.get("turnSign", 0.0)))
+    # 当前路径几何只定义左转、右转和直线三种状态，不接受任意连续值。
+    if turn_sign not in {-1.0, 0.0, 1.0}:
+        raise ValueError(f"{field_name}.turn_sign must be -1, 0, or 1")
+    return turn_sign
+
+
+def _waypoint_center(raw_point: object, altitude_m: float, field_name: str) -> PosInEarthS:
+    """读取已烘焙圆弧圆心。注意：只在 turn_sign 非 0 时有意义。"""
+    if not isinstance(raw_point, dict):
+        raise ValueError(f"{field_name} must be an object")
+    center = raw_point.get("center")
+    if isinstance(center, dict):
+        # 嵌套 center 复用普通航点坐标解析，保持 x_m/east 等别名一致。
+        return _route_point_from_config(center, f"{field_name}.center")
+    if "center_x_m" in raw_point or "center_y_m" in raw_point:
+        # 扁平 center_x_m/center_y_m 便于外部工具导出，缺省高度跟随航点。
+        return PosInEarthS(
+            float(raw_point.get("center_x_m", 0.0)),
+            float(raw_point.get("center_y_m", 0.0)),
+            altitude_m,
+        )
+    raise ValueError(f"{field_name}.center is required when turn_sign is non-zero")
+
+
 def _same_xy(a: PosInEarthS, b: PosInEarthS) -> bool:
     """判断两点水平面是否重合。注意：仅比较东/北，用于退化段保护。"""
     return abs(a.east - b.east) <= 1e-9 and abs(a.north - b.north) <= 1e-9
@@ -489,6 +519,11 @@ def _wpi_from_waypoints(
         _waypoint_radius(raw_point, default_r, f"route.waypoints[{index}]")
         for index, raw_point in enumerate(raw_waypoints)
     ]
+    turn_signs = [
+        _waypoint_turn_sign(raw_point, f"route.waypoints[{index}]")
+        for index, raw_point in enumerate(raw_waypoints)
+    ]
+    # 先完成退化校验，再决定 R 或已知圆弧，错误信息仍指向原始 waypoint 下标。
     for index in range(len(points) - 1):
         if _same_xy(points[index], points[index + 1]) and points[index].h == points[index + 1].h:
             raise ValueError(f"route.waypoints[{index}] and route.waypoints[{index + 1}] must be different")
@@ -498,7 +533,13 @@ def _wpi_from_waypoints(
             idx=index,
             pos=points[index],
             vdCmd=speed,
-            r=radii[index] if (insert_arcs and 0 < index < n - 1) else 0.0,
+            # 已烘焙圆弧已经给出真实曲率，不能再同时按 R 插入交接圆弧。
+            r=radii[index] if (insert_arcs and turn_signs[index] == 0.0 and 0 < index < n - 1) else 0.0,
+            turnSign=turn_signs[index],
+            # center 只在 turnSign 非 0 时解析，普通折线避免强制填写无意义字段。
+            center=_waypoint_center(raw_waypoints[index], points[index].h, f"route.waypoints[{index}]")
+            if turn_signs[index] != 0.0
+            else PosInEarthS(),
         )
         for index in range(n)
     ]
