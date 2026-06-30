@@ -102,6 +102,33 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         self.assertAlmostEqual(params.turn_switch_penalty_m, 0.0)
         self.assertAlmostEqual(params.turn_angle_weight_m, 0.0)
 
+    def test_external_route_file_is_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            element = root / "element"
+            element.mkdir()
+            (element / "line.json").write_text(
+                json.dumps({
+                    "speed_mps": 18.0,
+                    "waypoints": [
+                        {"x_m": 10.0, "y_m": 20.0, "altitude_m": 1000.0},
+                        {"x_m": 30.0, "y_m": 40.0, "altitude_m": 1100.0},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            config = root / "base.json"
+            config.write_text(
+                json.dumps({"route_file": "element/line.json", "avoidance": {"enabled": True}}),
+                encoding="utf-8",
+            )
+
+            params = parse_avoidance_params(str(config))
+
+        self.assertIsNotNone(params)
+        self.assertEqual(params.waypoints, [(10.0, 20.0, 1000.0), (30.0, 40.0, 1100.0)])
+        self.assertAlmostEqual(params.speed_mps, 18.0)
+
     def test_missing_avoidance_returns_none(self) -> None:
         self.assertIsNone(parse_avoidance_params(self._write({"route": {"waypoints": []}})))
 

@@ -3,29 +3,7 @@
   "step_s": 0.005,
   "playback_rate": 1.0,
   "seed": 1,
-  "route": {
-    "speed_mps": 20.0,
-    "waypoints": [
-      {
-        "x_m": 0.0,
-        "y_m": 0.0,
-        "altitude_m": 1000.0,
-        "R": 0.0
-      },
-      {
-        "x_m": 2000.0,
-        "y_m": 0.0,
-        "altitude_m": 1000.0,
-        "R": 400.0
-      },
-      {
-        "x_m": 2000.0,
-        "y_m": 2000.0,
-        "altitude_m": 1000.0,
-        "R": 0.0
-      }
-    ]
-  },
+  "route_file": "element/line.json",
   "avoidance": {
     "enabled": true,
     "allow_arc": true,
@@ -39,41 +17,7 @@
       "resolution_m": 20.0,
       "margin_m": 300.0
     },
-    "obstacles": [
-      {
-        "id": "C1",
-        "type": "circle",
-        "enabled": true,
-        "center": {
-          "east_m": 900.0,
-          "north_m": 0.0
-        },
-        "radius_m": 200.0
-      },
-      {
-        "id": "C2",
-        "type": "circle",
-        "enabled": true,
-        "center": {
-          "east_m": 2000.0,
-          "north_m": 1200.0
-        },
-        "radius_m": 200.0
-      },
-      {
-        "id": "R1",
-        "type": "rect",
-        "enabled": false,
-        "min": {
-          "east_m": 350.0,
-          "north_m": -180.0
-        },
-        "max": {
-          "east_m": 650.0,
-          "north_m": 180.0
-        }
-      }
-    ]
+    "obstacles_file": "element/obstacles.json"
   },
   "formation": {
     "pattern": "TRIANGLE",

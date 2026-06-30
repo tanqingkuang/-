@@ -78,6 +78,7 @@ from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
+from src.data.config_loader import resolve_config_references
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 
@@ -254,6 +255,19 @@ def _safe_float(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _load_resolved_json_config_for_ui(path: str) -> dict[str, object] | None:
+    """读取 GUI 需要的 JSON 配置并展开元素引用。注意：失败返回 None，避免影响主加载流程。"""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            return None
+        return resolve_config_references(data, Path(path))
+    except (OSError, ValueError):
+        # GUI 侧解析是辅助显示；配置错误由控制器主加载路径给出正式错误。
+        return None
+
+
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
     """从配置 JSON 解析 avoidance 障碍与膨胀间距，供 UI 显示。
 
@@ -261,10 +275,8 @@ def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
     绝不抛异常拖垮 _apply_config_path（该流程在控制器加载成功后调用）。
     约定与文档 §4.2 一致：顶层 enabled=false 或 obstacles 为空 → 完全跳过避障，返回空。
     """
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
+    data = _load_resolved_json_config_for_ui(path)
+    if data is None:
         # 非 JSON（如 YAML）或读取失败时不影响主流程，返回空障碍集。
         return [], 0.0
     avoidance = data.get("avoidance") if isinstance(data, dict) else None
@@ -365,12 +377,8 @@ class AvoidanceWindow(QDialog):
 
 def parse_avoidance_params(path: str) -> AvoidanceParams | None:
     """从配置 JSON 解析避障规划参数与长机航点。注意：安全解析；缺 avoidance/航点不足时返回 None。"""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return None
-    if not isinstance(data, dict):
+    data = _load_resolved_json_config_for_ui(path)
+    if data is None:
         return None
     avoidance = data.get("avoidance")
     if not isinstance(avoidance, dict) or not avoidance.get("enabled", True):

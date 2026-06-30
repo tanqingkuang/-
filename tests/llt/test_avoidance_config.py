@@ -143,6 +143,35 @@ class ParseAvoidanceConfigTests(unittest.TestCase):
         self.assertEqual(obstacles, [])
         self.assertEqual(clearance, 80.0)
 
+    def test_external_obstacles_file_is_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            element = root / "element"
+            element.mkdir()
+            (element / "obstacles.json").write_text(
+                json.dumps([
+                    {
+                        "id": "C1",
+                        "type": "circle",
+                        "enabled": True,
+                        "center": {"east_m": 10.0, "north_m": 20.0},
+                        "radius_m": 30.0,
+                    }
+                ]),
+                encoding="utf-8",
+            )
+            config = root / "base.json"
+            config.write_text(
+                json.dumps({"avoidance": {"enabled": True, "clearance_m": 12.0, "obstacles_file": "element/obstacles.json"}}),
+                encoding="utf-8",
+            )
+
+            obstacles, clearance = parse_avoidance_config(str(config))
+
+        self.assertEqual(clearance, 12.0)
+        self.assertEqual([o.obstacle_id for o in obstacles], ["C1"])
+        self.assertEqual((obstacles[0].center_x, obstacles[0].center_y, obstacles[0].radius), (10.0, 20.0, 30.0))
+
     def test_missing_id_gets_generated_default(self) -> None:
         path = self._write(
             {"avoidance": {"obstacles": [{"type": "circle", "radius_m": 1.0}]}}
