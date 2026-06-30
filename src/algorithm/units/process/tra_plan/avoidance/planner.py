@@ -146,8 +146,8 @@ def plan_avoidance_route(
     # 先摆点、折叠贴障弧，再对"折叠后真正要飞的航线"做可飞性校验：
     # allow_arc=True 时把"连续贴同一圆"的拐点串折叠成一段沿膨胀圆的大弧(turnSign!=0)，避免 R<膨胀半径
     # 时被一串固定 R 小弧切碎；这些被合并的拐点不再受固定 R 腿长约束（校验后置的关键意义）。
-    route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)
-    if allow_arc:
+    route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)  # 先只摆点(r=0)
+    if allow_arc:  # 仅在航段允许带弧时折叠贴障弧；关闭则保留直线骨架交给固定 R 倒角
         route = bake_obstacle_hug_arcs(
             route, full_causes, obstacles,
             turn_radius_m=turn_radius_m, hug_clearance=simplify_clearance_m, sample_step=sample_step,

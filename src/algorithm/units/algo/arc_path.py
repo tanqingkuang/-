@@ -85,7 +85,7 @@ def tangent_point(
     beta = math.acos(max(-1.0, min(1.0, radius / d)))
     best: tuple[float, float] | None = None
     best_dot = -2.0
-    for ang in (base + beta, base - beta):
+    for ang in (base + beta, base - beta):  # 两个候选切点(对称于 OP 连线)
         rx, ry = math.cos(ang), math.sin(ang)
         tx = center.east + radius * rx
         ty = center.north + radius * ry
@@ -93,14 +93,14 @@ def tangent_point(
         vx = -ry * turn_sign
         vy = rx * turn_sign
         if leaving:
-            wx, wy = ext.east - tx, ext.north - ty
+            wx, wy = ext.east - tx, ext.north - ty  # 离开：行进方向 T→ext
         else:
-            wx, wy = tx - ext.east, ty - ext.north
+            wx, wy = tx - ext.east, ty - ext.north  # 进入：行进方向 ext→T
         wn = math.hypot(wx, wy)
         if wn <= 1e-9:
             continue
         dot = (vx * wx + vy * wy) / wn
-        if dot > best_dot:
+        if dot > best_dot:  # 取行进方向与弧切向最一致(平滑相切)的切点
             best_dot = dot
             best = (tx, ty)
     return best
@@ -127,9 +127,9 @@ def common_tangent(
     sign2 = 1.0 if s1 == s2 else -1.0  # 外切法向同侧、内切异侧
     target = r1 - r2 if s1 == s2 else r1 + r2  # 法向在圆心连线上的投影
     c = target / d
-    if abs(c) > 1.0:
+    if abs(c) > 1.0:  # |投影| 超过连线长 → 该类公切线不存在(如一圆含于另一圆)
         return None
-    h = math.sqrt(max(0.0, 1.0 - c * c))
+    h = math.sqrt(max(0.0, 1.0 - c * c))  # 法向在连线垂向上的分量
     for hs in (h, -h):
         # 单位法向 n = c·u + hs·u⊥（u⊥ = u 逆时针 90°）
         nx = c * ux + hs * (-uy)

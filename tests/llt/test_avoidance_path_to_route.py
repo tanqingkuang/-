@@ -13,7 +13,8 @@ from src.algorithm.units.process.tra_plan.avoidance.obstacle import (
     make_circle,
     make_rect,
 )
-from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
+from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS
+from src.algorithm.units.algo.arc_path import arc_swept_rad
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import (
     assign_transition_radius,
     bake_obstacle_hug_arcs,
@@ -283,8 +284,8 @@ class BakeObstacleHugArcsTests(unittest.TestCase):
         on = lambda deg: self._wpi(
             500.0 + r_inf * math.cos(math.radians(deg)), r_inf * math.sin(math.radians(deg))
         )
-        # 自由点在下方两侧；中间三点贴在膨胀圆底部、极角单调递增(CCW)。
-        route = [self._wpi(100.0, -400.0), on(250.0), on(270.0), on(290.0), self._wpi(900.0, -400.0)]
+        # 自由点落在首/尾顶点的切线上(合法擦入位置)；中间三点贴在膨胀圆底部、极角单调递增(CCW)。
+        route = [self._wpi(273.5, -183.7), on(250.0), on(270.0), on(290.0), self._wpi(726.5, -183.7)]
         causes = [None, obstacle, obstacle, obstacle, None]
         return route, causes, obstacle, hug_clearance
 
@@ -303,6 +304,33 @@ class BakeObstacleHugArcsTests(unittest.TestCase):
         self.assertAlmostEqual(arc.center.north, 0.0, places=6)
         radius = math.hypot(arc.pos.east - arc.center.east, arc.pos.north - arc.center.north)
         self.assertAlmostEqual(radius, 250.0, places=6)  # 半径=障碍膨胀半径，非最小转弯半径
+        # 扫掠角应约等于顶点跨度(250°→290°≈40°)的底部局部弧，而非绕大半圈。
+        idx = out.index(arc)
+        line = WayLineS(
+            start=WayPointS(pos=arc.pos, turnSign=arc.turnSign, center=arc.center),
+            end=WayPointS(pos=out[idx + 1].pos),
+        )
+        self.assertAlmostEqual(math.degrees(arc_swept_rad(line)), 40.0, delta=5.0)
+
+    def test_hug_arc_does_not_wrap_long_way(self) -> None:
+        # 回归 PR#83 检视意见1：~40° 的底部贴障串(250/270/290)绝不能被折成绕大半圈的弧。
+        # 自由点远在圆下方、不在合法切线擦入位置时，宁可不折叠也不能产出 >180° 的怪弧。
+        obstacle = make_circle("C", 500.0, 0.0, 150.0)
+        on = lambda deg: self._wpi(
+            500.0 + 250.0 * math.cos(math.radians(deg)), 250.0 * math.sin(math.radians(deg))
+        )
+        route = [self._wpi(100.0, -400.0), on(250.0), on(270.0), on(290.0), self._wpi(900.0, -400.0)]
+        causes = [None, obstacle, obstacle, obstacle, None]
+        out = bake_obstacle_hug_arcs(route, causes, [obstacle], turn_radius_m=150.0, hug_clearance=100.0)
+        for node, nxt in zip(out, out[1:]):
+            if node.turnSign != 0.0:
+                line = WayLineS(
+                    start=WayPointS(pos=node.pos, turnSign=node.turnSign, center=node.center),
+                    end=WayPointS(pos=nxt.pos),
+                )
+                self.assertLessEqual(
+                    abs(math.degrees(arc_swept_rad(line))), 180.0, "贴障弧不应绕大半圈"
+                )
 
     def test_inflated_radius_smaller_than_turn_radius_not_collapsed(self) -> None:
         route, causes, obstacle, hug_clearance = self._hug_route()
@@ -330,11 +358,12 @@ class BakeObstacleHugArcsTests(unittest.TestCase):
         on1 = lambda deg: self._wpi(r_inf * math.cos(math.radians(deg)), r_inf * math.sin(math.radians(deg)))
         on2 = lambda deg: self._wpi(900.0 + r_inf * math.cos(math.radians(deg)), r_inf * math.sin(math.radians(deg)))
         # 都贴顶部、从左向右(CW, sign=-1)，极角单调递减：C1 150→120→90，C2 90→60→30。
+        # 自由端点落在首/尾顶点的切线上(擦入 C1@150°、擦出 C2@30°)，保证弧覆盖整个顶点跨度。
         route = [
-            self._wpi(-300.0, 100.0),  # 自由起点
+            self._wpi(-298.2, -116.5),  # 自由起点(C1@150° 切线上)
             on1(150.0), on1(120.0), on1(90.0),  # 贴 C1 顶
             on2(90.0), on2(60.0), on2(30.0),  # 贴 C2 顶（与 C1 段相邻，无自由顶点间隔）
-            self._wpi(1200.0, 100.0),  # 自由终点
+            self._wpi(1198.2, -116.5),  # 自由终点(C2@30° 切线上)
         ]
         causes = [None, c1, c1, c1, c2, c2, c2, None]
         out = bake_obstacle_hug_arcs(route, causes, [c1, c2], turn_radius_m=150.0, hug_clearance=hug)

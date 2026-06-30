@@ -244,14 +244,14 @@ def _split_route_segments(
     n = len(route)
     while i < n:
         w = route[i]
-        if w.turnSign != 0.0 and i + 1 < n:
+        if w.turnSign != 0.0 and i + 1 < n:  # 弧段：本点=切入、下一点=切出
             cur.append((w.pos.east, w.pos.north))  # 切入点闭合当前骨架
             subs.append(cur)
-            arcs.append((w.pos, route[i + 1].pos, w.center, w.turnSign))
+            arcs.append((w.pos, route[i + 1].pos, w.center, w.turnSign))  # 收下这段弧另行触障复核
             cur = [(route[i + 1].pos.east, route[i + 1].pos.north)]  # 新骨架从切出点起
-            i += 2
+            i += 2  # 跳过弧的两个端点
         else:
-            cur.append((w.pos.east, w.pos.north))
+            cur.append((w.pos.east, w.pos.north))  # 直线点累加进当前骨架
             i += 1
     subs.append(cur)
     return subs, arcs
@@ -280,24 +280,24 @@ def check_route_feasibility(
         sample_step = _default_sample_step(obstacles, arc_clearance)
     subs, arcs = _split_route_segments(route)
     for sub in subs:
-        if len(sub) >= 2:
+        if len(sub) >= 2:  # 单点骨架(相邻弧之间退化)无腿可校，跳过
             result = check_feasibility(
                 sub, obstacles,
                 turn_radius_m=turn_radius_m, leg_margin_m=leg_margin_m,
                 arc_clearance=arc_clearance, sample_step=sample_step, max_turn_deg=max_turn_deg,
             )
             if not result.ok:
-                return result
+                return result  # 任一骨架不可飞即整体不可飞，透传原因码
     if turn_radius_m > 0.0 and obstacles:
         for t1, t2, center, sign in arcs:
-            radius = hypot(t1.east - center.east, t1.north - center.north)
+            radius = hypot(t1.east - center.east, t1.north - center.north)  # 弧半径=切入点到圆心距
             arc = (
                 PosInEarthS(t1.east, t1.north, 0.0),
                 PosInEarthS(t2.east, t2.north, 0.0),
                 PosInEarthS(center.east, center.north, 0.0),
                 sign,
             )
-            for east, north in _arc_sample_points(arc, radius, sample_step):
+            for east, north in _arc_sample_points(arc, radius, sample_step):  # 沿弧密采逐点判障
                 obstacle_id = _hit_obstacle(obstacles, east, north, arc_clearance)
                 if obstacle_id is not None:
                     return FeasibilityResult(

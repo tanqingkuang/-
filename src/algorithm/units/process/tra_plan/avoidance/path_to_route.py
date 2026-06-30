@@ -12,7 +12,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from math import atan2, ceil, cos, hypot, sin
+from math import atan2, ceil, cos, hypot, pi, sin
 
 from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS
 from src.algorithm.units.algo.arc_path import arc_swept_rad, common_tangent, corner_arc, tangent_point
@@ -64,7 +64,7 @@ def _first_blocker(
         north = start[1] + (end[1] - start[1]) * t
         for obstacle in obstacles:
             if inside(obstacle, east, north, clearance):
-                return obstacle
+                return obstacle  # 沿线首个命中的障碍即"逼停"这条腿者，作为拐点来源
     return None
 
 
@@ -106,10 +106,10 @@ def simplify_path_with_causes(
         )
         if blocker is not None:
             result.append(points[i])
-            causes.append(blocker)
-            anchor = i
+            causes.append(blocker)  # i 被保留，记下逼出它的障碍
+            anchor = i  # 锚点前移到新拐点，从这里继续往前拉直
     result.append(points[-1])
-    causes.append(None)
+    causes.append(None)  # 末点恒保留、无来源
     return result, causes
 
 
@@ -234,6 +234,7 @@ def _hug_run(
     center = obstacle.center
 
     def ang(idx: int) -> float:
+        """求 route[idx] 相对障碍圆心的极角(弧度)，用于判断贴障串的角度推进方向。"""
         return atan2(route[idx].pos.north - center.north, route[idx].pos.east - center.east)
 
     j = k
@@ -242,9 +243,9 @@ def _hug_run(
         delta = atan2(sin(ang(j + 1) - ang(j)), cos(ang(j + 1) - ang(j)))  # wrap 到 (-pi,pi]
         if abs(delta) < 1e-9:  # 退化重合，停止
             break
-        step_sign = 1.0 if delta > 0.0 else -1.0
+        step_sign = 1.0 if delta > 0.0 else -1.0  # 本步极角增减向 = 绕圆心方向
         if sign == 0.0:
-            sign = step_sign
+            sign = step_sign  # 首步定下整串转向(turnSign)
         elif step_sign != sign:  # 转向反号：贴一下→绕回，断成两段
             break
         j += 1
@@ -270,14 +271,43 @@ def _sample_hug_arc(
         ),
         end=WayPointS(pos=PosInEarthS(t2.east, t2.north, 0.0)),
     )
-    swept = arc_swept_rad(line)
-    segments = max(1, ceil(radius * abs(swept) / step))
-    a_start = atan2(t1.north - center.north, t1.east - center.east)
+    swept = arc_swept_rad(line)  # 带符号扫掠角，决定采样沿弧推进方向
+    segments = max(1, ceil(radius * abs(swept) / step))  # 按弧长/步长定段数，至少 1 段
+    a_start = atan2(t1.north - center.north, t1.east - center.east)  # 切入点极角作采样起点
     points: list[Point] = []
     for m in range(segments + 1):
-        angle = a_start + swept * (m / segments)
+        angle = a_start + swept * (m / segments)  # 自起点极角按比例推进到切出点
         points.append((center.east + radius * cos(angle), center.north + radius * sin(angle)))
     return points
+
+
+def _hug_arc_span_sane(
+    t_in: PosInEarthS,
+    t_out: PosInEarthS,
+    center: PosInEarthS,
+    turn_sign: float,
+    vertices: list[PosInEarthS],
+) -> bool:
+    """护栏：贴障弧的扫掠角不应明显超过原贴障顶点的角度跨度。
+
+    重选进/出切点后，若两者落在原贴障侧的反面，弧会沿长边绕大半圈(扫掠可达 ~322°)，却仍贴在
+    膨胀圆上躲过触障复核。对比扫掠角与"首顶点→尾顶点沿转向的跨度"：欠扫(提前离开贴障走切线、
+    切角)是允许的；明显超扫(超过跨度 + 90° 余量)即判定切点选反、绕了长边，拒绝折叠。
+    """
+    line = WayLineS(
+        start=WayPointS(
+            pos=PosInEarthS(t_in.east, t_in.north, 0.0),
+            turnSign=turn_sign,
+            center=PosInEarthS(center.east, center.north, 0.0),
+        ),
+        end=WayPointS(pos=PosInEarthS(t_out.east, t_out.north, 0.0)),
+    )
+    swept = abs(arc_swept_rad(line))  # 弧扫掠角(绝对值)
+    two_pi = 2.0 * pi
+    a_first = atan2(vertices[0].north - center.north, vertices[0].east - center.east)
+    a_last = atan2(vertices[-1].north - center.north, vertices[-1].east - center.east)
+    span = ((a_last - a_first) * turn_sign) % two_pi  # 首→尾顶点沿转向的角度跨度
+    return swept <= span + pi / 2.0  # 允许欠扫/切角与小幅超扫，拒绝长边绕圈
 
 
 def _arc_clear(
@@ -334,13 +364,16 @@ def _hug_endpoints(
     for m in range(m_count):
         i0, j0, obstacle, sign = runs[m]
         center, radius = obstacle.center, obstacle.radius + hug_clearance
+        # 相邻段=同串里上/下一段贴障弧紧挨本段(中间无自由顶点)，此时衔接直线应是两圆公切线。
         left_adj = use_common_tangent and m > 0 and runs[m - 1][1] + 1 == i0
         right_adj = use_common_tangent and m < m_count - 1 and j0 + 1 == runs[m + 1][0]
         if left_adj:
+            # 入切点取与左邻圆的公切线在本圆一端(ct[1])。
             p_obs, p_sign = runs[m - 1][2], runs[m - 1][3]
             ct = common_tangent(p_obs.center, p_obs.radius + hug_clearance, p_sign, center, radius, sign)
             t_in = PosInEarthS(ct[1][0], ct[1][1], route[i0].pos.h) if ct else None
         else:
+            # 无左邻：对前一个自由点作点-圆切线(进入侧)。
             tp = tangent_point(route[i0 - 1].pos, center, radius, sign, leaving=False)
             t_in = PosInEarthS(tp[0], tp[1], route[i0].pos.h) if tp else None
         if right_adj:
@@ -383,8 +416,11 @@ def _assemble_hug_arcs(
         left_adj = use_common_tangent and m > 0 and runs[m - 1][1] + 1 == i0
         right_adj = use_common_tangent and m < len(runs) - 1 and j0 + 1 == runs[m + 1][0]
         src = endpoints[m - 1][1] if left_adj else route[i0 - 1].pos
+        vertices = [route[idx].pos for idx in range(i0, j0 + 1)]  # 原贴障顶点
         ok = (
             src is not None
+            # 护栏：弧扫掠角不应明显超过顶点跨度，否则切点选反、绕长边，拒绝折叠。
+            and _hug_arc_span_sane(t_in, t_out, center, sign, vertices)
             and _arc_clear(t_in, t_out, center, sign, radius, obstacles, sample_step)
             and _first_blocker((src.east, src.north), (t_in.east, t_in.north), obstacles, sample_step=sample_step) is None
         )
@@ -407,11 +443,12 @@ def _assemble_hug_arcs(
             i0, j0, obstacle, sign = runs[m]
             t_in, t_out = endpoints[m]
             arc_center = PosInEarthS(obstacle.center.east, obstacle.center.north, route[i0].pos.h)
+            # 弧用两航点表示：切入点(带 turnSign/圆心) + 切出点(直线)，整串 i0..j0 被这两点取代。
             out.append(WayPointInputS(idx=len(out), pos=t_in, vdCmd=route[i0 - 1].vdCmd, turnSign=sign, center=arc_center))
             out.append(WayPointInputS(idx=len(out), pos=t_out, vdCmd=route[j0].vdCmd))
-            k = j0 + 1
+            k = j0 + 1  # 跳过被折叠的整段贴障顶点
         else:
-            out.append(replace(route[k], idx=len(out)))
+            out.append(replace(route[k], idx=len(out)))  # 非折叠点原样保留(重排 idx)
             k += 1
     return out
 
@@ -435,12 +472,12 @@ def bake_obstacle_hug_arcs(
     """
     n = len(route)
     if n < 3 or len(causes) != n:
-        return route
+        return route  # 不足三点无内部拐点可折叠，或 cause 标签未对齐，原样返回
     if sample_step is None:
-        sample_step = _default_sample_step(obstacles, 0.0)
+        sample_step = _default_sample_step(obstacles, 0.0)  # 触障复核按真实障碍(clearance=0)定步长
     runs = _collect_hug_runs(route, causes, turn_radius_m=turn_radius_m, hug_clearance=hug_clearance)
     if not runs:
-        return route
+        return route  # 没有连续贴同一圆的串，无弧可折叠
     smooth = _assemble_hug_arcs(
         route, runs, obstacles, hug_clearance=hug_clearance, sample_step=sample_step, use_common_tangent=True
     )
