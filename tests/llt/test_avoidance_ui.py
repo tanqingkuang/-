@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from decimal import Decimal
 import tempfile
 import unittest
 from pathlib import Path
@@ -19,6 +20,8 @@ from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_
 from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.data.linefile import LineFileManager
+from src.data.geo import GeoOrigin
+from src.data.geo_config import route_to_internal
 from src.runner.sim_control import _build_leader_route
 from src.ui.gui.main_window import (
     MainWindow,
@@ -469,14 +472,15 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         route = [
             WayPointInputS(
                 idx=0,
-                pos=PosInEarthS(10.0, 20.0, 1000.0),
+                pos=PosInEarthS(0.0, 0.0, 1000.0),
                 vdCmd=18.0,
                 turnSign=1.0,
-                center=PosInEarthS(10.0, 120.0, 1000.0),
+                center=PosInEarthS(0.0, 100.0, 1000.0),
             ),
-            WayPointInputS(idx=1, pos=PosInEarthS(110.0, 120.0, 1000.0), vdCmd=18.0),
+            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 100.0, 1000.0), vdCmd=18.0),
         ]
         window._preview_route = route
+        window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
         window.export_route_button.setEnabled(True)
 
         with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=(str(output), "JSON 文件 (*.json)")) as dialog:
@@ -485,12 +489,20 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         saved = output.with_suffix(".json")
         payload = json.loads(saved.read_text(encoding="utf-8"))
         self.assertEqual(dialog.call_args.args[2], str(window.current_config_path.parent / "avoidance_route.json"))
-        self.assertEqual(payload, route_inputs_to_config(route, window._avoidance_params.speed_mps))
+        expected = route_inputs_to_config(route, window._avoidance_params.speed_mps, window._avoidance_params.geo_origin)
+        self.assertEqual(payload, expected)
+        self.assertIn("latitude_deg", payload["waypoints"][0])
+        self.assertNotIn("x_m", payload["waypoints"][0])
+        latitude_text = str(Decimal(str(payload["waypoints"][1]["latitude_deg"])))
+        longitude_text = str(Decimal(str(payload["waypoints"][1]["longitude_deg"])))
+        self.assertLessEqual(abs(Decimal(latitude_text).as_tuple().exponent), 7)
+        self.assertLessEqual(abs(Decimal(longitude_text).as_tuple().exponent), 7)
         loaded = LineFileManager().load_route(window.current_config_path, str(saved))
-        parsed = _build_leader_route({"route": loaded})
+        internal, _origin = route_to_internal(loaded)
+        parsed = _build_leader_route({"route": internal})
         self.assertAlmostEqual(parsed[0].turnSign, 1.0)
-        self.assertAlmostEqual(parsed[0].center.east, 10.0)
-        self.assertAlmostEqual(parsed[0].center.north, 120.0)
+        self.assertAlmostEqual(parsed[0].center.east, 0.0, places=2)
+        self.assertAlmostEqual(parsed[0].center.north, 100.0, places=2)
 
 
 if __name__ == "__main__":

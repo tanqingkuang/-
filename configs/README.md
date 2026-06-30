@@ -1,6 +1,6 @@
 # 配置说明
 
-本目录记录每个 JSON 配置文件对应的仿真内容。配置坐标统一采用 ENU：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度；编队槽位使用 `x_forward_y_up_z_right`。
+本目录记录每个 JSON 配置文件对应的仿真内容。客户可编辑的基础航线和避障障碍文件使用经纬高；控制器和算法内部仍统一采用 ENU：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度；编队槽位使用 `x_forward_y_up_z_right`。
 
 ## `base.json`
 
@@ -13,7 +13,7 @@
 ## `element/line.json`
 
 - 默认基础航线文件，结构与原 `base.json.route` 完全一致。
-- 当前仍使用 ENU 坐标：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度。
+- 对外使用经纬高：`latitude_deg`、`longitude_deg`、`altitude_m`。加载时以第一个航点为 ENU origin，转换后的高度仍取 `altitude_m` 原值。
 - `route_file` 的解析和生成由 `src/data/linefile/` 下的策略工厂负责，设计说明见 `src/data/linefile/航线文件设计.md`。
 
 ## `rally_demo.json`
@@ -26,7 +26,7 @@
 ## `element/obstacles.json`
 
 - 默认避障障碍库文件，结构与原 `base.json.avoidance.obstacles` 完全一致。
-- 当前支持圆形和轴对齐矩形障碍；`enabled` 只表示加载后的默认勾选状态。
+- 对外使用经纬度表达障碍位置：圆形障碍的半径仍为米，矩形障碍使用四点经纬度，可表达旋转矩形；加载时由上层注入基础航线 origin 并转换为 ENU。
 - `obstacles_file` 的解析和生成由 `src/data/obstaclefile/` 下的策略工厂负责，设计说明见 `src/data/obstaclefile/障碍文件设计.md`。
 
 ## `quadrilateral_10_aircraft_a05_leader.json`

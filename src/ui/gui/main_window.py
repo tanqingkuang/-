@@ -39,7 +39,7 @@ def _ensure_project_root_on_path() -> None:
 _ensure_project_root_on_path()
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -76,9 +76,11 @@ from PySide6.QtWidgets import (
 from src.algorithm.context.leaf_types import WayLineS, WayPointInputS, to_display_inputs
 from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_swept_rad
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
+from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_polygon, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
 from src.data.config_loader import _LINE_FILE_MANAGER, resolve_config_references
+from src.data.geo import GeoOrigin
+from src.data.geo_config import geo_origin_from_dict, route_to_external, route_to_internal
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 
@@ -233,7 +235,7 @@ class ObstacleView:
     """俯视图显示用的二维障碍（无限高柱体）。注意：当前仅供 UI 显示与勾选，规划后端后续接入。"""
 
     obstacle_id: str  # 障碍唯一标识，列表显示/勾选用
-    kind: str  # "circle" | "rect"
+    kind: str  # "circle" | "rect" | "polygon"
     enabled: bool = True  # 是否启用（参与避障）
     center_x: float = 0.0  # 圆心 east（kind=circle）
     center_y: float = 0.0  # 圆心 north
@@ -242,9 +244,12 @@ class ObstacleView:
     min_y: float = 0.0  # 矩形 north 下界
     max_x: float = 0.0  # 矩形 east 上界
     max_y: float = 0.0  # 矩形 north 上界
+    vertices: list[tuple[float, float]] = field(default_factory=list)  # 旋转矩形/多边形顶点
 
     def label(self) -> str:
         """生成左面板勾选列表的显示文本。注意：仅用于界面展示。"""
+        if self.kind == "polygon":
+            return f"{self.obstacle_id}  矩形 {len(self.vertices)}点"
         if self.kind == "rect":
             return f"{self.obstacle_id}  矩形 ({self.min_x:.0f},{self.min_y:.0f})-({self.max_x:.0f},{self.max_y:.0f})"
         return f"{self.obstacle_id}  圆 ({self.center_x:.0f},{self.center_y:.0f}) r{self.radius:.0f}"
@@ -274,15 +279,19 @@ def _load_json_config_for_ui(path: str) -> dict[str, object] | None:
 def _resolve_obstacles_reference_for_ui(data: dict[str, object], path: str) -> dict[str, object] | None:
     """只展开 avoidance.obstacles_file，避免航线文件错误污染障碍 UI 显示。"""
     try:
-        resolved = dict(data)
-        avoidance = resolved.get("avoidance")
-        if isinstance(avoidance, dict) and "obstacles_file" in avoidance:
-            # 复用主配置展开逻辑的障碍校验，但不传 route_file，避免触发航线策略。
-            resolved.pop("route_file", None)
-            resolved = resolve_config_references(resolved, Path(path))
-        return resolved
+        # 优先走完整配置展开：经纬度障碍需要基础航线 origin 才能转 ENU。
+        return resolve_config_references(data, Path(path))
     except (OSError, ValueError):
-        return None
+        try:
+            resolved = dict(data)
+            avoidance = resolved.get("avoidance")
+            if isinstance(avoidance, dict) and "obstacles_file" in avoidance:
+                # 兼容旧 ENU 障碍：坏 route_file 不应把障碍列表清空。
+                resolved.pop("route_file", None)
+                resolved = resolve_config_references(resolved, Path(path))
+            return resolved
+        except (OSError, ValueError):
+            return None
 
 
 def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[str, object] | None:
@@ -293,13 +302,20 @@ def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[
         if route_file is not None:
             # parse_avoidance_params 只需要 route 与 avoidance 参数，不需要读取障碍库。
             resolved["route"] = _LINE_FILE_MANAGER.load_route(Path(path), route_file)
+        route = resolved.get("route")
+        if isinstance(route, dict):
+            resolved["route"], _origin = route_to_internal(route)
         return resolved
     except (OSError, ValueError):
         return None
 
 
-def route_inputs_to_config(route: list[WayPointInputS], speed_mps: float) -> dict[str, object]:
-    """把避障航点转换为航线文件对象。注意：保留已烘焙圆弧，便于 route_file 再读回。"""
+def route_inputs_to_config(
+    route: list[WayPointInputS],
+    speed_mps: float,
+    geo_origin: GeoOrigin | None = None,
+) -> dict[str, object]:
+    """把避障航点转换为航线文件对象。注意：有 origin 时输出经纬高。"""
     waypoints: list[dict[str, object]] = []
     for point in route:
         # 普通字段保持与 configs/element/line.json 一致，方便人工编辑和复用。
@@ -318,7 +334,8 @@ def route_inputs_to_config(route: list[WayPointInputS], speed_mps: float) -> dic
                 "altitude_m": point.center.h,
             }
         waypoints.append(waypoint)
-    return {"speed_mps": speed_mps, "waypoints": waypoints}
+    route_config = {"speed_mps": speed_mps, "waypoints": waypoints}
+    return route_to_external(route_config, geo_origin) if geo_origin is not None else route_config
 
 
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
@@ -349,7 +366,16 @@ def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
             continue
         obstacle_id = str(raw.get("id", f"OB{index + 1}"))
         enabled = bool(raw.get("enabled", True))
-        if str(raw.get("type", "circle")) == "rect":
+        raw_type = str(raw.get("type", "circle"))
+        vertices = raw.get("vertices")
+        if raw_type == "polygon" and isinstance(vertices, list):
+            points: list[tuple[float, float]] = []
+            for point in vertices:
+                if isinstance(point, dict):
+                    points.append((_safe_float(point.get("east_m", 0.0)), _safe_float(point.get("north_m", 0.0))))
+            if len(points) >= 3:
+                obstacles.append(ObstacleView(obstacle_id=obstacle_id, kind="polygon", enabled=enabled, vertices=points))
+        elif raw_type == "rect":
             lo = raw.get("min", {})
             hi = raw.get("max", {})
             lo = lo if isinstance(lo, dict) else {}
@@ -397,6 +423,7 @@ class AvoidanceParams:
     speed_mps: float = 0.0
     allow_arc: bool = True  # 航段自身是否可为曲线：开启则折叠贴障大弧并把拐点烘焙成圆弧段；关闭只留直线骨架+交接圆弧
     waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
+    geo_origin: GeoOrigin | None = None  # 外部经纬高航线 origin；旧 ENU 配置为 None
 
 
 class AvoidanceWindow(QDialog):
@@ -440,6 +467,7 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         return None
     grid = avoidance.get("grid") if isinstance(avoidance.get("grid"), dict) else {}
     route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    geo_origin = geo_origin_from_dict(route.get("_geo_origin")) if isinstance(route, dict) else None
     raw_waypoints = route.get("waypoints", []) if isinstance(route, dict) else []
     waypoints: list[tuple[float, float, float]] = []
     if isinstance(raw_waypoints, list):
@@ -473,11 +501,14 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
         allow_arc=bool(avoidance.get("allow_arc", True)),
         waypoints=waypoints,
+        geo_origin=geo_origin,
     )
 
 
 def _obstacle_view_to_backend(view: "ObstacleView") -> ObstacleS:
     """把 UI 障碍转成后端 ObstacleS（供规划调用）。"""
+    if view.kind == "polygon":
+        return make_polygon(view.obstacle_id, view.vertices)
     if view.kind == "rect":
         return make_rect(view.obstacle_id, view.min_x, view.min_y, view.max_x, view.max_y)
     return make_circle(view.obstacle_id, view.center_x, view.center_y, view.radius)
@@ -1550,7 +1581,10 @@ class TopView(QGraphicsView):
         for obstacle in self.obstacles:
             if not obstacle.enabled:
                 continue
-            if obstacle.kind == "rect":
+            if obstacle.kind == "polygon":
+                xs.extend(point[0] for point in obstacle.vertices)
+                ys.extend(point[1] for point in obstacle.vertices)
+            elif obstacle.kind == "rect":
                 xs.extend([obstacle.min_x, obstacle.max_x])
                 ys.extend([obstacle.min_y, obstacle.max_y])
             else:
@@ -1589,13 +1623,21 @@ class TopView(QGraphicsView):
 
     def _obstacle_center(self, obstacle: ObstacleView) -> tuple[float, float]:
         """返回障碍中心世界坐标。注意：矩形取几何中心，圆取圆心。"""
+        if obstacle.kind == "polygon" and obstacle.vertices:
+            return (
+                sum(point[0] for point in obstacle.vertices) / len(obstacle.vertices),
+                sum(point[1] for point in obstacle.vertices) / len(obstacle.vertices),
+            )
         if obstacle.kind == "rect":
             return (obstacle.min_x + obstacle.max_x) / 2.0, (obstacle.min_y + obstacle.max_y) / 2.0
         return obstacle.center_x, obstacle.center_y
 
     def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
         """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（矩形按方角近似）。"""
-        if obstacle.kind == "rect":
+        if obstacle.kind == "polygon" and obstacle.vertices:
+            polygon = QPolygonF([QPointF(east, north) for east, north in obstacle.vertices])
+            painter.drawPolygon(polygon)
+        elif obstacle.kind == "rect":
             painter.drawRect(
                 QRectF(
                     obstacle.min_x - inflate,
@@ -2962,7 +3004,8 @@ class MainWindow(QMainWindow):
             # QFileDialog 在部分平台不会自动追加过滤器后缀，这里统一补成 JSON。
             route_path = route_path.with_suffix(".json")
         speed_mps = self._avoidance_params.speed_mps if self._avoidance_params is not None else self._preview_route[0].vdCmd
-        route_config = route_inputs_to_config(self._preview_route, speed_mps)
+        geo_origin = self._avoidance_params.geo_origin if self._avoidance_params is not None else None
+        route_config = route_inputs_to_config(self._preview_route, speed_mps, geo_origin)
         try:
             # 通过 LineFileManager 保存，确保输出路径和后缀策略与 route_file 加载链路一致。
             written = _LINE_FILE_MANAGER.save_route(config_path, str(route_path), route_config)
