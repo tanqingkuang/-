@@ -72,6 +72,20 @@ def _leg_candidate_obstacles(
     return candidates
 
 
+def _path_clear_against_all_obstacles(
+    points: list[Point],
+    obstacles: list[ObstacleS],
+    clearance: float,
+    sample_step: float | None,
+) -> bool:
+    """检查折线每条直线腿是否避开全量障碍。注意：用于局部候选漏筛后的重规划判定。"""
+    # 这里刻意复用 line_of_sight_clear，保持采样步长和去冗余阶段的直线判障一致。
+    return all(
+        line_of_sight_clear(start, end, obstacles, clearance=clearance, sample_step=sample_step)
+        for start, end in zip(points, points[1:])
+    )
+
+
 @dataclass
 class PlanResult:
     """避障规划结论。注意：ok=True 时 route 可用；失败时带 ERR_AVOID_* 原因码与定位/诊断。"""
@@ -177,6 +191,22 @@ def plan_avoidance_route(
             )
         # 去冗余只需考虑本腿候选障碍；最终可飞性仍对全障碍集复核。
         simplified, causes = simplify_path_with_causes(raw, leg_obstacles, clearance=simplify_clearance_m)
+        if len(leg_obstacles) < len(obstacles) and not _path_clear_against_all_obstacles(
+            simplified, obstacles, arc_clearance, sample_step
+        ):
+            # 局部预筛若漏掉实际绕行通道上的障碍，则回退为全量障碍重规划，恢复优化前可规划能力。
+            # 这条慢路径只在安全复核发现漏筛时触发，80km 常规路径仍保持候选集加速收益。
+            raw = plan_path(
+                start, goal, obstacles,
+                resolution_m=resolution_m, clearance_m=clearance_m, margin_m=margin_m,
+                turn_switch_penalty_m=turn_switch_penalty_m, turn_angle_weight_m=turn_angle_weight_m,
+            )
+            if raw is None:
+                return PlanResult(
+                    ok=False, code=ERR_NO_PATH,
+                    detail=f"腿 {leg} 全量障碍重规划无可行通道", leg_index=leg,
+                )
+            simplified, causes = simplify_path_with_causes(raw, obstacles, clearance=simplify_clearance_m)
         altitudes = _interp_altitudes(simplified, a[2], b[2])
         # 拼接：除首腿外丢掉与上一腿重合的衔接点（连同其 cause 标签一起丢）。
         if full_xy:

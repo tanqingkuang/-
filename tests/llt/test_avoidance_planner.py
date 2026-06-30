@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT, ERR_STRAIGHT_HITS_OBSTACLE
+from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import blocked, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import (
     ERR_ENDPOINT_IN_OBSTACLE,
@@ -46,6 +46,23 @@ def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
     return True
 
 
+def _route_collision_hits(result: PlanResult, obstacles) -> list[tuple[int, str]]:
+    """按展开航段采样检查真实障碍触碰；返回 (航段序号, 障碍 id)。"""
+    hits: list[tuple[int, str]] = []
+    for line_index, line in enumerate(_route_lines(result)):
+        for sample_index in range(501):
+            ratio = sample_index / 500.0
+            east = line.start.pos.east + (line.end.pos.east - line.start.pos.east) * ratio
+            north = line.start.pos.north + (line.end.pos.north - line.start.pos.north) * ratio
+            for obstacle in obstacles:
+                if blocked([obstacle], east, north, 0.0):
+                    hits.append((line_index, obstacle.id))
+                    break
+            if hits and hits[-1][0] == line_index:
+                break
+    return hits
+
+
 class PlanAvoidanceRouteTests(unittest.TestCase):
     def test_no_obstacles_follows_original_route(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0)]
@@ -63,7 +80,7 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         self.assertTrue(result.ok, result.detail)
         plan_path_mock.assert_not_called()
 
-    def test_prefiltered_obstacle_on_detour_is_rejected_by_final_check(self) -> None:
+    def test_prefiltered_obstacle_on_detour_falls_back_to_full_obstacles(self) -> None:
         params = dict(
             turn_radius_m=0.0,
             leg_margin_m=0.0,
@@ -81,9 +98,8 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
 
         result = plan_avoidance_route([(0.0, 0.0, 1000.0), (1000.0, 0.0, 1000.0)], obstacles, **params)
 
-        self.assertFalse(result.ok)
-        self.assertEqual(result.code, ERR_STRAIGHT_HITS_OBSTACLE)
-        self.assertEqual(result.obstacle_id, "B_top_blocker")
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(_route_collision_hits(result, obstacles), [])
 
     def test_single_circle_on_leg_is_detoured(self) -> None:
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
