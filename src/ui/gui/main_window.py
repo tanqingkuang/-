@@ -522,6 +522,80 @@ def _obstacle_view_to_backend(view: "ObstacleView") -> ObstacleS:
     return make_circle(view.obstacle_id, view.center_x, view.center_y, view.radius)
 
 
+def _inflated_polygon_vertices(vertices: list[tuple[float, float]], inflate: float) -> list[tuple[float, float]]:
+    """返回用于 GUI 显示的多边形外扩顶点。注意：面向旋转矩形/凸多边形显示近似。"""
+    if inflate <= 0.0 or len(vertices) < 3:
+        return list(vertices)
+    signed_area = 0.0
+    # 用有向面积判断顶点绕序，从而确定每条边的外法线方向。
+    for (x0, y0), (x1, y1) in zip(vertices, vertices[1:] + vertices[:1]):
+        signed_area += x0 * y1 - y0 * x1
+    if abs(signed_area) <= 1e-9:
+        return _inflate_polygon_from_centroid(vertices, inflate)
+
+    edge_lines: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for start, end in zip(vertices, vertices[1:] + vertices[:1]):
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return _inflate_polygon_from_centroid(vertices, inflate)
+        # Qt 画布使用 east/north 世界坐标，外扩只影响显示，不改变后端 inside(clearance) 语义。
+        if signed_area > 0.0:
+            normal = (dy / length, -dx / length)
+        else:
+            normal = (-dy / length, dx / length)
+        # 每条边沿外法线平移 inflate，再取相邻平移边交点作为新的角点。
+        point = (start[0] + normal[0] * inflate, start[1] + normal[1] * inflate)
+        edge_lines.append((point, (dx, dy)))
+
+    inflated: list[tuple[float, float]] = []
+    for index, _ in enumerate(vertices):
+        previous_point, previous_dir = edge_lines[index - 1]
+        current_point, current_dir = edge_lines[index]
+        # 相邻外移边的交点就是凸多边形的外扩角点；平行退化时改用径向兜底。
+        intersection = _line_intersection(previous_point, previous_dir, current_point, current_dir)
+        if intersection is None:
+            return _inflate_polygon_from_centroid(vertices, inflate)
+        inflated.append(intersection)
+    return inflated
+
+
+def _line_intersection(
+    point_a: tuple[float, float],
+    dir_a: tuple[float, float],
+    point_b: tuple[float, float],
+    dir_b: tuple[float, float],
+) -> tuple[float, float] | None:
+    """求两条参数直线交点。注意：平行或近似平行时返回 None。"""
+    # 二维叉积接近 0 表示两条外移边平行，无法稳定求 miter 角点。
+    cross = dir_a[0] * dir_b[1] - dir_a[1] * dir_b[0]
+    if abs(cross) <= 1e-9:
+        return None
+    # 解 point_a + dir_a * t = point_b + dir_b * u，只需要 t 即可还原交点。
+    delta = (point_b[0] - point_a[0], point_b[1] - point_a[1])
+    t = (delta[0] * dir_b[1] - delta[1] * dir_b[0]) / cross
+    return point_a[0] + dir_a[0] * t, point_a[1] + dir_a[1] * t
+
+
+def _inflate_polygon_from_centroid(vertices: list[tuple[float, float]], inflate: float) -> list[tuple[float, float]]:
+    """退化多边形的显示兜底：各顶点沿几何中心径向外推。"""
+    center_x = sum(point[0] for point in vertices) / len(vertices)
+    center_y = sum(point[1] for point in vertices) / len(vertices)
+    inflated: list[tuple[float, float]] = []
+    for east, north in vertices:
+        dx = east - center_x
+        dy = north - center_y
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            inflated.append((east, north))
+        else:
+            # 兜底路径只保证外扩圈不和本体重合，不承诺精确等距 offset。
+            scale = (length + inflate) / length
+            inflated.append((center_x + dx * scale, center_y + dy * scale))
+    return inflated
+
+
 def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[float, float]]:
     """采样圆弧航段为折线点（含两端）。注意：复用 arc_swept_rad 求扫掠角。"""
     center = line.start.center
@@ -1671,9 +1745,11 @@ class TopView(QGraphicsView):
         return obstacle.center_x, obstacle.center_y
 
     def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
-        """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（矩形按方角近似）。"""
+        """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（polygon 为显示近似）。"""
         if obstacle.kind == "polygon" and obstacle.vertices:
-            polygon = QPolygonF([QPointF(east, north) for east, north in obstacle.vertices])
+            # polygon 安全间距用外扩顶点显示，避免虚线圈与旋转矩形本体重合。
+            vertices = _inflated_polygon_vertices(obstacle.vertices, inflate)
+            polygon = QPolygonF([QPointF(east, north) for east, north in vertices])
             painter.drawPolygon(polygon)
         elif obstacle.kind == "rect":
             painter.drawRect(
