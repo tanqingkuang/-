@@ -22,6 +22,36 @@ from .obstacle import ObstacleS, blocked, inside, obstacle_bounds
 Point = tuple[float, float]
 
 
+def _bounds_intersect(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    """判断两个轴对齐包围盒是否相交。注意：边界接触视为相交。"""
+    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+
+def _segment_candidate_obstacles(
+    start: Point,
+    end: Point,
+    obstacles: list[ObstacleS],
+    clearance: float,
+) -> list[ObstacleS]:
+    """按线段扩展包围盒预筛障碍。注意：只剔除几何上不可能命中的远场障碍。"""
+    if not obstacles:
+        return []
+    segment_bounds = (
+        min(start[0], end[0]) - clearance,
+        min(start[1], end[1]) - clearance,
+        max(start[0], end[0]) + clearance,
+        max(start[1], end[1]) + clearance,
+    )
+    candidates: list[ObstacleS] = []
+    for obstacle in obstacles:
+        # 障碍 expanded bbox 与线段 expanded bbox 不相交时，逐点采样也不可能命中。
+        min_e, min_n, max_e, max_n = obstacle_bounds(obstacle)
+        obstacle_expanded = (min_e - clearance, min_n - clearance, max_e + clearance, max_n + clearance)
+        if _bounds_intersect(segment_bounds, obstacle_expanded):
+            candidates.append(obstacle)
+    return candidates
+
+
 def _default_sample_step(obstacles: list[ObstacleS], clearance: float) -> float:
     """推一个足够密的视线采样步长：远小于最小障碍尺寸与 clearance，避免线段在两采样点间穿过细障碍。"""
     features: list[float] = []
@@ -53,8 +83,12 @@ def _first_blocker(
         raise ValueError("sample_step must be > 0")
     if not obstacles:
         return None
+    candidates = _segment_candidate_obstacles(start, end, obstacles, clearance)
+    if not candidates:
+        # 没有候选障碍时整条线段必然清空，可直接跳过采样循环。
+        return None
     if sample_step is None:
-        sample_step = _default_sample_step(obstacles, clearance)
+        sample_step = _default_sample_step(candidates, clearance)
     length = hypot(end[0] - start[0], end[1] - start[1])
     # 用 ceil 保证实际采样间距 length/steps <= sample_step（int 向下取整会让间距超限、漏检细障碍）。
     steps = max(1, ceil(length / sample_step))
@@ -62,7 +96,8 @@ def _first_blocker(
         t = k / steps
         east = start[0] + (end[0] - start[0]) * t
         north = start[1] + (end[1] - start[1]) * t
-        for obstacle in obstacles:
+        for obstacle in candidates:
+            # 只检查线段附近候选障碍，避免长航段对全图障碍重复做 inside 判定。
             if inside(obstacle, east, north, clearance):
                 return obstacle  # 沿线首个命中的障碍即"逼停"这条腿者，作为拐点来源
     return None

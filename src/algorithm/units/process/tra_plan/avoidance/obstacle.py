@@ -7,8 +7,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import hypot
-
 from src.algorithm.context.leaf_types import PosInEarthS
 
 
@@ -45,22 +43,43 @@ def make_polygon(obstacle_id: str, vertices: list[tuple[float, float]]) -> Obsta
         raise ValueError("polygon obstacle needs at least three vertices")
     # 后端统一用 PosInEarthS 表达水平点，h 对二维避障无意义。
     points = [PosInEarthS(east=east, north=north) for east, north in vertices]
-    return ObstacleS(id=obstacle_id, kind="polygon", vertices=points)
+    east_values = [point.east for point in points]
+    north_values = [point.north for point in points]
+    # 多边形热点判定会先用 bbox 排除远场点，因此构造时缓存 bounds。
+    return ObstacleS(
+        id=obstacle_id,
+        kind="polygon",
+        min_e=min(east_values),
+        min_n=min(north_values),
+        max_e=max(east_values),
+        max_n=max(north_values),
+        vertices=points,
+    )
 
 
 def _point_segment_distance(east: float, north: float, a: PosInEarthS, b: PosInEarthS) -> float:
     """计算点到线段的水平距离。注意：用于 polygon clearance 外扩判定。"""
+    return _point_segment_distance_sq(east, north, a, b) ** 0.5
+
+
+def _point_segment_distance_sq(east: float, north: float, a: PosInEarthS, b: PosInEarthS) -> float:
+    """计算点到线段的水平距离平方。注意：热点判定中避免反复开方。"""
     dx = b.east - a.east
     dy = b.north - a.north
     length2 = dx * dx + dy * dy
     if length2 <= 1e-12:
-        return hypot(east - a.east, north - a.north)
+        de = east - a.east
+        dn = north - a.north
+        # 退化边按点障碍处理，仍返回平方距离以供阈值比较。
+        return de * de + dn * dn
     # 投影参数裁剪到线段范围内，避免使用无限直线距离。
     t = ((east - a.east) * dx + (north - a.north) * dy) / length2
     t = max(0.0, min(1.0, t))
     closest_e = a.east + t * dx
     closest_n = a.north + t * dy
-    return hypot(east - closest_e, north - closest_n)
+    de = east - closest_e
+    dn = north - closest_n
+    return de * de + dn * dn
 
 
 def _inside_polygon(vertices: list[PosInEarthS], east: float, north: float) -> bool:
@@ -69,7 +88,7 @@ def _inside_polygon(vertices: list[PosInEarthS], east: float, north: float) -> b
         return False
     # 先做边界判断，保证点落在边上时也算触障。
     for start, end in zip(vertices, vertices[1:] + vertices[:1]):
-        if _point_segment_distance(east, north, start, end) <= 1e-9:
+        if _point_segment_distance_sq(east, north, start, end) <= 1e-18:
             return True
     inside_flag = False
     j = len(vertices) - 1
@@ -93,13 +112,29 @@ def inside(obstacle: ObstacleS, east: float, north: float, clearance: float = 0.
     矩形按方角外扩近似（圆角误差由 clearance 吸收，见 §8）。
     """
     if obstacle.kind == "circle":
-        return hypot(east - obstacle.center.east, north - obstacle.center.north) <= obstacle.radius + clearance
+        radius = obstacle.radius + clearance
+        de = east - obstacle.center.east
+        dn = north - obstacle.center.north
+        # 圆的外接方框先挡掉绝大多数远场点，热点路径里可避免 hypot。
+        if abs(de) > radius or abs(dn) > radius:
+            return False
+        return de * de + dn * dn <= radius * radius
     if obstacle.kind == "polygon":
+        # bbox 外的点不可能在 polygon 内，也不可能落入按 clearance 外扩后的边带。
+        if (
+            east < obstacle.min_e - clearance
+            or east > obstacle.max_e + clearance
+            or north < obstacle.min_n - clearance
+            or north > obstacle.max_n + clearance
+        ):
+            return False
         if _inside_polygon(obstacle.vertices, east, north):
             return True
         # clearance 按点到各边距离膨胀，支持旋转矩形而不变成轴对齐包围盒。
+        clearance_sq = clearance * clearance
+        # 用距离平方和 clearance 平方比较，避免热点路径里每条边都开方。
         return any(
-            _point_segment_distance(east, north, start, end) <= clearance
+            _point_segment_distance_sq(east, north, start, end) <= clearance_sq
             for start, end in zip(obstacle.vertices, obstacle.vertices[1:] + obstacle.vertices[:1])
         )
     return (
@@ -124,7 +159,5 @@ def obstacle_bounds(obstacle: ObstacleS) -> tuple[float, float, float, float]:
         )
     if obstacle.kind == "polygon":
         # A* 搜索范围仍使用轴对齐 bounds，但碰撞判定用 polygon 原形。
-        east_values = [point.east for point in obstacle.vertices]
-        north_values = [point.north for point in obstacle.vertices]
-        return (min(east_values), min(north_values), max(east_values), max(north_values))
+        return (obstacle.min_e, obstacle.min_n, obstacle.max_e, obstacle.max_n)
     return (obstacle.min_e, obstacle.min_n, obstacle.max_e, obstacle.max_n)

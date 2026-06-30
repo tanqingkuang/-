@@ -17,11 +17,12 @@ from src.algorithm.context.leaf_types import WayPointInputS
 
 from .astar import plan_path
 from .feasibility import FeasibilityResult, check_route_feasibility
-from .obstacle import ObstacleS, blocked
+from .obstacle import ObstacleS, blocked, obstacle_bounds
 from .path_to_route import (
     assign_transition_radius,
     bake_obstacle_hug_arcs,
     bake_transition_arcs,
+    line_of_sight_clear,
     points_to_route,
     simplify_path_with_causes,
 )
@@ -33,6 +34,42 @@ Waypoint3D = tuple[float, float, float]
 # 失败原因码（见计划 §9.1）。可飞性相关码由 check_feasibility 透传（ERR_AVOID_*）。
 ERR_NO_PATH = "ERR_AVOID_NO_PATH"
 ERR_ENDPOINT_IN_OBSTACLE = "ERR_AVOID_ENDPOINT_IN_OBSTACLE"
+
+
+def _bounds_intersect(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    """判断两个轴对齐包围盒是否相交。注意：用于航段级障碍预筛。"""
+    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+
+def _leg_candidate_obstacles(
+    start: Point,
+    goal: Point,
+    obstacles: list[ObstacleS],
+    clearance_m: float,
+    margin_m: float,
+) -> list[ObstacleS]:
+    """筛出航段附近障碍。注意：只剔除超出航段搜索外扩范围的远场障碍。"""
+    pad = clearance_m + margin_m
+    # pad 与 A* 自动 bounds 外扩一致，远离该盒子的障碍不会参与本腿绕行。
+    leg_bounds = (
+        min(start[0], goal[0]) - pad,
+        min(start[1], goal[1]) - pad,
+        max(start[0], goal[0]) + pad,
+        max(start[1], goal[1]) + pad,
+    )
+    candidates: list[ObstacleS] = []
+    for obstacle in obstacles:
+        # 障碍本体按 clearance 外扩后再和航段搜索盒求交，避免漏掉安全边界。
+        min_e, min_n, max_e, max_n = obstacle_bounds(obstacle)
+        obstacle_bounds_expanded = (
+            min_e - clearance_m,
+            min_n - clearance_m,
+            max_e + clearance_m,
+            max_n + clearance_m,
+        )
+        if _bounds_intersect(leg_bounds, obstacle_bounds_expanded):
+            candidates.append(obstacle)
+    return candidates
 
 
 @dataclass
@@ -108,11 +145,22 @@ def plan_avoidance_route(
     for leg in range(len(waypoints) - 1):
         a = waypoints[leg]
         b = waypoints[leg + 1]
-        raw = plan_path(
-            (a[0], a[1]), (b[0], b[1]), obstacles,
-            resolution_m=resolution_m, clearance_m=clearance_m, margin_m=margin_m,
-            turn_switch_penalty_m=turn_switch_penalty_m, turn_angle_weight_m=turn_angle_weight_m,
-        )
+        start = (a[0], a[1])
+        goal = (b[0], b[1])
+        # 绝大多数长航段不需要绕障，先做连续线段判定，避免对原直线重复跑大范围 A*。
+        direct_candidates = _leg_candidate_obstacles(start, goal, obstacles, clearance_m, 0.0)
+        if line_of_sight_clear(start, goal, direct_candidates, clearance=clearance_m):
+            # 原腿全程在膨胀障碍外，直接保留端点；这与 A* 最短路结果等价但省掉网格搜索。
+            raw = [start, goal]
+            leg_obstacles = direct_candidates
+        else:
+            leg_obstacles = _leg_candidate_obstacles(start, goal, obstacles, clearance_m, margin_m)
+            # 只有被挡住的腿才跑 A*，且只把本腿搜索盒附近的障碍交给它。
+            raw = plan_path(
+                start, goal, leg_obstacles,
+                resolution_m=resolution_m, clearance_m=clearance_m, margin_m=margin_m,
+                turn_switch_penalty_m=turn_switch_penalty_m, turn_angle_weight_m=turn_angle_weight_m,
+            )
         if raw is None:
             # 区分“端点落在膨胀障碍内”与“通道被封死”两类，便于诊断（见 §9.1）。
             blocked_a = blocked(obstacles, a[0], a[1], clearance_m)
@@ -127,7 +175,8 @@ def plan_avoidance_route(
                 ok=False, code=ERR_NO_PATH,
                 detail=f"腿 {leg} 无可行通道（通道被封死或绕行超出栅格范围）", leg_index=leg,
             )
-        simplified, causes = simplify_path_with_causes(raw, obstacles, clearance=simplify_clearance_m)
+        # 去冗余只需考虑本腿候选障碍；最终可飞性仍对全障碍集复核。
+        simplified, causes = simplify_path_with_causes(raw, leg_obstacles, clearance=simplify_clearance_m)
         altitudes = _interp_altitudes(simplified, a[2], b[2])
         # 拼接：除首腿外丢掉与上一腿重合的衔接点（连同其 cause 标签一起丢）。
         if full_xy:

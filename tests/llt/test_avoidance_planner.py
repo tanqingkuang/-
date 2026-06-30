@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT
@@ -53,6 +54,14 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         lines = _route_lines(result)
         self.assertEqual(lines[0].start.pos.east, 0.0)
         self.assertEqual(lines[-1].end.pos.east, 2000.0)
+
+    def test_clear_leg_skips_astar_search(self) -> None:
+        wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0), (4000.0, 0.0, 1000.0)]
+        with patch("src.algorithm.units.process.tra_plan.avoidance.planner.plan_path") as plan_path_mock:
+            result = plan_avoidance_route(wps, [], **COMMON)
+
+        self.assertTrue(result.ok, result.detail)
+        plan_path_mock.assert_not_called()
 
     def test_single_circle_on_leg_is_detoured(self) -> None:
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]
