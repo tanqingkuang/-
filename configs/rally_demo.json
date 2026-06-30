@@ -1,0 +1,130 @@
+{
+  "duration_s": 500.0,
+  "step_s": 0.005,
+  "playback_rate": 1.0,
+  "seed": 1,
+  "route": {
+    "speed_mps": 20.0,
+    "waypoints": [
+      { "x_m": 5000.0, "y_m": 5000.0, "altitude_m": 500.0, "R": 0.0 },
+      { "x_m": 10000.0, "y_m": 5000.0, "altitude_m": 500.0, "R": 0.0 }
+    ]
+  },
+  "rally_route": {
+    "speed_mps": 20.0,
+    "waypoints": [
+      { "x_m": 0.0,    "y_m": 5000.0, "altitude_m": 500.0, "R": 0.0 },
+      { "x_m": 5000.0, "y_m": 5000.0, "altitude_m": 500.0, "R": 0.0 }
+    ]
+  },
+  "rally_cfg": {
+    "loose_scale": 3.0,
+    "convergence_radius_m": 30.0,
+    "stable_hold_s": 4.0,
+    "compress_time_s": 20.0,
+    "tight_radius_m": 5.0,
+    "stale_timeout_s": 3.0,
+    "target_pattern": "TRIANGLE",
+    "loiter_radius_m": 200.0,
+    "arrival_radius_m": 100.0,
+    "last_arrival_threshold_s": 8.0,
+    "mission_heading_deg": 0.0,
+    "catchup_radius_m": 200.0
+  },
+  "formation": {
+    "pattern": "TRIANGLE",
+    "coordinate_system": "x_forward_y_up_z_right",
+    "slots": [
+      { "node_id": "R01", "x_m":   0.0, "y_m": 0.0, "z_m":   0.0 },
+      { "node_id": "R02", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0 },
+      { "node_id": "R03", "x_m": -54.0, "y_m": 0.0, "z_m":  58.0 }
+    ]
+  },
+  "model": {
+    "gravity_mps2": 9.80665,
+    "min_speed_mps": 1.0,
+    "acceleration_filter": {
+      "natural_frequency_rad_s": 4.0,
+      "damping_ratio": 0.65
+    },
+    "limits": {
+      "acceleration_command_mps2": 6.0,
+      "max_climb_rate_mps": 3.0,
+      "max_descent_rate_mps": 3.0,
+      "nx_min": -1.0,
+      "nx_max": 1.0,
+      "nz_min": 0.0,
+      "nz_max": 4.0,
+      "phi_min_deg": -70.0,
+      "phi_max_deg": 70.0
+    }
+  },
+  "control": {
+    "velocity_command_limits": {
+      "forward_min_mps": 14.0,
+      "forward_max_mps": 25.0,
+      "vertical_min_mps": -3.0,
+      "vertical_max_mps": 3.0
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "R01",
+      "role": "rally_leader",
+      "x_m": 2000.0,
+      "y_m": 3000.0,
+      "altitude_m": 500.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 20.0,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 6000.0
+    },
+    {
+      "node_id": "R02",
+      "role": "rally_follower",
+      "rally_target": { "x_m": 4838.0, "y_m": 5174.0, "altitude_m": 500.0 },
+      "x_m": 3200.0,
+      "y_m": 2174.0,
+      "altitude_m": 500.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 20.0,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 0.0
+    },
+    {
+      "node_id": "R03",
+      "role": "rally_follower",
+      "rally_target": { "x_m": 4838.0, "y_m": 4826.0, "altitude_m": 500.0 },
+      "x_m": 3000.0,
+      "y_m": 4026.0,
+      "altitude_m": 500.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 20.0,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 0.0
+    }
+  ],
+  "links": [
+    {
+      "link_id": "R01-R02",
+      "direction": "duplex",
+      "latency_ms": 18.0,
+      "loss_rate": 0.01,
+      "status": "normal"
+    },
+    {
+      "link_id": "R01-R03",
+      "direction": "duplex",
+      "latency_ms": 21.0,
+      "loss_rate": 0.01,
+      "status": "normal"
+    },
+    {
+      "link_id": "R02-R03",
+      "direction": "duplex",
+      "latency_ms": 30.0,
+      "loss_rate": 0.02,
+      "status": "normal"
+    }
+  ]
+}

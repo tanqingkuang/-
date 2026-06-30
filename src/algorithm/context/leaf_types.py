@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, fields, replace
 from enum import IntEnum
 
@@ -235,3 +236,89 @@ def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:
     dst.stage = FormStageE(src.stage)
     dst.pattern = FormPatE(src.pattern)
     dst.step = int(src.step)
+
+
+def zero_velocity(v: VdInEarthS) -> None:
+    """将速度对象所有分量原地清零。注意：与 copy_velocity 配套，NONE 分支输出零速时调用。"""
+    v.vEast = 0.0
+    v.vNorth = 0.0
+    v.vUp = 0.0
+    v.vTheta = 0.0
+    v.vPsi = 0.0
+    v.vd = 0.0
+    v.dVPsi = 0.0
+
+
+def zero_acceleration(a: AccInEarthS) -> None:
+    """将加速度对象所有分量原地清零。注意：NONE 分支防止上一帧残留时调用。"""
+    a.accEast = 0.0
+    a.accNorth = 0.0
+    a.accUp = 0.0
+
+
+@dataclass
+class RallySlotScaleS:
+    """集结阶段的槽位偏置缩放因子。注意：需跨拍保留，进 Context；scaleRate 供 ScaledSlotGeometry 计算压缩速度前馈。"""
+
+    scale: float = 1.0  # 槽位偏置放大倍数；1.0 为最终队形，>1.0 为松散放大
+    scaleRate: float = 0.0  # scale 对时间的导数（1/s）；LOOSE 为 0，COMPRESS 为负值
+
+
+@dataclass
+class FollowerStateS:
+    """单架僚机向长机回报的集结状态快照。注意：id 与节点 ID 对应；posErr 为到当前目标的合距离。"""
+
+    id: str = ""  # 节点 ID，与 envelope.source 对应
+    pos: PosInEarthS = field(default_factory=PosInEarthS)  # 实际位置
+    posErr_m: float = 0.0  # 到当前目标的合距离，米；CATCHUP 阶段为 dist2d(self, slot)
+    headingErr_rad: float = 0.0  # 当前航向与目标航向之差的绝对值，弧度
+    arrived: int = 0  # 兼容旧协议；新协议以 rally_state == EXITED 为准
+    valid: bool = False  # 本帧数据是否有效（收到最新报文则置 True）
+    lastUpdate_s: float = 0.0  # 最近一次收到该机报文的仿真时间戳，秒
+    eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）；LOITERING/EXITED 时为当前时刻
+    rally_state: str = "FLYING"  # 集结汇合状态：FLYING / LOITERING / EXITED
+
+
+@dataclass
+class FormationAnalysisS:
+    """集结完成后的一次性编队质量分析。注意：仅作边界诊断量输出，不进 Context。"""
+
+    posErrMax_m: float = 0.0  # 期望僚机中的最大位置偏差，米（仅统计 expectedFollowerIds 里有效节点）
+    posErrRms_m: float = 0.0  # 期望僚机位置误差 RMSE，米
+    inPositionCount: int = 0  # 期望僚机中满足精度要求的机数
+    totalCount: int = 0  # 期望参与集结的总机数（= len(expectedFollowerIds)，不受断链影响）
+
+
+def copy_rally_slot_scale(src: RallySlotScaleS, dst: RallySlotScaleS) -> None:
+    """复制槽位缩放因子，避免 Context 字段被外部别名引用。注意：新增字段时同步补齐。"""
+    dst.scale = src.scale
+    dst.scaleRate = src.scaleRate
+
+
+def dist3d(a: "PosInEarthS", b: "PosInEarthS") -> float:
+    """两点 3D 欧氏距离，单位米。"""
+    de = a.east - b.east
+    dn = a.north - b.north
+    dh = a.h - b.h
+    return math.sqrt(de * de + dn * dn + dh * dh)
+
+
+def copy_follower_state(src: FollowerStateS, dst: FollowerStateS) -> None:
+    """复制单架僚机状态快照。注意：pos 为嵌套对象，须逐字段复制。"""
+    dst.id = src.id
+    copy_position(src.pos, dst.pos)
+    dst.posErr_m = src.posErr_m
+    dst.headingErr_rad = src.headingErr_rad
+    dst.arrived = src.arrived
+    dst.valid = src.valid
+    dst.lastUpdate_s = src.lastUpdate_s
+    dst.eta_s = src.eta_s
+    dst.rally_state = src.rally_state
+
+
+def copy_formation_analysis(src: FormationAnalysisS, dst: FormationAnalysisS) -> None:
+    """复制编队分析快照，供仿真层安全持有诊断结果。注意：新增字段时同步补齐。"""
+    dst.posErrMax_m = src.posErrMax_m
+    dst.posErrRms_m = src.posErrRms_m
+    dst.inPositionCount = src.inPositionCount
+    dst.totalCount = src.totalCount

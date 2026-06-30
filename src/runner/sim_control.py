@@ -25,6 +25,7 @@ from src.algorithm.context.leaf_types import (
     FormPosS,
     FormSelfInitS,
     FormStageE,
+    FormationAnalysisS,
     MotionProfS,
     NetWorkS,
     PosInEarthS,
@@ -40,7 +41,10 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
 from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity, waypoint_inputs_to_waylines
+from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
+from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.common.envelope import MessageEnvelope
 from src.data.config_loader import resolve_config_references
 from src.environment.comm import CommunicationChannel
@@ -120,6 +124,7 @@ class NodeState:
     # 相对当前航段的侧偏与待飞距，无航线时为 None。
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
+    rally_phase: str = ""  # 集结阶段字符串，如 JOINING/FLYING、CATCHUP、LOOSE、COMPRESS、HOLD
 
 
 @dataclass(frozen=True)
@@ -163,6 +168,7 @@ class SimulationSnapshot:
     route: RouteState | None = None  # 当前航段。
     route_segments: list[RouteState] = field(default_factory=list)  # 全部航段。
     cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。
+    rally_analysis: object | None = None  # FormationAnalysisS；集结完成首帧非 None，控制器锁存
 
 
 @dataclass(frozen=True)
@@ -217,6 +223,7 @@ class _NodeAlgorithmOutput:
     outbox: list[MessageEnvelope]  # 该节点本步要广播/发送的消息，统一交给通信模块。
     status: str  # 算法运行态文本（如 "forming"/"reconfiguring"），用于推导控制回报。
     control_diag: PosTrackDiagS  # 该节点本步位置跟踪诊断，供快照和日志记录。
+    formation_analysis: object | None = None  # FormationAnalysisS；集结完成首帧非 None
 
 
 @dataclass(frozen=True)
@@ -559,9 +566,9 @@ def _route_point_from_config(raw: object, field_name: str) -> PosInEarthS:
 
 def _leader_id_from_nodes(nodes: list[object]) -> str:
     """从节点配置中识别长机 ID。注意：找不到时使用默认长机。"""
-    # 优先取显式 role=="leader" 的节点。
+    # 优先取显式 role=="leader" 或 "rally_leader" 的节点。
     for index, node in enumerate(nodes):
-        if isinstance(node, dict) and str(node.get("role") or "") == "leader":
+        if isinstance(node, dict) and str(node.get("role") or "") in {"leader", "rally_leader"}:
             return node_id_from_config(node, index)
     # 没有显式长机则回退到第一个节点。
     for index, node in enumerate(nodes):
@@ -611,6 +618,89 @@ def _build_vel_cmd_limit(config: dict[str, object] | None = None) -> VelCmdLimit
     if limit.verticalMin > limit.verticalMax:
         raise ValueError("control.velocity_command_limits: vertical_min_mps must be <= vertical_max_mps")
     return limit
+
+
+def _build_rally_route(config: dict[str, object] | None = None, *, insert_arcs: bool = True) -> list[WayPointInputS] | None:
+    """从配置 rally_route 段生成集结长机航线。注意：键不存在时返回 None。"""
+    route_config = (config or {}).get("rally_route")
+    if route_config is None:
+        return None
+    if not isinstance(route_config, dict):
+        raise ValueError("rally_route must be an object")
+    waypoints = route_config.get("waypoints")
+    if waypoints is not None:
+        return _wpi_from_waypoints(waypoints, route_config, insert_arcs=insert_arcs)
+    segments = route_config.get("segments", route_config.get("lines"))
+    if segments is None:
+        wl = _wayline_from_config(route_config, 0, "rally_route")
+        return [
+            WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd),
+            WayPointInputS(idx=1, pos=wl.end.pos, vdCmd=wl.start.vdCmd),
+        ]
+    if not isinstance(segments, list) or not segments:
+        raise ValueError("rally_route.segments must be a non-empty list")
+    wpi_list: list[WayPointInputS] = []
+    for index, segment in enumerate(segments):
+        wl = _wayline_from_config(segment, index, f"rally_route.segments[{index}]", route_config)
+        if index == 0:
+            wpi_list.append(WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd))
+        wpi_list.append(WayPointInputS(idx=index + 1, pos=wl.end.pos, vdCmd=wl.start.vdCmd))
+    return wpi_list
+
+
+def _build_rally_task_init(
+    config: dict[str, object] | None,
+    algorithm_period_s: float,
+    nodes: list[object],
+) -> RallyTaskInitS | None:
+    """从配置 rally_cfg 段构造集结任务初始化参数。注意：键不存在时返回 None。"""
+    rally_cfg_raw = (config or {}).get("rally_cfg")
+    if rally_cfg_raw is None:
+        return None
+    if not isinstance(rally_cfg_raw, dict):
+        raise ValueError("rally_cfg must be an object")
+    expected_ids = [
+        node_id_from_config(node, i)
+        for i, node in enumerate(nodes)
+        if isinstance(node, dict) and str(node.get("role") or "") == "rally_follower"
+    ]
+    raw_pattern = rally_cfg_raw.get("target_pattern", "TRIANGLE")
+    pattern = _formation_pattern_from_config(raw_pattern)
+    return RallyTaskInitS(
+        looseScale=float(rally_cfg_raw.get("loose_scale", 3.0)),
+        convergenceRadius_m=float(rally_cfg_raw.get("convergence_radius_m", 5.0)),
+        stableHold_s=float(rally_cfg_raw.get("stable_hold_s", 5.0)),
+        compressTime_s=float(rally_cfg_raw.get("compress_time_s", 30.0)),
+        tightRadius_m=float(rally_cfg_raw.get("tight_radius_m", 2.0)),
+        expectedFollowerIds=expected_ids,
+        staleTimeout_s=float(rally_cfg_raw.get("stale_timeout_s", 2.0)),
+        targetPattern=pattern,
+        dt_s=algorithm_period_s,
+        loiter_radius_m=float(rally_cfg_raw.get("loiter_radius_m", 200.0)),
+        arrival_radius_m=float(rally_cfg_raw.get("arrival_radius_m", 100.0)),
+        last_arrival_threshold_s=float(rally_cfg_raw.get("last_arrival_threshold_s", 5.0)),
+        mission_heading_deg=float(rally_cfg_raw.get("mission_heading_deg", 0.0)),
+        catchup_radius_m=float(rally_cfg_raw.get("catchup_radius_m", 200.0)),
+        catchup_kp_speed=float(rally_cfg_raw.get("catchup_kp_speed", 0.05)),
+    )
+
+
+def _build_rally_approach_speed(config: dict[str, object] | None) -> float:
+    """从 rally_cfg.approach_speed_mps 读取僚机集结接近速度。注意：未配置时保持 EntityInitS 默认 20 m/s。"""
+    # approach_speed_mps 是僚机本地 APPROACH 速度，不属于长机 Rally 状态机门控。
+    # 因此它不放进 RallyTaskInitS，避免长机任务单元携带僚机控制细节。
+    # 控制器在装配 RallyFollowerEntity 时单独把该值写入 EntityInitS。
+    # 旧配置没有该字段时沿用 20 m/s，保持既有 demo 行为。
+    # 若配置了负值，加载阶段直接失败，避免到实体初始化时才报模块初始化错误。
+    rally_cfg_raw = (config or {}).get("rally_cfg")
+    if rally_cfg_raw is None:
+        return 20.0
+    if not isinstance(rally_cfg_raw, dict):
+        raise ValueError("rally_cfg must be an object")
+    speed = float(rally_cfg_raw.get("approach_speed_mps", 20.0))
+    if speed < 0.0:
+        raise ValueError("rally_cfg.approach_speed_mps must be >= 0")
+    return speed
 
 
 class _ConfigLoader:
@@ -668,8 +758,13 @@ class _ConfigLoader:
             raise ValueError("links must be a list")
         # 复用构造函数做深层校验：航线、编队/通信、模型配置任一非法都会在此抛错。
         _build_leader_route(config)
+        _build_rally_route(config)
         _build_formation_comm_init(list(nodes or []), list(links or []), config)
         _build_vel_cmd_limit(config)
+        step_s_v = float(config.get("step_s", 0.005))
+        decimation_v = int(config.get("algorithm_decimation", _DEFAULT_ALGORITHM_DECIMATION))
+        _build_rally_task_init(config, step_s_v * decimation_v, list(nodes or []))
+        _build_rally_approach_speed(config)
         ModelIterator._parse_model_config(model)
 
 
@@ -686,15 +781,27 @@ class _NodeAlgorithm:
         leader_route: list[WayPointInputS] | None,
         control_period_s: float,
         vel_cmd_limit: VelCmdLimitS | None = None,
+        rally_route: list[WayPointInputS] | None = None,
+        rally_cfg: object | None = None,
+        rally_target: PosInEarthS | None = None,
+        rally_leader_id: str = "",
+        rally_approach_speed_mps: float = 20.0,
     ) -> None:
         """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
         self._role = role
         # 标记长机是否已执行过算法步：未跑前 current_route 回退到航线首段。
         self._has_route_step = False
-        # 按角色选择编队实体：长机跑航线，僚机跟随保持。
+        # 集结角色从 RALLY 开始；其余角色（leader/wingman）默认 HOLD。
+        self._remote_stage = FormStageE.RALLY if role in {"rally_leader", "rally_follower"} else FormStageE.HOLD
+        self._initial_remote_stage = self._remote_stage
+        # 按角色选择编队实体。
         if role == "leader":
             self._entity: EntityBase = LeaderEntity()
+        elif role == "rally_leader":
+            self._entity = RallyLeaderEntity()
+        elif role == "rally_follower":
+            self._entity = RallyFollowerEntity()
         else:
             self._entity = FollowerEntity()
         self._entity.init(
@@ -704,16 +811,23 @@ class _NodeAlgorithm:
                 route=leader_route or [],
                 control_period_s=control_period_s,
                 velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
+                rally_route=rally_route,
+                rally_cfg=rally_cfg,
+                rally_target=rally_target,
+                rally_leader_id=rally_leader_id,
+                rally_approach_speed_mps=rally_approach_speed_mps,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。
         self._initial_route_lines: list[WayLineS] = []
-        if role == "leader":
-            tra_plan = getattr(self._entity, "_tra_plan", None)
-            if tra_plan is not None and hasattr(tra_plan, "get_route"):
-                self._initial_route_lines = tra_plan.get_route()
+        if role in {"leader", "rally_leader"}:
+            for _attr in ("_tra_plan", "_tra_plan_mission"):
+                tra_plan = getattr(self._entity, _attr, None)
+                if tra_plan is not None and hasattr(tra_plan, "get_route"):
+                    self._initial_route_lines = tra_plan.get_route()
+                    break
         # 僚机预置：直接进入 HOLD/三角队形并写入长机初态，避免冷启动时无参考。
-        if role != "leader" and initial_leader_state is not None and hasattr(self._entity, "cxt"):
+        if role not in {"leader", "rally_leader", "rally_follower"} and initial_leader_state is not None and hasattr(self._entity, "cxt"):
             self._entity.cxt.cmd.stage = FormStageE.HOLD  # type: ignore[attr-defined]
             self._entity.cxt.cmd.pattern = FormPatE.TRIANGLE  # type: ignore[attr-defined]
             copy_motion(initial_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
@@ -726,19 +840,23 @@ class _NodeAlgorithm:
         health: str = "normal",
     ) -> _NodeAlgorithmOutput:
         """推进 _NodeAlgorithm 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
-        # 把环境模型状态转为算法运动表示后驱动实体一步；远程指令固定为 HOLD。
         entity_output = EntityOutputS()
         self._entity.step(
             EntityInputS(
                 selfState=_motion_from_aircraft_state(state),
                 inbox=inbox,
-                remote=RemoteCmdS(FormStageE.HOLD),
+                remote=RemoteCmdS(self._remote_stage),
+                now_s=time_s,
             ),
             entity_output,
         )
-        # 长机一旦跑过即标记，使航线状态从实体上下文取实时值。
-        if self._role == "leader":
+        # 长机（包含集结长机）一旦跑过即标记，使 current_route() 从上下文取实时值。
+        if self._role in {"leader", "rally_leader"}:
             self._has_route_step = True
+        # 集结完成时自动切换为 HOLD，防止重复触发完成流程。
+        formation_analysis = entity_output.formationAnalysis
+        if formation_analysis is not None:
+            self._remote_stage = FormStageE.HOLD
         # 优先用输出加速度，缺省回退到实体上下文中的加速度。
         acc_cmd = entity_output.selfAccCmd or self._entity.cxt.selfAccCmd  # type: ignore[attr-defined]
         control = AccelerationCommand(
@@ -754,11 +872,13 @@ class _NodeAlgorithm:
         # 节点非健康时上报"重构"，否则"组队"，供控制回报聚合。
         status = "reconfiguring" if health != "normal" else "forming"
         control_diag = entity_output.controlDiag or PosTrackDiagS()
-        return _NodeAlgorithmOutput(control, outbox, status, control_diag)
+        return _NodeAlgorithmOutput(control, outbox, status, control_diag, formation_analysis)
 
     def reset(self) -> None:
         """复位 _NodeAlgorithm 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._has_route_step = False
+        self._remote_stage = self._initial_remote_stage
+        self._entity.reset()
         return None
 
     def close(self) -> None:
@@ -773,11 +893,32 @@ class _NodeAlgorithm:
             return FormStageE.NONE
         return FormStageE(cxt.cmd.stage)
 
+    def current_rally_phase_str(self) -> str:
+        """返回人类可读的集结阶段字符串，JOINING 阶段含本机汇合状态。"""
+        cxt = getattr(self._entity, "cxt", None)
+        if cxt is None:
+            return ""
+        stage = cxt.cmd.stage
+        step = cxt.cmd.step
+        if stage == FormStageE.RALLY:
+            _step_names = {0: "JOINING", 1: "CATCHUP", 2: "LOOSE", 3: "COMPRESS"}
+            phase = _step_names.get(step, f"STEP{step}")
+            if step == 0:
+                rally_join = getattr(self._entity, "_rally_join", None)
+                join_state = getattr(rally_join, "state", "") if rally_join is not None else ""
+                _join_abbr = {"FLYING": "FLY", "LOITERING": "LOIT", "EXITED": "EXIT"}
+                if join_state:
+                    phase = f"JN·{_join_abbr.get(join_state, join_state)}"
+            return phase
+        if stage == FormStageE.HOLD:
+            return "HOLD"
+        return ""
+
     def current_route(self) -> WayLineS | None:
         """读取当前航线状态。注意：返回副本避免外部改写内部状态。"""
         cxt = getattr(self._entity, "cxt", None)
-        # 仅长机持有航线；无上下文或非长机返回 None。
-        if cxt is None or self._role != "leader":
+        # 仅长机（含集结长机）持有航线；无上下文或非长机返回 None。
+        if cxt is None or self._role not in {"leader", "rally_leader"}:
             return None
         # 算法尚未跑过时上下文 wayLine 未初始化，回退到航线首段用于初始显示。
         if not self._has_route_step and self._initial_route_lines:
@@ -1123,6 +1264,7 @@ class SimulationController:
         self._display_route: list[WayLineS] | None = None  # 显示用航线(WayLineS)，仅供 GUI 画航段
         # 避障”采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
         self._leader_route_override: list[WayPointInputS] | None = None
+        self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
         self._config: dict[str, object] | None = None
@@ -1702,7 +1844,22 @@ class SimulationController:
         else:
             _display_wpi = _build_leader_route(config, insert_arcs=False)
         self._display_route = waypoint_inputs_to_waylines(_display_wpi) if len(_display_wpi) >= 2 else None
-        # 为每个节点创建算法适配器（长机/僚机实体由角色决定）。
+        # 集结场景额外参数：集结航线、任务配置、每机目标集结点。
+        rally_route = _build_rally_route(config)
+        rally_task_init = _build_rally_task_init(config, self._algorithm_period_s, list(nodes))
+        rally_approach_speed = _build_rally_approach_speed(config)
+        self._formation_completed_analysis = None
+        rally_leader_id = _leader_id_from_nodes(list(nodes))
+        _node_rally_targets: dict[str, PosInEarthS | None] = {
+            node_id_from_config(node, i): (
+                _route_point_from_config(node["rally_target"], f"nodes[{i}].rally_target")
+                if isinstance(node.get("rally_target"), dict)
+                else None
+            )
+            for i, node in enumerate(nodes)
+            if isinstance(node, dict)
+        }
+        # 为每个节点创建算法适配器（角色决定实体类型）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
                 node_id,
@@ -1712,6 +1869,11 @@ class SimulationController:
                 leader_route,
                 self._algorithm_period_s,
                 vel_cmd_limit,
+                rally_route=rally_route,
+                rally_cfg=rally_task_init,
+                rally_target=_node_rally_targets.get(node_id),
+                rally_leader_id=rally_leader_id,
+                rally_approach_speed_mps=rally_approach_speed,
             )
             for node_id in states
         }
@@ -1808,6 +1970,9 @@ class SimulationController:
             # 汇总各节点待发消息，统一在本轮末尾交给通信模块。
             outbox.extend(output.outbox)
             status_values.append(output.status)
+            # 集结完成首帧：锁存分析结果，供快照透传给 UI。
+            if output.formation_analysis is not None:
+                self._formation_completed_analysis = output.formation_analysis
         # 缓存本轮控制，供后续未跑算法的 tick 继续施加（保持-上次值语义）。
         self._current_controls = controls
         self._control_diagnostics = diagnostics
@@ -1825,8 +1990,11 @@ class SimulationController:
         route = self._make_route_snapshot()
         route_segments = self._make_route_segment_snapshots()
         nodes: list[NodeState] = []
+        rally_phases = {nid: alg.current_rally_phase_str() for nid, alg in self._node_algorithms.items()}
         for state in self._model.read_states().values():
             diag = self._control_diagnostics.get(state.node_id, PosTrackDiagS())
+            cmd_pos_e = diag.cmd_pos_east_m
+            cmd_pos_n = diag.cmd_pos_north_m
             nodes.append(
                 NodeState(
                     node_id=state.node_id,
@@ -1845,8 +2013,8 @@ class SimulationController:
                     nz=state.nz,
                     phi_deg=state.phi_deg,
                     psi_dot_deg_s=state.psi_dot_deg_s,
-                    cmd_pos_east_m=diag.cmd_pos_east_m,
-                    cmd_pos_north_m=diag.cmd_pos_north_m,
+                    cmd_pos_east_m=cmd_pos_e,
+                    cmd_pos_north_m=cmd_pos_n,
                     cmd_pos_h_m=diag.cmd_pos_h_m,
                     cmd_vel_east_mps=diag.cmd_vel_east_mps,
                     cmd_vel_north_mps=diag.cmd_vel_north_mps,
@@ -1866,6 +2034,7 @@ class SimulationController:
                     # 侧偏与待飞距相对"当前航段"计算，供 UI 显示跟踪误差。
                     cross_track_error_m=self._cross_track_error(state, route),
                     distance_to_go_m=self._distance_to_go(state, route),
+                    rally_phase=rally_phases.get(state.node_id, ""),
                 )
             )
         # 链路快照已折叠双向状态。
@@ -1881,6 +2050,7 @@ class SimulationController:
             route=route,
             route_segments=route_segments,
             cpu_utilization=self._cpu_utilization,
+            rally_analysis=self._formation_completed_analysis,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:
