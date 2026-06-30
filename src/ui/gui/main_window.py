@@ -78,8 +78,7 @@ from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
-from src.data.config_loader import resolve_config_references
-from src.data.linefile import LineFileManager
+from src.data.config_loader import _LINE_FILE_MANAGER, resolve_config_references
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 
@@ -290,7 +289,7 @@ def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[
         route_file = resolved.get("route_file")
         if route_file is not None:
             # parse_avoidance_params 只需要 route 与 avoidance 参数，不需要读取障碍库。
-            resolved["route"] = LineFileManager().load_route(Path(path), route_file)
+            resolved["route"] = _LINE_FILE_MANAGER.load_route(Path(path), route_file)
         return resolved
     except (OSError, ValueError):
         return None
