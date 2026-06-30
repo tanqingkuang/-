@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from src.data.linefile import LineFileManager, LineFileStrategyFactory
+from src.data.config_loader import resolve_config_references
 
 
 class LineFileTests(unittest.TestCase):
@@ -46,6 +47,28 @@ class LineFileTests(unittest.TestCase):
     def test_route_file_must_be_non_empty_string(self) -> None:
         with self.assertRaisesRegex(ValueError, "route_file must be a non-empty string"):
             LineFileManager().load_route("base.json", "")
+
+    def test_config_loader_resolves_rally_route_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            element = root / "element"
+            element.mkdir()
+            (element / "mission.json").write_text(
+                json.dumps({"speed_mps": 20.0, "waypoints": [{"x_m": 1.0, "y_m": 2.0, "altitude_m": 3.0}]}),
+                encoding="utf-8",
+            )
+            (element / "rally.json").write_text(
+                json.dumps({"speed_mps": 18.0, "waypoints": [{"x_m": 4.0, "y_m": 5.0, "altitude_m": 6.0}]}),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_config_references(
+                {"route_file": "element/mission.json", "rally_route_file": "element/rally.json"},
+                root / "rally_demo.json",
+            )
+
+        self.assertEqual(resolved["route"]["speed_mps"], 20.0)
+        self.assertEqual(resolved["rally_route"]["speed_mps"], 18.0)
 
 
 if __name__ == "__main__":

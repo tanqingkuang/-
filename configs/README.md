@@ -16,6 +16,13 @@
 - 当前仍使用 ENU 坐标：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度。
 - `route_file` 的解析和生成由 `src/data/linefile/` 下的策略工厂负责，设计说明见 `src/data/linefile/航线文件设计.md`。
 
+## `rally_demo.json`
+
+- 三机分散后执行集结并进入任务航线的演示场景。
+- 任务航线从 `element/rally_demo_route.json` 引用，主配置只保留 `route_file` 相对路径。
+- 集结长机航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `rally_route_file` 相对路径。
+- 两个外部航线文件加载后分别展开为控制器和算法消费的 `route` 与 `rally_route`。
+
 ## `element/obstacles.json`
 
 - 默认避障障碍库文件，结构与原 `base.json.avoidance.obstacles` 完全一致。
