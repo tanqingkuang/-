@@ -1,0 +1,63 @@
+{
+  "duration_s": 4200.0,
+  "step_s": 0.02,
+  "playback_rate": 1.0,
+  "seed": 1,
+  "route_file": "element/single_avoidance_80km_route.json",
+  "avoidance": {
+    "enabled": true,
+    "allow_arc": true,
+    "turn_radius_m": 600.0,
+    "leg_length_margin_m": 0.0,
+    "clearance_m": 200.0,
+    "simplify_clearance_m": 200.0,
+    "turn_switch_penalty_m": 0.0,
+    "turn_angle_weight_m": 0.0,
+    "grid": {
+      "resolution_m": 50.0,
+      "margin_m": 800.0
+    },
+    "obstacles_file": "element/single_avoidance_80km_obstacles.json"
+  },
+  "model": {
+    "gravity_mps2": 9.80665,
+    "min_speed_mps": 1.0,
+    "acceleration_filter": {
+      "natural_frequency_rad_s": 4.0,
+      "damping_ratio": 0.65
+    },
+    "limits": {
+      "acceleration_command_mps2": 8.0,
+      "max_climb_rate_mps": 3.0,
+      "max_descent_rate_mps": 3.0,
+      "nx_min": -1.0,
+      "nx_max": 1.0,
+      "nz_min": 0.0,
+      "nz_max": 4.0,
+      "phi_min_deg": -70.0,
+      "phi_max_deg": 70.0
+    }
+  },
+  "control": {
+    "velocity_command_limits": {
+      "forward_min_mps": 20.0,
+      "forward_max_mps": 65.0,
+      "vertical_min_mps": -3.0,
+      "vertical_max_mps": 3.0
+    }
+  },
+  "nodes": [
+    {
+      "node_id": "S01",
+      "role": "leader",
+      "x_m": 0.0,
+      "y_m": 0.0,
+      "altitude_m": 1200.0,
+      "psi_v_deg": 0.0,
+      "speed_mps": 45.0,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 12000.0
+    }
+  ],
+  "links": []
+}

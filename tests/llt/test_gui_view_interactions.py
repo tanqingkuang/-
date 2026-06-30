@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
 
+from src.data.geo import GeoOrigin
 from src.runner.sim_control import (
     NodeState as ControllerNodeState,
     SimulationSnapshot as ControllerSnapshot,
@@ -300,6 +301,29 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self._count_pixels_near(image, 180, 180, leader_color), 0)
         self.assertGreater(self._count_pixels_near(image, 260, 180, leader_color), 0)
 
+    def test_top_view_maps_positive_north_upward(self) -> None:
+        view = self.window.top_view
+        view.scale_value = 1.0
+        view.offset = QPointF(180.0, 180.0)
+
+        origin = view._world_to_viewport(QPointF(0.0, 0.0))
+        north = view._world_to_viewport(QPointF(0.0, 80.0))
+        round_trip = view._viewport_to_world(north)
+
+        self.assertAlmostEqual(origin.y(), 180.0)
+        self.assertLess(north.y(), origin.y())
+        self.assertAlmostEqual(round_trip.x(), 0.0)
+        self.assertAlmostEqual(round_trip.y(), 80.0)
+
+    def test_top_view_click_updates_copyable_geodetic_text(self) -> None:
+        self.window._top_view_geo_origin = GeoOrigin(39.0, 116.0)
+
+        self.window._on_top_view_point_clicked(0.0, 0.0)
+
+        self.assertEqual(self.window.top_view_coordinate.text(), "116.0000000, 39.0000000")
+        self.assertEqual(self.window.top_view_coordinate.selectedText(), "116.0000000, 39.0000000")
+        self.assertEqual(self.window.top_view_coordinate_hint.text(), "(lon, lat)")
+
     def test_top_view_link_keeps_screen_width_during_zoom(self) -> None:
         thin = self._link_stroke_height_at_scale(0.45)
         thick = self._link_stroke_height_at_scale(3.5)
@@ -340,6 +364,29 @@ class GuiViewInteractionTests(unittest.TestCase):
             },
         )
 
+        self.assert_route_and_aircraft_fit_viewport()
+
+    def test_reset_view_fits_large_80km_route(self) -> None:
+        self._load_ui_config(
+            nodes=[
+                {"node_id": "S01", "role": "leader", "x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0, "speed_mps": 45.0},
+            ],
+            links=[],
+            route={
+                "speed_mps": 45.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0},
+                    {"x_m": 76000.0, "y_m": 0.0, "altitude_m": 1200.0},
+                    {"x_m": 76000.0, "y_m": 70000.0, "altitude_m": 1200.0},
+                    {"x_m": 20000.0, "y_m": 70000.0, "altitude_m": 1200.0},
+                ],
+            },
+        )
+
+        self.window.top_view.reset_view()
+        self.app.processEvents()
+
+        self.assertLess(self.window.top_view.scale_value, 0.05)
         self.assert_route_and_aircraft_fit_viewport()
 
     def test_top_view_does_not_refit_during_running_snapshot_updates(self) -> None:
@@ -407,7 +454,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             self.window.top_view.offset.y(),
-            self.window.top_view.viewport().rect().height() / 2.0 - top_center_y * top_scale,
+            self.window.top_view.viewport().rect().height() / 2.0 + top_center_y * top_scale,
             delta=0.01,
         )
         side_center_x = sum(
@@ -455,7 +502,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         )
         self.assertAlmostEqual(
             view.offset.y(),
-            view.viewport().rect().height() / 2.0 - center_y * view.scale_value,
+            view.viewport().rect().height() / 2.0 + center_y * view.scale_value,
             delta=0.01,
         )
 
@@ -555,16 +602,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsNotNone(route)
         assert route is not None
 
-        start_x = route.start_x * self.window.top_view.scale_value + self.window.top_view.offset.x()
-        start_y = route.start_y * self.window.top_view.scale_value + self.window.top_view.offset.y()
-        end_x = route.end_x * self.window.top_view.scale_value + self.window.top_view.offset.x()
-        end_y = route.end_y * self.window.top_view.scale_value + self.window.top_view.offset.y()
+        start = self.window.top_view._world_to_viewport(QPointF(route.start_x, route.start_y))
+        end = self.window.top_view._world_to_viewport(QPointF(route.end_x, route.end_y))
         rect = self.window.top_view.viewport().rect()
 
-        self.assertGreaterEqual(start_x, 5.0)
-        self.assertGreaterEqual(start_y, 5.0)
-        self.assertLessEqual(end_x, rect.width() - 5.0)
-        self.assertGreaterEqual(end_y, 5.0)
+        self.assertGreaterEqual(start.x(), 5.0)
+        self.assertGreaterEqual(start.y(), 5.0)
+        self.assertLessEqual(end.x(), rect.width() - 5.0)
+        self.assertGreaterEqual(end.y(), 5.0)
 
     def test_low_zoom_two_point_trail_remains_visible(self) -> None:
         """低缩放长航线下，刚开始运行产生的两点尾迹也应清晰可见。"""
@@ -601,7 +646,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         image = view.grab().toImage()
         canvas = self.window.theme.canvas.name()
-        y = round(20.0 * view.scale_value + view.offset.y())
+        y = round(view._world_to_viewport(QPointF(0.0, 20.0)).y())
         touched = [
             x
             for x in range(image.width())
@@ -628,13 +673,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(len(snapshot.route_segments), 2)
         self.assertAlmostEqual(snapshot.route_segments[0].end_x, 6000.0)
         self.assertAlmostEqual(snapshot.route_segments[1].end_y, 3000.0)
-        second_end_x = snapshot.route_segments[1].end_x * self.window.top_view.scale_value + self.window.top_view.offset.x()
-        second_end_y = snapshot.route_segments[1].end_y * self.window.top_view.scale_value + self.window.top_view.offset.y()
+        second_end = self.window.top_view._world_to_viewport(
+            QPointF(snapshot.route_segments[1].end_x, snapshot.route_segments[1].end_y)
+        )
         rect = self.window.top_view.viewport().rect()
-        self.assertGreaterEqual(second_end_x, 5.0)
-        self.assertGreaterEqual(second_end_y, 5.0)
-        self.assertLessEqual(second_end_x, rect.width() - 5.0)
-        self.assertLessEqual(second_end_y, rect.height() - 5.0)
+        self.assertGreaterEqual(second_end.x(), 5.0)
+        self.assertGreaterEqual(second_end.y(), 5.0)
+        self.assertLessEqual(second_end.x(), rect.width() - 5.0)
+        self.assertLessEqual(second_end.y(), rect.height() - 5.0)
 
     def test_side_height_selection_does_not_move_top_view_aircraft(self) -> None:
         old_offset = QPointF(self.window.top_view.offset)
@@ -1343,12 +1389,12 @@ class GuiViewInteractionTests(unittest.TestCase):
             "duration_s": duration_s,
             "step_s": step_s,
             "playback_rate": playback_rate,
-            "nodes": nodes or [
+            "nodes": nodes if nodes is not None else [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
                 {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
             ],
-            "links": links or [
+            "links": links if links is not None else [
                 {"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01},
                 {"link_id": "A01-A03", "latency_ms": 21.0, "loss_rate": 0.01},
                 {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
@@ -1381,8 +1427,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         rect = view.viewport().rect()
         left = min(xs) * view.scale_value + view.offset.x()
         right = max(xs) * view.scale_value + view.offset.x()
-        top = min(ys) * view.scale_value + view.offset.y()
-        bottom = max(ys) * view.scale_value + view.offset.y()
+        top = view.offset.y() - max(ys) * view.scale_value
+        bottom = view.offset.y() - min(ys) * view.scale_value
         fitted_width = right - left
         fitted_height = bottom - top
 

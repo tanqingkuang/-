@@ -3,33 +3,43 @@
     "id": "C1",
     "type": "circle",
     "enabled": true,
+    "radius_m": 200.0,
     "center": {
-      "east_m": 900.0,
-      "north_m": 0.0
-    },
-    "radius_m": 200.0
+      "latitude_deg": 38.9999995,
+      "longitude_deg": 116.0103894
+    }
   },
   {
     "id": "C2",
     "type": "circle",
     "enabled": true,
+    "radius_m": 200.0,
     "center": {
-      "east_m": 2000.0,
-      "north_m": 1200.0
-    },
-    "radius_m": 200.0
+      "latitude_deg": 39.010807,
+      "longitude_deg": 116.0230912
+    }
   },
   {
     "id": "R1",
     "type": "rect",
     "enabled": false,
-    "min": {
-      "east_m": 350.0,
-      "north_m": -180.0
-    },
-    "max": {
-      "east_m": 650.0,
-      "north_m": 180.0
-    }
+    "points": [
+      {
+        "latitude_deg": 38.9983785,
+        "longitude_deg": 116.0040402
+      },
+      {
+        "latitude_deg": 38.9983784,
+        "longitude_deg": 116.0075033
+      },
+      {
+        "latitude_deg": 39.0016212,
+        "longitude_deg": 116.0075037
+      },
+      {
+        "latitude_deg": 39.0016213,
+        "longitude_deg": 116.0040404
+      }
+    ]
   }
 ]

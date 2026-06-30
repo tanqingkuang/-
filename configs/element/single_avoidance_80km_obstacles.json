@@ -1,0 +1,114 @@
+[
+  {
+    "id": "C1",
+    "type": "circle",
+    "enabled": true,
+    "radius_m": 1800.0,
+    "center": {
+      "latitude_deg": 31.2681421,
+      "longitude_deg": 121.6627045
+    }
+  },
+  {
+    "id": "C2",
+    "type": "circle",
+    "enabled": true,
+    "radius_m": 2500.0,
+    "center": {
+      "latitude_deg": 31.4271718,
+      "longitude_deg": 122.1258248
+    }
+  },
+  {
+    "id": "R1",
+    "type": "rect",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 31.281794,
+        "longitude_deg": 121.8202597
+      },
+      {
+        "latitude_deg": 31.281575,
+        "longitude_deg": 121.8937726
+      },
+      {
+        "latitude_deg": 31.3221611,
+        "longitude_deg": 121.8939527
+      },
+      {
+        "latitude_deg": 31.3223802,
+        "longitude_deg": 121.8204083
+      }
+    ]
+  },
+  {
+    "id": "R2",
+    "type": "rect",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 31.4941756,
+        "longitude_deg": 122.2420777
+      },
+      {
+        "latitude_deg": 31.4937839,
+        "longitude_deg": 122.3052328
+      },
+      {
+        "latitude_deg": 31.556915,
+        "longitude_deg": 122.3057923
+      },
+      {
+        "latitude_deg": 31.557307,
+        "longitude_deg": 122.2425947
+      }
+    ]
+  },
+  {
+    "id": "Q1",
+    "type": "rect",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 31.3371453,
+        "longitude_deg": 122.0472696
+      },
+      {
+        "latitude_deg": 31.3782047,
+        "longitude_deg": 122.1164132
+      },
+      {
+        "latitude_deg": 31.4004574,
+        "longitude_deg": 122.0984703
+      },
+      {
+        "latitude_deg": 31.3593885,
+        "longitude_deg": 122.0293182
+      }
+    ]
+  },
+  {
+    "id": "Q2",
+    "type": "rect",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 31.7511477,
+        "longitude_deg": 121.8978
+      },
+      {
+        "latitude_deg": 31.716533,
+        "longitude_deg": 121.9837028
+      },
+      {
+        "latitude_deg": 31.7450789,
+        "longitude_deg": 121.9994704
+      },
+      {
+        "latitude_deg": 31.7797041,
+        "longitude_deg": 121.9135472
+      }
+    ]
+  }
+]

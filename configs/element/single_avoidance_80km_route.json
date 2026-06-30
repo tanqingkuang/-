@@ -1,0 +1,65 @@
+{
+  "speed_mps": 45.0,
+  "waypoints": [
+    {
+      "altitude_m": 1200.0,
+      "R": 0.0,
+      "latitude_deg": 31.2304,
+      "longitude_deg": 121.4737
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.2303383,
+      "longitude_deg": 121.5996527
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.3022861,
+      "longitude_deg": 121.7363014
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.3016859,
+      "longitude_deg": 121.9463831
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.4270083,
+      "longitude_deg": 122.1573795
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.4263426,
+      "longitude_deg": 122.2730804
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.6067179,
+      "longitude_deg": 122.2746176
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.7341166,
+      "longitude_deg": 122.0646472
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 700.0,
+      "latitude_deg": 31.734909,
+      "longitude_deg": 121.8535939
+    },
+    {
+      "altitude_m": 1200.0,
+      "R": 0.0,
+      "latitude_deg": 31.8615597,
+      "longitude_deg": 121.6850391
+    }
+  ]
+}

@@ -39,7 +39,7 @@ def _ensure_project_root_on_path() -> None:
 _ensure_project_root_on_path()
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSignalBlocker, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QAction, QActionGroup, QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -76,9 +76,11 @@ from PySide6.QtWidgets import (
 from src.algorithm.context.leaf_types import WayLineS, WayPointInputS, to_display_inputs
 from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_swept_rad
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_rect
+from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_polygon, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
 from src.data.config_loader import _LINE_FILE_MANAGER, resolve_config_references
+from src.data.geo import GeoOrigin, enu_to_geodetic
+from src.data.geo_config import geo_origin_from_dict, route_to_external, route_to_internal
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 
@@ -90,8 +92,8 @@ WORLD_HEIGHT = 520.0
 TRAIL_SECONDS = 18.0
 # 俯视图初始平移留白，避免场景紧贴左上角边缘。
 TOP_VIEW_ORIGIN_MARGIN = 40.0
-# 视图缩放上下限，防止缩到看不见或放大到失真。
-VIEW_MIN_SCALE = 0.05
+# 视图缩放上下限，防止缩到看不见或放大到失真；下限需覆盖 100km 级地图自适应。
+VIEW_MIN_SCALE = 0.002
 VIEW_MAX_SCALE = 3.5
 # 自适应铺满时只占用视口 80%，四周留出可视边距。
 FIT_VIEWPORT_RATIO = 0.80
@@ -233,7 +235,7 @@ class ObstacleView:
     """俯视图显示用的二维障碍（无限高柱体）。注意：当前仅供 UI 显示与勾选，规划后端后续接入。"""
 
     obstacle_id: str  # 障碍唯一标识，列表显示/勾选用
-    kind: str  # "circle" | "rect"
+    kind: str  # "circle" | "rect" | "polygon"
     enabled: bool = True  # 是否启用（参与避障）
     center_x: float = 0.0  # 圆心 east（kind=circle）
     center_y: float = 0.0  # 圆心 north
@@ -242,9 +244,12 @@ class ObstacleView:
     min_y: float = 0.0  # 矩形 north 下界
     max_x: float = 0.0  # 矩形 east 上界
     max_y: float = 0.0  # 矩形 north 上界
+    vertices: list[tuple[float, float]] = field(default_factory=list)  # 旋转矩形/多边形顶点
 
     def label(self) -> str:
         """生成左面板勾选列表的显示文本。注意：仅用于界面展示。"""
+        if self.kind == "polygon":
+            return f"{self.obstacle_id}  矩形 {len(self.vertices)}点"
         if self.kind == "rect":
             return f"{self.obstacle_id}  矩形 ({self.min_x:.0f},{self.min_y:.0f})-({self.max_x:.0f},{self.max_y:.0f})"
         return f"{self.obstacle_id}  圆 ({self.center_x:.0f},{self.center_y:.0f}) r{self.radius:.0f}"
@@ -274,15 +279,19 @@ def _load_json_config_for_ui(path: str) -> dict[str, object] | None:
 def _resolve_obstacles_reference_for_ui(data: dict[str, object], path: str) -> dict[str, object] | None:
     """只展开 avoidance.obstacles_file，避免航线文件错误污染障碍 UI 显示。"""
     try:
-        resolved = dict(data)
-        avoidance = resolved.get("avoidance")
-        if isinstance(avoidance, dict) and "obstacles_file" in avoidance:
-            # 复用主配置展开逻辑的障碍校验，但不传 route_file，避免触发航线策略。
-            resolved.pop("route_file", None)
-            resolved = resolve_config_references(resolved, Path(path))
-        return resolved
+        # 优先走完整配置展开：经纬度障碍需要基础航线 origin 才能转 ENU。
+        return resolve_config_references(data, Path(path))
     except (OSError, ValueError):
-        return None
+        try:
+            resolved = dict(data)
+            avoidance = resolved.get("avoidance")
+            if isinstance(avoidance, dict) and "obstacles_file" in avoidance:
+                # 兼容旧 ENU 障碍：坏 route_file 不应把障碍列表清空。
+                resolved.pop("route_file", None)
+                resolved = resolve_config_references(resolved, Path(path))
+            return resolved
+        except (OSError, ValueError):
+            return None
 
 
 def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[str, object] | None:
@@ -293,13 +302,28 @@ def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[
         if route_file is not None:
             # parse_avoidance_params 只需要 route 与 avoidance 参数，不需要读取障碍库。
             resolved["route"] = _LINE_FILE_MANAGER.load_route(Path(path), route_file)
+        route = resolved.get("route")
+        if isinstance(route, dict):
+            resolved["route"], _origin = route_to_internal(route)
         return resolved
     except (OSError, ValueError):
         return None
 
 
-def route_inputs_to_config(route: list[WayPointInputS], speed_mps: float) -> dict[str, object]:
-    """把避障航点转换为航线文件对象。注意：保留已烘焙圆弧，便于 route_file 再读回。"""
+def _geo_origin_from_config_for_ui(path: str) -> GeoOrigin | None:
+    """从配置 route_file 读取经纬 origin。注意：仅供 GUI 点击坐标显示使用。"""
+    raw_data = _load_json_config_for_ui(path)
+    data = _resolve_route_reference_for_ui(raw_data, path) if raw_data is not None else None
+    route = data.get("route") if isinstance(data, dict) else None
+    return geo_origin_from_dict(route.get("_geo_origin")) if isinstance(route, dict) else None
+
+
+def route_inputs_to_config(
+    route: list[WayPointInputS],
+    speed_mps: float,
+    geo_origin: GeoOrigin | None = None,
+) -> dict[str, object]:
+    """把避障航点转换为航线文件对象。注意：有 origin 时输出经纬高。"""
     waypoints: list[dict[str, object]] = []
     for point in route:
         # 普通字段保持与 configs/element/line.json 一致，方便人工编辑和复用。
@@ -318,7 +342,8 @@ def route_inputs_to_config(route: list[WayPointInputS], speed_mps: float) -> dic
                 "altitude_m": point.center.h,
             }
         waypoints.append(waypoint)
-    return {"speed_mps": speed_mps, "waypoints": waypoints}
+    route_config = {"speed_mps": speed_mps, "waypoints": waypoints}
+    return route_to_external(route_config, geo_origin) if geo_origin is not None else route_config
 
 
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
@@ -349,7 +374,16 @@ def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
             continue
         obstacle_id = str(raw.get("id", f"OB{index + 1}"))
         enabled = bool(raw.get("enabled", True))
-        if str(raw.get("type", "circle")) == "rect":
+        raw_type = str(raw.get("type", "circle"))
+        vertices = raw.get("vertices")
+        if raw_type == "polygon" and isinstance(vertices, list):
+            points: list[tuple[float, float]] = []
+            for point in vertices:
+                if isinstance(point, dict):
+                    points.append((_safe_float(point.get("east_m", 0.0)), _safe_float(point.get("north_m", 0.0))))
+            if len(points) >= 3:
+                obstacles.append(ObstacleView(obstacle_id=obstacle_id, kind="polygon", enabled=enabled, vertices=points))
+        elif raw_type == "rect":
             lo = raw.get("min", {})
             hi = raw.get("max", {})
             lo = lo if isinstance(lo, dict) else {}
@@ -397,6 +431,7 @@ class AvoidanceParams:
     speed_mps: float = 0.0
     allow_arc: bool = True  # 航段自身是否可为曲线：开启则折叠贴障大弧并把拐点烘焙成圆弧段；关闭只留直线骨架+交接圆弧
     waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
+    geo_origin: GeoOrigin | None = None  # 外部经纬高航线 origin；旧 ENU 配置为 None
 
 
 class AvoidanceWindow(QDialog):
@@ -440,6 +475,7 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         return None
     grid = avoidance.get("grid") if isinstance(avoidance.get("grid"), dict) else {}
     route = data.get("route") if isinstance(data.get("route"), dict) else {}
+    geo_origin = geo_origin_from_dict(route.get("_geo_origin")) if isinstance(route, dict) else None
     raw_waypoints = route.get("waypoints", []) if isinstance(route, dict) else []
     waypoints: list[tuple[float, float, float]] = []
     if isinstance(raw_waypoints, list):
@@ -473,11 +509,14 @@ def parse_avoidance_params(path: str) -> AvoidanceParams | None:
         speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
         allow_arc=bool(avoidance.get("allow_arc", True)),
         waypoints=waypoints,
+        geo_origin=geo_origin,
     )
 
 
 def _obstacle_view_to_backend(view: "ObstacleView") -> ObstacleS:
     """把 UI 障碍转成后端 ObstacleS（供规划调用）。"""
+    if view.kind == "polygon":
+        return make_polygon(view.obstacle_id, view.vertices)
     if view.kind == "rect":
         return make_rect(view.obstacle_id, view.min_x, view.min_y, view.max_x, view.max_y)
     return make_circle(view.obstacle_id, view.center_x, view.center_y, view.radius)
@@ -1215,6 +1254,7 @@ class TopView(QGraphicsView):
     viewChanged = Signal()
     manualViewChanged = Signal()
     resetViewRequested = Signal()
+    pointClicked = Signal(float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化 TopView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -1228,7 +1268,7 @@ class TopView(QGraphicsView):
         self.preview_route_polyline: list[tuple[float, float]] | None = None
         # 预览航线的航点黑点，独立于折线采样点，避免圆弧采样点被误画成航点。
         self.preview_route_markers: list[tuple[float, float]] | None = None
-        # 视图变换由 scale_value(缩放) 与 offset(平移) 两个量描述：屏幕 = 世界*scale + offset。
+        # 视图变换由 scale_value(缩放) 与 offset(世界原点屏幕位置) 描述：x 向右、north/y 向上。
         self.scale_value = 1.0
         self.offset = self._default_offset()
         self.auto_center = False
@@ -1318,17 +1358,14 @@ class TopView(QGraphicsView):
             return
         cursor = event.position()
         # 记录缩放前光标对应的世界坐标，作为缩放锚点。
-        before = QPointF(
-            (cursor.x() - self.offset.x()) / self.scale_value,
-            (cursor.y() - self.offset.y()) / self.scale_value,
-        )
+        before = self._viewport_to_world(cursor)
         # 指数因子使每格滚动产生固定比例缩放，手感线性；再夹到上下限。
         factor = math.pow(1.001, delta)
         self.scale_value = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.scale_value * factor))
         # 反解 offset，使锚点世界坐标缩放后仍落在光标处（“以光标为中心缩放”）。
         self.offset = QPointF(
             cursor.x() - before.x() * self.scale_value,
-            cursor.y() - before.y() * self.scale_value,
+            cursor.y() + before.y() * self.scale_value,
         )
         self._manual_view = True
         self.viewport().update()
@@ -1376,7 +1413,12 @@ class TopView(QGraphicsView):
             event.accept()
         elif event.button() == Qt.MouseButton.LeftButton:
             # 松开左键即把选框区域放大铺满，再清空选框状态。
-            self._zoom_to_selection()
+            if self._selection_is_click():
+                # 单击不改变视角，只把屏幕点反解成 ENU 坐标给上层展示经纬度。
+                point = self._viewport_to_world(event.position())
+                self.pointClicked.emit(point.x(), point.y())
+            else:
+                self._zoom_to_selection()
             self._selection_origin = None
             self._selection_current = None
             self.viewport().update()
@@ -1395,9 +1437,9 @@ class TopView(QGraphicsView):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         # 先铺画布底色。
         painter.fillRect(self.rect(), self.theme.canvas)
-        # 把 offset/scale 装进画家变换：之后均按世界坐标绘制，线宽需除以 scale 保持视觉粗细。
+        # 把 offset/scale 装进画家变换：之后均按 ENU 世界坐标绘制，north/y 正方向显示在屏幕上方。
         painter.translate(self.offset)
-        painter.scale(self.scale_value, self.scale_value)
+        painter.scale(self.scale_value, -self.scale_value)
         if self.show_grid:
             self._draw_grid(painter)
         # 障碍画在网格之上、航线/节点之下，避免遮挡飞机与航线。
@@ -1420,8 +1462,33 @@ class TopView(QGraphicsView):
         """把视口坐标转换为世界坐标。注意：依赖当前缩放和平移状态。"""
         return QPointF(
             (point.x() - self.offset.x()) / self.scale_value,
-            (point.y() - self.offset.y()) / self.scale_value,
+            (self.offset.y() - point.y()) / self.scale_value,
         )
+
+    def _selection_is_click(self) -> bool:
+        """判断当前左键操作是否为单击。注意：小于缩放框阈值时不触发框选缩放。"""
+        if self._selection_origin is None or self._selection_current is None:
+            return False
+        # 与 _zoom_to_selection 的 8px 阈值保持一致，小拖动仍按点击处理。
+        return (
+            abs(self._selection_origin.x() - self._selection_current.x()) < 8
+            and abs(self._selection_origin.y() - self._selection_current.y()) < 8
+        )
+
+    def _world_to_viewport(self, point: QPointF) -> QPointF:
+        """把世界坐标转换为视口坐标。注意：north/y 正方向映射到屏幕上方。"""
+        return QPointF(
+            point.x() * self.scale_value + self.offset.x(),
+            self.offset.y() - point.y() * self.scale_value,
+        )
+
+    def _draw_screen_text(self, painter: QPainter, x: float, y: float, dx: float, dy: float, text: str) -> None:
+        """按屏幕坐标绘制文本。注意：避免世界 y 轴翻转导致文字倒置。"""
+        screen = self._world_to_viewport(QPointF(x, y))
+        painter.save()
+        painter.resetTransform()
+        painter.drawText(QPointF(screen.x() + dx, screen.y() + dy), text)
+        painter.restore()
 
     def _zoom_to_selection(self) -> None:
         """执行 to selection 缩放。注意：保持选区或鼠标焦点附近的世界坐标稳定。"""
@@ -1452,7 +1519,7 @@ class TopView(QGraphicsView):
         center_y = (world_start.y() + world_end.y()) / 2.0
         self.offset = QPointF(
             viewport.width() / 2.0 - center_x * self.scale_value,
-            viewport.height() / 2.0 - center_y * self.scale_value,
+            viewport.height() / 2.0 + center_y * self.scale_value,
         )
         self._manual_view = True
         if self.auto_center:
@@ -1497,7 +1564,7 @@ class TopView(QGraphicsView):
         # 只平移不缩放：把质心移到视口正中。
         self.offset = QPointF(
             rect.width() / 2.0 - center_x * self.scale_value,
-            rect.height() / 2.0 - center_y * self.scale_value,
+            rect.height() / 2.0 + center_y * self.scale_value,
         )
         self.viewChanged.emit()
 
@@ -1530,7 +1597,7 @@ class TopView(QGraphicsView):
         center_y = (min_y + max_y) / 2.0
         self.offset = QPointF(
             rect.width() / 2.0 - center_x * self.scale_value,
-            rect.height() / 2.0 - center_y * self.scale_value,
+            rect.height() / 2.0 + center_y * self.scale_value,
         )
 
     def _route_and_node_bounds(self) -> tuple[float, float, float, float] | None:
@@ -1550,7 +1617,10 @@ class TopView(QGraphicsView):
         for obstacle in self.obstacles:
             if not obstacle.enabled:
                 continue
-            if obstacle.kind == "rect":
+            if obstacle.kind == "polygon":
+                xs.extend(point[0] for point in obstacle.vertices)
+                ys.extend(point[1] for point in obstacle.vertices)
+            elif obstacle.kind == "rect":
                 xs.extend([obstacle.min_x, obstacle.max_x])
                 ys.extend([obstacle.min_y, obstacle.max_y])
             else:
@@ -1562,18 +1632,20 @@ class TopView(QGraphicsView):
 
     def _draw_grid(self, painter: QPainter) -> None:
         """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
-        # 反解视口四角对应的世界坐标范围（画家已应用 offset/scale）。
+        # 反解视口四角对应的世界坐标范围（画家已应用 offset/scale，north/y 向上）。
         rect = self.viewport().rect()
-        left = (rect.left() - self.offset.x()) / self.scale_value
-        right = (rect.right() - self.offset.x()) / self.scale_value
-        top = (rect.top() - self.offset.y()) / self.scale_value
-        bottom = (rect.bottom() - self.offset.y()) / self.scale_value
+        top_left = self._viewport_to_world(QPointF(rect.left(), rect.top()))
+        bottom_right = self._viewport_to_world(QPointF(rect.right(), rect.bottom()))
+        left = min(top_left.x(), bottom_right.x())
+        right = max(top_left.x(), bottom_right.x())
+        bottom = min(top_left.y(), bottom_right.y())
+        top = max(top_left.y(), bottom_right.y())
         spacing = self._grid_world_spacing()
         # 把可见范围对齐到网格间距的整数倍，确定起止网格线坐标。
         start_x = math.floor(left / spacing) * spacing
         end_x = math.ceil(right / spacing) * spacing
-        start_y = math.floor(top / spacing) * spacing
-        end_y = math.ceil(bottom / spacing) * spacing
+        start_y = math.floor(bottom / spacing) * spacing
+        end_y = math.ceil(top / spacing) * spacing
 
         # 线宽除以 scale，使网格线在任意缩放下都呈现 1px 视觉粗细。
         painter.setPen(QPen(self.theme.grid, 1.0 / self.scale_value))
@@ -1589,13 +1661,21 @@ class TopView(QGraphicsView):
 
     def _obstacle_center(self, obstacle: ObstacleView) -> tuple[float, float]:
         """返回障碍中心世界坐标。注意：矩形取几何中心，圆取圆心。"""
+        if obstacle.kind == "polygon" and obstacle.vertices:
+            return (
+                sum(point[0] for point in obstacle.vertices) / len(obstacle.vertices),
+                sum(point[1] for point in obstacle.vertices) / len(obstacle.vertices),
+            )
         if obstacle.kind == "rect":
             return (obstacle.min_x + obstacle.max_x) / 2.0, (obstacle.min_y + obstacle.max_y) / 2.0
         return obstacle.center_x, obstacle.center_y
 
     def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
         """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（矩形按方角近似）。"""
-        if obstacle.kind == "rect":
+        if obstacle.kind == "polygon" and obstacle.vertices:
+            polygon = QPolygonF([QPointF(east, north) for east, north in obstacle.vertices])
+            painter.drawPolygon(polygon)
+        elif obstacle.kind == "rect":
             painter.drawRect(
                 QRectF(
                     obstacle.min_x - inflate,
@@ -1640,13 +1720,9 @@ class TopView(QGraphicsView):
                 self._stroke_obstacle_shape(painter, obstacle, 0.0)
             # 在障碍中心标注 id（标签不随缩放，保持屏幕尺寸）。
             center_x, center_y = self._obstacle_center(obstacle)
-            painter.save()
-            painter.translate(center_x, center_y)
-            painter.scale(1.0 / self.scale_value, 1.0 / self.scale_value)
             painter.setPen(QPen(self.theme.ink if obstacle.enabled else self.theme.muted, 1))
             text = obstacle.obstacle_id if obstacle.enabled else f"{obstacle.obstacle_id}（未勾选）"
-            painter.drawText(QPointF(-10.0, 4.0), text)
-            painter.restore()
+            self._draw_screen_text(painter, center_x, center_y, -10.0, 4.0, text)
 
     def _draw_preview_route(self, painter: QPainter) -> None:
         """绘制避障预览航线（绿色虚线折线）和航点黑点。注意：只做渲染，不修改仿真状态。"""
@@ -1738,7 +1814,7 @@ class TopView(QGraphicsView):
             painter.restore()
             # 在机体左上方标注节点 ID（标签不随机体旋转）。
             painter.setPen(QPen(self.theme.ink, 1))
-            painter.drawText(QPointF(node.x - 13, node.y - 18), node.node_id)
+            self._draw_screen_text(painter, node.x, node.y, -13.0, -18.0, node.node_id)
 
     def _draw_slot_targets(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制僚机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态。"""
@@ -2336,6 +2412,7 @@ class MainWindow(QMainWindow):
         # 避障规划参数（来自配置）与“生成航线”得到的预览航线（采用前）。
         self._avoidance_params: AvoidanceParams | None = None
         self._preview_route: list[WayPointInputS] | None = None
+        self._top_view_geo_origin: GeoOrigin | None = None
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
@@ -2962,7 +3039,8 @@ class MainWindow(QMainWindow):
             # QFileDialog 在部分平台不会自动追加过滤器后缀，这里统一补成 JSON。
             route_path = route_path.with_suffix(".json")
         speed_mps = self._avoidance_params.speed_mps if self._avoidance_params is not None else self._preview_route[0].vdCmd
-        route_config = route_inputs_to_config(self._preview_route, speed_mps)
+        geo_origin = self._avoidance_params.geo_origin if self._avoidance_params is not None else None
+        route_config = route_inputs_to_config(self._preview_route, speed_mps, geo_origin)
         try:
             # 通过 LineFileManager 保存，确保输出路径和后缀策略与 route_file 加载链路一致。
             written = _LINE_FILE_MANAGER.save_route(config_path, str(route_path), route_config)
@@ -3025,6 +3103,13 @@ class MainWindow(QMainWindow):
         toolbar.setSpacing(8)
         title = QLabel("二维实时显示")
         title.setObjectName("stageTitle")
+        self.top_view_coordinate = QLineEdit()
+        self.top_view_coordinate.setReadOnly(True)
+        self.top_view_coordinate.setFixedWidth(238)
+        self.top_view_coordinate.setPlaceholderText("单击画布显示经纬度")
+        self.top_view_coordinate.setToolTip("单击二维实时显示区域后，这里显示 longitude_deg, latitude_deg，可直接复制。")
+        self.top_view_coordinate_hint = QLabel("(lon, lat)")
+        self.top_view_coordinate_hint.setObjectName("coordinateHint")
         # 全屏切换按钮（⛶），保存引用以便切换其图标/提示。
         fullscreen = QPushButton("⛶")
         fullscreen.setFixedSize(30, 30)
@@ -3032,6 +3117,8 @@ class MainWindow(QMainWindow):
         self.fullscreen_button = fullscreen
         toolbar.addWidget(title)
         toolbar.addWidget(fullscreen)
+        toolbar.addWidget(self.top_view_coordinate)
+        toolbar.addWidget(self.top_view_coordinate_hint)
         toolbar.addStretch(1)
         # 图例标签（颜色由样式表按 objectName 着色）。
         self.legend_leader = QLabel("● 长机")
@@ -3083,6 +3170,7 @@ class MainWindow(QMainWindow):
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
         self.top_view.resetViewRequested.connect(self.side_view.reset_view)
+        self.top_view.pointClicked.connect(self._on_top_view_point_clicked)
         # 俯视图/侧视图之间用细分隔线承载拖动调整，不额外占用明显空间。
         self.view_splitter = QSplitter(Qt.Orientation.Vertical)
         self.view_splitter.setObjectName("viewSplitter")
@@ -3603,6 +3691,7 @@ class MainWindow(QMainWindow):
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。
             config_path = Path(path).resolve()
             self.current_config_path = config_path
+            self._set_top_view_geo_origin_from_config(str(config_path))
             display_path = self._display_config_path(config_path)
             self.config_name.setText(display_path)
             self.config_name.setToolTip(display_path)
@@ -3615,6 +3704,29 @@ class MainWindow(QMainWindow):
         else:
             # 失败只记录告警，不改动当前已加载配置。
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
+
+    def _set_top_view_geo_origin_from_config(self, path: str) -> None:
+        """刷新俯视图点击坐标 origin。注意：无经纬航线时清空，避免沿用旧配置 origin。"""
+        # origin 来自基础航线第一个经纬航点；旧 ENU 配置没有 origin，不能反推经纬度。
+        self._top_view_geo_origin = _geo_origin_from_config_for_ui(path)
+        self.top_view_coordinate.clear()
+        if self._top_view_geo_origin is None:
+            self.top_view_coordinate.setPlaceholderText("当前配置无经纬 origin")
+        else:
+            self.top_view_coordinate.setPlaceholderText("单击画布显示经纬度")
+
+    def _on_top_view_point_clicked(self, east_m: float, north_m: float) -> None:
+        """处理俯视图单击坐标。注意：只显示经纬度，不修改仿真状态。"""
+        if self._top_view_geo_origin is None:
+            # 失败提示也放进同一个输入框，避免用户误复制上一配置遗留坐标。
+            self.top_view_coordinate.setText("当前配置无经纬 origin")
+            self.top_view_coordinate.selectAll()
+            return
+        latitude_deg, longitude_deg = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
+        self.top_view_coordinate.setText(f"{longitude_deg:.7f}, {latitude_deg:.7f}")
+        # 自动选中，用户单击后可直接 Ctrl+C 复制数字。
+        self.top_view_coordinate.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.top_view_coordinate.selectAll()
 
     def _sync_speed_controls(self, speed: float) -> None:
         """同步 speed controls 显示。注意：程序设置滑条时不重复下发倍率。"""

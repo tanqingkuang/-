@@ -149,11 +149,13 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 
 字段约定：
 
-- 顶层 `route_file` 是相对主配置文件目录的路径，指向完整 `route` 对象；加载时展开为 `route.waypoints[]`。
-- `avoidance.obstacles_file` 是相对主配置文件目录的路径，由 `src/data/obstaclefile/` 策略工厂解析，指向障碍数组，或包含 `obstacles` 字段的对象；加载时展开为 `avoidance.obstacles[]`。
+- 顶层 `route_file` 是相对主配置文件目录的路径，指向完整 `route` 对象；外部文件使用经纬高 `latitude_deg/longitude_deg/altitude_m` 时，加载时以第一个航点为 ENU origin 并展开为内部 `route.waypoints[]`。
+- `avoidance.obstacles_file` 是相对主配置文件目录的路径，由 `src/data/obstaclefile/` 策略工厂解析，指向障碍数组，或包含 `obstacles` 字段的对象；经纬度障碍加载时由上层注入基础航线 origin 并展开为内部 `avoidance.obstacles[]`。
 - 顶层 `enabled=false` 或展开后的 `obstacles` 为空 → 完全跳过避障，等价于现状。
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。`element/obstacles.json` 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
-- 长机原航线取自展开后的 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。航线文件还可携带 `turn_sign` 与 `center` 表示已烘焙圆弧航段，供避障航线输出后再次作为 `route_file` 读回。
+- 长机原航线取自展开后的 `route.waypoints[]`，内部坐标仍兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。航线文件还可携带 `turn_sign` 与 `center` 表示已烘焙圆弧航段，供避障航线输出后再次作为 `route_file` 读回。
+- 圆形障碍外部中心点使用经纬度，`radius_m` 仍为米；矩形障碍外部使用 `points[4]` 四个经纬点，可表达旋转矩形，内部转换为 polygon 后精确判定，不退化为轴对齐包围盒。
+- GUI 画布和避障窗口当前仍按内部 ENU 显示，不在本阶段切换为经纬度显示。
 - `allow_arc`（默认 `true`）：航段自身是否可为曲线。`true` 时启用贴障弧（§4.4）——绕障被折叠成沿膨胀圆的大弧；**不影响**直线-直线拐点的交接圆弧（后者由补充函数无条件按 R 补），见 §4.3。
 - `simplify_clearance_m`（缺省等于 `clearance_m`）：影响 A* 输出后的 `simplify_path` 视线拉直，**也是贴障弧的贴行半径**（膨胀半径 = `r_obs + simplify_clearance_m`，见 §4.4）。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
 - `turn_switch_penalty_m`（默认 `0.0`）：A* 搜索中每次 8 邻域方向切换的固定等效米代价，用于减少方向频繁切换导致的小直线段。
