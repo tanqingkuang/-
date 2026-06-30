@@ -6,7 +6,28 @@
 
 - 默认三机演示场景。
 - 航线速度为 `20 m/s`，包含东向平飞后北向平飞的基础折线航线。
+- 基础航线从 `element/line.json` 引用，主配置只保留 `route_file` 相对路径。
+- 避障障碍库从 `element/obstacles.json` 引用，主配置只保留 `avoidance.obstacles_file` 相对路径。
 - 编队为 1 架长机加 2 架僚机的三角队形，用于 GUI、控制器和基础回归验证。
+
+## `element/line.json`
+
+- 默认基础航线文件，结构与原 `base.json.route` 完全一致。
+- 当前仍使用 ENU 坐标：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度。
+- `route_file` 的解析和生成由 `src/data/linefile/` 下的策略工厂负责，设计说明见 `src/data/linefile/航线文件设计.md`。
+
+## `rally_demo.json`
+
+- 三机分散后执行集结并进入任务航线的演示场景。
+- 任务航线从 `element/rally_demo_route.json` 引用，主配置只保留 `route_file` 相对路径。
+- 集结长机航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `rally_route_file` 相对路径。
+- 两个外部航线文件加载后分别展开为控制器和算法消费的 `route` 与 `rally_route`。
+
+## `element/obstacles.json`
+
+- 默认避障障碍库文件，结构与原 `base.json.avoidance.obstacles` 完全一致。
+- 当前支持圆形和轴对齐矩形障碍；`enabled` 只表示加载后的默认勾选状态。
+- `obstacles_file` 的解析和生成由 `src/data/obstaclefile/` 下的策略工厂负责，设计说明见 `src/data/obstaclefile/障碍文件设计.md`。
 
 ## `quadrilateral_10_aircraft_a05_leader.json`
 

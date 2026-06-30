@@ -46,6 +46,7 @@ from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEnt
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.common.envelope import MessageEnvelope
+from src.data.config_loader import resolve_config_references
 from src.environment.comm import CommunicationChannel
 from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
 
@@ -725,6 +726,7 @@ class _ConfigLoader:
         # 根必须是对象；解析后立即做结构校验再返回副本。
         if not isinstance(data, dict):
             raise ValueError("config root must be an object")
+        data = resolve_config_references(data, config_path)
         self.validate(data)
         return dict(data)
 

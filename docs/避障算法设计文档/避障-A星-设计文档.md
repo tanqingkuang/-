@@ -129,6 +129,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 以 `configs/base.json` 实际内容为例：
 
 ```jsonc
+"route_file": "element/line.json",
 "avoidance": {
   "enabled": true,
   "allow_arc": true,             // 航段自身是否可为曲线（贴障弧线段，见 §4.4）；不影响拐点交接圆弧（见 §4.3）
@@ -142,22 +143,17 @@ def inside(obs, east, north, clearance=0.0) -> bool:
     "resolution_m": 20.0,        // 栅格分辨率，远小于 R
     "margin_m": 300.0            // 包围盒外扩
   },
-  "obstacles": [
-    { "id": "C1", "type": "circle", "enabled": true,
-      "center": {"east_m": 900, "north_m": 0}, "radius_m": 200 },
-    { "id": "C2", "type": "circle", "enabled": true,
-      "center": {"east_m": 2000, "north_m": 1200}, "radius_m": 200 },
-    { "id": "R1", "type": "rect", "enabled": false,
-      "min": {"east_m": 350, "north_m": -180}, "max": {"east_m": 650, "north_m": 180} }
-  ]
+  "obstacles_file": "element/obstacles.json"
 }
 ```
 
 字段约定：
 
-- 顶层 `enabled=false` 或 `obstacles` 为空 → 完全跳过避障，等价于现状。
-- 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。JSON 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
-- 长机原航线取自 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
+- 顶层 `route_file` 是相对主配置文件目录的路径，指向完整 `route` 对象；加载时展开为 `route.waypoints[]`。
+- `avoidance.obstacles_file` 是相对主配置文件目录的路径，由 `src/data/obstaclefile/` 策略工厂解析，指向障碍数组，或包含 `obstacles` 字段的对象；加载时展开为 `avoidance.obstacles[]`。
+- 顶层 `enabled=false` 或展开后的 `obstacles` 为空 → 完全跳过避障，等价于现状。
+- 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。`element/obstacles.json` 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
+- 长机原航线取自展开后的 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。
 - `allow_arc`（默认 `true`）：航段自身是否可为曲线。`true` 时启用贴障弧（§4.4）——绕障被折叠成沿膨胀圆的大弧；**不影响**直线-直线拐点的交接圆弧（后者由补充函数无条件按 R 补），见 §4.3。
 - `simplify_clearance_m`（缺省等于 `clearance_m`）：影响 A* 输出后的 `simplify_path` 视线拉直，**也是贴障弧的贴行半径**（膨胀半径 = `r_obs + simplify_clearance_m`，见 §4.4）。设为 `clearance_m` 时保持旧行为；调小可减少锯齿折线保留的中间拐点，但安全复核仍由后续可飞性校验兜底。
 - `turn_switch_penalty_m`（默认 `0.0`）：A* 搜索中每次 8 邻域方向切换的固定等效米代价，用于减少方向频繁切换导致的小直线段。

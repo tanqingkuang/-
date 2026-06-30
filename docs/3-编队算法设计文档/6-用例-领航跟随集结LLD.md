@@ -954,20 +954,8 @@ class EntityInitS:
 
 ```json
 {
-  "route": {
-    "speed_mps": 20.0,
-    "waypoints": [
-      { "x_m": 5000, "y_m": 5000, "altitude_m": 500, "R": 0.0 },
-      { "x_m": 10000, "y_m": 5000, "altitude_m": 500, "R": 0.0 }
-    ]
-  },
-  "rally_route": {
-    "speed_mps": 20.0,
-    "waypoints": [
-      { "x_m": 0,    "y_m": 5000, "altitude_m": 500, "R": 0.0 },
-      { "x_m": 5000, "y_m": 5000, "altitude_m": 500, "R": 0.0 }
-    ]
-  },
+  "route_file": "element/rally_demo_route.json",
+  "rally_route_file": "element/rally_demo_rally_route.json",
   "rally": {
     "loose_scale": 3.0,
     "convergence_radius_m": 5.0,
@@ -1013,7 +1001,7 @@ class EntityInitS:
 }
 ```
 
-> 顶层 `route`（mission_route）起点必须等于 `rally_route` 终点——本例均为 `(x=5000, y=5000, altitude=500)`，满足 `RallyLeaderEntity.init` 的航线连续性校验（见 7.1.3 节）。集结完成切 HOLD 时 `RouteInterp` 目标位置不会跳变。
+> `route_file` 加载后展开为顶层 `route`（mission_route），`rally_route_file` 加载后展开为 `rally_route`。`route` 起点必须等于 `rally_route` 终点——本例均为 `(x=5000, y=5000, altitude=500)`，满足 `RallyLeaderEntity.init` 的航线连续性校验（见 7.1.3 节）。集结完成切 HOLD 时 `RouteInterp` 目标位置不会跳变。
 >
 > `k_alt` / `v_up_max_mps` 可省略，省略时使用 `RallyApproachInitS` 中的默认值（0.5/s，5.0 m/s）。
 >
