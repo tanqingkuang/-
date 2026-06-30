@@ -169,6 +169,9 @@ class NodeState:
     track_pos_err_x: float = 0.0  # 航迹系前向位置误差
     track_pos_err_y: float = 0.0  # 航迹系垂向位置误差
     track_pos_err_z: float = 0.0  # 航迹系侧向位置误差
+    cmd_pos_x: float = 0.0  # 当前目标位置 east（槽位/M_i）
+    cmd_pos_y: float = 0.0  # 当前目标位置 north（槽位/M_i）
+    rally_phase: str = ""   # 集结阶段，如 JOINING/FLYING、CATCHUP、HOLD
 
 
 @dataclass
@@ -497,7 +500,7 @@ class Snapshot:
 def is_leader_node(node: NodeState) -> bool:
     """判断节点是否为长机。注意：GUI 显示必须遵循控制器 role，而不是节点顺序。"""
 
-    return node.role.strip().lower() == "leader"
+    return node.role.strip().lower() in {"leader", "rally_leader"}
 
 
 def leader_node_from(nodes: list[NodeState]) -> NodeState | None:
@@ -865,6 +868,9 @@ class ControllerSimulationAdapter:
                     track_pos_err_x=node.track_pos_err_x_m,
                     track_pos_err_y=node.track_pos_err_y_m,
                     track_pos_err_z=node.track_pos_err_z_m,
+                    cmd_pos_x=node.cmd_pos_east_m,
+                    cmd_pos_y=node.cmd_pos_north_m,
+                    rally_phase=node.rally_phase,
                 )
             )
 
@@ -1344,6 +1350,7 @@ class TopView(QGraphicsView):
             if self.snapshot.nodes and self.preview_route_polyline is None:
                 self._draw_route(painter)
             self._draw_links(painter, self.snapshot)
+            self._draw_slot_targets(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
         # 选框是屏幕坐标元素，需先复位变换再绘制，避免被缩放。
         painter.resetTransform()
@@ -1672,6 +1679,32 @@ class TopView(QGraphicsView):
             # 在机体左上方标注节点 ID（标签不随机体旋转）。
             painter.setPen(QPen(self.theme.ink, 1))
             painter.drawText(QPointF(node.x - 13, node.y - 18), node.node_id)
+
+    def _draw_slot_targets(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """绘制僚机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态。"""
+        for node in snapshot.nodes:
+            if is_leader_node(node):
+                continue
+            # 目标点为原点时跳过（初始化默认值，尚未收到有效指令）
+            if node.cmd_pos_x == 0.0 and node.cmd_pos_y == 0.0:
+                continue
+            color = QColor(self.theme.warn if node.health != "normal" else self.theme.wingman)
+            color.setAlphaF(0.70)
+            # 节点到目标点的虚线
+            pen = QPen(color, 1.0 / self.scale_value, Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(QPointF(node.x, node.y), QPointF(node.cmd_pos_x, node.cmd_pos_y))
+            # 目标位置的空心菱形
+            r = 7.0 / self.scale_value
+            diamond = QPainterPath()
+            diamond.moveTo(node.cmd_pos_x, node.cmd_pos_y - r)
+            diamond.lineTo(node.cmd_pos_x + r, node.cmd_pos_y)
+            diamond.lineTo(node.cmd_pos_x, node.cmd_pos_y + r)
+            diamond.lineTo(node.cmd_pos_x - r, node.cmd_pos_y)
+            diamond.closeSubpath()
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(color, 1.5 / self.scale_value))
+            painter.drawPath(diamond)
 
     def _draw_trail(self, painter: QPainter, node: NodeState, is_leader: bool, current_time: float) -> None:
         """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -2414,6 +2447,22 @@ class MainWindow(QMainWindow):
             grid.addWidget(button, index // 2, index % 2)
         layout.addWidget(disturb_group)
 
+        # "演示场景"分组：快捷加载预置配置文件。
+        demo_group = QGroupBox("演示场景")
+        demo_layout = QVBoxLayout(demo_group)
+        demo_layout.setContentsMargins(10, 18, 10, 10)
+        demo_layout.setSpacing(8)
+        btn_hold = QPushButton("编队保持")
+        btn_hold.setToolTip("加载 configs/base.json — 三机楔形保持队形演示")
+        btn_hold.clicked.connect(lambda: self._load_demo_config("base.json"))
+        btn_rally = QPushButton("集结演示")
+        btn_rally.setToolTip("加载 configs/rally_demo.json — 三机分散后集结演示")
+        btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo.json"))
+        demo_layout.addWidget(btn_hold)
+        demo_layout.addWidget(btn_rally)
+        layout.addWidget(demo_group)
+
+        # 底部弹性占位把上面各分组顶到面板顶部。
         layout.addStretch(1)
         return panel
 
@@ -3295,6 +3344,7 @@ class MainWindow(QMainWindow):
         for row, node in enumerate(snapshot.nodes):
             # 健康枚举翻译成中文；未知值原样显示。
             status = {"normal": "正常", "degraded": "降级", "fault": "故障", "lost": "失联"}.get(node.health, node.health)
+            # 节点表固定展示五列；rally_phase 仅保留在快照中，不写入隐藏的越界列。
             values = [
                 node.node_id,
                 f"{node.track_pos_err_x:.1f}",
@@ -3411,6 +3461,14 @@ class MainWindow(QMainWindow):
         snapshot = self.sim.inject_disturbance(kind)
         self._update_snapshot(snapshot)
         self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
+
+    def _load_demo_config(self, filename: str) -> None:
+        """加载 configs/ 目录下的预置演示配置。注意：文件不存在时记录告警。"""
+        path = self.project_root / "configs" / filename
+        if not path.exists():
+            self._log("WARN", f"演示配置不存在：{path}")
+            return
+        self._apply_config_path(str(path))
 
     def _choose_config(self) -> None:
         """处理 config 选择流程。注意：用户取消时不改变当前配置。"""

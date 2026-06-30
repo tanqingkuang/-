@@ -16,7 +16,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPointF, QRect, Qt
-from PySide6.QtWidgets import QApplication, QFrame, QSplitter
+from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
 
 from src.runner.sim_control import (
     NodeState as ControllerNodeState,
@@ -1137,6 +1137,43 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
         self.assert_table_uses_full_width(self.window.node_table)
         self.assert_table_uses_full_width(self.window.overall_table)
+
+    def test_node_table_update_does_not_write_beyond_five_columns(self) -> None:
+        """验证节点表保持五列时，集结阶段不会触发越界写入。"""
+        snapshot = Snapshot(
+            time=0.0,
+            duration=10.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[
+                NodeState(
+                    "R01",
+                    "rally_leader",
+                    100.0,
+                    120.0,
+                    20.0,
+                    0.0,
+                    rally_phase="JN·FLY",
+                ),
+            ],
+            links=[],
+        )
+        original_set_item = QTableWidget.setItem
+        written_columns: list[int] = []
+
+        def record_set_item(table: QTableWidget, row: int, column: int, item) -> None:
+            if table is self.window.node_table:
+                written_columns.append(column)
+            original_set_item(table, row, column, item)
+
+        with patch.object(QTableWidget, "setItem", new=record_set_item):
+            self.window._update_tables(snapshot)
+
+        self.assertEqual(self.window.node_table.columnCount(), 5)
+        self.assertTrue(written_columns)
+        self.assertLess(max(written_columns), self.window.node_table.columnCount())
 
     def test_overall_table_uses_role_leader_when_leader_is_not_first_node(self) -> None:
         snapshot = Snapshot(

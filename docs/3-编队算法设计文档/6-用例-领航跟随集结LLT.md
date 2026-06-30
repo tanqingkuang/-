@@ -1,0 +1,414 @@
+# 领航跟随集结 LLT 设计
+
+测试文件：
+
+- `tests/llt/test_formation_rally.py`
+- `tests/llt/test_sim_control_rally.py`
+
+被测模块：
+
+- `src/algorithm/context/leaf_types.py`
+- `src/algorithm/context/context.py`
+- `src/algorithm/entity/types.py`
+- `src/algorithm/units/process/formation_task/rally.py`
+- `src/algorithm/units/process/outbound/follower_broadcast.py`
+- `src/algorithm/units/process/outbound/rally_leader_broadcast.py`
+- `src/algorithm/units/process/inbound/follower_status.py`
+- `src/algorithm/units/process/inbound/rally_leader_follower.py`
+- `src/algorithm/units/algo/pos_calc/rally_approach.py`
+- `src/algorithm/units/algo/pos_calc/scaled_slot_geometry.py`
+- `src/algorithm/entity/leader_follower_rally/leader.py`
+- `src/algorithm/entity/leader_follower_rally/follower.py`
+- `src/runner/sim_control.py`
+
+设计依据：`docs/3-编队算法设计文档/6-用例-领航跟随集结LLD.md`
+
+---
+
+## 测试辅助
+
+```python
+def _pos(east=0.0, north=0.0, h=0.0) -> PosInEarthS:
+    return PosInEarthS(east=east, north=north, h=h)
+
+
+def _motion(
+    east=0.0,
+    north=0.0,
+    h=0.0,
+    v_east=0.0,
+    v_north=0.0,
+    v_up=0.0,
+    vd=0.0,
+    v_psi=0.0,
+    d_v_psi=0.0,
+) -> MotionProfS:
+    state = MotionProfS()
+    state.pos = PosInEarthS(east=east, north=north, h=h)
+    state.v = VdInEarthS(
+        vEast=v_east,
+        vNorth=v_north,
+        vUp=v_up,
+        vd=vd,
+        vPsi=v_psi,
+        dVPsi=d_v_psi,
+    )
+    return state
+
+
+def _follower_state(
+    node_id: str,
+    *,
+    pos_err_m=0.0,
+    arrived=0,
+    valid=True,
+    last_update_s=0.0,
+) -> FollowerStateS:
+    return FollowerStateS(
+        id=node_id,
+        pos=PosInEarthS(),
+        posErr_m=pos_err_m,
+        arrived=arrived,
+        valid=valid,
+        lastUpdate_s=last_update_s,
+    )
+
+
+def _follower_status_msg(
+    source="follower_1",
+    *,
+    pos_east=0.0,
+    pos_north=0.0,
+    pos_h=500.0,
+    pos_err_m=0.0,
+    arrived=0,
+) -> MessageEnvelope:
+    return MessageEnvelope(
+        topic="formation.follower_status",
+        source=source,
+        target="leader",
+        timestamp=0.0,
+        payload={
+            "id": source,
+            "pos_east": pos_east,
+            "pos_north": pos_north,
+            "pos_h": pos_h,
+            "pos_err_m": pos_err_m,
+            "arrived": arrived,
+        },
+    )
+
+
+def _leader_msg(
+    *,
+    stage=FormStageE.RALLY,
+    pattern=FormPatE.TRIANGLE,
+    step=0,
+    scale=3.0,
+    scale_rate=0.0,
+) -> MessageEnvelope:
+    return MessageEnvelope(
+        topic="formation.leader",
+        source="leader",
+        target=["follower_1"],
+        timestamp=0.0,
+        payload={
+            "leader_state": _motion_payload(_motion(v_east=20.0, vd=20.0)),
+            "cmd": {"stage": int(stage), "pattern": int(pattern), "step": step},
+            "slot_scale": {"scale": scale, "scale_rate": scale_rate},
+        },
+    )
+
+
+def _rally_task(
+    expected=("follower_1", "follower_2"),
+    *,
+    dt_s=0.1,
+    arrive_hold_s=0.2,
+    stable_hold_s=0.2,
+    compress_time_s=1.0,
+) -> Rally:
+    task = Rally()
+    task.init(
+        RallyTaskInitS(
+            looseScale=3.0,
+            convergenceRadius_m=5.0,
+            arriveHold_s=arrive_hold_s,
+            stableHold_s=stable_hold_s,
+            compressTime_s=compress_time_s,
+            tightRadius_m=2.0,
+            expectedFollowerIds=list(expected),
+            staleTimeout_s=0.5,
+            targetPattern=FormPatE.TRIANGLE,
+            dt_s=dt_s,
+        )
+    )
+    return task
+```
+
+---
+
+## 1. TestRallyLeafTypesAndContext - 叶类型与 Context
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_rally_slot_scale_defaults_to_final_scale` | `RallySlotScaleS()` 默认 `scale==1.0`、`scaleRate==0.0` |
+| `test_follower_state_defaults_invalid` | `FollowerStateS()` 默认 `valid is False`、`arrived==0`、`lastUpdate_s==0.0` |
+| `test_formation_analysis_defaults_zero` | `FormationAnalysisS()` 默认误差、数量字段为 0 |
+| `test_copy_rally_slot_scale_copies_scale_and_rate` | `copy_rally_slot_scale` 同时复制 `scale` 和 `scaleRate` |
+| `test_copy_follower_state_copies_valid_and_last_update` | `copy_follower_state` 复制 `id/pos/posErr_m/arrived/valid/lastUpdate_s` |
+| `test_copy_formation_analysis_copies_all_fields` | `copy_formation_analysis` 覆盖所有诊断字段 |
+| `test_context_contains_rally_fields` | `FormContextS` 含 `slotScale` 与 `followerStates`，且列表默认独立 |
+| `test_reset_context_resets_slot_scale_and_clears_follower_states` | `reset_context` 后 `slotScale.scale==1.0`、`scaleRate==0.0`、`followerStates==[]` |
+
+---
+
+## 2. TestEntityBoundaryTypes - 实体边界扩展
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_entity_input_contains_now_s_default_zero` | `EntityInputS().now_s == 0.0` |
+| `test_entity_init_contains_rally_route_target_and_cfg` | `EntityInitS` 含 `rally_route/rally_target/rally_cfg/rally_approach_speed_mps/rally_leader_id`，默认值符合 LLD（`rally_leader_id=""` 为默认值，`RallyFollowerEntity.init` 须将其注入 `FollowerBroadcastInitS.leaderId`） |
+| `test_entity_output_contains_optional_formation_analysis` | `EntityOutputS().formationAnalysis is None` |
+| `test_existing_hold_entities_accept_extended_boundary_types` | 现有 `LeaderEntity/FollowerEntity` 使用扩展后的 `EntityInputS/OutputS` 构造并 step 不抛异常 |
+
+---
+
+## 3. TestRallyTaskValidation - Rally 初始化校验
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_init_rejects_loose_scale_below_one` | `looseScale < 1.0` 抛 `ValueError` |
+| `test_init_rejects_zero_compress_time` | `compressTime_s <= 0` 抛 `ValueError` |
+| `test_init_rejects_zero_stale_timeout` | `staleTimeout_s <= 0` 抛 `ValueError` |
+| `test_init_rejects_zero_dt` | `dt_s <= 0` 抛 `ValueError` |
+| `test_reset_restores_none_and_loose_scale` | `reset()` 清零计时器，下一次 `remote=NONE` step 输出 `NONE/step=0/pattern=NONE/scale=looseScale` |
+
+---
+
+## 4. TestRallyTaskRemote - Rally 遥控语义
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_remote_none_outputs_none_and_loose_scale` | `remote=NONE` 输出 `cmd.stage=NONE`、`pattern=NONE`、`slotScale.scale=looseScale` |
+| `test_remote_none_resets_running_timers` | RALLY 中已累加计时器后切 `NONE`，再进 RALLY 不继承旧计时 |
+| `test_remote_hold_outputs_hold_final_scale` | `remote=HOLD` 输出 `HOLD`、`targetPattern`、`slotScale.scale=1.0`、`scaleRate=0.0` |
+| `test_remote_hold_does_not_mark_rally_completed` | 外部强制 HOLD 不设置正常完成标志，实体不应输出 `FormationAnalysisS` |
+| `test_remote_rally_from_none_starts_approach` | `NONE + remote=RALLY` 重置计时器并输出 `RALLY/step=0/targetPattern` |
+| `test_remote_rally_after_completed_hold_does_not_restart` | 已正常完成到 `HOLD` 后继续 `remote=RALLY`，保持 `HOLD`，不回到 `APPROACH` |
+| `test_none_then_rally_allows_restart` | 完成后先发 `NONE` 再发 `RALLY`，允许重新从 `APPROACH` 开始 |
+
+---
+
+## 5. TestRallyTaskApproachLooseCompress - Rally 状态机
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_empty_expected_followers_advances_by_timers` | `expectedFollowerIds=[]` 时，APPROACH/LOOSE 可按计时器立即推进 |
+| `test_missing_follower_states_freezes_approach` | 期望列表非空但 `followerStates=[]`，保持 `APPROACH`，`_arrive_timer` 不累加 |
+| `test_invalid_or_stale_follower_freezes_approach` | `valid=False` 或 `now_s-lastUpdate_s>staleTimeout_s`，不切 LOOSE |
+| `test_arrived_flag_controls_approach_not_pos_error` | `arrived==1` 且 `posErr_m` 很大，APPROACH 仍可按到达锁存推进 |
+| `test_arrive_timer_requires_continuous_arrived` | 连续满足到达才切 LOOSE，中间一帧未到达会清零计时器 |
+| `test_first_rally_frame_writes_target_pattern` | 第一拍 `RALLY/APPROACH` 即写 `cmd.pattern=targetPattern` |
+| `test_loose_uses_position_error_threshold` | LOOSE 阶段按 `posErr_m < convergenceRadius_m` 判定稳定 |
+| `test_loose_timer_resets_when_any_expected_follower_outside_radius` | 任一期望僚机误差超阈值，`_stable_timer` 清零 |
+| `test_loose_advances_to_compress_after_stable_hold` | 全部误差达标并持续 `stableHold_s` 后输出 `step=2` |
+| `test_compress_scale_decreases_linearly` | COMPRESS 每拍 `scale` 按 `looseScale -> 1.0` 线性递减 |
+| `test_compress_scale_rate_is_negative_until_final_scale` | `scale>1.0` 时 `scaleRate=-(looseScale-1)/compressTime_s` |
+| `test_compress_scale_rate_zero_at_final_scale` | `scale==1.0` 后 `scaleRate==0.0` |
+| `test_compress_waits_for_tight_error_after_scale_done` | `scale==1.0` 但任一僚机 `posErr_m>=tightRadius_m`，仍保持 `RALLY/step=2` |
+| `test_compress_to_hold_sets_rally_completed_once` | `scale==1.0` 且误差达标时输出 `HOLD`，并只在转换拍输出 `rallyCompleted=True` |
+
+---
+
+## 6. TestFollowerBroadcast - 僚机状态广播
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_targets_leader_from_cfg` | `cfg.leaderId` 非空时，`MessageEnvelope.target` 等于 `cfg.leaderId` |
+| `test_broadcast_topic_is_follower_status` | 输出 topic 固定为 `formation.follower_status` |
+| `test_payload_contains_position_error_and_arrived` | payload 含 `id/pos_east/pos_north/pos_h/pos_err_m/arrived` |
+| `test_pos_error_is_distance_to_self_cmd` | `pos_err_m = norm(selfState.pos - selfCmd.pos)` |
+| `test_arrived_uses_entity_latched_value` | `arrived` 直接等于 `u.selfArrived`，不由当前距离反算 |
+| `test_empty_leader_id_raises_value_error` | `cfg.leaderId == ""` 时 `init()` 抛 `ValueError`（不依赖 netWork 推断） |
+| `test_missing_ports_raise_value_error` | `selfState/selfCmd/outbox` 未绑定时抛 `ValueError` |
+
+---
+
+## 7. TestFollowerStatusInbound - 长机解析僚机回报
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_parses_two_follower_messages` | 两条 `formation.follower_status` 写入两个 `FollowerStateS`，字段完整 |
+| `test_updates_existing_entry_in_place` | 已有同 ID 条目时原地更新，不追加重复项 |
+| `test_appends_new_follower_entry` | 新 source 追加到 `followerStates` |
+| `test_sets_valid_and_last_update` | 收到报文后 `valid=True`、`lastUpdate_s=now_s` |
+| `test_empty_inbox_keeps_last_update` | 断链帧不更新 `lastUpdate_s`，不清空旧状态 |
+| `test_filters_non_follower_status_topics` | `formation.leader`、`node.status` 等非目标 topic 被忽略 |
+| `test_ignores_non_dict_or_incomplete_payload` | payload 非 dict 或关键字段缺失时跳过，不写半截状态 |
+| `test_payload_id_mismatch_uses_envelope_source` | payload 中 `id` 与 `envelope.source` 不一致时，以 `envelope.source` 作为 `FollowerStateS.id`，不信任 payload id |
+
+---
+
+## 8. TestRallyLeaderBroadcastAndInbound - 长机广播扩展与僚机解析
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_rally_leader_broadcast_keeps_existing_payload_contract` | payload 保留 `leader_state` 与 `cmd`，topic 仍为 `formation.leader` |
+| `test_rally_leader_broadcast_adds_slot_scale` | payload 新增 `slot_scale.scale` 与 `slot_scale.scale_rate` |
+| `test_rally_leader_follower_parses_cmd_leader_state_and_slot_scale` | 入站单元同时写入 `leaderState/cmd/slotScale` |
+| `test_missing_slot_scale_defaults_final_scale` | 老格式长机广播无 `slot_scale` 时，解析为 `scale=1.0`、`scaleRate=0.0` |
+| `test_malformed_slot_scale_defaults_final_scale` | `slot_scale` 非 dict 或字段不可转 float 时解析为 `scale=1.0`、`scaleRate=0.0` |
+| `test_non_leader_topic_is_skipped` | 非 `formation.leader` topic 不改写 `leaderState/cmd/slotScale` |
+| `test_latest_leader_message_wins` | 同帧多条长机广播，后到消息覆盖先到消息 |
+
+---
+
+## 9. TestRallyApproach - 飞向目标集结点
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_outputs_target_position` | `selfCmd.pos` 恒等于初始化注入的 M_i |
+| `test_normal_branch_sets_horizontal_speed` | `dHoriz>=epsilon` 时 `hypot(vNorth,vEast)==approachSpeed_mps` |
+| `test_normal_branch_heading_uses_atan2_north_east` | 目标在正北方向时 `vPsi≈pi/2`，证明公式为 `atan2(dN,dE)` |
+| `test_normal_branch_clamps_vertical_speed` | 水平距离很小且高度差大时，`abs(vUp)<=vUpMax_mps` |
+| `test_near_zero_horizontal_branch_stops_horizontal_motion` | `dHoriz<epsilon` 时 `vNorth==0`、`vEast==0`、`vd==0` |
+| `test_near_zero_horizontal_branch_keeps_heading` | 近零分支 `vPsi` 等于 `selfState.v.vPsi` |
+| `test_near_zero_horizontal_branch_clamps_altitude_loop` | 近零分支 `vUp=clamp(dH*k_alt, +/-vUpMax_mps)` |
+| `test_init_rejects_invalid_speed_or_limits` | `approachSpeed_mps<0`、`vUpMax_mps<=0`、`k_alt<0` 抛 `ValueError` |
+
+---
+
+## 10. TestScaledSlotGeometry - 带缩放槽位几何
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_scale_one_matches_slot_geometry_position_and_velocity` | `scale=1.0/scaleRate=0` 时，位置和速度与现有 `SlotGeometry` 一致 |
+| `test_scale_two_doubles_position_offset` | `scale=2.0` 时槽位偏置相对长机扩大 2 倍 |
+| `test_scale_rate_adds_compression_velocity` | `scaleRate<0` 时速度多出 `scaleRate * R(heading) * offset` 分量 |
+| `test_turn_feedforward_uses_scaled_offset` | 长机 `dVPsi!=0` 时，刚体旋转速度使用 `scale * slot.x/z` |
+| `test_vertical_offset_and_scale_rate_affect_up_command` | `slot.y` 被 `scale` 放大，`vUp` 含 `scaleRate * slot.y` |
+| `test_velocity_scalar_and_heading_are_recomputed` | 输出 `vd=hypot(vEast,vNorth)`，`vPsi=atan2(vNorth,vEast)` |
+| `test_undefined_leader_track_falls_back_consistently` | 长机水平速度为 0 时，按现有 `SlotGeometry` 的东向兜底策略计算 |
+| `test_missing_pattern_or_slot_raises` | 未知 `pattern` 或找不到本机槽位时抛 `ValueError` |
+
+---
+
+## 11. TestRallyLeaderEntity - 集结长机实体
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_init_binds_rally_ports_to_context` | `slotScale/followerStates/cmd/wayLine/selfCmd` 端口绑定到同一 `FormContextS` 对象 |
+| `test_step_injects_now_s_to_follower_status_and_rally_task` | `EntityInputS.now_s` 被传给入站状态解析和 Rally 任务 |
+| `test_remote_rally_uses_rally_route` | `remote=RALLY` 时推进 `_tra_plan_rally`，`wayLine` 来自 `cfg.rally_route` |
+| `test_hold_uses_mission_route_after_completion` | 正常完成到 HOLD 后推进 `_tra_plan_mission`，`wayLine` 来自 `cfg.route` |
+| `test_remote_none_outputs_zero_command_without_route_interp` | `remote=NONE` 时不调用空航线插值，`selfCmd` 为当前位置零速，`selfAccCmd` 为零 |
+| `test_remote_none_still_broadcasts_none` | `NONE` 分支仍广播 `cmd.stage=NONE` 和当前 `slotScale` |
+| `test_route_continuity_validation_accepts_connected_routes` | `mission_route` 起点与 `rally_route` 终点距离小于阈值时初始化通过 |
+| `test_route_continuity_validation_rejects_gap` | 两条航线不连续时初始化抛 `ValueError` |
+| `test_formation_analysis_emits_once_after_normal_completion` | COMPRESS 正常完成后首帧 `formationAnalysis` 非空，下一帧为 None |
+| `test_forced_hold_does_not_emit_formation_analysis` | `remote=HOLD` 强制中断不输出完成分析 |
+| `test_reset_clears_completion_flag_context_and_outbox` | `reset()` 清理 `_rally_completed`、上下文、outbox、双航线规划器状态 |
+
+---
+
+## 12. TestRallyFollowerEntity - 集结僚机实体
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_none_stage_outputs_current_position_zero_speed` | 未收到 RALLY 时 `selfCmd.pos` 复制本机位置，速度为零，不直飞 M_i |
+| `test_none_stage_broadcasts_arrived_zero` | `cmd.stage=NONE` 时仍发送在线状态，`arrived=0` |
+| `test_rally_before_arrival_uses_rally_approach` | `cmd.stage=RALLY` 且 `_self_arrived=False` 时目标为 M_i |
+| `test_arrival_uses_self_state_to_target_distance` | 到达判定使用 `selfState.pos` 与 `_rally_target` 的 3D 距离，不使用 `selfCmd.pos` |
+| `test_arrival_latches_and_does_not_revert` | 到达 M_i 后 `_self_arrived=True`，后续误差回升也不回到 Approach |
+| `test_after_arrival_uses_scaled_slot_geometry_even_when_cmd_step_approach` | 系统仍是 APPROACH 时，先到机已切槽位跟随 |
+| `test_hold_forces_slot_geometry_even_if_not_arrived` | 外部强制 HOLD 时，无论 `_self_arrived` 都使用最终槽位 |
+| `test_compress_uses_leader_slot_scale` | `slotScale.scale/scaleRate` 来自长机广播并传入 `ScaledSlotGeometry` |
+| `test_broadcast_uses_latched_self_arrived` | 出站 `selfArrived` 等于实体锁存值 |
+| `test_reset_clears_self_arrived_and_buffers` | `reset()` 后 `_self_arrived=False`，inbox/outbox 清空 |
+
+---
+
+## 13. TestRallySimControlIntegration - 仿真控制接入
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_rally_demo_config_exists_and_loads` | `configs/rally_demo.json` 存在且能被 `sim_control.load_config()` 正常解析（文件须作为交付物提交） |
+| `test_config_loader_accepts_rally_route_waypoints` | 配置中的 `rally_route.waypoints` 被解析为 `RouteS`，并注入长机 `EntityInitS.rally_route` |
+| `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `RallyLeaderEntity`，`role="rally_follower"` 创建 `RallyFollowerEntity` |
+| `test_legacy_roles_still_select_hold_entities` | `leader/wingman` 角色仍创建现有 hold 实体，保持既有场景兼容 |
+| `test_rally_config_builds_expected_follower_ids` | `rally.expected_follower_ids` 注入 `RallyTaskInitS.expectedFollowerIds` |
+| `test_rally_node_target_is_required_for_rally_follower` | `rally_follower` 缺少 `rally_target` 时配置校验失败 |
+| `test_rally_leader_requires_rally_route` | `rally_leader` 缺少 `rally_route` 时配置校验失败 |
+| `test_rally_remote_defaults_to_rally_until_completion` | 集结场景运行时 `_NodeAlgorithm.step` 下发 `RemoteCmdS(FormStageE.RALLY)` |
+| `test_hold_scene_remote_remains_hold` | 非集结场景仍下发 `RemoteCmdS(FormStageE.HOLD)` |
+| `test_now_s_is_injected_to_entity_input` | `_NodeAlgorithm.step(..., time_s=t)` 构造 `EntityInputS(now_s=t)` |
+| `test_rally_leader_broadcast_reaches_rally_followers` | 通过通信通道，长机 `slot_scale` 广播到僚机 inbox 并被解析 |
+| `test_rally_status_reaches_leader` | 僚机 `formation.follower_status` 通过通信通道到达长机并更新 `followerStates` |
+| `test_rally_snapshot_exposes_formation_completed_analysis_when_complete` | 正常完成集结后，仿真快照字段 `formation_completed_analysis` 携带 `FormationAnalysisS` 诊断结果 |
+| `test_formation_completed_analysis_cleared_on_load_and_reset` | `load_config()` 和 `reset()` 后快照 `formation_completed_analysis is None`，不携带上次集结结果 |
+| `test_remote_stage_switches_to_hold_after_completion` | 集结完成后控制器自动将 `_remote_stage` 切为 `HOLD`，后续帧 `EntityInputS.remote.stage == HOLD` |
+
+---
+
+## 14. TestRallyEndToEndScenario - 小规模闭环场景
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_two_followers_reach_hold_after_rally` | 1 长机 + 2 僚机配置，运行足够时长后长机 `cmd.stage==HOLD` |
+| `test_followers_first_report_arrived_then_slot_error_converges` | 僚机先广播 `arrived=1`，之后 `posErr_m` 进入松散/紧密阈值 |
+| `test_link_loss_freezes_rally_progress` | 某期望僚机链路丢失超过 `staleTimeout_s` 时，Rally 不推进到下一阶段 |
+| `test_recover_after_link_loss_allows_progress` | 链路恢复并重新收到有效状态后，状态机继续推进 |
+| `test_reset_restarts_rally_from_approach` | 集结运行中调用 `reset()`，仿真复位且 `_remote_stage` 重置为 `RALLY`，下一帧长机输出 `cmd.stage=RALLY/step=0`（NONE→RALLY 重启语义已在 TestRallyTaskRemote.test_none_then_rally_allows_restart 单元级覆盖） |
+
+---
+
+## 覆盖矩阵
+
+| LLD 需求 | 覆盖测试类 |
+| -------- | ---------- |
+| 新增叶类型、copy 函数、Context reset | TestRallyLeafTypesAndContext |
+| EntityInputS/EntityInitS/EntityOutputS 扩展 | TestEntityBoundaryTypes |
+| Rally 参数校验与 reset | TestRallyTaskValidation |
+| remote NONE/HOLD/RALLY 语义 | TestRallyTaskRemote |
+| APPROACH/LOOSE/COMPRESS/HOLD 状态流转 | TestRallyTaskApproachLooseCompress |
+| expectedFollowerIds、valid、lastUpdate_s、超时冻结 | TestRallyTaskApproachLooseCompress, TestFollowerStatusInbound |
+| `cmd.pattern` 首拍写入 targetPattern | TestRallyTaskApproachLooseCompress |
+| `slotScale.scale/scaleRate` 输出 | TestRallyTaskApproachLooseCompress, TestScaledSlotGeometry |
+| 僚机状态广播与锁存 arrived | TestFollowerBroadcast, TestRallyFollowerEntity |
+| 长机解析僚机回报 | TestFollowerStatusInbound |
+| 长机广播保持既有 payload 并追加 `slot_scale` | TestRallyLeaderBroadcastAndInbound |
+| 僚机解析长机 `slot_scale`，缺字段默认 | TestRallyLeaderBroadcastAndInbound |
+| RallyApproach 速度、航向、高度限幅 | TestRallyApproach |
+| ScaledSlotGeometry 缩放、压缩速度前馈、转弯前馈 | TestScaledSlotGeometry |
+| RallyLeaderEntity 双航线切换与 NONE 零速 | TestRallyLeaderEntity |
+| RallyFollowerEntity cmd.stage 门控与单机到达锁存 | TestRallyFollowerEntity |
+| FormationAnalysis 只在正常完成后输出一次 | TestRallyLeaderEntity |
+| 配置解析、角色映射、now_s 注入、remote=RALLY 接入、完成后自动切 HOLD、锁存清空 | TestRallySimControlIntegration |
+| 多机闭环集结、断链冻结、恢复继续、重启 | TestRallyEndToEndScenario |
+
+---
+
+## 执行命令
+
+```bash
+python -m unittest tests.llt.test_formation_rally tests.llt.test_sim_control_rally
+```
+
+提交前仍需运行项目基础检查：
+
+```bash
+python -m compileall -q src
+git diff --check
+```
+
+若本轮实现修改了 `src/` 下 Python 代码，还需执行注释覆盖率检查：
+
+```bash
+python -X utf8 scripts/comment_coverage.py \
+  --fail-under-module 100 \
+  --fail-under-class 100 \
+  --fail-under-func 100 \
+  --fail-under-inline 15 \
+  --worst 12
+```
