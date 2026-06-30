@@ -79,7 +79,7 @@ from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_polygon, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
 from src.data.config_loader import _LINE_FILE_MANAGER, resolve_config_references
-from src.data.geo import GeoOrigin
+from src.data.geo import GeoOrigin, enu_to_geodetic
 from src.data.geo_config import geo_origin_from_dict, route_to_external, route_to_internal
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
@@ -92,8 +92,8 @@ WORLD_HEIGHT = 520.0
 TRAIL_SECONDS = 18.0
 # 俯视图初始平移留白，避免场景紧贴左上角边缘。
 TOP_VIEW_ORIGIN_MARGIN = 40.0
-# 视图缩放上下限，防止缩到看不见或放大到失真。
-VIEW_MIN_SCALE = 0.05
+# 视图缩放上下限，防止缩到看不见或放大到失真；下限需覆盖 100km 级地图自适应。
+VIEW_MIN_SCALE = 0.002
 VIEW_MAX_SCALE = 3.5
 # 自适应铺满时只占用视口 80%，四周留出可视边距。
 FIT_VIEWPORT_RATIO = 0.80
@@ -308,6 +308,14 @@ def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[
         return resolved
     except (OSError, ValueError):
         return None
+
+
+def _geo_origin_from_config_for_ui(path: str) -> GeoOrigin | None:
+    """从配置 route_file 读取经纬 origin。注意：仅供 GUI 点击坐标显示使用。"""
+    raw_data = _load_json_config_for_ui(path)
+    data = _resolve_route_reference_for_ui(raw_data, path) if raw_data is not None else None
+    route = data.get("route") if isinstance(data, dict) else None
+    return geo_origin_from_dict(route.get("_geo_origin")) if isinstance(route, dict) else None
 
 
 def route_inputs_to_config(
@@ -1246,6 +1254,7 @@ class TopView(QGraphicsView):
     viewChanged = Signal()
     manualViewChanged = Signal()
     resetViewRequested = Signal()
+    pointClicked = Signal(float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化 TopView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -1404,7 +1413,12 @@ class TopView(QGraphicsView):
             event.accept()
         elif event.button() == Qt.MouseButton.LeftButton:
             # 松开左键即把选框区域放大铺满，再清空选框状态。
-            self._zoom_to_selection()
+            if self._selection_is_click():
+                # 单击不改变视角，只把屏幕点反解成 ENU 坐标给上层展示经纬度。
+                point = self._viewport_to_world(event.position())
+                self.pointClicked.emit(point.x(), point.y())
+            else:
+                self._zoom_to_selection()
             self._selection_origin = None
             self._selection_current = None
             self.viewport().update()
@@ -1449,6 +1463,16 @@ class TopView(QGraphicsView):
         return QPointF(
             (point.x() - self.offset.x()) / self.scale_value,
             (self.offset.y() - point.y()) / self.scale_value,
+        )
+
+    def _selection_is_click(self) -> bool:
+        """判断当前左键操作是否为单击。注意：小于缩放框阈值时不触发框选缩放。"""
+        if self._selection_origin is None or self._selection_current is None:
+            return False
+        # 与 _zoom_to_selection 的 8px 阈值保持一致，小拖动仍按点击处理。
+        return (
+            abs(self._selection_origin.x() - self._selection_current.x()) < 8
+            and abs(self._selection_origin.y() - self._selection_current.y()) < 8
         )
 
     def _world_to_viewport(self, point: QPointF) -> QPointF:
@@ -2388,6 +2412,7 @@ class MainWindow(QMainWindow):
         # 避障规划参数（来自配置）与“生成航线”得到的预览航线（采用前）。
         self._avoidance_params: AvoidanceParams | None = None
         self._preview_route: list[WayPointInputS] | None = None
+        self._top_view_geo_origin: GeoOrigin | None = None
         self._segment_lock_preferred = True
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
@@ -3078,6 +3103,13 @@ class MainWindow(QMainWindow):
         toolbar.setSpacing(8)
         title = QLabel("二维实时显示")
         title.setObjectName("stageTitle")
+        self.top_view_coordinate = QLineEdit()
+        self.top_view_coordinate.setReadOnly(True)
+        self.top_view_coordinate.setFixedWidth(238)
+        self.top_view_coordinate.setPlaceholderText("单击画布显示经纬度")
+        self.top_view_coordinate.setToolTip("单击二维实时显示区域后，这里显示 longitude_deg, latitude_deg，可直接复制。")
+        self.top_view_coordinate_hint = QLabel("(lon, lat)")
+        self.top_view_coordinate_hint.setObjectName("coordinateHint")
         # 全屏切换按钮（⛶），保存引用以便切换其图标/提示。
         fullscreen = QPushButton("⛶")
         fullscreen.setFixedSize(30, 30)
@@ -3085,6 +3117,8 @@ class MainWindow(QMainWindow):
         self.fullscreen_button = fullscreen
         toolbar.addWidget(title)
         toolbar.addWidget(fullscreen)
+        toolbar.addWidget(self.top_view_coordinate)
+        toolbar.addWidget(self.top_view_coordinate_hint)
         toolbar.addStretch(1)
         # 图例标签（颜色由样式表按 objectName 着色）。
         self.legend_leader = QLabel("● 长机")
@@ -3136,6 +3170,7 @@ class MainWindow(QMainWindow):
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
         self.top_view.resetViewRequested.connect(self.side_view.reset_view)
+        self.top_view.pointClicked.connect(self._on_top_view_point_clicked)
         # 俯视图/侧视图之间用细分隔线承载拖动调整，不额外占用明显空间。
         self.view_splitter = QSplitter(Qt.Orientation.Vertical)
         self.view_splitter.setObjectName("viewSplitter")
@@ -3656,6 +3691,7 @@ class MainWindow(QMainWindow):
             # 成功：更新配置名标签/提示，并按需把该路径记入 config.ini。
             config_path = Path(path).resolve()
             self.current_config_path = config_path
+            self._set_top_view_geo_origin_from_config(str(config_path))
             display_path = self._display_config_path(config_path)
             self.config_name.setText(display_path)
             self.config_name.setToolTip(display_path)
@@ -3668,6 +3704,29 @@ class MainWindow(QMainWindow):
         else:
             # 失败只记录告警，不改动当前已加载配置。
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
+
+    def _set_top_view_geo_origin_from_config(self, path: str) -> None:
+        """刷新俯视图点击坐标 origin。注意：无经纬航线时清空，避免沿用旧配置 origin。"""
+        # origin 来自基础航线第一个经纬航点；旧 ENU 配置没有 origin，不能反推经纬度。
+        self._top_view_geo_origin = _geo_origin_from_config_for_ui(path)
+        self.top_view_coordinate.clear()
+        if self._top_view_geo_origin is None:
+            self.top_view_coordinate.setPlaceholderText("当前配置无经纬 origin")
+        else:
+            self.top_view_coordinate.setPlaceholderText("单击画布显示经纬度")
+
+    def _on_top_view_point_clicked(self, east_m: float, north_m: float) -> None:
+        """处理俯视图单击坐标。注意：只显示经纬度，不修改仿真状态。"""
+        if self._top_view_geo_origin is None:
+            # 失败提示也放进同一个输入框，避免用户误复制上一配置遗留坐标。
+            self.top_view_coordinate.setText("当前配置无经纬 origin")
+            self.top_view_coordinate.selectAll()
+            return
+        latitude_deg, longitude_deg = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
+        self.top_view_coordinate.setText(f"{longitude_deg:.7f}, {latitude_deg:.7f}")
+        # 自动选中，用户单击后可直接 Ctrl+C 复制数字。
+        self.top_view_coordinate.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.top_view_coordinate.selectAll()
 
     def _sync_speed_controls(self, speed: float) -> None:
         """同步 speed controls 显示。注意：程序设置滑条时不重复下发倍率。"""

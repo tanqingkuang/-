@@ -29,6 +29,14 @@
 - 对外使用经纬度表达障碍位置：圆形障碍的半径仍为米，矩形障碍使用四点经纬度，可表达旋转矩形；加载时由上层注入基础航线 origin 并转换为 ENU。
 - `obstacles_file` 的解析和生成由 `src/data/obstaclefile/` 下的策略工厂负责，设计说明见 `src/data/obstaclefile/障碍文件设计.md`。
 
+## `single_avoidance_80km.json`
+
+- 单机避障演示场景，不配置编队通信链路。
+- 基础航线从 `element/single_avoidance_80km_route.json` 引用，包含 10 个经纬高航点、9 条直线航段，航段长度约 `11 km` 到 `24 km`，整体视野约 `80 km`。
+- 原航线内部拐点默认转弯半径为 `700 m`；飞机初始位于第一航点，速度 `45 m/s`，航向与第一航段一致。
+- 避障障碍库从 `element/single_avoidance_80km_obstacles.json` 引用，包含 2 个圆形、2 个轴对齐矩形和 2 个斜放矩形。
+- 避障规划参数使用 `turn_radius_m=600 m`、`leg_length_margin_m=0 m`、`grid.resolution_m=50 m`，其余参数按避障设计文档建议给出初始默认值。
+
 ## `quadrilateral_10_aircraft_a05_leader.json`
 
 - 十机四边形航线场景，航段速度为 `20 m/s`。

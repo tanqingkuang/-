@@ -18,6 +18,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
 
+from src.data.geo import GeoOrigin
 from src.runner.sim_control import (
     NodeState as ControllerNodeState,
     SimulationSnapshot as ControllerSnapshot,
@@ -314,6 +315,15 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(round_trip.x(), 0.0)
         self.assertAlmostEqual(round_trip.y(), 80.0)
 
+    def test_top_view_click_updates_copyable_geodetic_text(self) -> None:
+        self.window._top_view_geo_origin = GeoOrigin(39.0, 116.0)
+
+        self.window._on_top_view_point_clicked(0.0, 0.0)
+
+        self.assertEqual(self.window.top_view_coordinate.text(), "116.0000000, 39.0000000")
+        self.assertEqual(self.window.top_view_coordinate.selectedText(), "116.0000000, 39.0000000")
+        self.assertEqual(self.window.top_view_coordinate_hint.text(), "(lon, lat)")
+
     def test_top_view_link_keeps_screen_width_during_zoom(self) -> None:
         thin = self._link_stroke_height_at_scale(0.45)
         thick = self._link_stroke_height_at_scale(3.5)
@@ -354,6 +364,29 @@ class GuiViewInteractionTests(unittest.TestCase):
             },
         )
 
+        self.assert_route_and_aircraft_fit_viewport()
+
+    def test_reset_view_fits_large_80km_route(self) -> None:
+        self._load_ui_config(
+            nodes=[
+                {"node_id": "S01", "role": "leader", "x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0, "speed_mps": 45.0},
+            ],
+            links=[],
+            route={
+                "speed_mps": 45.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1200.0},
+                    {"x_m": 76000.0, "y_m": 0.0, "altitude_m": 1200.0},
+                    {"x_m": 76000.0, "y_m": 70000.0, "altitude_m": 1200.0},
+                    {"x_m": 20000.0, "y_m": 70000.0, "altitude_m": 1200.0},
+                ],
+            },
+        )
+
+        self.window.top_view.reset_view()
+        self.app.processEvents()
+
+        self.assertLess(self.window.top_view.scale_value, 0.05)
         self.assert_route_and_aircraft_fit_viewport()
 
     def test_top_view_does_not_refit_during_running_snapshot_updates(self) -> None:
@@ -1356,12 +1389,12 @@ class GuiViewInteractionTests(unittest.TestCase):
             "duration_s": duration_s,
             "step_s": step_s,
             "playback_rate": playback_rate,
-            "nodes": nodes or [
+            "nodes": nodes if nodes is not None else [
                 {"node_id": "A01", "role": "leader", "x_m": 140.0, "y_m": 260.0, "altitude_m": 1200.0},
                 {"node_id": "A02", "role": "wingman", "x_m": 92.0, "y_m": 318.0, "altitude_m": 1215.0},
                 {"node_id": "A03", "role": "wingman", "x_m": 88.0, "y_m": 202.0, "altitude_m": 1230.0},
             ],
-            "links": links or [
+            "links": links if links is not None else [
                 {"link_id": "A01-A02", "latency_ms": 18.0, "loss_rate": 0.01},
                 {"link_id": "A01-A03", "latency_ms": 21.0, "loss_rate": 0.01},
                 {"link_id": "A02-A03", "latency_ms": 30.0, "loss_rate": 0.02},
