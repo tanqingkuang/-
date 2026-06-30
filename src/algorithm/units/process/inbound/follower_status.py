@@ -48,6 +48,7 @@ class FollowerStatus(InboundBase):
         # 同一帧多条同源消息按遍历顺序覆盖，保留最后一条，匹配通信层“后到为准”的语义。
         # payload.id 只用于诊断展示，不用于身份判定，避免伪造载荷污染长机状态表。
         # 关键字段先做完整性校验，防止缺字段消息创建半初始化的 FollowerStateS。
+        _state_lookup: dict[str, FollowerStateS] = {s.id: s for s in y.followerStates}
         for msg in u.inbox:
             if msg.topic != FOLLOWER_STATUS_TOPIC or not isinstance(msg.payload, dict):
                 continue
@@ -72,10 +73,11 @@ class FollowerStatus(InboundBase):
                 continue
             # 以 envelope.source 作为节点 ID，不信任 payload 中的 id 字段。
             node_id = msg.source
-            entry = next((s for s in y.followerStates if s.id == node_id), None)
+            entry = _state_lookup.get(node_id)
             if entry is None:
                 entry = FollowerStateS(id=node_id)
                 y.followerStates.append(entry)
+                _state_lookup[node_id] = entry
             entry.pos.east = pos_east
             entry.pos.north = pos_north
             entry.pos.h = pos_h

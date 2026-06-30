@@ -514,7 +514,6 @@ def _build_rally_task_init(
         dt_s=algorithm_period_s,
         loiter_radius_m=float(rally_cfg_raw.get("loiter_radius_m", 200.0)),
         arrival_radius_m=float(rally_cfg_raw.get("arrival_radius_m", 100.0)),
-        last_arrival_threshold_s=float(rally_cfg_raw.get("last_arrival_threshold_s", 5.0)),
         mission_heading_deg=float(rally_cfg_raw.get("mission_heading_deg", 0.0)),
         catchup_radius_m=float(rally_cfg_raw.get("catchup_radius_m", 200.0)),
         catchup_kp_speed=float(rally_cfg_raw.get("catchup_kp_speed", 0.05)),

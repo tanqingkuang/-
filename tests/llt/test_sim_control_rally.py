@@ -170,6 +170,27 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertEqual(result.code, "OK")
             self.assertAlmostEqual(follower._rally_join._approach_speed, 16.0)
 
+    def test_vel_cmd_limit_vertical_injected_into_follower_rally_join(self) -> None:
+        """velCmdLimit.vertical 应注入僚机 RallyJoinPos 替换硬编码 ±3.0。"""
+        config = _rally_config()
+        config.setdefault("control", {})["velocity_command_limits"] = {  # type: ignore[index]
+            "forward_min_mps": 14.0,
+            "forward_max_mps": 25.0,
+            "vertical_min_mps": -2.0,
+            "vertical_max_mps": 2.5,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            result = controller.load_config(str(_write_json(Path(tmp), config)))
+            follower = controller._node_algorithms["R02"]._entity
+
+            self.assertEqual(result.code, "OK")
+            self.assertAlmostEqual(follower._rally_join._v_up_min, -2.0)
+            self.assertAlmostEqual(follower._rally_join._v_up_max, 2.5)
+            self.assertAlmostEqual(follower._catchup._v_up_min, -2.0)
+            self.assertAlmostEqual(follower._catchup._v_up_max, 2.5)
+
     def test_manual_step_runs_rally_stage_and_sends_leader_broadcast(self) -> None:
         """验证手动步进后集结长机进入 RALLY 并通过通信信道投递长机广播。"""
 
@@ -200,6 +221,55 @@ class SimControlRallyTests(unittest.TestCase):
                 snapshot = controller._make_snapshot_unlocked()
 
             self.assertIs(snapshot.rally_analysis, analysis)
+
+    def test_build_rally_task_init_ignores_removed_last_arrival_threshold_s(self) -> None:
+        """last_arrival_threshold_s 已移除，配置中出现该键应被忽略，不影响加载，且结果中不携带该字段。"""
+        config = _rally_config()
+        config.setdefault("rally_cfg", {})["last_arrival_threshold_s"] = 99.0  # type: ignore[index]
+        nodes = list(config["nodes"])  # type: ignore[arg-type]
+
+        task_init = _build_rally_task_init(config, 0.02, nodes)
+
+        self.assertIsNotNone(task_init)
+        self.assertFalse(hasattr(task_init, "last_arrival_threshold_s"))
+
+    def test_validate_rejects_rally_leader_without_rally_route(self) -> None:
+        """rally_leader 角色缺少 rally_route 时 validate() 应拒绝配置。"""
+        from src.runner.sim_control import _ConfigLoader
+
+        config = _rally_config()
+        del config["rally_route"]  # type: ignore[misc]
+        with self.assertRaises(ValueError, msg="rally_route is required"):
+            _ConfigLoader().validate(config)
+
+    def test_validate_rejects_rally_leader_without_route(self) -> None:
+        """rally_leader 角色缺少任务 route 时 validate() 应拒绝配置。"""
+        from src.runner.sim_control import _ConfigLoader
+
+        config = _rally_config()
+        del config["route"]  # type: ignore[misc]
+        with self.assertRaises(ValueError, msg="route is required"):
+            _ConfigLoader().validate(config)
+
+    def test_validate_rejects_rally_follower_without_rally_target(self) -> None:
+        """rally_follower 节点缺少 rally_target 时 validate() 应拒绝配置。"""
+        from src.runner.sim_control import _ConfigLoader
+
+        config = _rally_config()
+        nodes = list(config["nodes"])  # type: ignore[arg-type]
+        follower = {k: v for k, v in nodes[1].items() if k != "rally_target"}
+        config["nodes"] = [nodes[0], follower, nodes[2]]  # type: ignore[index]
+        with self.assertRaises(ValueError, msg="rally_target is required"):
+            _ConfigLoader().validate(config)
+
+    def test_validate_rejects_rally_roles_without_rally_cfg(self) -> None:
+        """任何集结角色都缺少 rally_cfg 时 validate() 应拒绝配置。"""
+        from src.runner.sim_control import _ConfigLoader
+
+        config = _rally_config()
+        del config["rally_cfg"]  # type: ignore[misc]
+        with self.assertRaises(ValueError, msg="rally_cfg is required"):
+            _ConfigLoader().validate(config)
 
     def test_repository_rally_demo_config_loads(self) -> None:
         """验证仓库内 rally_demo.json 与控制器当前配置契约一致。"""

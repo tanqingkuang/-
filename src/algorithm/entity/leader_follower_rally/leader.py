@@ -9,6 +9,7 @@ from src.algorithm.context.leaf_types import (
     FormationAnalysisS,
     FormStageE,
     PosTrackDiagS,
+    RallyPhaseE,
     RemoteCmdS,
     copy_motion,
     copy_pos_track_diag,
@@ -18,10 +19,8 @@ from src.algorithm.context.leaf_types import (
     dist3d,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init, waypoint_inputs_to_waylines
+from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, _follower_tracker_init, waypoint_inputs_to_waylines
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
-from src.algorithm.units.algo.ctrl.base import CtrlInitS
-from src.algorithm.units.algo.ctrl.ppi import PPIInitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
@@ -32,7 +31,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
 )
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
-from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
+from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.formation_task.base import FormationTaskOutputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInitS, FollowerStatusInputS, FollowerStatusOutputS
@@ -54,7 +53,7 @@ class RallyLeaderEntity(EntityBase):
         """按配置初始化 RallyLeaderEntity。"""
         if not cfg.rally_route:
             raise ValueError("RallyLeaderEntity: rally_route is required")
-        if cfg.route is None:
+        if not cfg.route:
             raise ValueError("RallyLeaderEntity: route (mission_route) is required")
         rally_cfg = cfg.rally_cfg
         if not isinstance(rally_cfg, RallyTaskInitS):
@@ -95,6 +94,8 @@ class RallyLeaderEntity(EntityBase):
         # 单元初始化
         self._inbound.init(FollowerStatusInitS())
         self._task.init(rally_cfg)
+        v_up_min = cfg.velCmdLimit.verticalMin if math.isfinite(cfg.velCmdLimit.verticalMin) else -3.0
+        v_up_max = cfg.velCmdLimit.verticalMax if math.isfinite(cfg.velCmdLimit.verticalMax) else 3.0
         self._rally_join.init(RallyJoinPosInitS(
             loose_slot=rally_end,
             approach_speed_mps=cfg.rally_approach_speed_mps,
@@ -105,12 +106,13 @@ class RallyLeaderEntity(EntityBase):
             loiter_speed_max_mps=loiter_max,
             mission_heading_rad=math.radians(rally_cfg.mission_heading_deg),
             mission_speed_mps=cfg.rally_approach_speed_mps,
-            last_arrival_threshold_s=rally_cfg.last_arrival_threshold_s,
+            v_up_min_mps=v_up_min,
+            v_up_max_mps=v_up_max,
         ))
         mission_lines = waypoint_inputs_to_waylines(cfg.route)
         self._tra_plan_mission.init(LeaderRouteInitS(mission_lines))
         self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M, leadTimeS=_LEADER_FF_LEAD_TIME_S))
-        self._pos_track.init(_leader_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
+        self._pos_track.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
         # 绑定端口
@@ -175,7 +177,7 @@ class RallyLeaderEntity(EntityBase):
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
-        if stage == FormStageE.RALLY and step == 0:
+        if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
             # JOINING 阶段：长机平等参与，也飞向自己的松散点（队形中心）
             self._rally_join_u.t_ref = self.cxt.rally_t_ref
             self._rally_join_u.t_ref_valid = self.cxt.rally_t_ref_valid
@@ -267,19 +269,3 @@ def _compute_formation_analysis(
     )
 
 
-def _leader_tracker_init(control_period_s, vel_limit):
-    """生成长机位置跟踪器配置（前向纯速度环）。"""
-    from src.algorithm.entity.types import VelCmdLimitS
-    vel_limit = vel_limit or VelCmdLimitS()
-    gain_forward = PPIInitS(
-        kpPos=0.0, kpVel=1.0, kiVel=0.0,
-        dt=control_period_s, accMin=-6.0, accMax=6.0,
-        vCmdMin=vel_limit.forwardMin, vCmdMax=vel_limit.forwardMax,
-    )
-    gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
-    gain_vertical = PPIInitS(
-        kpPos=0.2 / 0.6, kpVel=0.6, kiVel=0.0,
-        dt=control_period_s, accMin=-6.0, accMax=6.0,
-        vCmdMin=vel_limit.verticalMin, vCmdMax=vel_limit.verticalMax,
-    )
-    return PidComposeInitS(0.5, gain_forward, gain_lateral, gain_vertical)

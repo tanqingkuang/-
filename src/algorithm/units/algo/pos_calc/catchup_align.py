@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import FormCommInitS
+from src.algorithm.units.algo.formation_math import clamp
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.scaled_slot_geometry import ScaledSlotGeometry, ScaledSlotInitS, ScaledSlotInputS
 
@@ -23,6 +24,8 @@ class CatchupAlignInitS:
     kp_speed: float = 0.05             # 沿航迹误差增益（m/s per m）
     speed_min_mps: float = 14.0        # 速度下限
     speed_max_mps: float = 25.0        # 速度上限
+    v_up_min_mps: float = -3.0         # 天向速度下限（来自 velCmdLimit.verticalMin）
+    v_up_max_mps: float = 3.0          # 天向速度上限（来自 velCmdLimit.verticalMax）
 
 
 class CatchupAlign:
@@ -54,6 +57,8 @@ class CatchupAlign:
         self._kp = cfg.kp_speed
         self._v_min = cfg.speed_min_mps
         self._v_max = cfg.speed_max_mps
+        self._v_up_min = cfg.v_up_min_mps
+        self._v_up_max = cfg.v_up_max_mps
         # 杆的横侧向坐标：M_i 点在 track-frame 的 cross-track 坐标，初始化后固定
         self._mi_cross = -cfg.mi_east * self._sin_h + cfg.mi_north * self._cos_h
 
@@ -103,7 +108,7 @@ class CatchupAlign:
         y.selfCmd.v.vPsi = self._heading
         y.selfCmd.v.vd = speed
         d_h = slot_h - u.selfState.pos.h
-        y.selfCmd.v.vUp = max(-3.0, min(3.0, d_h * 0.3))
+        y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = 0.0
         y.selfCmd.v.vTheta = 0.0
 

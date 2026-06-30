@@ -17,6 +17,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosInEarthS,
     PosTrackDiagS,
+    RallyPhaseE,
     RemoteCmdS,
     WayLineS,
     WayPointInputS,
@@ -108,6 +109,22 @@ class _ConfigLoader:
             raise ValueError("nodes must be a list")
         if links is not None and not isinstance(links, list):
             raise ValueError("links must be a list")
+        # 集结角色必填字段前置校验：早于深层构造函数，以便给出明确报错而非 AttributeError。
+        node_list: list[dict] = [n for n in (nodes or []) if isinstance(n, dict)]
+        has_rally_leader = any(str(n.get("role") or "") == "rally_leader" for n in node_list)
+        has_rally_role = has_rally_leader or any(
+            str(n.get("role") or "") == "rally_follower" for n in node_list
+        )
+        if has_rally_role and config.get("rally_cfg") is None:
+            raise ValueError("rally_cfg is required when any node has a rally role")
+        if has_rally_leader:
+            if config.get("rally_route") is None:
+                raise ValueError("rally_route is required for rally_leader role")
+            if config.get("route") is None:
+                raise ValueError("route is required for rally_leader role")
+        for n in node_list:
+            if str(n.get("role") or "") == "rally_follower" and n.get("rally_target") is None:
+                raise ValueError(f"node {n.get('node_id')!r}: rally_target is required for rally_follower")
         # 复用构造函数做深层校验：航线、编队/通信、模型配置任一非法都会在此抛错。
         # validate 不保留这些构造结果，只利用构造函数的类型和取值检查。
         # 这样可以避免校验逻辑和实际初始化逻辑分叉。
@@ -153,6 +170,7 @@ class _NodeAlgorithm:
         # 集结角色从 RALLY 开始；其余角色（leader/wingman）默认 HOLD。
         self._remote_stage = FormStageE.RALLY if role in {"rally_leader", "rally_follower"} else FormStageE.HOLD
         self._initial_remote_stage = self._remote_stage
+        self._rally_completed: bool = False
         # 按角色选择编队实体。
         # leader/rally_leader/rally_follower/wingman 对应不同算法实现，但对外 step 接口一致。
         if role == "leader":
@@ -187,10 +205,19 @@ class _NodeAlgorithm:
                     break
         # 僚机预置：直接进入 HOLD/三角队形并写入长机初态，避免冷启动时无参考。
         # 这段只影响实体上下文初值，后续仍由通信和算法输出持续刷新长机状态。
-        if role not in {"leader", "rally_leader", "rally_follower"} and initial_leader_state is not None and hasattr(self._entity, "cxt"):
+        self._cold_start_leader_state: MotionProfS | None = (
+            initial_leader_state
+            if role not in {"leader", "rally_leader", "rally_follower"}
+            else None
+        )
+        self._apply_cold_start_preset()
+
+    def _apply_cold_start_preset(self) -> None:
+        """将僚机冷启动预置写入实体上下文，__init__ 与 reset 共用。"""
+        if self._cold_start_leader_state is not None and hasattr(self._entity, "cxt"):
             self._entity.cxt.cmd.stage = FormStageE.HOLD  # type: ignore[attr-defined]
             self._entity.cxt.cmd.pattern = FormPatE.TRIANGLE  # type: ignore[attr-defined]
-            copy_motion(initial_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
+            copy_motion(self._cold_start_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
 
     def step(
         self,
@@ -216,8 +243,10 @@ class _NodeAlgorithm:
         if self._role in {"leader", "rally_leader"}:
             self._has_route_step = True
         # 集结完成时自动切换为 HOLD，防止重复触发完成流程。
+        # 用专用标志位锁存，与诊断载荷解耦（诊断仅一帧有效，标志持久到 reset）。
         formation_analysis = entity_output.formationAnalysis
-        if formation_analysis is not None:
+        if not self._rally_completed and formation_analysis is not None:
+            self._rally_completed = True
             self._remote_stage = FormStageE.HOLD
         # 优先用输出加速度，缺省回退到实体上下文中的加速度。
         # 部分实体实现仍把最终命令留在上下文中，这里兼容两种输出方式。
@@ -241,7 +270,9 @@ class _NodeAlgorithm:
         """复位 _NodeAlgorithm 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._has_route_step = False
         self._remote_stage = self._initial_remote_stage
+        self._rally_completed = False
         self._entity.reset()
+        self._apply_cold_start_preset()
         return None
 
     def close(self) -> None:
@@ -264,9 +295,12 @@ class _NodeAlgorithm:
         stage = cxt.cmd.stage
         step = cxt.cmd.step
         if stage == FormStageE.RALLY:
-            _step_names = {0: "JOINING", 1: "CATCHUP", 2: "LOOSE", 3: "COMPRESS"}
-            phase = _step_names.get(step, f"STEP{step}")
-            if step == 0:
+            try:
+                phase_e = RallyPhaseE(step)
+                phase = phase_e.name
+            except ValueError:
+                phase = f"STEP{step}"
+            if step == RallyPhaseE.JOINING:
                 rally_join = getattr(self._entity, "_rally_join", None)
                 join_state = getattr(rally_join, "state", "") if rally_join is not None else ""
                 _join_abbr = {"FLYING": "FLY", "LOITERING": "LOIT", "EXITED": "EXIT"}

@@ -15,7 +15,6 @@
     "target_pattern": "TRIANGLE",
     "loiter_radius_m": 200.0,
     "arrival_radius_m": 100.0,
-    "last_arrival_threshold_s": 8.0,
     "mission_heading_deg": 0.0,
     "catchup_radius_m": 200.0
   },

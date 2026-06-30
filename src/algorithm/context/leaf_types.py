@@ -30,6 +30,15 @@ class CommDirE(IntEnum):
     SIMPLEX = 1
 
 
+class RallyPhaseE(IntEnum):
+    """集结子阶段枚举，cmd.step 的类型安全替代；值与历史整数协议完全兼容。"""
+
+    JOINING = 0
+    CATCHUP = 1
+    LOOSE = 2
+    COMPRESS = 3
+
+
 @dataclass
 class FormSelfInitS:
     """实体自身初始化标识。注意：id 用于在通信拓扑中唯一定位本机。"""

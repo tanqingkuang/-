@@ -9,6 +9,7 @@ from src.algorithm.context.leaf_types import (
     FollowerStateS,
     FormPatE,
     FormStageE,
+    RallyPhaseE,
     RallySlotScaleS,
 )
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
@@ -40,7 +41,6 @@ class RallyTaskInitS(FormationTaskInitS):
     # 集结汇合新增参数（RallyJoinPos 使用，Rally 任务直接透传给实体）
     loiter_radius_m: float = 200.0  # 盘旋圆半径，米
     arrival_radius_m: float = 100.0  # 进入盘旋的触发距离，米
-    last_arrival_threshold_s: float = 5.0  # 兼容保留；当前切出判定固定使用最快盘旋半圈
     mission_heading_deg: float = 0.0  # 切出后飞行方向（度，从东向起算）
     catchup_radius_m: float = 200.0  # CATCHUP→LOOSE 位置误差阈值（dist2d to slot），米
     catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
@@ -100,6 +100,7 @@ class Rally(FormationTaskBase):
         self._catchup_stable_timer: float = 0.0
         self._stable_timer: float = 0.0
         self._compress_elapsed: float = 0.0
+        self._t_ref: float = 0.0  # 最近一次有效 T_ref（有 FLYING 参与者时更新，之后锁存）
 
     def step(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
@@ -116,7 +117,7 @@ class Rally(FormationTaskBase):
             if y.cmd.stage in (FormStageE.RALLY, FormStageE.HOLD):
                 self._reset_timers()
             y.cmd.stage = FormStageE.NONE
-            y.cmd.step = 0
+            y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = FormPatE.NONE
             y.slotScale.scale = self._loose_scale
             y.slotScale.scaleRate = 0.0
@@ -126,7 +127,7 @@ class Rally(FormationTaskBase):
             if y.cmd.stage == FormStageE.RALLY:
                 self._reset_timers()
             y.cmd.stage = FormStageE.HOLD
-            y.cmd.step = 0
+            y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = self._target_pattern
             y.slotScale.scale = 1.0
             y.slotScale.scaleRate = 0.0
@@ -136,7 +137,7 @@ class Rally(FormationTaskBase):
         if y.cmd.stage == FormStageE.HOLD:
             # 已完成集结，HOLD 是终态；只有先发 NONE 再发 RALLY 才能重启
             y.cmd.stage = FormStageE.HOLD
-            y.cmd.step = 0
+            y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = self._target_pattern
             y.slotScale.scale = 1.0
             y.slotScale.scaleRate = 0.0
@@ -144,19 +145,20 @@ class Rally(FormationTaskBase):
         if y.cmd.stage == FormStageE.NONE:
             # 首次进入集结
             self._reset_timers()
-            y.cmd.step = 0
+            y.cmd.step = RallyPhaseE.JOINING
 
         # cmd.stage == RALLY（或从 NONE 首次进入）— 按 cmd.step 路由
         y.cmd.stage = FormStageE.RALLY
-        step = y.cmd.step
+        step = RallyPhaseE(y.cmd.step) if y.cmd.step in RallyPhaseE._value2member_map_ else RallyPhaseE.JOINING
+        # state_map 在整个 step() 内共用，避免各门控 helper 重复构建。
+        state_map: dict[str, FollowerStateS] = {s.id: s for s in states}
 
         # Rally 任务只看僚机回报的离散门控，不直接读取飞机连续状态。
         # APPROACH 门控使用 arrived 锁存，允许先到机在近场等待时 posErr_m 变大。
         # LOOSE/COMPRESS 门控改用 posErr_m，因为此时 selfCmd 已转为松散/压缩槽位目标。
         # 计时器只在连续满足条件时累加，任一僚机失效或超阈值都会清零。
         # slotScale 每拍都写出，确保僚机漏收上一帧广播后仍可从最新消息恢复。
-        if step == 0:  # JOINING：等待所有参与者（含长机自身）到达松散点并切出
-            state_map = {s.id: s for s in states}
+        if step == RallyPhaseE.JOINING:
             expected_states = [state_map[fid] for fid in self._expected_ids if fid in state_map]
             # 计算 T_ref：所有仍在 FLYING 状态的有效参与者中 ETA 最大值
             flying_etas = [
@@ -164,10 +166,14 @@ class Rally(FormationTaskBase):
                 if self._is_valid(s, now_s)
                 and s.rally_state == RALLY_STATE_FLYING
                 and math.isfinite(s.eta_s)
+                and s.eta_s > 0.0
             ]
             if u.leader_join_flying and math.isfinite(u.leader_eta_s) and u.leader_eta_s > 0.0:
                 flying_etas.append(u.leader_eta_s)
-            y.t_ref = max(flying_etas) if flying_etas else now_s
+            # 有 FLYING 参与者时更新 t_ref；全部离开后锁存最后值，避免"最后一架到达时塌缩为 now_s"。
+            if flying_etas:
+                self._t_ref = max(flying_etas)
+            y.t_ref = self._t_ref if self._t_ref > 0.0 else now_s
             # 单机无僚机场景不需要等待通信；多机时须确认长机和全部期望僚机已实际运行过汇合解算。
             leader_ready = not self._expected_ids or (
                 not u.leader_join_flying
@@ -178,48 +184,48 @@ class Rally(FormationTaskBase):
             )
             y.t_ref_valid = leader_ready and followers_ready
 
-            if self._all_participants_exited(states, now_s, u.leader_join_exited):
-                next_step = 1
+            if self._all_participants_exited(state_map, now_s, u.leader_join_exited):
+                next_step = RallyPhaseE.CATCHUP
             else:
-                next_step = 0
+                next_step = RallyPhaseE.JOINING
             y.cmd.step = next_step
             y.cmd.pattern = self._target_pattern
             y.slotScale.scale = self._loose_scale
             y.slotScale.scaleRate = 0.0
 
-        elif step == 1:  # CATCHUP：全机沿任务航向直线飞行，速度调节收敛到松散槽位
-            if self._all_catchup_ok(states, now_s):
+        elif step == RallyPhaseE.CATCHUP:
+            if self._all_catchup_ok(state_map, now_s):
                 self._catchup_stable_timer += self._dt_s
                 if self._catchup_stable_timer >= self._catchup_stable_s:
-                    next_step = 2
+                    next_step = RallyPhaseE.LOOSE
                     self._catchup_stable_timer = 0.0
                 else:
-                    next_step = 1
+                    next_step = RallyPhaseE.CATCHUP
             else:
                 self._catchup_stable_timer = 0.0
-                next_step = 1
+                next_step = RallyPhaseE.CATCHUP
             y.cmd.step = next_step
             y.cmd.pattern = self._target_pattern
             y.slotScale.scale = self._loose_scale
             y.slotScale.scaleRate = 0.0
 
-        elif step == 2:  # LOOSE：二维槽位跟随，等待精度收敛
-            if self._all_followers_ok(states, now_s, self._conv_radius_m):
+        elif step == RallyPhaseE.LOOSE:
+            if self._all_followers_ok(state_map, now_s, self._conv_radius_m):
                 self._stable_timer += self._dt_s
                 if self._stable_timer >= self._stable_hold_s:
-                    next_step = 3
+                    next_step = RallyPhaseE.COMPRESS
                     self._stable_timer = 0.0
                 else:
-                    next_step = 2
+                    next_step = RallyPhaseE.LOOSE
             else:
                 self._stable_timer = 0.0
-                next_step = 2
+                next_step = RallyPhaseE.LOOSE
             y.cmd.step = next_step
             y.cmd.pattern = self._target_pattern
             y.slotScale.scale = self._loose_scale
             y.slotScale.scaleRate = 0.0
 
-        else:  # step == 3, COMPRESS
+        else:  # step == RallyPhaseE.COMPRESS
             self._compress_elapsed += self._dt_s
             progress = self._compress_elapsed / self._compress_time_s
             scale = self._loose_scale - (self._loose_scale - 1.0) * progress
@@ -228,13 +234,13 @@ class Rally(FormationTaskBase):
                 scaleRate = 0.0
             else:
                 scaleRate = -(self._loose_scale - 1.0) / self._compress_time_s
-            if scale == 1.0 and self._all_followers_ok(states, now_s, self._tight_radius_m):
+            if scale == 1.0 and self._all_followers_ok(state_map, now_s, self._tight_radius_m):
                 y.cmd.stage = FormStageE.HOLD
-                y.cmd.step = 0
+                y.cmd.step = RallyPhaseE.JOINING
                 y.rallyCompleted = True
             else:
                 y.cmd.stage = FormStageE.RALLY
-                y.cmd.step = 3
+                y.cmd.step = RallyPhaseE.COMPRESS
             y.cmd.pattern = self._target_pattern
             y.slotScale.scale = scale
             y.slotScale.scaleRate = scaleRate
@@ -248,6 +254,7 @@ class Rally(FormationTaskBase):
         self._catchup_stable_timer = 0.0
         self._stable_timer = 0.0
         self._compress_elapsed = 0.0
+        self._t_ref = 0.0
 
     def _is_valid(self, entry: FollowerStateS, now_s: float) -> bool:
         """判断单架僚机状态条目是否有效（未超时且 valid=True）。"""
@@ -256,20 +263,24 @@ class Rally(FormationTaskBase):
         return (now_s - entry.lastUpdate_s) <= self._stale_timeout_s
 
     def _all_participants_exited(
-        self, states: list[FollowerStateS], now_s: float, leader_exited: bool
+        self, state_map: dict[str, FollowerStateS], now_s: float, leader_exited: bool
     ) -> bool:
         """JOINING→LOOSE 门控：期望僚机全部 EXITED 且长机自身也已 EXITED。"""
         if not leader_exited:
             return False
         if not self._expected_ids:
             return True
-        state_map = {s.id: s for s in states}
         for fid in self._expected_ids:
             entry = state_map.get(fid)
-            if entry is None or not self._is_valid(entry, now_s):
+            if entry is None:
                 return False
-            if entry.rally_state != RALLY_STATE_EXITED:
+            # EXITED 是终态：曾经切出的僚机不因随后丢链而被撤销。
+            if entry.rally_state == RALLY_STATE_EXITED:
+                continue
+            # 尚未 EXITED：要求报文新鲜，防止无效数据误判为"仍在飞"。
+            if not self._is_valid(entry, now_s):
                 return False
+            return False  # 新鲜报文但 state != EXITED，确认尚未切出
         return True
 
     def _join_state_initialized(self, entry: FollowerStateS, now_s: float) -> bool:
@@ -280,11 +291,10 @@ class Rally(FormationTaskBase):
             return math.isfinite(entry.eta_s) and entry.eta_s > now_s
         return entry.rally_state in (RALLY_STATE_LOITERING, RALLY_STATE_EXITED)
 
-    def _all_catchup_ok(self, states: list[FollowerStateS], now_s: float) -> bool:
+    def _all_catchup_ok(self, state_map: dict[str, FollowerStateS], now_s: float) -> bool:
         """CATCHUP→LOOSE 门控：期望僚机同时满足位置（dist2d to slot）和航向误差阈值。"""
         if not self._expected_ids:
             return True
-        state_map = {s.id: s for s in states}
         for fid in self._expected_ids:
             entry = state_map.get(fid)
             if entry is None or not self._is_valid(entry, now_s):
@@ -298,11 +308,10 @@ class Rally(FormationTaskBase):
                 return False
         return True
 
-    def _all_followers_ok(self, states: list[FollowerStateS], now_s: float, threshold_m: float) -> bool:
+    def _all_followers_ok(self, state_map: dict[str, FollowerStateS], now_s: float, threshold_m: float) -> bool:
         """LOOSE→COMPRESS 和 COMPRESS→HOLD 门控：期望僚机全部有效且槽位误差收敛。"""
         if not self._expected_ids:
             return True
-        state_map = {s.id: s for s in states}
         for fid in self._expected_ids:
             entry = state_map.get(fid)
             if (
