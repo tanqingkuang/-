@@ -325,7 +325,7 @@ sequenceDiagram
 
 机理与 C 仿真一致：每次 tick 循环结束后**追加可控延迟**实现可控倍频；不追加延迟即全速跑（最大倍频）。
 
-- **配置**：仿真控制接受 `playback_rate`（范围 `0.1` 到 `20.0`），影响 wall-clock 到 sim-time 的推进倍率；同步 headless `run_until_complete` 不依赖 GUI 事件循环
+- **配置**：仿真控制接受 `playback_rate`（范围 `0.1` 到 `50.0`），影响 wall-clock 到 sim-time 的推进倍率；同步 headless `run_until_complete` 不依赖 GUI 事件循环
 - **倍频上限**：受单次 tick 固有运行时间限制——若 `dt/N < tick_runtime`，按全速跑并标记 warning
 - **固定延迟扣减**：sleep 时长必须扣掉本次 tick 实际运行时间
 - **实时显示推送频率与倍频解耦**（对应 C 仿真的"通信保证"）：推送恒按 wall-clock 节流（5–10 Hz），避免 UI 被淹 + 避免推送占用 tick 算力

@@ -29,6 +29,33 @@ GRID_MAX_SCREEN_SPACING = 96.0
 APP_CONFIG_SECTION = "config"
 APP_CONFIG_KEY_LAST_CONFIG = "last_config"
 APP_CONFIG_FILE_NAME = "config.ini"
+# GUI 播放倍率滑条采用离散档位，兼顾低倍率细调和高倍率快速跳转。
+PLAYBACK_RATE_VALUES: tuple[float, ...] = (
+    tuple(round(index / 10.0, 1) for index in range(1, 21))
+    + tuple(float(index) for index in range(3, 11))
+    + tuple(float(index) for index in range(12, 21, 2))
+    + tuple(float(index) for index in range(23, 51, 3))
+)
+PLAYBACK_RATE_SLIDER_MIN = 1
+PLAYBACK_RATE_SLIDER_MAX = len(PLAYBACK_RATE_VALUES)
+
+
+def slider_value_to_playback_rate(value: int) -> float:
+    """把倍率滑条位置转换成播放倍率。注意：输入越界时按最近档位夹紧。"""
+
+    index = max(0, min(len(PLAYBACK_RATE_VALUES) - 1, int(value) - PLAYBACK_RATE_SLIDER_MIN))
+    return PLAYBACK_RATE_VALUES[index]
+
+
+def playback_rate_to_slider_value(rate: float) -> int:
+    """把播放倍率转换成最近滑条位置。注意：配置倍率不必刚好落在 GUI 档位上。"""
+
+    safe_rate = rate if math.isfinite(rate) else 1.0
+    nearest_index = min(
+        range(len(PLAYBACK_RATE_VALUES)),
+        key=lambda index: abs(PLAYBACK_RATE_VALUES[index] - safe_rate),
+    )
+    return PLAYBACK_RATE_SLIDER_MIN + nearest_index
 
 
 def adaptive_world_grid_spacing(scale_value: float) -> int:

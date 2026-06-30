@@ -21,7 +21,9 @@ from src.ui.gui.view_models import (
     APP_CONFIG_SECTION,
     LinkState,
     NodeState,
+    playback_rate_to_slider_value,
     Snapshot,
+    slider_value_to_playback_rate,
     WORLD_HEIGHT,
     WORLD_WIDTH,
     default_project_root,
@@ -261,7 +263,7 @@ class MainWindowActionMixin:
     def _sync_speed_controls(self, speed: float) -> None:
         """同步 speed controls 显示。注意：程序设置滑条时不重复下发倍率。"""
         # 配置加载后控制器已持有倍率，这里只让滑条和文本追上当前真实倍率。
-        slider_value = max(self.speed_slider.minimum(), min(self.speed_slider.maximum(), round(speed * 10)))
+        slider_value = playback_rate_to_slider_value(speed)
         with QSignalBlocker(self.speed_slider):
             self.speed_slider.setValue(slider_value)
         self.speed_label.setText(f"{speed:.1f}x")
@@ -348,8 +350,8 @@ class MainWindowActionMixin:
 
     def _on_speed_changed(self, value: int) -> None:
         """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
-        # 滑块整数值 / 10 得到倍率（1->0.1x, 10->1.0x, 200->20.0x）。
-        speed = value / 10.0
+        # 滑块位置映射到离散倍率档位，低倍率细调，高倍率按大步长跳转。
+        speed = slider_value_to_playback_rate(value)
         self.sim.set_speed(speed)
         self.speed_label.setText(f"{speed:.1f}x")
 

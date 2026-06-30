@@ -1391,8 +1391,8 @@ class SimulationControllerTests(unittest.TestCase):
 
             self.assertEqual(missing.code, "ERR_CONFIG_NOT_FOUND")
             self.assertEqual(invalid.code, "ERR_CONFIG_INVALID")
-            self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
-            self.assertEqual(controller.set_playback_rate(20.1).code, "ERR_INVALID_ARGUMENT")
+            self.assertEqual(controller.set_playback_rate(50.0).code, "OK")
+            self.assertEqual(controller.set_playback_rate(50.1).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual(controller.step(0).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual(controller.inject_disturbance({"type": "bad"}).code, "ERR_INVALID_ARGUMENT")
             self.assertEqual([event.level for event in controller.get_recent_events(limit=1, min_level="WARN")], ["WARN"])
@@ -1406,8 +1406,8 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(controller.playback_rate, 1.0)
             self.assertEqual(controller.load_config(str(path)).code, "OK")
             self.assertAlmostEqual(controller.playback_rate, 10.0)
-            self.assertEqual(controller.set_playback_rate(20.0).code, "OK")
-            self.assertAlmostEqual(controller.playback_rate, 20.0)
+            self.assertEqual(controller.set_playback_rate(50.0).code, "OK")
+            self.assertAlmostEqual(controller.playback_rate, 50.0)
             controller.close()
 
     def test_reset_preserves_runtime_playback_rate_update(self) -> None:

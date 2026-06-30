@@ -37,7 +37,12 @@ from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.side_view import SideView
 from src.ui.gui.theme_widgets import THEMES, SelectButton
 from src.ui.gui.top_view import TopView
-from src.ui.gui.view_models import Snapshot
+from src.ui.gui.view_models import (
+    PLAYBACK_RATE_SLIDER_MAX,
+    PLAYBACK_RATE_SLIDER_MIN,
+    playback_rate_to_slider_value,
+    Snapshot,
+)
 
 
 class MainWindowLayoutMixin:
@@ -157,7 +162,7 @@ class MainWindowLayoutMixin:
         form.addRow("时长(s)", self.duration_input)
         layout.addWidget(config_group)
 
-        # “播放”分组：速度滑块范围 1..200，对应 0.1x..20.0x（见 _on_speed_changed 除以 10）。
+        # “播放”分组：滑块按离散倍率档位跳转，避免 50x 上限压缩低倍率可调空间。
         playback_group = QGroupBox("播放")
         playback_layout = QVBoxLayout(playback_group)
         playback_layout.setContentsMargins(10, 18, 10, 10)
@@ -166,8 +171,9 @@ class MainWindowLayoutMixin:
         self.cpu_label.setToolTip("仿真线程忙碌时间 / 墙钟统计周期")
         self.speed_label = QLabel("1.0x")
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
-        self.speed_slider.setRange(1, 200)
-        self.speed_slider.setValue(10)  # 默认 1.0x
+        self.speed_slider.setRange(PLAYBACK_RATE_SLIDER_MIN, PLAYBACK_RATE_SLIDER_MAX)
+        self.speed_slider.setValue(playback_rate_to_slider_value(1.0))  # 默认 1.0x
+        self.speed_slider.setToolTip("播放倍率：0.1-2 每 0.1，2-10 每 1，10-20 每 2，20-50 每 3")
         self.speed_slider.valueChanged.connect(self._on_speed_changed)
         playback_layout.addWidget(self.speed_slider)
         status_row.addWidget(self.cpu_label)
