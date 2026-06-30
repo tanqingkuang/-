@@ -329,7 +329,7 @@ class AvoidanceParams:
     resolution_m: float = 10.0
     margin_m: float = 0.0
     speed_mps: float = 0.0
-    allow_arc: bool = True  # 航段自身是否可为曲线（贴障弧线段，预留）；不影响拐点交接圆弧
+    allow_arc: bool = True  # 航段自身是否可为曲线：开启则折叠贴障大弧并把拐点烘焙成圆弧段；关闭只留直线骨架+交接圆弧
     waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
 
 
@@ -2575,7 +2575,10 @@ class MainWindow(QMainWindow):
         layout.addLayout(param_grid)
         # allow_arc 与交接半径正交，保留为单独开关避免误归类到长度参数。
         self.allow_arc_check = QCheckBox("航段带圆弧")
-        self.allow_arc_check.setToolTip("航段自身是否可为曲线（贴障弧线段，预留功能）；直线-直线拐点的交接圆弧始终按转弯半径补充。")
+        self.allow_arc_check.setToolTip(
+            "开启：把连续贴同一障碍的拐点折叠成沿膨胀圆的大弧，并将直线-直线拐点烘焙成相切圆弧段，航段显示为曲线；"
+            "关闭：仅保留直线骨架，拐点不折叠大弧，飞行时长机按转弯半径平滑过弯（显示为尖角）。"
+        )
         self.allow_arc_check.toggled.connect(self._on_avoidance_param_changed)
         layout.addWidget(self.allow_arc_check)
         return group

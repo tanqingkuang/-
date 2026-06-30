@@ -16,9 +16,15 @@ from math import hypot
 from src.algorithm.context.leaf_types import WayPointInputS
 
 from .astar import plan_path
-from .feasibility import FeasibilityResult, check_feasibility
+from .feasibility import FeasibilityResult, check_route_feasibility
 from .obstacle import ObstacleS, blocked
-from .path_to_route import assign_transition_radius, bake_transition_arcs, points_to_route, simplify_path
+from .path_to_route import (
+    assign_transition_radius,
+    bake_obstacle_hug_arcs,
+    bake_transition_arcs,
+    points_to_route,
+    simplify_path_with_causes,
+)
 
 Point = tuple[float, float]
 # (east, north, altitude) 三元组的原始航点。
@@ -98,6 +104,7 @@ def plan_avoidance_route(
 
     full_xy: list[Point] = []
     full_alt: list[float] = []
+    full_causes: list[ObstacleS | None] = []
     for leg in range(len(waypoints) - 1):
         a = waypoints[leg]
         b = waypoints[leg + 1]
@@ -120,22 +127,33 @@ def plan_avoidance_route(
                 ok=False, code=ERR_NO_PATH,
                 detail=f"腿 {leg} 无可行通道（通道被封死或绕行超出栅格范围）", leg_index=leg,
             )
-        simplified = simplify_path(raw, obstacles, clearance=simplify_clearance_m)
+        simplified, causes = simplify_path_with_causes(raw, obstacles, clearance=simplify_clearance_m)
         altitudes = _interp_altitudes(simplified, a[2], b[2])
-        # 拼接：除首腿外丢掉与上一腿重合的衔接点。
+        # 拼接：除首腿外丢掉与上一腿重合的衔接点（连同其 cause 标签一起丢）。
         if full_xy:
             simplified = simplified[1:]
             altitudes = altitudes[1:]
+            causes = causes[1:]
         full_xy.extend(simplified)
         full_alt.extend(altitudes)
+        full_causes.extend(causes)
 
-    # 去掉相邻重合点，避免退化航段。
-    full_xy, full_alt = _dedup(full_xy, full_alt)
+    # 去掉相邻重合点，避免退化航段（cause 标签随点一并去重）。
+    full_xy, full_alt, full_causes = _dedup(full_xy, full_alt, full_causes)
     if len(full_xy) < 2:
         return PlanResult(ok=False, code=ERR_NO_PATH, detail="规划结果退化为单点")
 
-    feasibility = check_feasibility(
-        full_xy, obstacles,
+    # 先摆点、折叠贴障弧，再对"折叠后真正要飞的航线"做可飞性校验：
+    # allow_arc=True 时把"连续贴同一圆"的拐点串折叠成一段沿膨胀圆的大弧(turnSign!=0)，避免 R<膨胀半径
+    # 时被一串固定 R 小弧切碎；这些被合并的拐点不再受固定 R 腿长约束（校验后置的关键意义）。
+    route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)  # 先只摆点(r=0)
+    if allow_arc:  # 仅在航段允许带弧时折叠贴障弧；关闭则保留直线骨架交给固定 R 倒角
+        route = bake_obstacle_hug_arcs(
+            route, full_causes, obstacles,
+            turn_radius_m=turn_radius_m, hug_clearance=simplify_clearance_m, sample_step=sample_step,
+        )
+    feasibility = check_route_feasibility(
+        route, obstacles,
         turn_radius_m=turn_radius_m, leg_margin_m=leg_margin_m,
         arc_clearance=arc_clearance, sample_step=sample_step, max_turn_deg=max_turn_deg,
     )
@@ -145,23 +163,27 @@ def plan_avoidance_route(
             obstacle_id=feasibility.obstacle_id, simplified_points=full_xy, feasibility=feasibility,
         )
 
-    # 可飞性校验通过后，再补交接半径：直线段是圆弧的外切线、R 即配置值，此处补 R 必不触障。
-    route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)
+    # 校验通过后补交接半径：直线段是圆弧的外切线、R 即配置值，此处补 R 必不触障。
+    # 弧两端相邻拐点的 r 会被 assign_transition_radius 自动清零（交接交给弧自身）。
     assign_transition_radius(route, turn_radius_m)
-    # allow_arc=True：把拐点烘焙成圆弧航段(turnSign!=0)，航段本身即曲线，显示画弧；
+    # allow_arc=True：把剩余直线-直线拐点烘焙成圆弧航段(turnSign!=0)，航段本身即曲线，显示画弧；
     # allow_arc=False：保留直线骨架+交接半径 r(显示画尖角、飞行时长机按 r 平滑过弯)。
     if allow_arc:
         route = bake_transition_arcs(route)
     return PlanResult(ok=True, route=route, simplified_points=full_xy, feasibility=feasibility)
 
 
-def _dedup(points: list[Point], altitudes: list[float]) -> tuple[list[Point], list[float]]:
-    """去掉相邻水平重合的点（保留其首个高度）。"""
+def _dedup(
+    points: list[Point], altitudes: list[float], causes: list[ObstacleS | None]
+) -> tuple[list[Point], list[float], list[ObstacleS | None]]:
+    """去掉相邻水平重合的点（保留其首个高度与 cause 标签）。"""
     out_xy: list[Point] = []
     out_alt: list[float] = []
-    for point, alt in zip(points, altitudes):
+    out_cause: list[ObstacleS | None] = []
+    for point, alt, cause in zip(points, altitudes, causes):
         if out_xy and hypot(point[0] - out_xy[-1][0], point[1] - out_xy[-1][1]) <= 1e-9:
             continue
         out_xy.append(point)
         out_alt.append(alt)
-    return out_xy, out_alt
+        out_cause.append(cause)
+    return out_xy, out_alt, out_cause

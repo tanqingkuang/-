@@ -33,11 +33,14 @@ def _route_lines(result: PlanResult):
 
 
 def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
+    # 贴障弧会让直线段端点(切点)正好落在膨胀边界(r+clearance)上——这是"贴着安全间距飞"的预期，
+    # 属于允许的边界相切。因此把判定半径收一个 epsilon：允许贴边界，但仍拦截真正穿入安全间距的点。
+    margin = max(0.0, clearance - 1e-6)
     for line in _route_lines(result):
         if line.start.turnSign == 0.0:
-            if blocked(obstacles, line.start.pos.east, line.start.pos.north, clearance):
+            if blocked(obstacles, line.start.pos.east, line.start.pos.north, margin):
                 return False
-            if blocked(obstacles, line.end.pos.east, line.end.pos.north, clearance):
+            if blocked(obstacles, line.end.pos.east, line.end.pos.north, margin):
                 return False
     return True
 
@@ -100,6 +103,26 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         lines = _route_lines(result)
         self.assertTrue(any(line.start.turnSign != 0.0 for line in lines))
         self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
+
+    def test_hug_arc_rescues_fixed_radius_leg_too_short(self) -> None:
+        # #2：R 大于障碍膨胀半径会让"固定 R 倒角"判腿太短，但这些拐点会被贴障弧合并、不再受腿长约束。
+        # 可飞性后置（校折叠后航线）后，该场景应规划成功，并贴出 R=膨胀半径(=200+400=600) 的大弧。
+        obs = [make_circle("C1", 900.0, 0.0, 200.0), make_circle("C2", 1900.0, 1200.0, 200.0)]
+        params = dict(
+            turn_radius_m=400.0, leg_margin_m=10.0, clearance_m=400.0, simplify_clearance_m=400.0,
+            speed_mps=20.0, resolution_m=20.0, margin_m=300.0,
+        )
+        result = plan_avoidance_route(
+            [(300.0, -400.0, 1000.0), (2600.0, 1600.0, 1000.0)], obs, allow_arc=True, **params
+        )
+        self.assertTrue(result.ok, result.detail)
+        assert result.route is not None
+        from src.algorithm.units.algo.arc_path import arc_radius
+
+        arcs = [ln for ln in _route_lines(result) if ln.start.turnSign != 0.0]
+        self.assertTrue(arcs, "应折叠出贴障弧")
+        # 至少有一段弧的半径是障碍膨胀半径(600)，而不是最小转弯半径(400)。
+        self.assertTrue(any(abs(arc_radius(a) - 600.0) < 1.0 for a in arcs))
 
     def test_altitude_profile_preserved(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1400.0)]
