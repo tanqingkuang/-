@@ -26,6 +26,7 @@ from src.runner.sim_control import _build_leader_route
 from src.ui.gui.main_window import (
     MainWindow,
     ReferenceRoute,
+    _inflated_polygon_vertices,
     parse_avoidance_params,
     preview_route_marker_points,
     reference_route_points,
@@ -134,6 +135,17 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         self.assertIsNotNone(params)
         self.assertEqual(params.waypoints, [(10.0, 20.0, 1000.0), (30.0, 40.0, 1100.0)])
         self.assertAlmostEqual(params.speed_mps, 18.0)
+
+    def test_polygon_clearance_display_expands_rotated_rect(self) -> None:
+        vertices = [(0.0, 100.0), (100.0, 0.0), (200.0, 100.0), (100.0, 200.0)]
+
+        inflated = _inflated_polygon_vertices(vertices, 20.0)
+
+        self.assertEqual(len(inflated), len(vertices))
+        self.assertNotEqual(inflated, vertices)
+        self.assertLess(inflated[0][0], vertices[0][0])
+        self.assertGreater(inflated[2][0], vertices[2][0])
+        self.assertGreater(inflated[3][1], vertices[3][1])
 
     def test_missing_avoidance_returns_none(self) -> None:
         self.assertIsNone(parse_avoidance_params(self._write({"route": {"waypoints": []}})))
