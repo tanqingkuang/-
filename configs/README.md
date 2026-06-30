@@ -20,6 +20,7 @@
 
 - 默认避障障碍库文件，结构与原 `base.json.avoidance.obstacles` 完全一致。
 - 当前支持圆形和轴对齐矩形障碍；`enabled` 只表示加载后的默认勾选状态。
+- `obstacles_file` 的解析和生成由 `src/data/obstaclefile/` 下的策略工厂负责，设计说明见 `src/data/obstaclefile/障碍文件设计.md`。
 
 ## `quadrilateral_10_aircraft_a05_leader.json`
 

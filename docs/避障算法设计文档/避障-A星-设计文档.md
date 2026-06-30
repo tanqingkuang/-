@@ -150,7 +150,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 字段约定：
 
 - 顶层 `route_file` 是相对主配置文件目录的路径，指向完整 `route` 对象；加载时展开为 `route.waypoints[]`。
-- `avoidance.obstacles_file` 是相对主配置文件目录的路径，指向障碍数组，或包含 `obstacles` 字段的对象；加载时展开为 `avoidance.obstacles[]`。
+- `avoidance.obstacles_file` 是相对主配置文件目录的路径，由 `src/data/obstaclefile/` 策略工厂解析，指向障碍数组，或包含 `obstacles` 字段的对象；加载时展开为 `avoidance.obstacles[]`。
 - 顶层 `enabled=false` 或展开后的 `obstacles` 为空 → 完全跳过避障，等价于现状。
 - 每个障碍带 `id`（界面列表显示 / 勾选用）与 `enabled`（默认勾选状态）。`element/obstacles.json` 是**障碍库**，界面再从中**勾选本次启用的子集**——只对勾选项规划，未勾选的不参与（见 §6）。
 - 长机原航线取自展开后的 `route.waypoints[]`，航点坐标兼容 `x_m/east`、`y_m/north`、`altitude_m/h` 两套字段名（与控制器 `_route_point_from_config` 一致）。

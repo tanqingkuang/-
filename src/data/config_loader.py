@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import copy
-import json
 from pathlib import Path
 
 from src.data.linefile import LineFileManager
+from src.data.obstaclefile import ObstacleFileManager
 
 
 _LINE_FILE_MANAGER = LineFileManager()
+_OBSTACLE_FILE_MANAGER = ObstacleFileManager()
 
 
 def resolve_config_references(config: dict[str, object], config_path: str | Path) -> dict[str, object]:
@@ -29,31 +30,11 @@ def resolve_config_references(config: dict[str, object], config_path: str | Path
         resolved["route"] = _LINE_FILE_MANAGER.load_route(base_path, route_file)
 
     avoidance = resolved.get("avoidance")
-    # 障碍文件引用暂时仍是通用 JSON，后续可按同样模式抽成 obstaclefile 策略。
     if isinstance(avoidance, dict):
-        # 障碍库允许独立维护；展开后保持旧的 avoidance.obstacles 数组契约。
         obstacles_file = avoidance.get("obstacles_file")
         if obstacles_file is not None:
-            obstacles_data = _load_referenced_json(base_path, obstacles_file, "avoidance.obstacles_file")
-            if isinstance(obstacles_data, dict):
-                # 兼容将来把障碍数组包进对象并附带说明字段的写法。
-                if "obstacles" not in obstacles_data:
-                    raise ValueError("avoidance.obstacles_file object must contain obstacles")
-                obstacles_data = obstacles_data["obstacles"]
-            if not isinstance(obstacles_data, list):
-                raise ValueError("avoidance.obstacles_file must point to an obstacles array")
-            avoidance["obstacles"] = obstacles_data
+            # obstacles_file 交给独立障碍文件管理器，便于后续按客户格式扩展策略。
+            avoidance["obstacles"] = _OBSTACLE_FILE_MANAGER.load_obstacles(base_path, obstacles_file)
 
     return resolved
-
-
-def _load_referenced_json(base_path: Path, raw_path: object, field_name: str) -> object:
-    """读取相对主配置的 JSON 引用。注意：非法路径直接按配置错误抛出。"""
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        raise ValueError(f"{field_name} must be a non-empty string")
-    element_path = Path(raw_path)
-    if not element_path.is_absolute():
-        # 相对路径只相对主配置文件目录，避免受当前工作目录影响。
-        element_path = base_path.parent / element_path
-    return json.loads(element_path.read_text(encoding="utf-8"))
 
