@@ -46,16 +46,16 @@ def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
     return True
 
 
-def _route_collision_hits(result: PlanResult, obstacles) -> list[tuple[int, str]]:
+def _route_collision_hits(result: PlanResult, obstacles, clearance: float = 0.0) -> list[tuple[int, str]]:
     """按展开航段采样检查真实障碍触碰；返回 (航段序号, 障碍 id)。"""
     hits: list[tuple[int, str]] = []
     for line_index, line in enumerate(_route_lines(result)):
-        for sample_index in range(501):
-            ratio = sample_index / 500.0
+        for sample_index in range(1001):
+            ratio = sample_index / 1000.0
             east = line.start.pos.east + (line.end.pos.east - line.start.pos.east) * ratio
             north = line.start.pos.north + (line.end.pos.north - line.start.pos.north) * ratio
             for obstacle in obstacles:
-                if blocked([obstacle], east, north, 0.0):
+                if blocked([obstacle], east, north, clearance):
                     hits.append((line_index, obstacle.id))
                     break
             if hits and hits[-1][0] == line_index:
@@ -100,6 +100,27 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
 
         self.assertTrue(result.ok, result.detail)
         self.assertEqual(_route_collision_hits(result, obstacles), [])
+
+    def test_prefiltered_obstacle_clearance_violation_falls_back_to_full_obstacles(self) -> None:
+        params = dict(
+            turn_radius_m=0.0,
+            leg_margin_m=0.0,
+            clearance_m=50.0,
+            simplify_clearance_m=50.0,
+            speed_mps=20.0,
+            resolution_m=20.0,
+            margin_m=100.0,
+            allow_arc=False,
+        )
+        obstacles = [
+            make_rect("A_big_wall", 400.0, -1000.0, 600.0, 100.0),
+            make_rect("B_220", 400.0, 220.0, 700.0, 300.0),
+        ]
+
+        result = plan_avoidance_route([(0.0, 0.0, 1000.0), (1000.0, 0.0, 1000.0)], obstacles, **params)
+
+        self.assertTrue(result.ok, result.detail)
+        self.assertEqual(_route_collision_hits(result, obstacles, 50.0), [])
 
     def test_single_circle_on_leg_is_detoured(self) -> None:
         obstacles = [make_circle("C1", 900.0, 0.0, 180.0)]

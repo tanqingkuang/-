@@ -192,9 +192,10 @@ def plan_avoidance_route(
         # 去冗余只需考虑本腿候选障碍；最终可飞性仍对全障碍集复核。
         simplified, causes = simplify_path_with_causes(raw, leg_obstacles, clearance=simplify_clearance_m)
         if len(leg_obstacles) < len(obstacles) and not _path_clear_against_all_obstacles(
-            simplified, obstacles, arc_clearance, sample_step
+            simplified, obstacles, simplify_clearance_m, sample_step
         ):
             # 局部预筛若漏掉实际绕行通道上的障碍，则回退为全量障碍重规划，恢复优化前可规划能力。
+            # 判定使用 simplify_clearance_m，保证漏筛检测和去冗余直线安全距离合同一致。
             # 这条慢路径只在安全复核发现漏筛时触发，80km 常规路径仍保持候选集加速收益。
             raw = plan_path(
                 start, goal, obstacles,
