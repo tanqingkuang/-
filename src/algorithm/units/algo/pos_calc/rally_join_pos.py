@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import PosInEarthS
+from src.algorithm.units.algo.formation_math import clamp
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
 
 _TWO_PI = 2.0 * math.pi
@@ -41,7 +42,8 @@ class RallyJoinPosInitS(PosCalcInitS):
     loiter_speed_max_mps: float = 25.0  # 最大盘旋速度
     mission_heading_rad: float = 0.0  # 切出后的飞行方向（弧度，从东向起算）
     mission_speed_mps: float = 20.0  # 切出后的飞行速度
-    last_arrival_threshold_s: float = 5.0  # 兼容保留；当前切出判定固定使用最快盘旋半圈
+    v_up_min_mps: float = -3.0  # 天向速度下限（来自 velCmdLimit.verticalMin，兜底 −3 m/s）
+    v_up_max_mps: float = 3.0   # 天向速度上限（来自 velCmdLimit.verticalMax，兜底 +3 m/s）
 
 
 @dataclass
@@ -75,8 +77,8 @@ class RallyJoinPos(PosCalcBase):
         self._speed_max = cfg.loiter_speed_max_mps
         self._mission_heading = cfg.mission_heading_rad
         self._mission_speed = cfg.mission_speed_mps
-        self._last_arrival_threshold_s = cfg.last_arrival_threshold_s  # 保留配置值，当前算法不读取
-
+        self._v_up_min = cfg.v_up_min_mps
+        self._v_up_max = cfg.v_up_max_mps
         self._state: str = RALLY_STATE_FLYING
         self._eta_s: float = 0.0
         self._loiter_center_e: float = 0.0
@@ -143,13 +145,13 @@ class RallyJoinPos(PosCalcBase):
             y.selfCmd.v.vNorth = speed * d_n / d_horiz
             y.selfCmd.v.vd = speed
             v_up_raw = speed * d_h / max(d_horiz, 1.0)
-            y.selfCmd.v.vUp = max(-3.0, min(3.0, v_up_raw))
+            y.selfCmd.v.vUp = clamp(v_up_raw, self._v_up_min, self._v_up_max)
         else:
             y.selfCmd.v.vPsi = u.selfState.v.vPsi
             y.selfCmd.v.vEast = 0.0
             y.selfCmd.v.vNorth = 0.0
             y.selfCmd.v.vd = 0.0
-            y.selfCmd.v.vUp = max(-3.0, min(3.0, d_h * 0.5))
+            y.selfCmd.v.vUp = clamp(d_h * 0.5, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = 0.0
         y.selfCmd.v.vTheta = 0.0
 
@@ -228,7 +230,7 @@ class RallyJoinPos(PosCalcBase):
         y.selfCmd.v.vPsi = math.atan2(v_n, v_e)
         y.selfCmd.v.vd = self._loiter_speed
         d_h = self._slot.h - u.selfState.pos.h
-        y.selfCmd.v.vUp = max(-3.0, min(3.0, d_h * 0.3))
+        y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = self._loiter_speed / max(actual_r, 1.0)  # CCW 向心前馈（用实际半径）
         y.selfCmd.v.vTheta = 0.0
 
@@ -250,7 +252,7 @@ class RallyJoinPos(PosCalcBase):
         y.selfCmd.v.vPsi = heading
         y.selfCmd.v.vd = vd
         d_h = self._slot.h - u.selfState.pos.h
-        y.selfCmd.v.vUp = max(-3.0, min(3.0, d_h * 0.3))
+        y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = 0.0
         y.selfCmd.v.vTheta = 0.0
 

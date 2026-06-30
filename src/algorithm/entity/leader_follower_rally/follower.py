@@ -8,6 +8,7 @@ from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
     FormStageE,
     PosTrackDiagS,
+    RallyPhaseE,
     copy_motion,
     copy_pos_track_diag,
     copy_position,
@@ -72,6 +73,8 @@ class RallyFollowerEntity(EntityBase):
         # 单元初始化
         self._inbound.init(None)
         self._tra_plan.init(None)
+        v_up_min = cfg.velCmdLimit.verticalMin if math.isfinite(cfg.velCmdLimit.verticalMin) else -3.0
+        v_up_max = cfg.velCmdLimit.verticalMax if math.isfinite(cfg.velCmdLimit.verticalMax) else 3.0
         self._rally_join.init(RallyJoinPosInitS(
             loose_slot=cfg.rally_target,
             approach_speed_mps=cfg.rally_approach_speed_mps,
@@ -82,7 +85,8 @@ class RallyFollowerEntity(EntityBase):
             loiter_speed_max_mps=loiter_max,
             mission_heading_rad=math.radians(rally_cfg.mission_heading_deg),
             mission_speed_mps=cfg.rally_approach_speed_mps,
-            last_arrival_threshold_s=rally_cfg.last_arrival_threshold_s,
+            v_up_min_mps=v_up_min,
+            v_up_max_mps=v_up_max,
         ))
         self._catchup.init(CatchupAlignInitS(
             selfId=cfg.selfInit.id,
@@ -94,6 +98,8 @@ class RallyFollowerEntity(EntityBase):
             kp_speed=rally_cfg.catchup_kp_speed,
             speed_min_mps=loiter_min,
             speed_max_mps=loiter_max,
+            v_up_min_mps=v_up_min,
+            v_up_max_mps=v_up_max,
         ))
         self._pos_calc_slot.init(ScaledSlotInitS(
             selfId=cfg.selfInit.id,
@@ -161,14 +167,14 @@ class RallyFollowerEntity(EntityBase):
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
-        if stage == FormStageE.RALLY and self.cxt.cmd.step == 0:
+        if stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.JOINING:
             # JOINING 阶段：平等飞行 / 盘旋 / 切出
             self._rally_join_u.t_ref = self.cxt.rally_t_ref
             self._rally_join_u.t_ref_valid = self.cxt.rally_t_ref_valid
             self._rally_join_u.t_now = u.now_s
             self._rally_join.step(self._rally_join_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
-        elif stage == FormStageE.RALLY and self.cxt.cmd.step == 1:
+        elif stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.CATCHUP:
             # CATCHUP 阶段：锁定任务航向，速度调节收敛到松散槽位
             self._catchup.step(self._slot_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
@@ -207,7 +213,7 @@ class RallyFollowerEntity(EntityBase):
         self._outbound_u.eta_s = self._rally_join.eta_s
         self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
         # CATCHUP 阶段 selfCmd.pos = 前视点，dist3d(self, selfCmd) 不代表到槽位距离；用 CatchupAlign 直接暴露的 pos_err_m
-        if self.cxt.cmd.step == 1:
+        if self.cxt.cmd.step == RallyPhaseE.CATCHUP:
             self._outbound_u.pos_err_m_override = self._catchup.pos_err_m
         else:
             self._outbound_u.pos_err_m_override = None

@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.algorithm.context.leaf_types import FormPatE
+from src.algorithm.context.leaf_types import FormCommInitS, FormPatE, FormStageE, MotionProfS, PosInEarthS, WayPointInputS
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import arc_radius
 from src.environment.model import AircraftState
@@ -23,6 +23,7 @@ from src.runner.sim_control import (
     SimulationController,
     SimulationSnapshot,
     _DataLogger,
+    _NodeAlgorithm,
     _build_formation_comm_init,
     _build_leader_route,
     _build_vel_cmd_limit,
@@ -1529,6 +1530,88 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(a01_inbox, [])
             self.assertTrue(any(msg.topic == "formation.leader" for msg in a02_inbox))
             controller.close()
+
+
+class NodeAlgorithmResetTests(unittest.TestCase):
+    """验证 _NodeAlgorithm.reset() 保留构造期僚机冷启动预置。"""
+
+    def _make_comm_init(self) -> FormCommInitS:
+        return FormCommInitS()
+
+    def _make_leader_state(self) -> MotionProfS:
+        s = MotionProfS()
+        s.pos.east = 100.0
+        s.pos.north = 200.0
+        s.pos.h = 500.0
+        return s
+
+    def _make_leader_route(self) -> list[WayPointInputS]:
+        return [
+            WayPointInputS(idx=0, pos=PosInEarthS(east=0.0, north=0.0, h=500.0), vdCmd=20.0),
+            WayPointInputS(idx=1, pos=PosInEarthS(east=1000.0, north=0.0, h=500.0), vdCmd=20.0),
+        ]
+
+    def test_reset_preserves_cold_start_preset_for_wingman(self) -> None:
+        """reset() 后僚机 cmd.stage/pattern 和 leaderState 应与构造后一致。"""
+        initial_leader = self._make_leader_state()
+        node = _NodeAlgorithm(
+            node_id="W01",
+            role="wingman",
+            comm_init=self._make_comm_init(),
+            initial_leader_state=initial_leader,
+            leader_route=self._make_leader_route(),
+            control_period_s=0.02,
+        )
+
+        # 构造后预置正确
+        self.assertEqual(node._entity.cxt.cmd.stage, FormStageE.HOLD)
+        self.assertEqual(node._entity.cxt.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
+
+        # reset 后预置应被恢复
+        node.reset()
+
+        self.assertEqual(node._entity.cxt.cmd.stage, FormStageE.HOLD)
+        self.assertEqual(node._entity.cxt.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
+
+    def test_reset_clears_rally_completed_flag(self) -> None:
+        """reset() 后 _rally_completed 应归 False，允许重新触发集结完成流程。"""
+        from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
+        from src.algorithm.context.leaf_types import FormPatE as FP, PosInEarthS as P
+
+        rally_cfg = RallyTaskInitS(
+            expectedFollowerIds=[],
+            dt_s=0.02,
+            targetPattern=FP.TRIANGLE,
+        )
+        rally_route = [
+            WayPointInputS(idx=0, pos=P(east=0.0, north=0.0, h=500.0), vdCmd=20.0),
+            WayPointInputS(idx=1, pos=P(east=100.0, north=0.0, h=500.0), vdCmd=20.0),
+        ]
+        mission_route = [
+            WayPointInputS(idx=0, pos=P(east=100.0, north=0.0, h=500.0), vdCmd=20.0),
+            WayPointInputS(idx=1, pos=P(east=200.0, north=0.0, h=500.0), vdCmd=20.0),
+        ]
+        node = _NodeAlgorithm(
+            node_id="R01",
+            role="rally_leader",
+            comm_init=self._make_comm_init(),
+            initial_leader_state=None,
+            leader_route=mission_route,
+            control_period_s=0.02,
+            rally_route=rally_route,
+            rally_cfg=rally_cfg,
+        )
+
+        # 模拟集结完成后锁存
+        node._rally_completed = True
+        node._remote_stage = FormStageE.HOLD
+
+        node.reset()
+
+        self.assertFalse(node._rally_completed)
+        self.assertEqual(node._remote_stage, FormStageE.RALLY)
 
 
 if __name__ == "__main__":

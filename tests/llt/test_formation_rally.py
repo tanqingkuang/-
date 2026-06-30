@@ -371,6 +371,30 @@ class EntityBoundaryTypesTests(unittest.TestCase):
         self.assertIsNone(EntityOutputS().formationAnalysis)
 
 
+class RallyPhaseEnumTests(unittest.TestCase):
+    """验证 RallyPhaseE 枚举值与历史整数协议兼容，并检查状态机写出枚举键名。"""
+
+    def test_rally_phase_e_values_match_legacy_integers(self) -> None:
+        """RallyPhaseE 的整数值必须与历史裸整数协议一致，以防向后不兼容。"""
+        from src.algorithm.context.leaf_types import RallyPhaseE
+
+        self.assertEqual(int(RallyPhaseE.JOINING), 0)
+        self.assertEqual(int(RallyPhaseE.CATCHUP), 1)
+        self.assertEqual(int(RallyPhaseE.LOOSE), 2)
+        self.assertEqual(int(RallyPhaseE.COMPRESS), 3)
+
+    def test_task_writes_rally_phase_e_to_cmd_step(self) -> None:
+        """Rally 任务写入 cmd.step 的值应为 RallyPhaseE 成员，可按名称反查。"""
+        from src.algorithm.context.leaf_types import RallyPhaseE
+
+        task = _rally_task(expected=(), dt_s=0.1)
+        ctx = FormContextS()
+        _task_step(task, ctx, remote=FormStageE.RALLY, states=[], now_s=0.0)
+        # cmd.step 可安全转换为 RallyPhaseE（不抛 ValueError）
+        phase = RallyPhaseE(ctx.cmd.step)
+        self.assertEqual(phase, RallyPhaseE.CATCHUP)  # 无僚机期望 → 立即 JOINING→CATCHUP
+
+
 class RallyTaskTests(unittest.TestCase):
     """验证集结任务状态机和遥控语义。"""
 
@@ -420,10 +444,11 @@ class RallyTaskTests(unittest.TestCase):
         _task_step(task, ctx, remote=FormStageE.RALLY, states=all_exited, now_s=0.0)
         self.assertEqual(ctx.cmd.step, 1)
 
-        # 僚机数据过期（now_s=1.0，lastUpdate_s=0.0，stale_timeout_s=0.5）→ 不推进
+        # 僚机数据过期且仍在 FLYING（now_s=1.0，lastUpdate_s=0.0，stale_timeout_s=0.5）→ 不推进
+        # 注：过期且已 EXITED 不阻塞（EXITED 是终态，见 #12 fix）
         ctx = FormContextS()
         task = _rally_task(expected=("R02",), dt_s=0.1)
-        stale = [_follower_state("R02", valid=True, last_update_s=0.0)]
+        stale = [_follower_state("R02", valid=True, last_update_s=0.0, rally_state="FLYING")]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=stale, now_s=1.0)
         self.assertEqual(ctx.cmd.step, 0)
 
@@ -440,6 +465,24 @@ class RallyTaskTests(unittest.TestCase):
         follower_exited = [_follower_state("R02", valid=True, last_update_s=0.0)]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=follower_exited, now_s=0.0, leader_join_exited=False)
         self.assertEqual(ctx.cmd.step, 0)
+
+    def test_exited_follower_not_blocked_by_stale_timeout(self) -> None:
+        """已 EXITED 僚机丢链后不应阻塞 JOINING→CATCHUP 门控（EXITED 是终态）。"""
+        task = _rally_task(expected=("R02",), dt_s=0.1)
+        ctx = FormContextS()
+        # 先推进：R02 在 now_s=0.0 时已 EXITED，正常切到 step=1
+        exited_state = [_follower_state("R02", valid=True, last_update_s=0.0)]
+        _task_step(task, ctx, remote=FormStageE.RALLY, states=exited_state, now_s=0.0)
+        self.assertEqual(ctx.cmd.step, 1)
+
+        # 现在 reset 回 step=0，模拟重新进入 JOINING
+        ctx = FormContextS()
+        task = _rally_task(expected=("R02",), dt_s=0.1)
+        # R02 在 t=0 时 EXITED，到 t=10 时数据已过期（stale_timeout_s=0.5）
+        stale_exited = [_follower_state("R02", valid=True, last_update_s=0.0, rally_state="EXITED")]
+        _task_step(task, ctx, remote=FormStageE.RALLY, states=stale_exited, now_s=10.0)
+        # EXITED 是终态，过期不应阻止推进
+        self.assertEqual(ctx.cmd.step, 1, "stale EXITED entry should not block JOINING→CATCHUP transition")
 
     def test_t_ref_stays_invalid_until_all_join_states_are_initialized(self) -> None:
         """验证参与者首个有效 ETA 未收齐时，不发布可用于切出的集结基准时刻。"""
@@ -477,6 +520,53 @@ class RallyTaskTests(unittest.TestCase):
 
         self.assertTrue(ready.t_ref_valid)
         self.assertAlmostEqual(ready.t_ref, 30.0)
+
+    def test_t_ref_locked_after_last_flyer_departs(self) -> None:
+        """T_ref 在最后一架飞机离开 FLYING 后应锁存，而非塌缩为 now_s。"""
+        task = _rally_task(expected=("R02",), dt_s=0.1)
+        ctx = FormContextS()
+
+        # 拍 1：R02 FLYING，ETA=50s，长机也 FLYING，ETA=40s → t_ref = 50.0
+        flying = [_follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=50.0, last_update_s=0.0)]
+        out1 = _task_step(
+            task, ctx, remote=FormStageE.RALLY, states=flying, now_s=0.0,
+            leader_join_exited=False, leader_join_flying=True, leader_eta_s=40.0,
+        )
+        self.assertAlmostEqual(out1.t_ref, 50.0)
+
+        # 拍 2：R02 进入 LOITERING（flying_etas 空），长机也已 EXITED
+        loitering = [_follower_state("R02", rally_state=RALLY_STATE_LOITERING, last_update_s=2.0)]
+        out2 = _task_step(
+            task, ctx, remote=FormStageE.RALLY, states=loitering, now_s=2.0,
+            leader_join_exited=False, leader_join_flying=False, leader_eta_s=0.0,
+        )
+        # t_ref 不应塌缩为 now_s=2.0，应锁存为上一拍的 50.0
+        self.assertAlmostEqual(out2.t_ref, 50.0,
+            msg="t_ref should remain locked at last valid value, not collapse to now_s")
+
+    def test_cold_start_follower_eta_zero_cannot_overwrite_locked_t_ref(self) -> None:
+        """冷启动僚机 FLYING/eta=0 不应在主机报文过期后把已锁存的 T_ref 覆盖为 0。"""
+        task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
+        ctx = FormContextS()
+
+        # 拍 1：R02 FLYING/eta=50（now=0），R03 FLYING/eta=0 → t_ref 锁存 50.0
+        states_tick1 = [
+            _follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=50.0, last_update_s=0.0),
+            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=0.0,  last_update_s=0.0),
+        ]
+        out1 = _task_step(task, ctx, remote=FormStageE.RALLY, states=states_tick1, now_s=0.0)
+        self.assertAlmostEqual(out1.t_ref, 50.0)
+
+        # 拍 2：R02 数据过期，只剩 R03 FLYING/eta=0
+        # 若 eta=0 被计入 flying_etas，max([0.0])=0 会覆盖已锁存的 50.0
+        states_tick2 = [
+            _follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=50.0, last_update_s=0.0),  # stale at now=5
+            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=0.0,  last_update_s=5.0),
+        ]
+        out2 = _task_step(task, ctx, remote=FormStageE.RALLY, states=states_tick2, now_s=5.0)
+        # eta=0 不应进入 flying_etas，锁存的 t_ref 应保持 50.0 不变
+        self.assertAlmostEqual(out2.t_ref, 50.0,
+            msg="zero-ETA cold-start must not overwrite locked t_ref when valid flyer expires")
 
     def test_loose_and_compress_gate_on_position_error(self) -> None:
         """验证 CATCHUP/LOOSE/COMPRESS 使用位置误差阈值依次推进到 HOLD 并只在转换拍置完成标志。"""
@@ -795,6 +885,33 @@ class RallyLeaderBroadcastAndInboundTests(unittest.TestCase):
         self.assertEqual(ctx.slotScale, RallySlotScaleS())
         self.assertFalse(old_output.t_ref_valid)
 
+    def test_invalid_t_ref_does_not_commit_partial_cmd_state(self) -> None:
+        """t_ref 解析异常时不应提交本条消息中已解析的 cmd.stage/step，避免「新阶段 + 无效 T_ref」半截状态。"""
+        ctx = FormContextS()
+        inbound = RallyLeaderFollower()
+        out = RallyLeaderFollowerOutputS(
+            leaderState=ctx.leaderState,
+            cmd=ctx.cmd,
+            slotScale=ctx.slotScale,
+        )
+        # 先建立 HOLD 基准状态
+        from src.algorithm.context.leaf_types import FormStageE as FSE
+        ctx.cmd.stage = FSE.HOLD
+        ctx.cmd.step = 0
+
+        # 构造一条 stage=RALLY/step=2 但 t_ref 字段为非法字符串的消息
+        bad_t_ref_msg = _leader_msg(stage=FormStageE.RALLY, step=2, t_ref_valid=True)
+        bad_t_ref_msg.payload["t_ref"] = "not-a-float"  # type: ignore[index]
+
+        inbound.step(InboundInputS(inbox=[bad_t_ref_msg]), out)
+
+        # t_ref 非法 → 整条消息应被丢弃，cmd 维持 HOLD/step=0 不变
+        self.assertEqual(ctx.cmd.stage, FSE.HOLD,
+            msg="bad t_ref must not commit cmd.stage change (partial state)")
+        self.assertEqual(ctx.cmd.step, 0,
+            msg="bad t_ref must not commit cmd.step change (partial state)")
+        self.assertFalse(out.t_ref_valid)
+
     def test_rally_leader_follower_requires_all_output_ports(self) -> None:
         """验证三类输出端口必须同时绑定。"""
 
@@ -1061,6 +1178,19 @@ class RallyEntityTests(unittest.TestCase):
                     route=_route((101.5, 0.0, 500.0), (200.0, 0.0, 500.0)),
                     rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
                     rally_cfg=_rally_cfg(expected=("R02",)),
+                )
+            )
+
+    def test_rally_leader_init_rejects_empty_route_list(self) -> None:
+        """验证 route=[] 时抛出 ValueError 而非 IndexError。"""
+        with self.assertRaises(ValueError):
+            RallyLeaderEntity().init(
+                EntityInitS(
+                    selfInit=FormSelfInitS("R01"),
+                    commInit=_comm_init(),
+                    route=[],  # 空列表，不是 None，守卫应捕获
+                    rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                    rally_cfg=_rally_cfg(expected=()),
                 )
             )
 

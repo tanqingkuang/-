@@ -46,30 +46,32 @@ class RallyLeaderFollower(InboundBase):
             cmd = payload.get("cmd")
             if not isinstance(state, dict) or not isinstance(cmd, dict):
                 continue
-            # 同一消息：先写 leaderState + cmd，再追加 slot_scale，三字段一致性有保证
-            _write_motion_from_payload(state, y.leaderState)
-            from src.algorithm.context.leaf_types import FormPatE, FormStageE
-            y.cmd.stage = FormStageE(int(cmd.get("stage", FormStageE.NONE)))
-            y.cmd.pattern = FormPatE(int(cmd.get("pattern", FormPatE.NONE)))
-            y.cmd.step = int(cmd.get("step", 0))
+            # t_ref 先解析：非法则整条消息丢弃，避免「新阶段 + 无效 T_ref」半截状态提交到黑板。
+            try:
+                t_ref_parsed = float(payload.get("t_ref", 0.0))
+            except (TypeError, ValueError):
+                continue
+            raw_t_ref_valid = payload.get("t_ref_valid", False)
+            t_ref_valid_parsed = raw_t_ref_valid if isinstance(raw_t_ref_valid, bool) else False
             # 解析 slot_scale，任何异常均 fallback 到默认值（scale=1.0, scaleRate=0.0）
             try:
                 ss = payload.get("slot_scale", {})
                 if not isinstance(ss, dict):
                     raise TypeError
-                y.slotScale.scale = float(ss.get("scale", 1.0))
-                y.slotScale.scaleRate = float(ss.get("scale_rate", 0.0))
+                scale_parsed = float(ss.get("scale", 1.0))
+                scale_rate_parsed = float(ss.get("scale_rate", 0.0))
             except (TypeError, ValueError):
-                y.slotScale.scale = 1.0
-                y.slotScale.scaleRate = 0.0
-            try:
-                y.t_ref = float(payload.get("t_ref", 0.0))
-            except (TypeError, ValueError):
-                y.t_ref = 0.0
-                y.t_ref_valid = False
-                continue
-            raw_t_ref_valid = payload.get("t_ref_valid", False)
-            y.t_ref_valid = raw_t_ref_valid if isinstance(raw_t_ref_valid, bool) else False
+                scale_parsed, scale_rate_parsed = 1.0, 0.0
+            # 全部字段解析成功后，一次性写入输出端口，保证多字段一致性。
+            _write_motion_from_payload(state, y.leaderState)
+            from src.algorithm.context.leaf_types import FormPatE, FormStageE
+            y.cmd.stage = FormStageE(int(cmd.get("stage", FormStageE.NONE)))
+            y.cmd.pattern = FormPatE(int(cmd.get("pattern", FormPatE.NONE)))
+            y.cmd.step = int(cmd.get("step", 0))
+            y.slotScale.scale = scale_parsed
+            y.slotScale.scaleRate = scale_rate_parsed
+            y.t_ref = t_ref_parsed
+            y.t_ref_valid = t_ref_valid_parsed
 
     def reset(self) -> None:
         """复位 RallyLeaderFollower 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

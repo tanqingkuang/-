@@ -600,6 +600,9 @@ class TopView(QGraphicsView):
         for node in snapshot.nodes:
             if is_leader_node(node):
                 continue
+            # 仅集结场景绘制目标槽位（HOLD 等其他阶段不需要此标记）
+            if not node.rally_phase:
+                continue
             # 目标点为原点时跳过（初始化默认值，尚未收到有效指令）
             if node.cmd_pos_x == 0.0 and node.cmd_pos_y == 0.0:
                 continue
