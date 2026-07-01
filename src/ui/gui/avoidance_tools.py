@@ -359,6 +359,64 @@ def _inflate_polygon_from_centroid(vertices: list[tuple[float, float]], inflate:
     return inflated
 
 
+def _rounded_inflated_polygon_points(
+    vertices: list[tuple[float, float]], inflate: float, corner_segments: int = 6
+) -> list[tuple[float, float]]:
+    """返回用于 GUI 显示的多边形圆角外扩折线点，与后端 inside() 的圆角膨胀语义一致。
+
+    每条边沿外法线平移 inflate，相邻边在凸顶点用半径 = inflate 的圆弧衔接，圆弧离散成折
+    线点。这样角部是圆角（等价 Minkowski 和），而不像 _inflated_polygon_vertices 的 miter
+    尖角向外凸出。inflate<=0 或退化时回退到原始顶点/径向兜底。
+    """
+    if inflate <= 0.0 or len(vertices) < 3:
+        return list(vertices)
+    signed_area = 0.0
+    # 有向面积定绕序，进而确定每条边的外法线方向（与 _inflated_polygon_vertices 保持一致）。
+    for (x0, y0), (x1, y1) in zip(vertices, vertices[1:] + vertices[:1]):
+        signed_area += x0 * y1 - y0 * x1
+    if abs(signed_area) <= 1e-9:
+        return _inflate_polygon_from_centroid(vertices, inflate)
+
+    normals: list[tuple[float, float]] = []
+    for start, end in zip(vertices, vertices[1:] + vertices[:1]):
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = math.hypot(dx, dy)
+        if length <= 1e-9:
+            return _inflate_polygon_from_centroid(vertices, inflate)
+        # 正绕序取右手法线，负绕序取反向，二者都指向多边形外侧。
+        if signed_area > 0.0:
+            normals.append((dy / length, -dx / length))
+        else:
+            normals.append((-dy / length, dx / length))
+
+    count = len(vertices)
+    points: list[tuple[float, float]] = []
+    for index in range(count):
+        start = vertices[index]
+        end = vertices[(index + 1) % count]
+        nx, ny = normals[index]
+        # 当前边沿外法线整体平移 inflate，两端点构成一段偏移直段。
+        points.append((start[0] + nx * inflate, start[1] + ny * inflate))
+        points.append((end[0] + nx * inflate, end[1] + ny * inflate))
+        # 在顶点 end 处，用半径 inflate 的圆弧把本边外法线转到下一条边外法线。
+        next_nx, next_ny = normals[(index + 1) % count]
+        angle_from = math.atan2(ny, nx)
+        sweep = math.atan2(next_ny, next_nx) - angle_from
+        # 归一到与绕序一致的方向，保证圆弧只走多边形外侧那段。
+        if signed_area > 0.0:
+            while sweep < 0.0:
+                sweep += 2.0 * math.pi
+        else:
+            while sweep > 0.0:
+                sweep -= 2.0 * math.pi
+        steps = max(1, int(corner_segments * abs(sweep) / (math.pi / 2.0)))
+        for step in range(1, steps):
+            angle = angle_from + sweep * (step / steps)
+            points.append((end[0] + math.cos(angle) * inflate, end[1] + math.sin(angle) * inflate))
+    return points
+
+
 def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[float, float]]:
     """采样圆弧航段为折线点（含两端）。注意：复用 arc_swept_rad 求扫掠角。"""
     center = line.start.center

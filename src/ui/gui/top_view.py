@@ -8,7 +8,7 @@ from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
-from src.ui.gui.avoidance_tools import _inflated_polygon_vertices, preview_route_marker_points, route_to_polyline
+from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
 from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.view_models import (
     FIT_VIEWPORT_RATIO,
@@ -450,8 +450,9 @@ class TopView(QGraphicsView):
     def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
         """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（polygon 为显示近似）。"""
         if obstacle.kind == "polygon" and obstacle.vertices:
-            # polygon 安全间距用外扩顶点显示，避免虚线圈与旋转矩形本体重合。
-            vertices = _inflated_polygon_vertices(obstacle.vertices, inflate)
+            # polygon 安全间距按圆角外扩显示，与后端 inside() 的“点到边距离≤clearance”边界一致，
+            # 避免 miter 尖角在角部凸出、令折线看上去擦过所画膨胀框。
+            vertices = _rounded_inflated_polygon_points(obstacle.vertices, inflate)
             polygon = QPolygonF([QPointF(east, north) for east, north in vertices])
             painter.drawPolygon(polygon)
         elif obstacle.kind == "rect":
