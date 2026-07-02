@@ -557,7 +557,11 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 2.0)
 
     def test_pid_compose_forward_speed_p_uses_scalar_speed_error(self) -> None:
-        """验证长机型前向速度环按地速标量误差控制(纯 P，速度比例走 kd、kp=ki=kiv=0)，不把目标速度投影到当前航向后再相减。"""
+        """验证长机型前向速度环按地速标量误差控制(纯 P，速度比例走 kd、kp=ki=kiv=0)。
+
+        误差幅值仍是地速标量差 vd_cmd-vd_self=20-10=10(与航向无关)；1.1 后误差在
+        "目标速度系"分解/还原，故这 10 的前向加速度沿**目标航向**(此处东向)输出，而非本机航向(北向)。
+        """
 
         tracker = PidCompose()
         tracker.init(
@@ -575,8 +579,59 @@ class PosTrackTests(unittest.TestCase):
             PosTrackOutputS(accCmd=ctx.selfAccCmd),
         )
 
+        # 沿目标航向(东)输出标量速度误差 10；本机航向(北)分量为 0。
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 10.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
+
+    def test_pid_compose_decomposes_error_in_target_velocity_frame(self) -> None:
+        """1.1 核心：误差按目标速度系分解。目标在本机航向(北)正右后方 100m，但沿目标航向(东)是纯前向偏置，
+        应主要走前向通道(kp_fwd·100=10)，而非被本机航迹系判成大侧偏去转弯(那样会是 kp_lat·100=50)。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainForward=CtrlInitS(kp=0.1, ki=0.0, kd=0.0, dt=0.1),
+                gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.0, dt=0.1),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=0.0, v_north=10.0)  # 机头朝北
+        ctx.selfCmd = _motion(east=100.0, north=0.0, h=0.0, v_east=10.0)   # 目标航向朝东，在正东 100m
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        # 目标系(东)下 100m 为纯前向误差 → 前向加速度 0.1·100=10 沿东；侧偏为 0，无转弯指令。
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 10.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
+
+    def test_pid_compose_falls_back_to_self_frame_when_target_hovers(self) -> None:
+        """目标水平速度低于 vMin(悬停/集结起步)时航向无定义，应退回本机航迹系兜底，不因建基奇异而抛错。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=0.5,
+                gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.0, dt=0.1),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=0.0, v_east=10.0)  # 机头朝东，可飞
+        ctx.selfCmd = _motion(east=0.0, north=50.0, h=0.0)               # 目标在正北 50m，且悬停(零速)
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        # 退回自身系(东)：北向 50m 为侧偏，lateral_right=(0,-1,0) → 侧偏 -50 → 侧向加速度 -25 落在北向 +25。
         self.assertAlmostEqual(ctx.selfAccCmd.accEast, 0.0)
-        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 10.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 25.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
 
     def test_pid_compose_writes_control_diagnostics(self) -> None:
@@ -636,12 +691,15 @@ class PosTrackTests(unittest.TestCase):
             PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
         )
 
+        # 1.1 后误差在"目标速度系"(selfCmd 航迹系，含其 v_north/-3、v_up/5 造成的航向与倾角)分解；
+        # 数值随之从旧的自身系(东向平飞)结果改变。前向位置(PPI kpPos=0)仍被屏蔽为 0。
         self.assertAlmostEqual(diag.track_pos_err_x_m, 0.0)
-        self.assertAlmostEqual(diag.track_pos_err_y_m, 8.0)
-        self.assertAlmostEqual(diag.track_pos_err_z_m, -4.0)
+        self.assertAlmostEqual(diag.track_pos_err_y_m, -10.39828, places=5)
+        self.assertAlmostEqual(diag.track_pos_err_z_m, -16.00735, places=5)
+        # 前向速度误差是地速标量差(与系无关)：hypot(12,-3)-10。
         self.assertAlmostEqual(diag.track_vel_err_x_mps, math.hypot(12.0, -3.0) - 10.0)
-        self.assertAlmostEqual(diag.track_vel_err_y_mps, 5.0)
-        self.assertAlmostEqual(diag.track_vel_err_z_mps, 3.0)
+        self.assertAlmostEqual(diag.track_vel_err_y_mps, 3.63576, places=5)
+        self.assertAlmostEqual(diag.track_vel_err_z_mps, 2.42536, places=5)
 
     def test_pid_compose_masks_unused_velocity_error_diagnostics(self) -> None:
         """未配置速度环增益时，航迹系速度误差诊断应输出 0。"""

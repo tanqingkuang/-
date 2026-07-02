@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from src.algorithm.units.algo.ctrl.base import CtrlBase, CtrlInitS
@@ -96,14 +97,21 @@ class PidCompose(PosTrackBase):
             u.selfCmd.pos.north - u.selfState.pos.north,
             u.selfCmd.pos.h - u.selfState.pos.h,
         )
-        pos_err = enu_to_track(pos_err_enu, u.selfState)
+        # 误差/速度一律投到"目标速度系"(selfCmd 的航迹系)：横偏相对目标航路度量，
+        # 规避以本机航迹系度量时"目标落在机头后方→越滚越偏"的正反馈(转圈)根因；
+        # 前向误差随之变为"沿目标航向的前后"，天然覆盖"飞机比目标点靠前→前向环减速后退"。
+        # 目标水平速度过低(集结起步/悬停)时其航向无定义，退回本机航迹系兜底，避免建基奇异。
+        frame = u.selfCmd
+        if math.hypot(u.selfCmd.v.vEast, u.selfCmd.v.vNorth) < self._v_min:
+            frame = u.selfState
+        pos_err = enu_to_track(pos_err_enu, frame)
         self_vel = enu_to_track(
             (u.selfState.v.vEast, u.selfState.v.vNorth, u.selfState.v.vUp),
-            u.selfState,
+            frame,
         )
         trim_vel = enu_to_track(
             (u.selfCmd.v.vEast, u.selfCmd.v.vNorth, u.selfCmd.v.vUp),
-            u.selfState,
+            frame,
         )
         # 各轴速度前馈(原指令)与实测速度：前向用地速标量 vd，法向/侧向用航迹系分量。
         vel_ff = (u.selfCmd.v.vd, trim_vel[1], trim_vel[2])
@@ -146,7 +154,7 @@ class PidCompose(PosTrackBase):
             self._vertical.step(pos_err[1], vel_ff[1], vel_actual[1]),
             self._lateral.step(pos_err[2], vel_ff[2], vel_actual[2]) + lateral_ff,
         )
-        acc_enu = track_to_enu(acc_track, u.selfState)
+        acc_enu = track_to_enu(acc_track, frame)
         y.accCmd.accEast = acc_enu[0]
         y.accCmd.accNorth = acc_enu[1]
         y.accCmd.accUp = acc_enu[2]
