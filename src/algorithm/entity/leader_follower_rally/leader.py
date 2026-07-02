@@ -42,7 +42,7 @@ from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutp
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.entity.leader_follower_rally import fill_output
 
-_LEADER_L1_DISTANCE_M = 200.0
+_LEADER_L1_DISTANCE_M = 0.0  # 关闭L1前瞻，直接按航段投影解算目标航迹。大侧偏限角保护已由横侧向变限幅(1.2)接管。
 _LEADER_FF_LEAD_TIME_S = 0.5
 
 

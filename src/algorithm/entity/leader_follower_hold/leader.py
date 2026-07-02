@@ -37,7 +37,7 @@ from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcas
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 
-_LEADER_L1_DISTANCE_M = 200.0 # 配置为0，则关闭L1前瞻航迹插值，直接按航段起点/终点位置解算航迹。
+_LEADER_L1_DISTANCE_M = 0.0 # 关闭L1前瞻，直接按航段投影解算目标航迹。大侧偏限角保护已由横侧向变限幅(1.2)接管，L1 不再需要。
 _LEADER_FF_LEAD_TIME_S = 0.5 # 曲率前馈前瞻时间 σ(秒)，前瞻窗长 L2=σ·vd；配为0则关闭曲率前馈。调参旋钮。
 
 
