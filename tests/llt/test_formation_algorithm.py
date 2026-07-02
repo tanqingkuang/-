@@ -35,6 +35,7 @@ from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
+from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
 from src.algorithm.units.process.formation_task.hold import Hold
@@ -738,6 +739,53 @@ class PosTrackTests(unittest.TestCase):
             )
 
         self.assertEqual((out.accEast, out.accNorth, out.accUp), (1.0, 2.0, 3.0))
+
+
+class LateralTrackAngleTests(unittest.TestCase):
+    """横侧向串级 + 航迹角变限幅控制律。"""
+
+    def _cfg(self, **kw: float) -> LateralTrackAngleInitS:
+        base = dict(
+            kp=0.02, kd=0.12, ki=0.0, dt=0.05, outMax=4.0,
+            gammaMaxRad=math.radians(30.0), floorRad=math.radians(7.0), margin=1.2,
+        )
+        base.update(kw)
+        return LateralTrackAngleInitS(**base)
+
+    def test_unsaturated_matches_parallel_pid(self) -> None:
+        """无饱和 + ki=0 时，串级输出严格等于旧并联式 kp·dZ + kd·velErr(平滑迁移的等价保证)。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg())
+        dz, vel_err, v = 1.0, 0.5, 20.0  # 小侧偏，不触发变限幅饱和
+        got = ctrl.step(dz, vel_err, v)
+        self.assertAlmostEqual(got, 0.02 * dz + 0.12 * vel_err)
+        self.assertAlmostEqual(got, 0.08)
+
+    def test_variable_track_angle_limit(self) -> None:
+        """限幅曲线：|dZ|≥R→90°；中段→asin(|dZ|/R)；极小→地板 7°。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg())
+        v = 20.0
+        radius = v * v / (9.80665 * math.sin(math.radians(30.0))) * 1.2
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(10.0 * radius, v), math.pi / 2)
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.5 * radius, v), math.asin(0.5))
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.0, v), math.radians(7.0))
+
+    def test_large_cross_track_bounds_lateral_accel(self) -> None:
+        """大侧偏下侧向加速度饱和到 kd·V·sin(90°)，且不随侧偏继续增大——这是防"持续滚转→转圈"的本质。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg())
+        v = 20.0
+        a1 = ctrl.step(1_000.0, 0.0, v)
+        a2 = ctrl.step(1_000_000.0, 0.0, v)
+        self.assertAlmostEqual(a1, 0.12 * v * math.sin(math.pi / 2))  # = 2.4，对应 90° 垂直切入
+        self.assertAlmostEqual(a1, a2)  # 侧偏放大 1000 倍指令不变：有界拦截，不会越滚越紧
+        self.assertGreater(a1, 0.0)     # dZ>0(目标在右) → 向右(正)修正
+
+    def test_rejects_zero_kd(self) -> None:
+        """kd=0 时串级 K1=-kp/kd 与内环比例都退化，应在 init 拦截。"""
+        with self.assertRaisesRegex(ValueError, "kd"):
+            LateralTrackAngle().init(self._cfg(kd=0.0))
 
 
 class ProcessUnitTests(unittest.TestCase):

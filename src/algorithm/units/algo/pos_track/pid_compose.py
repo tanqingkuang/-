@@ -10,24 +10,31 @@ from src.algorithm.units.algo.ctrl.pid import Pid
 from src.algorithm.units.algo.ctrl.ppi import PPI, PPIInitS
 from src.algorithm.units.algo.formation_math import enu_to_track, track_to_enu
 from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS, PosTrackInputS, PosTrackOutputS
+from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
 
 
-def _uses_position_error(cfg: CtrlInitS | PPIInitS | None) -> bool:
+def _uses_position_error(cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | None) -> bool:
     """判断控制配置是否会消费位置误差。注意：只服务诊断屏蔽，不改变控制计算。"""
     if isinstance(cfg, PPIInitS):
         # PPI 的位置误差只进外环 kpPos；kpVel/kiVel 属于速度内环，不能让位置诊断误报有效。
         return cfg.kpPos != 0.0
+    if isinstance(cfg, LateralTrackAngleInitS):
+        # 串级横侧向的外环消费横偏 dZ(K1=-kp/kd)，kp/ki 任一非零即启用位置通道。
+        return cfg.kp != 0.0 or cfg.ki != 0.0
     if isinstance(cfg, CtrlInitS):
         # 并联式 PID 中 kp/ki 是位置通道，kd/kiv 只说明速度误差通道启用。
         return cfg.kp != 0.0 or cfg.ki != 0.0
     return False
 
 
-def _uses_velocity_error(cfg: CtrlInitS | PPIInitS | None) -> bool:
+def _uses_velocity_error(cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | None) -> bool:
     """判断控制配置是否会消费速度误差。注意：前馈速度本身不算速度误差闭环。"""
     if isinstance(cfg, PPIInitS):
         # PPI 的内环跟踪 vel_cmd-velActual，因此 kpVel/kiVel 任一非零都表示速度误差被使用。
         return cfg.kpVel != 0.0 or cfg.kiVel != 0.0
+    if isinstance(cfg, LateralTrackAngleInitS):
+        # 串级横侧向内环跟踪侧向速度误差(velErr-velErrCmd)，kd 非零即启用速度通道。
+        return cfg.kd != 0.0
     if isinstance(cfg, CtrlInitS):
         # 并联式 PID 的速度误差只走 kd/kiv；位置环开启不代表速度诊断有效。
         return cfg.kd != 0.0 or cfg.kiv != 0.0
@@ -51,7 +58,7 @@ class PidComposeInitS(PosTrackInitS):
 
     vMin: float = 0.5
     gainForward: CtrlInitS | PPIInitS | None = None
-    gainLateral: CtrlInitS | PPIInitS | None = None
+    gainLateral: CtrlInitS | PPIInitS | LateralTrackAngleInitS | None = None
     gainVertical: CtrlInitS | PPIInitS | None = None
 
 
@@ -63,6 +70,7 @@ class PidCompose(PosTrackBase):
         self._v_min = PidComposeInitS.vMin
         self._forward: CtrlBase = Pid()
         self._lateral: CtrlBase = Pid()
+        self._lateral_cascade: LateralTrackAngle | None = None  # 非 None 时横侧向走串级+变限幅
         self._vertical: CtrlBase = Pid()
         self._diag_pos_enabled = (False, False, False)
         self._diag_vel_enabled = (False, False, False)
@@ -71,7 +79,14 @@ class PidCompose(PosTrackBase):
         """按配置初始化 PidCompose。注意：调用方需先准备好必要依赖和输入数据。"""
         self._v_min = cfg.vMin
         self._forward = _make_ctrl(cfg.gainForward)
-        self._lateral = _make_ctrl(cfg.gainLateral)
+        # 横侧向：LateralTrackAngleInitS 走串级+航迹角变限幅(需本机地速，见 step)；否则退回并联/串级 Pid。
+        if isinstance(cfg.gainLateral, LateralTrackAngleInitS):
+            self._lateral_cascade = LateralTrackAngle()
+            self._lateral_cascade.init(cfg.gainLateral)
+            self._lateral = Pid()  # 占位，串级激活时不参与计算
+        else:
+            self._lateral_cascade = None
+            self._lateral = _make_ctrl(cfg.gainLateral)
         self._vertical = _make_ctrl(cfg.gainVertical)
         # 诊断字段轴序固定为 x/y/z = 前向/垂向/右侧向，配置字段顺序则是 Forward/Vertical/Lateral。
         self._diag_pos_enabled = (
@@ -142,17 +157,22 @@ class PidCompose(PosTrackBase):
             y.diag.track_vel_err_y_mps = vel_err[1] if self._diag_vel_enabled[1] else 0.0
             y.diag.track_vel_err_z_mps = vel_err[2] if self._diag_vel_enabled[2] else 0.0
 
-        # 航迹偏航角速率前馈(向心加速度)：在航迹系侧向直接补出维持转弯所需的 vd·dVPsi。
-        # 本机航迹系第三轴(lateral_right)以右为正，而 dVPsi>0 为左转，故取负号；
-        # 配合本机自身 vd，外/内侧僚机的半径与速度差异被自动吸收(v_S/R_S = dVPsi)。
-        lateral_ff = -u.selfCmd.v.dVPsi * u.selfState.v.vd
-        # 三轴统一调用 step(位置误差, 速度前馈, 实测速度)：Pid 内部取 velErr=velFf-velActual 走并联式；
-        # PPI 走串级 P+PI(外环 P 把位置误差转速度反馈、叠加前馈后限幅，内环 PI 跟踪)。
-        # 前向/法向用何种控制律由增益类型决定，侧向恒为位置环。
+        # 航迹偏航角速率前馈(向心加速度)：在目标速度系侧向直接补出维持转弯所需的 v_S·dVPsi。
+        # 侧向轴(lateral_right)以右为正，而 dVPsi>0 为左转，故取负号。
+        # 目标系下向心量应按**目标点自身**的地速 selfCmd.v.vd 与角速率算(v_S/R_S=dVPsi)，
+        # 与参照航向自洽；外/内侧僚机的半径与速度差异经槽位几何已折入 selfCmd(见 slot_geometry)。
+        lateral_ff = -u.selfCmd.v.dVPsi * u.selfCmd.v.vd
+        # 前向/法向：step(位置误差, 速度前馈, 实测速度)——Pid 走并联式、PPI 走串级 P+PI。
+        # 横侧向：LateralTrackAngle 走串级 + 航迹角变限幅(消除大侧偏持续滚转→转圈)，需本机地速；
+        #        无该配置时退回并联/串级 Pid(旧行为)。两路均叠加向心前馈 lateral_ff。
+        if self._lateral_cascade is not None:
+            lateral_acc = self._lateral_cascade.step(pos_err[2], vel_err[2], u.selfState.v.vd) + lateral_ff
+        else:
+            lateral_acc = self._lateral.step(pos_err[2], vel_ff[2], vel_actual[2]) + lateral_ff
         acc_track = (
             self._forward.step(pos_err[0], vel_ff[0], vel_actual[0]),
             self._vertical.step(pos_err[1], vel_ff[1], vel_actual[1]),
-            self._lateral.step(pos_err[2], vel_ff[2], vel_actual[2]) + lateral_ff,
+            lateral_acc,
         )
         acc_enu = track_to_enu(acc_track, frame)
         y.accCmd.accEast = acc_enu[0]
@@ -163,4 +183,6 @@ class PidCompose(PosTrackBase):
         """复位 PidCompose 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._forward.reset()
         self._lateral.reset()
+        if self._lateral_cascade is not None:
+            self._lateral_cascade.reset()
         self._vertical.reset()

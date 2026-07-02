@@ -24,11 +24,11 @@ from src.algorithm.entity.types import (
     VelCmdLimitS,
 )
 from src.algorithm.units.algo.arc_path import corner_arc
-from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.ppi import PPIInitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
+from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
 from src.algorithm.units.process.formation_task.hold import Hold
@@ -178,8 +178,9 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
     """按给定前向增益生成位置跟踪器配置。注意：前向/垂向走串级 P+PI(可限速)，侧向恒为位置环 Pid，长机与僚机只在前向通道有别。"""
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
-    # 侧向(侧偏)保持并联式位置环 Pid(只限侧向加速度，速度不限)，两实体共用。
-    gain_lateral = CtrlInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
+    # 侧向(侧偏)改串级(P+PI)+航迹角变限幅：增益 kp/kd/ki 与旧并联式一一等价(无饱和+ki=0 时严格相等)，
+    # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
+    gain_lateral = LateralTrackAngleInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
     # 垂向改串级 P+PI：等价旧 kp=0.2/kd=0.6(kpPos=kp/kd)，acc 限幅沿用 ±6；
     # 垂向速度限幅 vCmdMin/vCmdMax 由配置注入(默认 ±inf 不限)。
     gain_vertical = PPIInitS(

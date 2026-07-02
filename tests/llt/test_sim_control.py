@@ -716,16 +716,11 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertAlmostEqual(nodes["A03"].altitude_m, nodes["A01"].altitude_m, delta=0.5)
             controller.close()
 
-    @unittest.expectedFailure  # 1.1 已知失败，1.2 变限幅落地后移除本标注恢复严格断言。见下方 docstring。
     def test_off_route_leader_turns_without_snaking_backward(self) -> None:
         """Leader should smoothly cut toward the route instead of weaving forward/backward.
 
-        注(1.1 中间态，已知失败)：本 fixture 长机初始横偏达 260m。1.1 把误差改到目标速度系度量后，
-        横侧向变为直接对真实横偏做控制，旁路了 L1 前视点纯追踪隐含的拦截角上界；旧无限幅侧向环在
-        如此大横偏下把航迹角过冲到约 102°(越过正南)，东向出现约 2m 的向后蛇行(11 个采样点回退)。
-        这是分步顺序的固有中间态：L1 的限角保护要到 1.2 才由"按侧偏的航迹角变限幅"接管。
-        故本步标注 expectedFailure；1.2 引入变限幅(最大 90° 垂直切入，航迹角不越 90° → 东向不回退)后，
-        删除本标注，严格断言(+0.1)应恢复通过。
+        本 fixture 长机初始横偏达 260m。1.2 引入"按侧偏的航迹角变限幅"后，大侧偏下航迹角被限到
+        最多 90°(垂直切入)、不越 90°，故东向不回退、平滑切入(不再有 1.1 中间态那种越过正南的向后蛇行)。
         """
         controller = SimulationController()
         controller.load_config(str(Path(__file__).resolve().parent / "fixtures" / "test.json"))
@@ -791,8 +786,8 @@ class SimulationControllerTests(unittest.TestCase):
             leader = controller._node_algorithms["A01"]._entity
             follower = controller._node_algorithms["A02"]._entity
 
-            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.2)
-            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.2)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.2)
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.2)
             controller.close()
 
     def test_default_algorithm_pid_period_matches_design_contract(self) -> None:
@@ -806,10 +801,10 @@ class SimulationControllerTests(unittest.TestCase):
             leader = controller._node_algorithms["A01"]._entity
             follower = controller._node_algorithms["A02"]._entity
 
-            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.05)
-            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.05)
-            self.assertAlmostEqual(leader._pos_track._lateral._cfg.outMax, 4.0)
-            self.assertAlmostEqual(follower._pos_track._lateral._cfg.outMax, 4.0)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.05)
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.05)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.outMax, 4.0)
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.outMax, 4.0)
             controller.close()
 
     def test_realtime_logging_uses_sim_time_10_hz(self) -> None:
