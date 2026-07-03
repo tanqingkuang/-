@@ -104,6 +104,19 @@ class RouteState:
 
 
 @dataclass(frozen=True)
+class RallyJoinGeometryState:
+    """集结节点的盘旋圆与关键点，按静态配置预计算，不随仿真推进变化。仅供 GUI 辅助展示。"""
+
+    slot_east_m: float  # 松散目标点 M_i（同时是盘旋圆上的切出点），东向坐标
+    slot_north_m: float
+    loiter_center_east_m: float  # 盘旋圆圆心，东向坐标
+    loiter_center_north_m: float
+    loiter_radius_m: float  # 盘旋圆半径
+    entry_east_m: float  # 切入点 T（按节点初始位置求得的 CCW 切线切点），东向坐标
+    entry_north_m: float
+
+
+@dataclass(frozen=True)
 class SimulationSnapshot:
     """完整实时观测快照。注意：供 GUI、CLI 和订阅回调读取。"""
 
@@ -118,6 +131,7 @@ class SimulationSnapshot:
     route_segments: list[RouteState] = field(default_factory=list)  # 全部航段。
     cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。
     rally_analysis: object | None = None  # FormationAnalysisS；集结完成首帧非 None，控制器锁存
+    rally_geometry: dict[str, RallyJoinGeometryState] = field(default_factory=dict)  # 按 node_id 索引，非集结场景为空字典
 
 
 @dataclass(frozen=True)

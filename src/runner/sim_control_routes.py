@@ -18,14 +18,20 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     WayPointS,
 )
+from src.algorithm.entity.leader_follower_rally import (
+    rally_loose_target,
+    rally_route_heading_rad,
+    resolve_formation_slot,
+)
 from src.algorithm.entity.types import VelCmdLimitS
+from src.algorithm.units.algo.pos_calc.rally_join_pos import _ccw_entry_tangent
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.environment.model import AircraftState, node_id_from_config
 from src.runner.sim_control_constants import (
     _DEFAULT_TRIANGLE_WING_SLOTS,
     _FORMATION_COORDINATE_SYSTEM,
 )
-from src.runner.sim_control_types import RouteState
+from src.runner.sim_control_types import RallyJoinGeometryState, RouteState
 
 def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
     """把环境模型状态转换为算法运动状态。注意：单位和坐标系必须保持一致。"""
@@ -544,10 +550,65 @@ def _build_rally_task_init(
         dt_s=algorithm_period_s,
         loiter_radius_m=float(rally_cfg_raw.get("loiter_radius_m", 200.0)),
         arrival_radius_m=float(rally_cfg_raw.get("arrival_radius_m", 100.0)),
-        mission_heading_deg=float(rally_cfg_raw.get("mission_heading_deg", 0.0)),
         catchup_radius_m=float(rally_cfg_raw.get("catchup_radius_m", 200.0)),
         catchup_kp_speed=float(rally_cfg_raw.get("catchup_kp_speed", 0.05)),
     )
+
+
+def _build_rally_join_geometry(
+    nodes: list[object],
+    rally_route: list[WayPointInputS] | None,
+    formation_comm_init: FormCommInitS,
+    rally_task_init: RallyTaskInitS | None,
+    initial_states: dict[str, AircraftState],
+) -> dict[str, RallyJoinGeometryState]:
+    """按静态配置预计算各集结节点的盘旋圆、切入点 T、切出点 M_i，仅供 GUI 辅助展示。
+
+    注意：只依赖配置和模型已解析的初始状态（不依赖仿真推进后的运行时状态），几何公式复用
+    RallyJoinPos 的实际实现（`rally_route_heading_rad`/`rally_loose_target`/`_ccw_entry_tangent`），
+    避免和算法行为分叉。切入点 T 的起点取自 initial_states（模型对 x_m/y_m 缺省时按节点序号错位
+    摆放的解析结果），不能直接读原始配置的 x_m/y_m——配置省略该字段时二者默认值不同，直接读配置
+    会用错误的起点算出错误的 T。集结长机不依赖队形/槽位，即使 targetPattern 在 formPat 中找不到
+    （只有 rally_follower 才需要它），长机自己的圆和切出点仍应正常给出。
+    """
+    if rally_route is None or rally_task_init is None or len(rally_route) < 2:
+        return {}
+    heading = rally_route_heading_rad(rally_route)
+    a = rally_route[0].pos
+    radius = rally_task_init.loiter_radius_m
+
+    geometry: dict[str, RallyJoinGeometryState] = {}
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict):
+            continue
+        role = str(node.get("role") or "")
+        if role not in ("rally_leader", "rally_follower"):
+            continue
+        node_id = node_id_from_config(node, index)
+        if role == "rally_leader":
+            slot_pos = a
+        else:
+            slot = resolve_formation_slot(formation_comm_init, rally_task_init.targetPattern, node_id)
+            if slot is None:
+                continue
+            slot_pos = rally_loose_target(a, heading, rally_task_init.looseScale, slot)
+        center_e = slot_pos.east - radius * math.sin(heading)
+        center_n = slot_pos.north + radius * math.cos(heading)
+        initial_state = initial_states.get(node_id)
+        start_e = initial_state.x_m if initial_state is not None else slot_pos.east
+        start_n = initial_state.y_m if initial_state is not None else slot_pos.north
+        tangent = _ccw_entry_tangent(start_e, start_n, center_e, center_n, radius)
+        entry_e, entry_n = (tangent[0], tangent[1]) if tangent is not None else (slot_pos.east, slot_pos.north)
+        geometry[node_id] = RallyJoinGeometryState(
+            slot_east_m=slot_pos.east,
+            slot_north_m=slot_pos.north,
+            loiter_center_east_m=center_e,
+            loiter_center_north_m=center_n,
+            loiter_radius_m=radius,
+            entry_east_m=entry_e,
+            entry_north_m=entry_n,
+        )
+    return geometry
 
 
 def _build_rally_approach_speed(config: dict[str, object] | None) -> float:

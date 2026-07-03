@@ -3,7 +3,7 @@
   "step_s": 0.005,
   "playback_rate": 1.0,
   "seed": 1,
-  "route_file": "element/rally_demo_route.json",
+  "route_file": "element/rally_demo_rally_route.json",
   "rally_route_file": "element/rally_demo_rally_route.json",
   "rally_cfg": {
     "loose_scale": 3.0,
@@ -15,7 +15,6 @@
     "target_pattern": "TRIANGLE",
     "loiter_radius_m": 200.0,
     "arrival_radius_m": 100.0,
-    "mission_heading_deg": 0.0,
     "catchup_radius_m": 200.0
   },
   "formation": {
@@ -59,19 +58,18 @@
       "node_id": "R01",
       "role": "rally_leader",
       "x_m": 2000.0,
-      "y_m": 3000.0,
+      "y_m": -1000.0,
       "altitude_m": 500.0,
       "psi_v_deg": 0.0,
       "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
-      "distance_to_go_m": 6000.0
+      "distance_to_go_m": 0.0
     },
     {
       "node_id": "R02",
       "role": "rally_follower",
-      "rally_target": { "x_m": 0.0, "y_m": 100.0, "altitude_m": 500.0 },
-      "x_m": 3200.0,
-      "y_m": 2174.0,
+      "x_m": -1500.0,
+      "y_m": -1000.0,
       "altitude_m": 500.0,
       "psi_v_deg": 0.0,
       "speed_mps": 20.0,
@@ -81,9 +79,8 @@
     {
       "node_id": "R03",
       "role": "rally_follower",
-      "rally_target": { "x_m": 0.0, "y_m": -100.0, "altitude_m": 500.0 },
-      "x_m": 3000.0,
-      "y_m": 4026.0,
+      "x_m": 1500.0,
+      "y_m": 1000.0,
       "altitude_m": 500.0,
       "psi_v_deg": 0.0,
       "speed_mps": 20.0,

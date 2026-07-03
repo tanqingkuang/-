@@ -40,8 +40,7 @@ class EntityInitS:
     route: list[WayPointInputS] = field(default_factory=list)  # 预置航点输入，由长机 init 转换；僚机忽略
     control_period_s: float = DEFAULT_CONTROL_PERIOD_S  # 控制算法处理周期，单位 s
     velCmdLimit: VelCmdLimitS = field(default_factory=VelCmdLimitS)  # 前向/垂向速度指令限幅
-    rally_route: RouteS | None = None  # 集结航线（仅集结长机使用）
-    rally_target: PosInEarthS | None = None  # 本机目标集结点 M_i（仅集结僚机使用）
+    rally_route: list[WayPointInputS] | None = None  # 集结航线；[0]=A（队形中心），[-1]=B（集结终点）
     rally_cfg: object | None = None  # RallyTaskInitS；长机使用完整参数，僚机只取 convergenceRadius_m
     rally_approach_speed_mps: float = 20.0  # 僚机飞向 M_i 的速度
     rally_leader_id: str = ""  # 僚机回报消息的发送目标（来自节点配置 leader_id）

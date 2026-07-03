@@ -30,12 +30,15 @@ from src.algorithm.context.leaf_types import (
 )
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
+from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RALLY_STATE_FLYING,
     RALLY_STATE_LOITERING,
+    RallyJoinPos,
+    RallyJoinPosInitS,
+    RallyJoinPosInputS,
 )
 from src.algorithm.units.algo.pos_calc.scaled_slot_geometry import ScaledSlotGeometry, ScaledSlotInitS, ScaledSlotInputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
@@ -96,6 +99,7 @@ def _follower_state(
     last_update_s: float = 0.0,
     rally_state: str = "EXITED",
     eta_s: float = 0.0,
+    reached_slot_once: bool = False,
 ) -> FollowerStateS:
     """构造长机侧保存的僚机状态。"""
 
@@ -108,6 +112,7 @@ def _follower_state(
         lastUpdate_s=last_update_s,
         rally_state=rally_state,
         eta_s=eta_s,
+        reachedSlotOnce=reached_slot_once,
     )
 
 
@@ -210,6 +215,7 @@ def _task_step(
     now_s: float = 0.0,
     leader_join_exited: bool = True,
     leader_join_flying: bool = False,
+    leader_join_reached_slot_once: bool = False,
     leader_eta_s: float = 0.0,
 ) -> RallyTaskOutputS:
     """推进 Rally 任务一拍并返回输出端口。"""
@@ -223,6 +229,7 @@ def _task_step(
             now_s=now_s,
             leader_join_exited=leader_join_exited,
             leader_join_flying=leader_join_flying,
+            leader_join_reached_slot_once=leader_join_reached_slot_once,
             leader_eta_s=leader_eta_s,
         ),
         output,
@@ -362,7 +369,6 @@ class EntityBoundaryTypesTests(unittest.TestCase):
 
         init = EntityInitS()
         self.assertIsNone(init.rally_route)
-        self.assertIsNone(init.rally_target)
         self.assertIsNone(init.rally_cfg)
         self.assertEqual(init.rally_approach_speed_mps, 20.0)
         self.assertEqual(init.rally_leader_id, "")
@@ -566,6 +572,45 @@ class RallyTaskTests(unittest.TestCase):
         # eta=0 不应进入 flying_etas，锁存的 t_ref 应保持 50.0 不变
         self.assertAlmostEqual(out2.t_ref, 50.0,
             msg="zero-ETA cold-start must not overwrite locked t_ref when valid flyer expires")
+
+    def test_t_ref_counts_loitering_follower_that_has_not_reached_slot_once(self) -> None:
+        """回归用例：切入点 T 到 M_i 之间弧长很长时，刚进 LOITERING（尚未首次路过 M_i）的僚机
+        ETA 仍应计入 T_ref 聚合，不能因为状态从 FLYING 变成 LOITERING 就被立即剔除，
+        否则 T_ref 会塌缩到更快参与者的 ETA，导致同步提前（本次"切线进圆"重构引入的新问题）。"""
+        task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
+        ctx = FormContextS()
+
+        # R02 刚到切入点 T、进入 LOITERING，但离 M_i 还有约 61s 圆弧（尚未首次路过，reached_slot_once=False）。
+        # R03 仍在 FLYING，ETA 更短（30s）。若 R02 被错误剔除，t_ref 会塌缩为 30.0 而不是 63.59。
+        states = [
+            _follower_state("R02", rally_state=RALLY_STATE_LOITERING, eta_s=63.59, reached_slot_once=False, last_update_s=0.0),
+            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=30.0, last_update_s=0.0),
+        ]
+        out = _task_step(
+            task, ctx, remote=FormStageE.RALLY, states=states, now_s=0.0,
+            leader_join_exited=True, leader_join_flying=False, leader_eta_s=0.0,
+        )
+        self.assertAlmostEqual(out.t_ref, 63.59,
+            msg="LOITERING follower that has not reached M_i once must still count toward T_ref")
+
+    def test_t_ref_excludes_loitering_follower_after_reaching_slot_once(self) -> None:
+        """验证已经首次路过 M_i、纯粹在盘旋等待的僚机不再计入 T_ref 聚合，
+        避免其每圈波动的 ETA（下一次路过所需时间）反复推高/拉低 T_ref。"""
+        task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
+        ctx = FormContextS()
+
+        # R02 已经路过 M_i 一次，正在等待 T_ref（"下一圈还要飞的时间"，这里故意给一个很大的值验证被排除）。
+        # R03 仍在 FLYING，ETA=30s。若 R02 未被排除，max(90, 30)=90 会覆盖掉正确的 30。
+        states = [
+            _follower_state("R02", rally_state=RALLY_STATE_LOITERING, eta_s=90.0, reached_slot_once=True, last_update_s=0.0),
+            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=30.0, last_update_s=0.0),
+        ]
+        out = _task_step(
+            task, ctx, remote=FormStageE.RALLY, states=states, now_s=0.0,
+            leader_join_exited=True, leader_join_flying=False, leader_eta_s=0.0,
+        )
+        self.assertAlmostEqual(out.t_ref, 30.0,
+            msg="LOITERING follower that already reached M_i once must not count toward T_ref")
 
     def test_loose_and_compress_gate_on_position_error(self) -> None:
         """验证 CATCHUP/LOOSE/COMPRESS 使用位置误差阈值依次推进到 HOLD 并只在转换拍置完成标志。"""
@@ -918,6 +963,92 @@ class RallyLeaderBroadcastAndInboundTests(unittest.TestCase):
             RallyLeaderFollower().step(InboundInputS(inbox=[]), RallyLeaderFollowerOutputS())
 
 
+class RallyLooseTargetTests(unittest.TestCase):
+    """直接单测 rally_loose_target()：旋转、右侧轴符号、缩放、高度固定差，逐项隔离验证。"""
+
+    def test_pure_forward_offset_at_zero_heading(self) -> None:
+        """heading=0（正东）时，纯前向偏置（x 分量）应直接映射为东向偏置，北向不变。"""
+        from src.algorithm.entity.leader_follower_rally import rally_loose_target
+
+        m_i = rally_loose_target(_pos(0.0, 0.0, 100.0), 0.0, 1.0, FormPosS("R02", 10.0, 5.0, 0.0))
+        self.assertAlmostEqual(m_i.east, 10.0)
+        self.assertAlmostEqual(m_i.north, 0.0)
+        self.assertAlmostEqual(m_i.h, 105.0)
+
+    def test_right_axis_sign_at_zero_heading(self) -> None:
+        """heading=0（正东）时，纯右侧偏置（z 分量，正值=右）应映射为负的北向偏置（面向正东时右手边是正南）。"""
+        from src.algorithm.entity.leader_follower_rally import rally_loose_target
+
+        m_i = rally_loose_target(_pos(0.0, 0.0, 100.0), 0.0, 1.0, FormPosS("R02", 0.0, 0.0, 10.0))
+        self.assertAlmostEqual(m_i.east, 0.0)
+        self.assertAlmostEqual(m_i.north, -10.0,
+            msg="positive slot.z (right, facing east) must map to negative north (south), not positive")
+
+    def test_rotates_forward_offset_with_heading(self) -> None:
+        """heading=90°（正北）时，纯前向偏置应旋转成北向偏置，验证旋转矩阵方向而非仅测 heading=0。"""
+        from src.algorithm.entity.leader_follower_rally import rally_loose_target
+
+        m_i = rally_loose_target(_pos(0.0, 0.0, 100.0), math.pi / 2.0, 1.0, FormPosS("R02", 10.0, 0.0, 0.0))
+        self.assertAlmostEqual(m_i.east, 0.0, places=6)
+        self.assertAlmostEqual(m_i.north, 10.0, places=6)
+
+    def test_looseScale_multiplies_horizontal_offset_only(self) -> None:
+        """looseScale 应线性放大水平偏置（east/north），但高度偏置（slot.y）必须保持固定，不随 scale 扩展。"""
+        from src.algorithm.entity.leader_follower_rally import rally_loose_target
+
+        slot = FormPosS("R02", 10.0, 5.0, 20.0)
+        m_i_scale1 = rally_loose_target(_pos(0.0, 0.0, 100.0), 0.0, 1.0, slot)
+        m_i_scale3 = rally_loose_target(_pos(0.0, 0.0, 100.0), 0.0, 3.0, slot)
+
+        self.assertAlmostEqual(m_i_scale3.east, 3.0 * m_i_scale1.east)
+        self.assertAlmostEqual(m_i_scale3.north, 3.0 * m_i_scale1.north)
+        self.assertAlmostEqual(m_i_scale1.h, 105.0)
+        self.assertAlmostEqual(m_i_scale3.h, 105.0,
+            msg="height offset must stay fixed at slot.y regardless of looseScale")
+
+    def test_route_start_offset_carries_through(self) -> None:
+        """集结区起点 A 非原点时，M_i 应在 A 的基础上叠加旋转/缩放后的偏置，而不是忽略 A。"""
+        from src.algorithm.entity.leader_follower_rally import rally_loose_target
+
+        m_i = rally_loose_target(_pos(1000.0, 2000.0, 500.0), 0.0, 2.0, FormPosS("R02", 10.0, 0.0, 0.0))
+        self.assertAlmostEqual(m_i.east, 1020.0)
+        self.assertAlmostEqual(m_i.north, 2000.0)
+        self.assertAlmostEqual(m_i.h, 500.0)
+
+
+class RallyLoiterSpeedBoundsTests(unittest.TestCase):
+    """直接单测 loiter_speed_bounds()：只显式配置 forwardMin/forwardMax 中的一侧时，与另一侧的默认
+    兜底值反序的情形必须被显式拒绝，而不是静默产出 min>=max 的非法区间留给下游报 ERR_MODULE_INIT_FAILED。"""
+
+    def test_only_forward_max_configured_below_default_min_rejected(self) -> None:
+        """只配 forwardMax=10（< 默认 loiter_min=14）时，(14, 10) 是非法区间，必须拒绝。"""
+        from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds
+
+        with self.assertRaises(ValueError):
+            loiter_speed_bounds(VelCmdLimitS(forwardMax=10.0))
+
+    def test_only_forward_min_configured_above_default_max_rejected(self) -> None:
+        """只配 forwardMin=30（> 默认 loiter_max=25）时，(30, 25) 是非法区间，必须拒绝。"""
+        from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds
+
+        with self.assertRaises(ValueError):
+            loiter_speed_bounds(VelCmdLimitS(forwardMin=30.0))
+
+    def test_both_unconfigured_uses_valid_defaults(self) -> None:
+        """两侧都不配置时退回默认 (14, 25)，本身自洽，不应报错。"""
+        from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds
+
+        loiter_min, loiter_max = loiter_speed_bounds(VelCmdLimitS())
+        self.assertEqual((loiter_min, loiter_max), (14.0, 25.0))
+
+    def test_both_explicitly_configured_and_consistent_passes_through(self) -> None:
+        """两侧都显式配置且自洽时，原样透传，不受默认值影响。"""
+        from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds
+
+        loiter_min, loiter_max = loiter_speed_bounds(VelCmdLimitS(forwardMin=18.0, forwardMax=22.0))
+        self.assertEqual((loiter_min, loiter_max), (18.0, 22.0))
+
+
 class RallyPosCalcTests(unittest.TestCase):
     """验证集结专用位置解算单元。"""
 
@@ -948,6 +1079,49 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.v.vEast, 25.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -2.5)
 
+    def test_scaled_slot_geometry_altitude_fixed_not_scaled(self) -> None:
+        """验证高度偏置不随 scale 扩展：slot.y=30 时，h = leader.h + 30，与 scale 无关。"""
+
+        comm_init_alt = FormCommInitS(
+            netWork=[
+                NetWorkS("R01", "R02", CommDirE.DUPLEX),
+                NetWorkS("R01", "R03", CommDirE.DUPLEX),
+            ],
+            formPat=["TRIANGLE"],
+            formPos=[
+                [
+                    FormPosS("R01", 0.0, 0.0, 0.0),
+                    FormPosS("R02", -10.0, 30.0, -5.0),  # slot.y=30 高度偏置
+                    FormPosS("R03", -10.0, 0.0, 5.0),
+                ]
+            ],
+        )
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=100.0, north=200.0, h=500.0, v_east=20.0)
+        ctx.selfState = _motion(east=80.0, north=210.0, h=530.0, v_east=20.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2)
+        ctx.slotScale = RallySlotScaleS(scale=2.0, scaleRate=-0.5)
+        scaled = ScaledSlotGeometry()
+        scaled.init(ScaledSlotInitS(selfId="R02", commInit=comm_init_alt))
+
+        scaled.step(
+            ScaledSlotInputS(
+                selfState=ctx.selfState,
+                leaderState=ctx.leaderState,
+                cmd=ctx.cmd,
+                slotScale=ctx.slotScale,
+            ),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        # 高度固定差：leader.h + slot.y = 500 + 30 = 530（不随 scale=2 变化，非 500+2*30=560）
+        self.assertAlmostEqual(ctx.selfCmd.pos.h, 530.0,
+            msg="altitude must equal leader.h + slot.y regardless of scale")
+        # 水平位置仍按 scale 扩展
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 80.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 210.0)
+
     def test_scaled_slot_geometry_requires_slot_scale_port(self) -> None:
         """验证 slotScale 端口未绑定时失败。"""
 
@@ -963,6 +1137,318 @@ class RallyPosCalcTests(unittest.TestCase):
                 PosCalcOutputS(selfCmd=MotionProfS()),
             )
 
+    def test_rally_join_pos_entry_point_lies_on_loiter_circle(self) -> None:
+        """验证 FLYING 阶段算出的切入点 T 落在盘旋圆上，且不再等于 init.loose_slot。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=60.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+        ))
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        join.step(RallyJoinPosInputS(selfState=_motion(east=2000.0, north=300.0, h=500.0), t_ref_valid=False), out)
+
+        entry = join._entry_point  # 白盒检查：切入点应已算出并固定
+        self.assertIsNotNone(entry)
+        dist_to_center = math.hypot(entry.east - join._loiter_center_e, entry.north - join._loiter_center_n)
+        self.assertAlmostEqual(dist_to_center, 200.0, places=3,
+            msg="entry point must lie exactly on the loiter circle")
+        self.assertNotAlmostEqual(entry.east, 0.0, places=0,
+            msg="entry point should generally differ from loose_slot A")
+
+    def _flying_to_loitering_heading_jump_deg(self, *, loiter_radius_m: float, arrival_radius_m: float) -> float:
+        """驱动 RallyJoinPos 从远处直飞到切入点，返回 FLYING→LOITERING 切换瞬间的指令航向跳变（度）。"""
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=arrival_radius_m,
+            loiter_radius_m=loiter_radius_m,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+            mission_speed_mps=20.0,
+        ))
+        state = _motion(east=-2000.0, north=300.0, h=500.0)
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        t_now = 0.0
+        dt = 0.05
+        prev_heading = None
+        for _ in range(80000):
+            join.step(RallyJoinPosInputS(selfState=state, t_ref=1e9, t_ref_valid=False, t_now=t_now), out)
+            heading = math.atan2(out.selfCmd.v.vNorth, out.selfCmd.v.vEast)
+            if join.state == RALLY_STATE_LOITERING:
+                return abs(math.degrees(math.atan2(math.sin(heading - prev_heading), math.cos(heading - prev_heading))))
+            prev_heading = heading
+            state = _motion(
+                east=state.pos.east + out.selfCmd.v.vEast * dt,
+                north=state.pos.north + out.selfCmd.v.vNorth * dt,
+                h=out.selfCmd.pos.h,
+            )
+            t_now += dt
+        self.fail("did not reach LOITERING within the simulated step budget")
+        return 0.0  # unreachable, keeps type-checkers happy
+
+    def test_rally_join_pos_flying_to_loitering_transition_heading_jump_is_small(self) -> None:
+        """回归用例：即便 `arrival_radius_m` 配置得较大，FLYING→LOITERING 切换瞬间的指令航向跳变
+        也应被压到一个较小的量级（不能是配置多大跳变就多大）——T 是圆上固定点，触发半径越大，
+        LOITERING 按飞机此刻实际角度算出的切向航向跟 FLYING 直飞航向（按 T 处角度算）差得越多，
+        实测默认 100m 时能到 ~26°；应被内部按 loiter_radius_m 反解夹到较小触发半径，压到几度以内。"""
+        jump_deg = self._flying_to_loitering_heading_jump_deg(loiter_radius_m=200.0, arrival_radius_m=100.0)
+        self.assertLess(jump_deg, 10.0,
+            msg="FLYING->LOITERING command heading jump must stay small regardless of arrival_radius_m")
+
+    def test_rally_join_pos_heading_jump_bound_holds_across_loiter_radii(self) -> None:
+        """回归用例：跳变角上限是按 loiter_radius_m 反解触发半径得到的（ψ=atan(d/R)），不能是固定距离
+        上限——固定距离在小半径下换算出的角度会远超预期（实测固定 15m 时 R=10m 能到 ~56°）。
+        验证合法范围内（不小于 init 校验的下限）不同 loiter_radius_m 下跳变角都保持在较小量级，
+        不随 R 变小而显著放大。"""
+        for radius in (200.0, 100.0, 50.0):
+            jump_deg = self._flying_to_loitering_heading_jump_deg(loiter_radius_m=radius, arrival_radius_m=100.0)
+            self.assertLess(jump_deg, 8.0,
+                msg=f"heading jump bound must hold for loiter_radius_m={radius}, got {jump_deg:.2f} deg")
+
+    def test_rally_join_pos_rejects_loiter_radius_too_small_for_capture_window(self) -> None:
+        """回归用例：loiter_radius_m 太小时，按跳变角上限反解出的触发半径会被地板值/离散步进距离压过，
+        init 应显式拒绝，而不是静默产出一个远超 5° 承诺的跳变角，或让飞机整拍跨过捕获窗口错过切入。
+        实测固定 15m 触发半径上限时 R=10m 能到 ~56° 跳变，属于典型的"太小"场景。"""
+        with self.assertRaises(ValueError):
+            RallyJoinPos().init(RallyJoinPosInitS(
+                loose_slot=_pos(0.0, 0.0, 500.0),
+                approach_speed_mps=20.0,
+                arrival_radius_m=100.0,
+                loiter_radius_m=10.0,
+                loiter_speed_min_mps=14.0,
+                loiter_speed_max_mps=25.0,
+                mission_heading_rad=0.0,
+                mission_speed_mps=20.0,
+                control_period_s=0.05,
+            ))
+
+    def test_rally_join_pos_rejects_arrival_radius_too_small_even_with_valid_loiter_radius(self) -> None:
+        """回归用例：即便 loiter_radius_m 本身合法，运行时实际生效的触发半径是
+        min(arrival_radius_m, arc_capture_radius_m)——arrival_radius_m 配得比它还小时，
+        飞机可能整拍跨过这个更窄的窗口，冻结在离 T 一点点但始终不够近的位置，永远进不了 LOITERING。
+        复现过：speed=20m/s、周期0.05s、R=200m、arrival_radius_m=0.1m 时，大多数起点会永久卡在 FLYING。"""
+        with self.assertRaises(ValueError):
+            RallyJoinPos().init(RallyJoinPosInitS(
+                loose_slot=_pos(0.0, 0.0, 500.0),
+                approach_speed_mps=20.0,
+                arrival_radius_m=0.1,  # 合法的 loiter_radius_m=200 反解出的触发半径远大于此
+                loiter_radius_m=200.0,
+                loiter_speed_min_mps=14.0,
+                loiter_speed_max_mps=25.0,
+                mission_heading_rad=0.0,
+                mission_speed_mps=20.0,
+                control_period_s=0.05,
+            ))
+
+    def test_rally_join_pos_capture_window_uses_worst_case_of_approach_and_loiter_min_speed(self) -> None:
+        """回归用例：捕获窗口的安全边界要用 FLYING 阶段可能达到的最大速度校验——近场按 slow_radius_m
+        减速时的地板是 loiter_speed_min_mps，若它比 approach_speed_mps 还大，真实步进距离由它决定，
+        只按 approach_speed_mps 算会低估最坏情况，遗漏本该拒绝的配置。"""
+        # approach_speed_mps 很小、loiter_speed_min_mps 很大：真实步进距离由后者决定，
+        # 若校验只看 approach_speed_mps 会误判这组参数合法。
+        with self.assertRaises(ValueError):
+            RallyJoinPos().init(RallyJoinPosInitS(
+                loose_slot=_pos(0.0, 0.0, 500.0),
+                approach_speed_mps=5.0,
+                arrival_radius_m=100.0,
+                loiter_radius_m=40.0,  # 按 approach_speed_mps=5 算勉强合法，但按 loiter_speed_min_mps=40 算不够
+                loiter_speed_min_mps=40.0,
+                loiter_speed_max_mps=45.0,
+                mission_heading_rad=0.0,
+                mission_speed_mps=20.0,
+                control_period_s=0.05,
+            ))
+
+    def test_rally_join_pos_exit_heading_matches_mission_heading_from_opposite_arrival(self) -> None:
+        """回归用例：即便从任务航向的正对侧飞来（旧版会导致切出反向），切出速度方向仍须对齐任务航向。"""
+
+        mission_heading = 0.0  # 任务航向正东
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=60.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=mission_heading,
+            mission_speed_mps=20.0,
+        ))
+
+        # 起点在 A 的正东侧、需要一路向西飞才能到达——旧版会让盘旋圆按到达航向（向西）摆歪，
+        # 切出瞬间指令方向与任务航向（正东）相差近 180°。
+        state = _motion(east=2000.0, north=300.0, h=500.0)
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        t_now = 0.0
+        dt = 0.1
+        for _ in range(20000):
+            join.step(RallyJoinPosInputS(selfState=state, t_ref=0.0, t_ref_valid=True, t_now=t_now), out)
+            if join.state == RALLY_STATE_EXITED:
+                break
+            # 简化运动学：假设速度指令被完美跟踪，只推进位置，不引入动力学误差。
+            state = _motion(
+                east=state.pos.east + out.selfCmd.v.vEast * dt,
+                north=state.pos.north + out.selfCmd.v.vNorth * dt,
+                h=out.selfCmd.pos.h,
+            )
+            t_now += dt
+        else:
+            self.fail("RallyJoinPos did not reach EXITED within the simulated step budget")
+
+        exit_heading = math.atan2(out.selfCmd.v.vNorth, out.selfCmd.v.vEast)
+        self.assertAlmostEqual(exit_heading, mission_heading, delta=1e-6,
+            msg="exit velocity direction must equal mission heading regardless of arrival direction")
+        self.assertGreater(out.selfCmd.v.vEast, 0.0,
+            msg="exit velocity must point east (mission heading), not backward toward the arrival side")
+
+    def test_rally_join_pos_does_not_exit_immediately_when_entry_point_lands_just_past_slot_angle(self) -> None:
+        """回归用例：切入点 T 弦长离 M_i 很近，但沿 CCW 方向其实在 M_i"之后"（需绕行近一整圈）时，
+        不能被对称弧距 ang_dist 误判成"已到达"而在没有真正飞完圆弧的情况下立即切出。"""
+
+        mission_heading = 0.0  # 任务航向正东
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=60.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=mission_heading,
+            mission_speed_mps=20.0,
+        ))
+
+        # 该起点对应的切入点 T ≈ (34.7, 3.0)，与 M_i=(0,0) 弦长仅约 35m，
+        # 但按 CCW 方向的真实弧长约 350°（T 在角度上刚"越过"M_i，而非即将到达）。
+        state = _motion(east=-950.08, north=-170.61, h=500.0)
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        t_now = 0.0
+        dt = 0.1
+        for _ in range(20000):
+            join.step(RallyJoinPosInputS(selfState=state, t_ref=0.0, t_ref_valid=True, t_now=t_now), out)
+            if join.state == RALLY_STATE_EXITED:
+                break
+            state = _motion(
+                east=state.pos.east + out.selfCmd.v.vEast * dt,
+                north=state.pos.north + out.selfCmd.v.vNorth * dt,
+                h=out.selfCmd.pos.h,
+            )
+            t_now += dt
+        else:
+            self.fail("RallyJoinPos did not reach EXITED within the simulated step budget")
+
+        # 直飞到切入点约需 47s；若在此刻附近就切出，说明没有真正沿圆弧飞行（复现了指令方向大跳变的 bug）。
+        # 正确行为需要另外飞完约 350° 弧长（半径 200m、最大速度 25m/s 时一圈约 50s），
+        # 因此切出时刻应显著晚于"刚到切入点"的时间。
+        self.assertGreater(t_now, 80.0,
+            msg="must not exit right after reaching the tangent entry point when its arc angle to M_i is ~350°, not ~10°")
+
+    def test_rally_join_pos_reached_slot_once_stays_false_when_entry_point_lands_just_past_slot_angle(self) -> None:
+        """回归用例：同一个"切入点弦长近、真实弧长约 350°"场景下，进 LOITERING 那一拍
+        reached_slot_once 必须仍是 False（不能被对称弧距 ang_dist 误判成"已到达"，
+        否则会在 T_ref 聚合里被过早剔除，复现"到达 T 就退出 T_ref 聚合"的问题）。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=100.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+            mission_speed_mps=20.0,
+        ))
+        # t_ref_valid=False：只观察进 LOITERING 那一拍的 reached_slot_once，不触发切出评估。
+        state = _motion(east=-950.08, north=-170.61, h=500.0)
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        t_now = 0.0
+        dt = 0.1
+        for _ in range(20000):
+            join.step(RallyJoinPosInputS(selfState=state, t_ref_valid=False, t_now=t_now), out)
+            if join.state == RALLY_STATE_LOITERING:
+                self.assertFalse(join.reached_slot_once,
+                    msg="entering LOITERING via a tangent point far from M_i (in true arc-length terms) "
+                        "must not immediately flip reached_slot_once to True")
+                return
+            state = _motion(
+                east=state.pos.east + out.selfCmd.v.vEast * dt,
+                north=state.pos.north + out.selfCmd.v.vNorth * dt,
+                h=out.selfCmd.pos.h,
+            )
+            t_now += dt
+        self.fail("did not reach LOITERING within the simulated step budget")
+
+    def test_rally_join_pos_loitering_targets_nominal_radius_not_actual(self) -> None:
+        """回归用例：LOITERING 阶段的位置/前馈指令必须以期望半径 loiter_radius_m 为准，而不是飞机此刻的实际半径。
+
+        注：这里只断言"指令算对了没有"（几何上确定、不依赖闭环收敛），不模拟完整动力学闭环——
+        实际半径能否收敛到期望值取决于 PidCompose/飞行器动力学，已用真实仿真单独跑过验证收敛到
+        ~200~202m（期望 200m）；此处只保证 RallyJoinPos 这一层给出的指令本身是"奔着期望半径去的"。
+        """
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=60.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+            mission_speed_mps=20.0,
+        ))
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+
+        # 让飞机"实际半径"明显偏离期望值（150m，不是 200m），验证指令仍然对齐期望半径而不是跟着实际半径走。
+        # 直接从 FLYING 步进到接近切入点，再手动摆一个偏离期望半径的位置进入 LOITERING 的第一拍。
+        join.step(RallyJoinPosInputS(selfState=_motion(east=-2000.0, north=0.0, h=500.0), t_ref_valid=False), out)
+        # 强制切到 LOITERING，模拟飞机当前实际半径为 150m（偏离期望的 200m）而非精确在切入点上。
+        join._state = RALLY_STATE_LOITERING
+        join._away_from_slot = True
+        theta = math.radians(30.0)
+        actual_radius = 150.0
+        pos_e = join._loiter_center_e + actual_radius * math.cos(theta)
+        pos_n = join._loiter_center_n + actual_radius * math.sin(theta)
+        join.step(RallyJoinPosInputS(selfState=_motion(east=pos_e, north=pos_n, h=500.0), t_ref_valid=False), out)
+
+        cmd_dist_to_center = math.hypot(
+            out.selfCmd.pos.east - join._loiter_center_e,
+            out.selfCmd.pos.north - join._loiter_center_n,
+        )
+        self.assertAlmostEqual(cmd_dist_to_center, 200.0, places=6,
+            msg="position command must sit on the nominal-radius circle, not the aircraft's current (actual) radius")
+        self.assertAlmostEqual(out.selfCmd.v.dVPsi, join._loiter_speed / 200.0, places=6,
+            msg="centripetal feedforward must use the nominal radius, not the aircraft's current (actual) radius")
+
+    def test_rally_join_pos_falls_back_to_direct_flight_when_starting_inside_circle(self) -> None:
+        """已知限制：起点落在盘旋圆内部时无切线可求，应退化为直飞 loose_slot 而不是抛异常。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(10.0, 20.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=60.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+        ))
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        # 起点就是 loose_slot 本身（必然落在盘旋圆上/圆内），验证不抛异常且退化为直飞该点。
+        join.step(RallyJoinPosInputS(selfState=_motion(east=10.0, north=20.0, h=500.0), t_ref_valid=False), out)
+
+        self.assertEqual(join._entry_point.east, 10.0)
+        self.assertEqual(join._entry_point.north, 20.0)
+
 
 class RallyEntityTests(unittest.TestCase):
     """验证集结长机和僚机实体的主链路。"""
@@ -975,7 +1461,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_target=PosInEarthS(10.0, 20.0, 500.0),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1021,7 +1507,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_target=PosInEarthS(10.0, 20.0, 500.0),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1047,7 +1533,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_target=PosInEarthS(10.0, 20.0, 500.0),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1079,7 +1565,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_target=PosInEarthS(10.0, 20.0, 500.0),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1165,21 +1651,6 @@ class RallyEntityTests(unittest.TestCase):
         self.assertEqual(leader._rally_join.state, RALLY_STATE_FLYING)
         self.assertFalse(leader._rally_completed)
 
-    def test_rally_leader_rejects_non_continuous_rally_and_mission_routes(self) -> None:
-        """验证集结航线终点与任务航线起点不连续时初始化失败。"""
-
-        leader = RallyLeaderEntity()
-        with self.assertRaises(ValueError):
-            leader.init(
-                EntityInitS(
-                    selfInit=FormSelfInitS("R01"),
-                    commInit=_comm_init(),
-                    route=_route((101.5, 0.0, 500.0), (200.0, 0.0, 500.0)),
-                    rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
-                    rally_cfg=_rally_cfg(expected=("R02",)),
-                )
-            )
-
     def test_rally_leader_init_rejects_empty_route_list(self) -> None:
         """验证 route=[] 时抛出 ValueError 而非 IndexError。"""
         with self.assertRaises(ValueError):
@@ -1189,6 +1660,26 @@ class RallyEntityTests(unittest.TestCase):
                     commInit=_comm_init(),
                     route=[],  # 空列表，不是 None，守卫应捕获
                     rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                    rally_cfg=_rally_cfg(expected=()),
+                )
+            )
+
+    def test_rally_route_heading_rejects_horizontally_degenerate_first_segment(self) -> None:
+        """回归用例：A/A1 水平坐标重合（仅高度不同也算）时必须显式报错，不能静默按 atan2(0,0) 退化为正东。"""
+        from src.algorithm.entity.leader_follower_rally import rally_route_heading_rad
+
+        with self.assertRaises(ValueError):
+            rally_route_heading_rad(_route((0.0, 0.0, 500.0), (0.0, 0.0, 520.0)))
+
+    def test_rally_leader_init_rejects_horizontally_degenerate_rally_route(self) -> None:
+        """验证长机 init 时也会拒绝水平退化的 rally_route 第一航段，而不是算出错误航向静默通过。"""
+        with self.assertRaises(ValueError):
+            RallyLeaderEntity().init(
+                EntityInitS(
+                    selfInit=FormSelfInitS("R01"),
+                    commInit=_comm_init(),
+                    route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                    rally_route=_route((0.0, 0.0, 500.0), (0.0, 0.0, 520.0)),
                     rally_cfg=_rally_cfg(expected=()),
                 )
             )

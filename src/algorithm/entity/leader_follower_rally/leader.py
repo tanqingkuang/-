@@ -16,7 +16,6 @@ from src.algorithm.context.leaf_types import (
     zero_acceleration,
     zero_velocity,
     copy_position,
-    dist3d,
 )
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, _follower_tracker_init, waypoint_inputs_to_waylines
@@ -40,7 +39,7 @@ from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLea
 from src.algorithm.units.process.outbound.leader_broadcast import OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
-from src.algorithm.entity.leader_follower_rally import fill_output
+from src.algorithm.entity.leader_follower_rally import fill_output, loiter_speed_bounds, rally_route_heading_rad
 
 _LEADER_L1_DISTANCE_M = 0.0  # 关闭L1前瞻，直接按航段投影解算目标航迹。大侧偏限角保护已由横侧向变限幅(1.2)接管。
 _LEADER_FF_LEAD_TIME_S = 0.5
@@ -51,21 +50,17 @@ class RallyLeaderEntity(EntityBase):
 
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 RallyLeaderEntity。"""
-        if not cfg.rally_route:
-            raise ValueError("RallyLeaderEntity: rally_route is required")
+        if not cfg.rally_route or len(cfg.rally_route) < 2:
+            raise ValueError("RallyLeaderEntity: rally_route 至少需要两个航点")
         if not cfg.route:
             raise ValueError("RallyLeaderEntity: route (mission_route) is required")
         rally_cfg = cfg.rally_cfg
         if not isinstance(rally_cfg, RallyTaskInitS):
             raise ValueError("RallyLeaderEntity: rally_cfg must be RallyTaskInitS")
 
-        # 长机松散槽位 = 队形中心 = rally_route 终点
-        rally_end = cfg.rally_route[-1].pos
-
-        # 航线连续性校验
-        mission_start = cfg.route[0].pos
-        if dist3d(rally_end, mission_start) >= 1.0:
-            raise ValueError("mission_route 起点与 rally_route 终点距离超过 1 m")
+        # A = 集结区起点（掌机松散目标）；heading 取第一航段方向，支持多航点集结航线
+        rally_start = cfg.rally_route[0].pos
+        _heading = rally_route_heading_rad(cfg.rally_route)
 
         self.cxt = FormContextS()
         self._remote = RemoteCmdS()
@@ -75,10 +70,7 @@ class RallyLeaderEntity(EntityBase):
         self._tight_radius_m: float = rally_cfg.tightRadius_m
         self._stale_timeout_s: float = rally_cfg.staleTimeout_s
 
-        fwd_min = cfg.velCmdLimit.forwardMin
-        fwd_max = cfg.velCmdLimit.forwardMax
-        loiter_min = fwd_min if (math.isfinite(fwd_min) and fwd_min > 0) else 14.0
-        loiter_max = fwd_max if (math.isfinite(fwd_max) and fwd_max > 0) else 25.0
+        loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
 
         slow_radius_m = max(rally_cfg.arrival_radius_m * 3.0, 60.0)
 
@@ -97,17 +89,18 @@ class RallyLeaderEntity(EntityBase):
         v_up_min = cfg.velCmdLimit.verticalMin if math.isfinite(cfg.velCmdLimit.verticalMin) else -3.0
         v_up_max = cfg.velCmdLimit.verticalMax if math.isfinite(cfg.velCmdLimit.verticalMax) else 3.0
         self._rally_join.init(RallyJoinPosInitS(
-            loose_slot=rally_end,
+            loose_slot=rally_start,
             approach_speed_mps=cfg.rally_approach_speed_mps,
             slow_radius_m=slow_radius_m,
             arrival_radius_m=rally_cfg.arrival_radius_m,
             loiter_radius_m=rally_cfg.loiter_radius_m,
             loiter_speed_min_mps=loiter_min,
             loiter_speed_max_mps=loiter_max,
-            mission_heading_rad=math.radians(rally_cfg.mission_heading_deg),
+            mission_heading_rad=_heading,
             mission_speed_mps=cfg.rally_approach_speed_mps,
             v_up_min_mps=v_up_min,
             v_up_max_mps=v_up_max,
+            control_period_s=cfg.control_period_s,
         ))
         mission_lines = waypoint_inputs_to_waylines(cfg.route)
         self._tra_plan_mission.init(LeaderRouteInitS(mission_lines))
@@ -154,6 +147,7 @@ class RallyLeaderEntity(EntityBase):
         self._task_u.leader_eta_s = self._rally_join.eta_s
         self._task_u.leader_join_exited = (self._rally_join.state == RALLY_STATE_EXITED)
         self._task_u.leader_join_flying = (self._rally_join.state == RALLY_STATE_FLYING)
+        self._task_u.leader_join_reached_slot_once = self._rally_join.reached_slot_once
         self._task.step(self._task_u, self._task_y)
 
         # 同步 t_ref 到上下文（供广播）
