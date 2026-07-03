@@ -738,6 +738,70 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertGreaterEqual(after + 0.1, before)
         controller.close()
 
+    def test_change_config_formation_switch_forward_overshoot_is_damped(self) -> None:
+        """change.json 楔形切横队时，外侧僚机前向待飞距不应再明显越过目标点。"""
+
+        controller = SimulationController()
+        self.addCleanup(controller.close)
+        self.assertEqual(controller.load_config(str(Path("configs") / "change.json")).code, "OK")
+        controller._logger._file_logging_disabled = True
+
+        self.assertEqual(controller.step(int(5.0 / 0.005)).code, "OK")
+        self.assertEqual(controller.switch_formation(1).code, "OK")
+
+        wingmen = {"A01", "A02", "A04", "A05"}
+        min_forward_error = {node_id: 0.0 for node_id in wingmen}
+        final_forward_error = {node_id: 0.0 for node_id in wingmen}
+        for _ in range(int(30.0 / 0.05)):
+            self.assertEqual(controller.step(10).code, "OK")
+            nodes = {node.node_id: node for node in controller.get_snapshot().nodes if node.node_id in wingmen}
+            for node_id, node in nodes.items():
+                min_forward_error[node_id] = min(min_forward_error[node_id], node.track_pos_err_x_m)
+                final_forward_error[node_id] = node.track_pos_err_x_m
+
+        # 旧参数外侧僚机会冲到约 -20m；整定后越零超调压到 3m 以内。
+        self.assertLessEqual(max(-value for value in min_forward_error.values()), 3.0)
+        self.assertLessEqual(max(abs(value) for value in final_forward_error.values()), 2.0)
+
+    def test_vertical_formation_switch_probe_is_damped(self) -> None:
+        """临时错层队形切换应验证垂向 PPI 整定，避免高度目标阶跃产生明显超调。"""
+
+        config_path = Path("configs") / "change.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["duration_s"] = 60.0
+        vertical_offsets = {"A01": 60.0, "A02": 30.0, "A03": 0.0, "A04": -30.0, "A05": -60.0}
+        for slot in config["formation"]["formations"][1]["slots"]:  # type: ignore[index]
+            slot["y_m"] = vertical_offsets[str(slot["node_id"])]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            probe_path = Path(tmp) / "vertical_switch_probe.json"
+            probe_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            self.assertEqual(controller.load_config(str(probe_path)).code, "OK")
+            controller._logger._file_logging_disabled = True
+
+            self.assertEqual(controller.step(int(5.0 / 0.005)).code, "OK")
+            self.assertEqual(controller.switch_formation(1).code, "OK")
+
+            max_adverse_overshoot = 0.0
+            final_vertical_errors = {node_id: 0.0 for node_id in vertical_offsets}
+            for _ in range(int(25.0 / 0.05)):
+                self.assertEqual(controller.step(10).code, "OK")
+                for node in controller.get_snapshot().nodes:
+                    expected_offset = vertical_offsets.get(node.node_id)
+                    if expected_offset is None or expected_offset == 0.0:
+                        continue
+                    if expected_offset > 0.0:
+                        max_adverse_overshoot = max(max_adverse_overshoot, -node.track_pos_err_y_m)
+                    else:
+                        max_adverse_overshoot = max(max_adverse_overshoot, node.track_pos_err_y_m)
+                    final_vertical_errors[node.node_id] = abs(node.track_pos_err_y_m)
+
+            # 旧垂向参数在 60m 阶跃探针下约 1m 超调；整定后应小于 0.3m。
+            self.assertLessEqual(max_adverse_overshoot, 0.3)
+            self.assertLessEqual(max(final_vertical_errors.values()), 1.0)
+
     def test_formation_algorithm_generates_finite_controlled_motion(self) -> None:
         """Controller should drive aircraft through the formation algorithm, not the old velocity stub."""
 

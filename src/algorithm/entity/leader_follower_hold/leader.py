@@ -197,11 +197,11 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
         kp=0.02, ki=0.0, kd=0.30, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
         gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD, margin=_LATERAL_R_MARGIN,
     )
-    # 垂向改串级 P+PI：等价旧 kp=0.2/kd=0.6(kpPos=kp/kd)，acc 限幅沿用 ±6；
-    # 垂向速度限幅 vCmdMin/vCmdMax 由配置注入(默认 ±inf 不限)。
+    # 垂向改串级 P+PI：按错层队形切换探针整定为较高阻尼，压低高度阶跃越零超调；
+    # 垂向速度限幅 vCmdMin/vCmdMax 由配置注入(默认 ±inf 不限)，acc 限幅沿用 ±6。
     gain_vertical = PPIInitS(
-        kpPos=0.2 / 0.6,
-        kpVel=0.6,
+        kpPos=0.25,
+        kpVel=0.65,
         kiVel=0.0,
         dt=control_period_s,
         accMin=-6.0,
@@ -234,12 +234,12 @@ def _default_tracker_init(
 def _follower_tracker_init(
     control_period_s: float = DEFAULT_CONTROL_PERIOD_S, vel_limit: VelCmdLimitS | None = None
 ) -> PidComposeInitS:
-    """生成僚机默认位置跟踪器配置。注意：前向串级 P+PI，等价旧 kp=0.02/kd=0.12(kpPos=kp/kd)，增益待整定。"""
+    """生成僚机默认位置跟踪器配置。注意：前向串级 P+PI 已按 change.json 队形切换整定，避免外侧僚机越零超调。"""
     vel_limit = vel_limit or VelCmdLimitS()
-    # 前向速度限幅由配置注入；前向速度恒正，按需设 forwardMin>0、forwardMax 上限。
+    # 前向速度限幅由配置注入；提高速度内环阻尼后，90m 槽位突变不再越过目标点十几米。
     gain_forward = PPIInitS(
-        kpPos=0.02 / 0.12,
-        kpVel=0.12,
+        kpPos=0.12,
+        kpVel=0.32,
         kiVel=0.0,
         dt=control_period_s,
         accMin=-6.0,
