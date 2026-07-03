@@ -25,7 +25,7 @@ from src.algorithm.context.leaf_types import (
     WayPointS,
 )
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
-from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
+from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity, _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
@@ -35,6 +35,7 @@ from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
+from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
 from src.algorithm.units.process.formation_task.hold import Hold
@@ -46,6 +47,7 @@ from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutp
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.units.process.tra_plan.noop import Noop
 from src.common.envelope import MessageEnvelope
+from src.environment.model import AircraftState, ModelIterator, PointMass3DoFModel
 
 
 def _motion(
@@ -557,7 +559,11 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 2.0)
 
     def test_pid_compose_forward_speed_p_uses_scalar_speed_error(self) -> None:
-        """验证长机型前向速度环按地速标量误差控制(纯 P，速度比例走 kd、kp=ki=kiv=0)，不把目标速度投影到当前航向后再相减。"""
+        """验证长机型前向速度环按地速标量误差控制(纯 P，速度比例走 kd、kp=ki=kiv=0)。
+
+        误差幅值仍是地速标量差 vd_cmd-vd_self=20-10=10(与航向无关)；1.1 后误差在
+        "目标速度系"分解/还原，故这 10 的前向加速度沿**目标航向**(此处东向)输出，而非本机航向(北向)。
+        """
 
         tracker = PidCompose()
         tracker.init(
@@ -575,9 +581,81 @@ class PosTrackTests(unittest.TestCase):
             PosTrackOutputS(accCmd=ctx.selfAccCmd),
         )
 
-        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 0.0)
-        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 10.0)
+        # 沿目标航向(东)输出标量速度误差 10；本机航向(北)分量为 0。
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 10.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 0.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
+
+    def test_pid_compose_decomposes_error_in_target_velocity_frame(self) -> None:
+        """1.1 核心：误差按目标速度系分解。目标在本机航向(北)正右后方 100m，但沿目标航向(东)是纯前向偏置，
+        应主要走前向通道(kp_fwd·100=10)，而非被本机航迹系判成大侧偏去转弯(那样会是 kp_lat·100=50)。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainForward=CtrlInitS(kp=0.1, ki=0.0, kd=0.0, dt=0.1),
+                gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.0, dt=0.1),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=0.0, v_north=10.0)  # 机头朝北
+        ctx.selfCmd = _motion(east=100.0, north=0.0, h=0.0, v_east=10.0)   # 目标航向朝东，在正东 100m
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        # 目标系(东)下 100m 为纯前向误差 → 前向加速度 0.1·100=10 沿东；侧偏为 0，无转弯指令。
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 10.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 0.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
+
+    def test_pid_compose_falls_back_to_self_frame_when_target_hovers(self) -> None:
+        """目标水平速度低于 vMin(悬停/集结起步)时航向无定义，应退回本机航迹系兜底，不因建基奇异而抛错。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=0.5,
+                gainLateral=CtrlInitS(kp=0.5, ki=0.0, kd=0.0, dt=0.1),
+            )
+        )
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=0.0, v_east=10.0)  # 机头朝东，可飞
+        ctx.selfCmd = _motion(east=0.0, north=50.0, h=0.0)               # 目标在正北 50m，且悬停(零速)
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        # 退回自身系(东)：北向 50m 为侧偏，lateral_right=(0,-1,0) → 侧偏 -50 → 侧向加速度 -25 落在北向 +25。
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 0.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 25.0)
+        self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
+
+    def test_pid_compose_centripetal_ff_uses_self_speed_not_target_speed(self) -> None:
+        """向心前馈须按本机自身地速换算(a_lat=dVPsi·V_self)，而非目标速度。
+
+        本机东向 10、目标东向 20(dVPsi=0.1)、位置零误差、各轴增益关：侧向仅剩前馈
+        lateral_ff=-dVPsi·V_self=-1.0，目标系(东)侧向轴=(0,-1,0) → accNorth=+1.0(取本机速度 10)。
+        若误用目标速度 20 则会得到 2.0。
+        """
+        tracker = PidCompose()
+        tracker.init(PidComposeInitS(vMin=3.0))  # 三轴增益缺省为零，隔离出纯前馈
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=0.0, v_east=10.0)
+        ctx.selfCmd = _motion(east=0.0, north=0.0, h=0.0, v_east=20.0, d_vpsi=0.1)
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 1.0)  # dVPsi·V_self = 0.1·10
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 0.0)
 
     def test_pid_compose_writes_control_diagnostics(self) -> None:
         """验证 PosTrack 通过 diag 输出目标指令和控制误差，不把诊断量写入 Context。"""
@@ -636,12 +714,15 @@ class PosTrackTests(unittest.TestCase):
             PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
         )
 
+        # 1.1 后误差在"目标速度系"(selfCmd 航迹系，含其 v_north/-3、v_up/5 造成的航向与倾角)分解；
+        # 数值随之从旧的自身系(东向平飞)结果改变。前向位置(PPI kpPos=0)仍被屏蔽为 0。
         self.assertAlmostEqual(diag.track_pos_err_x_m, 0.0)
-        self.assertAlmostEqual(diag.track_pos_err_y_m, 8.0)
-        self.assertAlmostEqual(diag.track_pos_err_z_m, -4.0)
+        self.assertAlmostEqual(diag.track_pos_err_y_m, -10.39828, places=5)
+        self.assertAlmostEqual(diag.track_pos_err_z_m, -16.00735, places=5)
+        # 前向速度误差是地速标量差(与系无关)：hypot(12,-3)-10。
         self.assertAlmostEqual(diag.track_vel_err_x_mps, math.hypot(12.0, -3.0) - 10.0)
-        self.assertAlmostEqual(diag.track_vel_err_y_mps, 5.0)
-        self.assertAlmostEqual(diag.track_vel_err_z_mps, 3.0)
+        self.assertAlmostEqual(diag.track_vel_err_y_mps, 3.63576, places=5)
+        self.assertAlmostEqual(diag.track_vel_err_z_mps, 2.42536, places=5)
 
     def test_pid_compose_masks_unused_velocity_error_diagnostics(self) -> None:
         """未配置速度环增益时，航迹系速度误差诊断应输出 0。"""
@@ -680,6 +761,104 @@ class PosTrackTests(unittest.TestCase):
             )
 
         self.assertEqual((out.accEast, out.accNorth, out.accUp), (1.0, 2.0, 3.0))
+
+
+class LateralTrackAngleTests(unittest.TestCase):
+    """横侧向串级 + 航迹角变限幅控制律。"""
+
+    def _cfg(self, **kw: float) -> LateralTrackAngleInitS:
+        base = dict(
+            kp=0.02, kd=0.12, ki=0.0, dt=0.05, outMax=4.0,
+            gammaMaxRad=math.radians(30.0), floorRad=math.radians(7.0), margin=1.2,
+        )
+        base.update(kw)
+        return LateralTrackAngleInitS(**base)
+
+    def test_unsaturated_matches_parallel_pid(self) -> None:
+        """无饱和 + ki=0 时，串级输出严格等于旧并联式 kp·dZ + kd·velErr(平滑迁移的等价保证)。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg())
+        dz, vel_err, v = 1.0, 0.5, 20.0  # 小侧偏，不触发变限幅饱和
+        got = ctrl.step(dz, vel_err, v)
+        self.assertAlmostEqual(got, 0.02 * dz + 0.12 * vel_err)
+        self.assertAlmostEqual(got, 0.08)
+
+    def test_variable_track_angle_limit(self) -> None:
+        """限幅曲线：|dZ|≥R→90°；中段→asin(|dZ|/R)；极小→地板 7°。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg())
+        v = 20.0
+        radius = v * v / (9.80665 * math.sin(math.radians(30.0))) * 1.2
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(10.0 * radius, v), math.pi / 2)
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.5 * radius, v), math.asin(0.5))
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.0, v), math.radians(7.0))
+
+    def test_large_cross_track_bounds_lateral_accel(self) -> None:
+        """大侧偏下侧向加速度饱和到 kd·V·sin(90°)，且不随侧偏继续增大——这是防"持续滚转→转圈"的本质。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg())
+        v = 20.0
+        a1 = ctrl.step(1_000.0, 0.0, v)
+        a2 = ctrl.step(1_000_000.0, 0.0, v)
+        self.assertAlmostEqual(a1, 0.12 * v * math.sin(math.pi / 2))  # = 2.4，对应 90° 垂直切入
+        self.assertAlmostEqual(a1, a2)  # 侧偏放大 1000 倍指令不变：有界拦截，不会越滚越紧
+        self.assertGreater(a1, 0.0)     # dZ>0(目标在右) → 向右(正)修正
+
+    def test_rejects_zero_kd(self) -> None:
+        """kd=0 时串级 K1=-kp/kd 与内环比例都退化，应在 init 拦截。"""
+        with self.assertRaisesRegex(ValueError, "kd"):
+            LateralTrackAngle().init(self._cfg(kd=0.0))
+
+
+class PosTrackClosedLoopTests(unittest.TestCase):
+    """PidCompose(僚机增益) + 三自由度质点模型闭环回归：复现"目标在机头后方偏右→转圈"原始故障。"""
+
+    def test_follower_behind_right_slot_tracks_without_circling(self) -> None:
+        """槽位随编队东向 20m/s 移动，僚机初始在槽位**前方 40m、右侧 80m**(即槽位落在其机头右后方)。
+
+        旧实现(本机航迹系度量误差)：右后方目标→右滚消侧偏，但目标在后、侧偏反增，飞机转整圈追踪。
+        新实现(1.1 目标速度系 + 1.2 航迹角变限幅)：应靠降速让槽位追上、有界右滚(不越 90°)平滑切入并收敛，
+        航向相对编队航向的最大偏离远小于半圈。此用例即该故障的闭环回归护栏。
+        """
+        model = PointMass3DoFModel(ModelIterator._default_config())
+        tracker = PidCompose()
+        tracker.init(_follower_tracker_init(0.05))
+        state = AircraftState(
+            node_id="F", x_m=40.0, y_m=80.0, altitude_m=1000.0, speed_mps=20.0,
+            theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
+            ax_rate_mps3=0.0, ay_rate_mps3=0.0, az_rate_mps3=0.0,
+            nx=0.0, nz=0.0, phi_rad=0.0, psi_dot_deg_s=0.0,
+        )
+        slot_e, slot_n, slot_h, slot_v = 0.0, 0.0, 1000.0, 20.0  # 槽位起于原点、沿东向匀速
+        dt = 0.05
+        self_cmd, self_state, acc = MotionProfS(), MotionProfS(), AccInEarthS()
+        d0 = math.hypot(state.x_m - slot_e, state.y_m - slot_n)
+        max_heading_dev = 0.0
+
+        for _ in range(int(40.0 / dt)):
+            self_state.pos = PosInEarthS(state.x_m, state.y_m, state.altitude_m)
+            self_state.v = VdInEarthS(
+                vEast=state.vx_mps, vNorth=state.vy_mps, vUp=state.vz_mps,
+                vd=math.hypot(state.vx_mps, state.vy_mps), vPsi=state.psi_rad,
+            )
+            self_cmd.pos = PosInEarthS(slot_e, slot_n, slot_h)
+            self_cmd.v = VdInEarthS(vEast=slot_v, vNorth=0.0, vUp=0.0, vd=slot_v, vPsi=0.0, dVPsi=0.0)
+            tracker.step(
+                PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
+                PosTrackOutputS(accCmd=acc),
+            )
+            state.update_from_vector(
+                model.step(state.as_vector(), (acc.accEast, acc.accNorth, acc.accUp), (0.0, 0.0, 0.0), dt)
+            )
+            slot_e += slot_v * dt  # 槽位随编队前移
+            max_heading_dev = max(max_heading_dev, abs(math.atan2(math.sin(state.psi_rad), math.cos(state.psi_rad))))
+
+        final = math.hypot(state.x_m - slot_e, state.y_m - slot_n)
+        # 不转圈：航向相对编队航向(东)的最大偏离远小于半圈(转一圈会扫过 ≥180°)。
+        self.assertLess(max_heading_dev, math.radians(90.0))
+        # 收敛到槽位：既绝对收敛，也相对初始 89m 大幅收敛。
+        self.assertLess(final, 5.0)
+        self.assertLess(final, 0.1 * d0)
 
 
 class ProcessUnitTests(unittest.TestCase):
