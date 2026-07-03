@@ -5,7 +5,6 @@ import math
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     FormCommInitS,
-    FormPatE,
     FormPosS,
     PosInEarthS,
     PosTrackDiagS,
@@ -72,18 +71,16 @@ def rally_loose_target(route_start: PosInEarthS, heading_rad: float, scale: floa
     )
 
 
-def resolve_formation_slot(comm_init: FormCommInitS, target_pattern: FormPatE, node_id: str) -> FormPosS | None:
-    """按目标队形在 formPat/formPos 中定位本机槽位。注意：找不到目标队形行或本机槽位时返回 None，
-    由调用方决定报错方式——RallyFollowerEntity.init 需要按具体原因抛不同的 ValueError 文案，
-    GUI 侧的静态几何预计算（sim_control_routes._build_rally_join_geometry）只需要"找不到就跳过"。
+def resolve_formation_slot(comm_init: FormCommInitS, target_pattern: int, node_id: str) -> FormPosS | None:
+    """按目标队形索引在 formPos 中定位本机槽位。注意：`target_pattern` 是纯整型队形索引（formPos 行号，
+    与 `FormSnapshotS.pattern` 同一语义），不再是需要在 `formPat`（仅供显示的队形名列表）中查找的枚举值。
+    索引越界或本机槽位缺失时返回 None，由调用方决定报错方式——RallyFollowerEntity.init 需要按具体原因抛
+    不同的 ValueError 文案，GUI 侧的静态几何预计算（sim_control_routes._build_rally_join_geometry）只需要
+    "找不到就跳过"。
     """
-    try:
-        pattern_index = comm_init.formPat.index(target_pattern)
-    except ValueError:
+    if not (0 <= target_pattern < len(comm_init.formPos)):
         return None
-    if pattern_index >= len(comm_init.formPos):
-        return None
-    return next((slot for slot in comm_init.formPos[pattern_index] if slot.id == node_id), None)
+    return next((slot for slot in comm_init.formPos[target_pattern] if slot.id == node_id), None)
 
 
 def fill_output(cxt: FormContextS, diag: PosTrackDiagS, outbox: list, y: EntityOutputS) -> None:

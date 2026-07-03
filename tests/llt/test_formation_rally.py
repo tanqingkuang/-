@@ -1087,7 +1087,7 @@ class RallyPosCalcTests(unittest.TestCase):
                 NetWorkS("R01", "R02", CommDirE.DUPLEX),
                 NetWorkS("R01", "R03", CommDirE.DUPLEX),
             ],
-            formPat=[FormPatE.TRIANGLE],
+            formPat=["TRIANGLE"],
             formPos=[
                 [
                     FormPosS("R01", 0.0, 0.0, 0.0),
@@ -1100,7 +1100,7 @@ class RallyPosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=500.0, v_east=20.0)
         ctx.selfState = _motion(east=80.0, north=210.0, h=530.0, v_east=20.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=FormPatE.TRIANGLE, step=2)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2)
         ctx.slotScale = RallySlotScaleS(scale=2.0, scaleRate=-0.5)
         scaled = ScaledSlotGeometry()
         scaled.init(ScaledSlotInitS(selfId="R02", commInit=comm_init_alt))
