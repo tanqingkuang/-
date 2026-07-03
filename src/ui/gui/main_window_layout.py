@@ -88,6 +88,11 @@ class MainWindowLayoutMixin:
         self.avoidance_action.triggered.connect(self._open_avoidance_window)
         self.menuBar().addAction(self.avoidance_action)
 
+        # 3D 态势放到顶层入口；窗口主体独立在 situation3d 包中，降低主界面冲突面。
+        self.situation3d_action = QAction("3D态势(&3)", self)
+        self.situation3d_action.triggered.connect(self._open_situation3d_window)
+        self.menuBar().addAction(self.situation3d_action)
+
         # 帮助菜单承载低频入口，避免主题/日志控件常驻占用主画布顶部空间。
         self.help_menu = self.menuBar().addMenu("帮助(&H)")
         # QActionGroup 同样由窗口持有，保证浅色/深色两个动作始终互斥。

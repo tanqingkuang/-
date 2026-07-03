@@ -90,6 +90,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIn("帮助(&H)", menu_titles)
         self.assertEqual([action.text() for action in self.window.monitor_menu.actions()], ["数据监控(&M)", "离线分析(&A)"])
         self.assertEqual([action.text() for action in self.window.data_analysis_menu.actions()], ["控制效果分析(&A)"])
+        self.assertIn("3D态势(&3)", menu_titles)
         help_menu = self.window.help_menu
         self.assertEqual([action.text() for action in help_menu.actions()], ["浅色模式", "深色模式", "", "日志"])
 
@@ -99,6 +100,25 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.theme_key, "dark")
         self.assertTrue(self.window.dark_theme_action.isChecked())
         self.assertFalse(self.window.light_theme_action.isChecked())
+
+    def test_situation3d_menu_opens_independent_window(self) -> None:
+        self.assertIsNone(self.window._situation3d_window)
+        menu_titles = [action.text() for action in self.window.menuBar().actions()]
+        self.assertIn("3D态势(&3)", menu_titles)
+
+        self.window.situation3d_action.trigger()
+        self.app.processEvents()
+
+        first_window = self.window._situation3d_window
+        self.assertIsNotNone(first_window)
+        self.assertTrue(first_window.isVisible())
+        self.assertEqual(first_window.windowTitle(), "3D态势")
+
+        self.window.situation3d_action.trigger()
+        self.app.processEvents()
+
+        self.assertIs(self.window._situation3d_window, first_window)
+        self.assertTrue(first_window.isVisible())
 
     def test_data_analysis_menu_opens_independent_window(self) -> None:
         self.window._open_data_analysis_window()
