@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, QRect, Qt
+from PySide6.QtCore import QMetaObject, QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
 
 from src.data.geo import GeoOrigin
@@ -35,7 +35,7 @@ from src.ui.gui.main_window import (
     default_project_root,
     run_gui,
 )
-from src.ui.gui.view_models import PLAYBACK_RATE_SLIDER_MAX
+from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -113,13 +113,74 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsNotNone(first_window)
         self.assertTrue(first_window.isVisible())
         self.assertTrue(first_window.isWindow())
+        self.assertTrue(first_window.isMaximized())
+        self.assertFalse(first_window.isFullScreen())
         self.assertEqual(first_window.windowTitle(), "3D态势")
+        self.assertEqual(first_window.quick_view.errors(), [])
+
+        self.window.obstacles = [
+            ObstacleView("OBS1", "circle", center_x=80.0, center_y=70.0, radius=25.0),
+        ]
+        self.window.clearance_spin.setValue(5.0)
+        self.window._update_snapshot(
+            Snapshot(
+                time=1.0,
+                duration=10.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[
+                    NodeState(
+                        "A01",
+                        "leader",
+                        10.0,
+                        20.0,
+                        3.0,
+                        4.0,
+                        altitude=30.0,
+                        trail=[TrailPoint(1.0, 2.0, 3.0, 0.0), TrailPoint(4.0, 5.0, 6.0, 1.0)],
+                    ),
+                    NodeState("A02", "wing", -30.0, 12.0, 2.0, 1.0, altitude=40.0),
+                    NodeState("A03", "wing", -34.0, 28.0, 2.0, -1.0, altitude=42.0),
+                ],
+                links=[],
+                route_segments=[ReferenceRoute(0.0, 0.0, 100.0, 100.0, 50.0, 120.0)],
+            )
+        )
+        self.app.processEvents()
+        scene_data = json.loads(first_window.bridge.sceneData())
+        self.assertEqual(scene_data["counts"]["aircraft"], 3)
+        self.assertGreaterEqual(scene_data["counts"]["trailPoints"], 2)
+        self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
+        self.assertEqual(scene_data["counts"]["obstacles"], 1)
+        self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)
+
+        root_object = first_window.quick_view.rootObject()
+        self.assertIsNotNone(root_object)
+        root_object.setProperty("yaw", 12.0)
+        root_object.setProperty("pitch", -20.0)
+        root_object.setProperty("distance", 3456.0)
+        self.window._update_snapshot(self.window.sim.snapshot())
+        self.app.processEvents()
+
+        self.assertAlmostEqual(float(root_object.property("yaw")), 12.0)
+        self.assertAlmostEqual(float(root_object.property("pitch")), -20.0)
+        self.assertAlmostEqual(float(root_object.property("distance")), 3456.0)
+
+        self.assertTrue(QMetaObject.invokeMethod(root_object, "resetCamera"))
+        self.app.processEvents()
+        self.assertAlmostEqual(float(root_object.property("yaw")), scene_data["camera"]["yaw"])
+        self.assertAlmostEqual(float(root_object.property("pitch")), scene_data["camera"]["pitch"])
+        self.assertAlmostEqual(float(root_object.property("distance")), scene_data["camera"]["distance"])
 
         self.window.situation3d_action.trigger()
         self.app.processEvents()
 
         self.assertIs(self.window._situation3d_window, first_window)
         self.assertTrue(first_window.isVisible())
+        self.assertTrue(first_window.isMaximized())
+        self.assertFalse(first_window.isFullScreen())
 
     def test_data_analysis_menu_opens_independent_window(self) -> None:
         self.window._open_data_analysis_window()

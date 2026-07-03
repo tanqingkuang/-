@@ -29,6 +29,7 @@ if ($InstallDependencies) {
     --workpath (Join-Path $ProjectRoot "build\dev") `
     --name $AppName `
     --paths $ProjectRoot `
+    --add-data "src/ui/gui/situation3d/qml;src/ui/gui/situation3d/qml" `
     src/ui/gui/main_window.py
 
 New-Item -ItemType Directory -Path $DistRoot -Force | Out-Null

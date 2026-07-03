@@ -20,6 +20,7 @@ Remove-Item -LiteralPath $DevSupportDir -Recurse -Force -ErrorAction SilentlyCon
     --onefile `
     --name $AppName `
     --paths $ProjectRoot `
+    --add-data "src/ui/gui/situation3d/qml;src/ui/gui/situation3d/qml" `
     src/ui/gui/main_window.py
 
 Write-Host "Release Windows exe: $ProjectRoot\dist\$AppName.exe"
