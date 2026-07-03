@@ -27,7 +27,8 @@ def _route_end(controller: SimulationController) -> tuple[float, float]:
     route = controller._leader_route
     assert route is not None
     pos = route[-1].pos
-    return (round(pos.east, 3), round(pos.north, 3))
+    # 经纬航线经 WGS84 往返转换有亚毫米级误差，舍到 0.1m 消除噪声（不影响航线区分）。
+    return (round(pos.east, 1), round(pos.north, 1))
 
 
 # 原 base.json 航线终点 (2000,2000)；样例航线终点 (1000,1000)。

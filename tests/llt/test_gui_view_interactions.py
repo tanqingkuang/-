@@ -19,6 +19,7 @@ from PySide6.QtCore import QMetaObject, QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
 
 from src.data.geo import GeoOrigin
+from tests.llt._geo_route import geodetic_config
 from src.runner.sim_control import (
     NodeState as ControllerNodeState,
     SimulationSnapshot as ControllerSnapshot,
@@ -1009,7 +1010,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                     {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
                 ],
             }
-            config_path.write_text(json.dumps(config), encoding="utf-8")
+            config_path.write_text(json.dumps(geodetic_config(config)), encoding="utf-8")
             state_path = project_root / "config.ini"
             state_path.write_text("[config]\nlast_config = configs/startup.json\n", encoding="utf-8")
 
@@ -1500,7 +1501,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         if route is not None:
             config["route"] = route
         with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8", delete=False) as handle:
-            json.dump(config, handle)
+            # 产品约定航线只支持经纬度；把 ENU 航线等价转成经纬后写盘。
+            json.dump(geodetic_config(config), handle)
             config_path = handle.name
         try:
             self.window._apply_config_path(config_path)

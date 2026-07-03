@@ -29,6 +29,7 @@ from src.runner.sim_control import (
     _build_vel_cmd_limit,
     _route_state_from_wayline,
 )
+from tests.llt._geo_route import geodetic_route
 
 
 def _write_config(
@@ -441,14 +442,14 @@ class SimulationControllerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = _write_config(Path(tmp))
             config = json.loads(config_path.read_text(encoding="utf-8"))
-            config["route"] = {
+            config["route"] = geodetic_route({
                 "speed_mps": 12.0,
                 "waypoints": [
                     {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
                     {"x_m": 100.0, "y_m": 0.0, "altitude_m": 1000.0},
                     {"x_m": 100.0, "y_m": 80.0, "altitude_m": 1000.0},
                 ],
-            }
+            })
             config_path.write_text(json.dumps(config), encoding="utf-8")
             controller = SimulationController()
             controller.load_config(str(config_path))
@@ -1680,6 +1681,67 @@ class NodeAlgorithmResetTests(unittest.TestCase):
 
         self.assertFalse(node._rally_completed)
         self.assertEqual(node._remote_stage, FormStageE.RALLY)
+
+
+class RouteGeodeticEnforcementTests(unittest.TestCase):
+    """端到端验证"JSON 航线只支持经纬度"：经纬航线正常加载运行，ENU 航线加载报错。"""
+
+    def _nodes_links(self) -> dict[str, object]:
+        return {
+            "duration_s": 0.05,
+            "step_s": 0.005,
+            "playback_rate": 10.0,
+            "nodes": [
+                {"node_id": "A01", "role": "leader", "x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "speed_mps": 20.0},
+                {"node_id": "A02", "role": "wingman", "x_m": -45.0, "y_m": 50.0, "altitude_m": 1000.0, "speed_mps": 20.0},
+            ],
+            "links": [{"link_id": "A01-A02", "direction": "duplex", "latency_ms": 20.0, "loss_rate": 0.0}],
+        }
+
+    def test_enu_route_config_is_rejected_on_load(self) -> None:
+        """反例：ENU(x_m/y_m)航线的 JSON 加载失败并返回配置错误码（界面据此提示加载失败）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._nodes_links()
+            config["route"] = {
+                "speed_mps": 20.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                ],
+            }
+            path = Path(tmp) / "enu.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            result = controller.load_config(str(path))
+
+            self.assertEqual(result.code, "ERR_CONFIG_INVALID")
+            self.assertIn("geodetic", result.message.lower())
+            self.assertEqual(controller.get_snapshot().run_state, "UNLOADED")
+
+    def test_geodetic_route_config_loads_and_runs(self) -> None:
+        """正例：经纬度航线的 JSON 正常加载并可运行到结束。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = self._nodes_links()
+            config["route"] = geodetic_route({
+                "speed_mps": 20.0,
+                "waypoints": [
+                    {"x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                ],
+            })
+            path = Path(tmp) / "geo.json"
+            path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(path))
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(controller.get_snapshot().run_state, "READY")
+
+            run = controller.run_until_complete(str(path))
+            self.assertEqual(run.code, "OK")
+            self.assertEqual(controller.get_snapshot().run_state, "FINISHED")
 
 
 if __name__ == "__main__":

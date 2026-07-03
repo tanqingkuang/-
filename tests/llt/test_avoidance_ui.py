@@ -22,6 +22,7 @@ from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_
 from src.data.linefile import LineFileManager
 from src.data.geo import GeoOrigin
 from src.data.geo_config import route_to_internal
+from tests.llt._geo_route import geodetic_config, geodetic_route
 from src.runner.sim_control import _build_leader_route
 from src.ui.gui.main_window import (
     MainWindow,
@@ -41,7 +42,8 @@ BASE_CONFIG = str(Path(__file__).resolve().parents[2] / "configs" / "base.json")
 class ParseAvoidanceParamsTests(unittest.TestCase):
     def _write(self, payload: object) -> str:
         handle = tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8", delete=False)
-        json.dump(payload, handle)
+        # 产品约定航线只支持经纬度；把测试里的 ENU 航线等价转成经纬后再写盘。
+        json.dump(geodetic_config(payload) if isinstance(payload, dict) else payload, handle)
         handle.close()
         self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
         return handle.name
@@ -115,13 +117,13 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
             element = root / "element"
             element.mkdir()
             (element / "line.json").write_text(
-                json.dumps({
+                json.dumps(geodetic_route({
                     "speed_mps": 18.0,
                     "waypoints": [
                         {"x_m": 10.0, "y_m": 20.0, "altitude_m": 1000.0},
                         {"x_m": 30.0, "y_m": 40.0, "altitude_m": 1100.0},
                     ],
-                }),
+                })),
                 encoding="utf-8",
             )
             config = root / "base.json"
@@ -133,7 +135,9 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
             params = parse_avoidance_params(str(config))
 
         self.assertIsNotNone(params)
-        self.assertEqual(params.waypoints, [(10.0, 20.0, 1000.0), (30.0, 40.0, 1100.0)])
+        # 经纬航线以首航点为 ENU 原点，故 (10,20)/(30,40) 重定为 (0,0)/(20,20)；容忍亚毫米往返误差。
+        rounded = [(round(e, 2), round(n, 2), round(a, 2)) for e, n, a in params.waypoints]
+        self.assertEqual(rounded, [(0.0, 0.0, 1000.0), (20.0, 20.0, 1100.0)])
         self.assertAlmostEqual(params.speed_mps, 18.0)
 
     def test_polygon_clearance_display_expands_rotated_rect(self) -> None:
@@ -159,16 +163,16 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         path = self._write({"avoidance": {"enabled": True}, "route": {"waypoints": [{"x_m": 0, "y_m": 0}]}})
         self.assertIsNone(parse_avoidance_params(path))
 
-    def test_east_north_aliases_parsed(self) -> None:
-        # 控制器兼容 east/north/h 字段名，UI 解析也应一致，否则会得到全零航点。
+    def test_route_altitude_alias_parsed(self) -> None:
+        # 经纬航线以首航点为 ENU 原点：(100,200)/(300,400) 重定为 (0,0)/(200,200)，高度(h)原样保留。
         path = self._write({"avoidance": {"enabled": True}, "route": {"waypoints": [
             {"east": 100.0, "north": 200.0, "h": 1000.0},
             {"east": 300.0, "north": 400.0, "h": 1200.0},
         ]}})
         params = parse_avoidance_params(path)
         self.assertIsNotNone(params)
-        self.assertEqual(params.waypoints[0], (100.0, 200.0, 1000.0))
-        self.assertEqual(params.waypoints[1], (300.0, 400.0, 1200.0))
+        self.assertEqual(tuple(round(v, 2) for v in params.waypoints[0]), (0.0, 0.0, 1000.0))
+        self.assertEqual(tuple(round(v, 2) for v in params.waypoints[1]), (200.0, 200.0, 1200.0))
 
 
 class RouteToPolylineTests(unittest.TestCase):
@@ -244,7 +248,8 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
     def _write(self, payload: object) -> str:
         handle = tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8", delete=False)
-        json.dump(payload, handle)
+        # 产品约定航线只支持经纬度；把测试里的 ENU 航线等价转成经纬后再写盘。
+        json.dump(geodetic_config(payload) if isinstance(payload, dict) else payload, handle)
         handle.close()
         self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
         return handle.name

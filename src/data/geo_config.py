@@ -81,19 +81,36 @@ def route_to_internal(route: dict[str, object], origin: GeoOrigin | None = None)
     """把外部航线对象转换为内部 ENU route。注意：origin 缺省时取第一个经纬航点。"""
     resolved = copy.deepcopy(route)
     waypoints = resolved.get("waypoints")
-    if not isinstance(waypoints, list) or not waypoints or not _has_geodetic_point(waypoints[0]):
-        # 旧 ENU 航线直接透传，不强行生成 origin。
+    if not isinstance(waypoints, list) or not waypoints:
+        # 无 waypoints（空列表 / segments 等其它写法）：无经纬信息可转，原样透传。
         return resolved, origin
+    if not _has_geodetic_point(waypoints[0]):
+        # 原则：航线必须是经纬度。非经纬(如 ENU x_m/y_m)航线在加载期直接拒绝，
+        # 由控制器映射为配置错误、界面提示加载失败。
+        raise ValueError(
+            "route waypoints must be geodetic (latitude_deg + longitude_deg); "
+            "ENU x_m/y_m routes are no longer supported"
+        )
     # 按约定使用基础航线第一个航点作为 origin；上层可为 rally_route 传入同一 origin。
     route_origin = origin or GeoOrigin(_read_float(waypoints[0], _LAT_KEYS), _read_float(waypoints[0], _LON_KEYS))
     converted_waypoints: list[object] = []
-    for raw in waypoints:
+    for index, raw in enumerate(waypoints):
         if not isinstance(raw, dict):
             converted_waypoints.append(raw)
             continue
+        if not _has_geodetic_point(raw):
+            raise ValueError(
+                f"route.waypoints[{index}] must be geodetic (latitude_deg + longitude_deg); "
+                "ENU x_m/y_m routes are no longer supported"
+            )
         point = _point_to_enu(raw, route_origin)
         center = point.get("center")
-        if isinstance(center, dict) and _has_geodetic_point(center):
+        if isinstance(center, dict):
+            if not _has_geodetic_point(center):
+                raise ValueError(
+                    f"route.waypoints[{index}].center must be geodetic (latitude_deg + longitude_deg); "
+                    "ENU x_m/y_m route centers are no longer supported"
+                )
             # 已烘焙圆弧的圆心也属于水平几何，必须使用同一个 origin 转 ENU。
             point["center"] = _point_to_enu(center, route_origin)
         converted_waypoints.append(point)
