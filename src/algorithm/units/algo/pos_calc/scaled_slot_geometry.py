@@ -48,24 +48,21 @@ class ScaledSlotGeometry(SlotGeometry):
         scale = u.slotScale.scale
         scaleRate = u.slotScale.scaleRate
 
-        # 世界坐标系下的未缩放偏置（super 已算好）
+        # 世界坐标系下的未缩放水平偏置（super 已算好）
         offset_e = y.selfCmd.pos.east - u.leaderState.pos.east
         offset_n = y.selfCmd.pos.north - u.leaderState.pos.north
-        offset_h = y.selfCmd.pos.h - u.leaderState.pos.h
 
-        # 位置缩放
+        # 水平位置缩放；高度偏置固定不缩放，直接保留 super 写入的 leader.h + slot.y
         y.selfCmd.pos.east = u.leaderState.pos.east + scale * offset_e
         y.selfCmd.pos.north = u.leaderState.pos.north + scale * offset_n
-        y.selfCmd.pos.h = u.leaderState.pos.h + scale * offset_h
 
         # 速度后处理：d/dt(scale·R·slot) = scale·dR/dt·slot + scaleRate·R·slot
         # super 给出 leaderVel + dR/dt·slot（旋转前馈）；提取旋转前馈再乘 scale，加 scaleRate 项
+        # 高度无缩放，故垂向无 scaleRate 修正项，vUp 保持 super 写入值不动
         ff_e = y.selfCmd.v.vEast - u.leaderState.v.vEast
         ff_n = y.selfCmd.v.vNorth - u.leaderState.v.vNorth
-        ff_up = y.selfCmd.v.vUp - u.leaderState.v.vUp
         y.selfCmd.v.vEast = u.leaderState.v.vEast + scale * ff_e + scaleRate * offset_e
         y.selfCmd.v.vNorth = u.leaderState.v.vNorth + scale * ff_n + scaleRate * offset_n
-        y.selfCmd.v.vUp = u.leaderState.v.vUp + scale * ff_up + scaleRate * offset_h
         y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
         y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
         # dVPsi（偏航角速率）不随 scale 变化，保持父类值不动

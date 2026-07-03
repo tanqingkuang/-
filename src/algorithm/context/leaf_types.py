@@ -280,6 +280,7 @@ class FollowerStateS:
     lastUpdate_s: float = 0.0  # 最近一次收到该机报文的仿真时间戳，秒
     eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）；LOITERING/EXITED 时为当前时刻
     rally_state: str = "FLYING"  # 集结汇合状态：FLYING / LOITERING / EXITED
+    reachedSlotOnce: bool = False  # 是否已至少一次路过松散点 M_i（LOITERING 但尚未路过时仍应计入 T_ref 聚合）
 
 
 @dataclass
@@ -317,6 +318,7 @@ def copy_follower_state(src: FollowerStateS, dst: FollowerStateS) -> None:
     dst.lastUpdate_s = src.lastUpdate_s
     dst.eta_s = src.eta_s
     dst.rally_state = src.rally_state
+    dst.reachedSlotOnce = src.reachedSlotOnce
 
 
 def copy_formation_analysis(src: FormationAnalysisS, dst: FormationAnalysisS) -> None:

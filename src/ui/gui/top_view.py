@@ -17,6 +17,7 @@ from src.ui.gui.view_models import (
     VIEW_MAX_SCALE,
     VIEW_MIN_SCALE,
     ObstacleView,
+    RallyGeometryView,
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
@@ -228,6 +229,7 @@ class TopView(QGraphicsView):
             # 有预览时只显示绿色预览线和预览黑点，避免与 committed 航线形成两根线。
             if self.snapshot.nodes and self.preview_route_polyline is None:
                 self._draw_route(painter)
+            self._draw_rally_geometry(painter, self.snapshot)
             self._draw_links(painter, self.snapshot)
             self._draw_slot_targets(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
@@ -535,6 +537,57 @@ class TopView(QGraphicsView):
             [(routes[0].start_x, routes[0].start_y)] + [(route.end_x, route.end_y) for route in routes],
         )
 
+    def _draw_rally_geometry(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """绘制集结盘旋圆、切入点 T（三角）与松散目标点 M_i（实心圆）。
+
+        注意：只在飞机仍处于 JOINING 阶段时显示——集结完成后这些参考点已经不代表飞机当前目标，
+        常驻显示只会长期遮挡后续航段/僚机目标标记，用 rally_phase（"JN·..."）过滤及时隐藏。
+        长机/僚机分色，避免多机场景下分不清哪个圆属于哪架机；圆在屏幕上太小（缩得很远）时只画
+        圆和标记点、不画文字标签，避免多机标签互相重叠看不清。
+        """
+        if not snapshot.rally_geometry:
+            return
+        node_by_id = {node.node_id: node for node in snapshot.nodes}
+        marker_r = 6.0 / self.scale_value
+
+        for geometry in snapshot.rally_geometry:
+            node = node_by_id.get(geometry.node_id)
+            if node is None or not node.rally_phase.startswith("JN"):
+                continue
+            color = QColor(self.theme.leader if is_leader_node(node) else self.theme.wingman)
+
+            circle_pen = QPen(color, 1.4 / self.scale_value)
+            circle_pen.setDashPattern([5, 4])
+            painter.setPen(circle_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(QPointF(geometry.center_x, geometry.center_y), geometry.radius, geometry.radius)
+
+            show_labels = geometry.radius * self.scale_value > 40.0
+            self._draw_rally_marker(painter, geometry, color, marker_r, show_labels)
+
+    def _draw_rally_marker(
+        self, painter: QPainter, geometry: RallyGeometryView, color: QColor, marker_r: float, show_labels: bool
+    ) -> None:
+        """绘制单个节点的 M_i（实心圆点）和 T（空心三角）标记，视野足够大时附带文字标签。"""
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(geometry.slot_x, geometry.slot_y), marker_r, marker_r)
+        if show_labels:
+            painter.setPen(QPen(color, 1))
+            self._draw_screen_text(painter, geometry.slot_x, geometry.slot_y, 8.0, -6.0, f"{geometry.node_id} M")
+
+        triangle = QPainterPath()
+        triangle.moveTo(geometry.entry_x, geometry.entry_y + marker_r)
+        triangle.lineTo(geometry.entry_x + marker_r, geometry.entry_y - marker_r)
+        triangle.lineTo(geometry.entry_x - marker_r, geometry.entry_y - marker_r)
+        triangle.closeSubpath()
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(color, 1.5 / self.scale_value))
+        painter.drawPath(triangle)
+        if show_labels:
+            painter.setPen(QPen(color, 1))
+            self._draw_screen_text(painter, geometry.entry_x, geometry.entry_y, 8.0, -6.0, f"{geometry.node_id} T")
+
     def _draw_route_markers(self, painter: QPainter, markers: list[tuple[float, float]]) -> None:
         """绘制航点黑点。注意：仅画端点标记，不包含圆弧折线采样点。"""
         if not markers:
@@ -597,17 +650,18 @@ class TopView(QGraphicsView):
             self._draw_screen_text(painter, node.x, node.y, -13.0, -18.0, node.node_id)
 
     def _draw_slot_targets(self, painter: QPainter, snapshot: Snapshot) -> None:
-        """绘制僚机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态。"""
+        """绘制各机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态；长机/僚机都画，
+        长机在 JOINING 阶段目标是盘旋圆切入点/圆上投影点，跟僚机的槽位目标是同一套 cmd_pos 机制。
+        """
         for node in snapshot.nodes:
-            if is_leader_node(node):
-                continue
             # 仅集结场景绘制目标槽位（HOLD 等其他阶段不需要此标记）
             if not node.rally_phase:
                 continue
             # 目标点为原点时跳过（初始化默认值，尚未收到有效指令）
             if node.cmd_pos_x == 0.0 and node.cmd_pos_y == 0.0:
                 continue
-            color = QColor(self.theme.warn if node.health != "normal" else self.theme.wingman)
+            base = self.theme.leader if is_leader_node(node) else self.theme.wingman
+            color = QColor(self.theme.warn if node.health != "normal" else base)
             color.setAlphaF(0.70)
             # 节点到目标点的虚线
             pen = QPen(color, 1.0 / self.scale_value, Qt.PenStyle.DashLine)

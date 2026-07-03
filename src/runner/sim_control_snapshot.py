@@ -82,6 +82,7 @@ class SimulationControllerSnapshotMixin:
             route_segments=route_segments,
             cpu_utilization=self._cpu_utilization,
             rally_analysis=self._formation_completed_analysis,
+            rally_geometry=self._rally_geometry,
         )
 
     def _parse_configured_links(self, raw_links: list[object]) -> list[_ConfiguredLink]:

@@ -84,6 +84,18 @@ class GeoConfigTests(unittest.TestCase):
                 {"waypoints": [{"x_m": 0.0, "y_m": 0.0}, {"x_m": 1000.0, "y_m": 0.0}]}
             )
 
+    def test_route_to_internal_rejects_mixed_geodetic_and_enu_waypoints(self) -> None:
+        """反例：首点是经纬但后续混入 ENU 航点时也必须报错，不能把缺省经纬当作 0°/0° 转换。"""
+        with self.assertRaisesRegex(ValueError, r"waypoints\[1\].*geodetic"):
+            route_to_internal(
+                {
+                    "waypoints": [
+                        {"latitude_deg": 39.0, "longitude_deg": 116.0, "altitude_m": 1000.0},
+                        {"x_m": 1000.0, "y_m": 0.0, "altitude_m": 1000.0},
+                    ]
+                }
+            )
+
     def test_route_to_internal_accepts_geodetic_waypoints(self) -> None:
         """正例：经纬航线正常转成内部 ENU，首航点落在 ENU 原点。"""
         origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)

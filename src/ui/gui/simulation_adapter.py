@@ -13,6 +13,7 @@ from src.ui.gui.view_models import (
     WORLD_WIDTH,
     LinkState,
     NodeState,
+    RallyGeometryView,
     ReferenceRoute,
     Snapshot,
     TrailPoint,
@@ -422,6 +423,19 @@ class ControllerSimulationAdapter:
         ]
         if not route_segments and route is not None:
             route_segments = [route]
+        rally_geometry = [
+            RallyGeometryView(
+                node_id=node_id,
+                slot_x=geometry.slot_east_m,
+                slot_y=geometry.slot_north_m,
+                center_x=geometry.loiter_center_east_m,
+                center_y=geometry.loiter_center_north_m,
+                radius=geometry.loiter_radius_m,
+                entry_x=geometry.entry_east_m,
+                entry_y=geometry.entry_north_m,
+            )
+            for node_id, geometry in snapshot.rally_geometry.items()
+        ]
         return Snapshot(
             time=snapshot.time_s,
             duration=snapshot.duration_s,
@@ -434,6 +448,7 @@ class ControllerSimulationAdapter:
             route=route,
             route_segments=route_segments,
             cpu_utilization=snapshot.cpu_utilization,
+            rally_geometry=rally_geometry,
         )
 
     @staticmethod

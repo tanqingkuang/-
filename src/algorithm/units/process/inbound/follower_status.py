@@ -66,6 +66,7 @@ class FollowerStatus(InboundBase):
                 arrived = int(payload.get("arrived", 0))
                 eta_s = float(payload.get("eta_s", 0.0))
                 rally_state = str(payload.get("rally_state", "FLYING"))
+                reached_slot_once = bool(payload.get("reached_slot_once", False))
             except (TypeError, ValueError):
                 continue
             numeric_fields = (pos_east, pos_north, pos_h, pos_err_m, heading_err_rad, eta_s)
@@ -86,6 +87,7 @@ class FollowerStatus(InboundBase):
             entry.arrived = arrived
             entry.eta_s = eta_s
             entry.rally_state = rally_state
+            entry.reachedSlotOnce = reached_slot_once
             entry.id = node_id
             entry.valid = True
             entry.lastUpdate_s = u.now_s

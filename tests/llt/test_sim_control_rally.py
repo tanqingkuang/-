@@ -31,9 +31,11 @@ def _rally_config() -> dict[str, object]:
         "algorithm_decimation": 1,
         "playback_rate": 1.0,
         "route": {
+            # route（mission_route）起点必须等于 rally_route 起点 A=(0,0)（见 sim_control_modules.py
+            # 的连续性校验），不是旧版语义里的 rally_route 终点。
             "speed_mps": 20.0,
             "waypoints": [
-                {"x_m": 100.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
+                {"x_m": 0.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
                 {"x_m": 200.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
             ],
         },
@@ -67,7 +69,6 @@ def _rally_config() -> dict[str, object]:
             {
                 "node_id": "R02",
                 "role": "rally_follower",
-                "rally_target": {"x_m": 90.0, "y_m": 5.0, "altitude_m": 500.0},
                 "x_m": -50.0,
                 "y_m": 20.0,
                 "altitude_m": 500.0,
@@ -76,7 +77,6 @@ def _rally_config() -> dict[str, object]:
             {
                 "node_id": "R03",
                 "role": "rally_follower",
-                "rally_target": {"x_m": 90.0, "y_m": -5.0, "altitude_m": 500.0},
                 "x_m": -50.0,
                 "y_m": -20.0,
                 "altitude_m": 500.0,
@@ -157,9 +157,8 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertIsInstance(controller._node_algorithms["R03"]._entity, RallyFollowerEntity)
             self.assertIsNotNone(snapshot.route)
             assert snapshot.route is not None
-            # 经纬航线以首航点为 ENU 原点：原 (100,0)->(200,0) 重定为 (0,0)->(100,0)。
-            self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=2)
-            self.assertAlmostEqual(snapshot.route.end_x_m, 100.0, places=2)
+            self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=3)
+            self.assertAlmostEqual(snapshot.route.end_x_m, 200.0, places=3)
 
     def test_rally_cfg_approach_speed_is_injected_into_followers(self) -> None:
         """验证 rally_cfg.approach_speed_mps 会注入僚机 RallyJoinPos。"""
@@ -256,15 +255,36 @@ class SimControlRallyTests(unittest.TestCase):
         with self.assertRaises(ValueError, msg="route is required"):
             _ConfigLoader().validate(config)
 
-    def test_validate_rejects_rally_follower_without_rally_target(self) -> None:
-        """rally_follower 节点缺少 rally_target 时 validate() 应拒绝配置。"""
+    def test_validate_rejects_mission_route_start_far_from_rally_route_start(self) -> None:
+        """route（mission_route）起点必须等于 rally_route 起点 A；相距过远时 validate() 应拒绝配置。"""
         from src.runner.sim_control import _ConfigLoader
 
         config = _rally_config()
-        nodes = list(config["nodes"])  # type: ignore[arg-type]
-        follower = {k: v for k, v in nodes[1].items() if k != "rally_target"}
-        config["nodes"] = [nodes[0], follower, nodes[2]]  # type: ignore[index]
-        with self.assertRaises(ValueError, msg="rally_target is required"):
+        config["route"]["waypoints"][0]["x_m"] = 9999.0  # type: ignore[index]
+        with self.assertRaises(ValueError, msg="route start must equal rally_route start A"):
+            _ConfigLoader().validate(config)
+
+    def test_validate_rejects_mission_route_first_segment_direction_mismatch(self) -> None:
+        """route（mission_route）首段方向必须与 rally_route 首段方向（任务航向）大致一致；
+        起点位置对得上但方向差得多（如垂直）时 validate() 也应拒绝配置。"""
+        from src.runner.sim_control import _ConfigLoader
+
+        config = _rally_config()
+        # 起点仍是 (0,0)（跟 rally_route 起点 A 对得上），但第二个航点改成正北，
+        # 首段方向从正东变成正北，跟 rally_route 的正东方向差 90°。
+        config["route"]["waypoints"][1] = {"x_m": 0.0, "y_m": 200.0, "altitude_m": 500.0, "R": 0.0}  # type: ignore[index]
+        with self.assertRaises(ValueError, msg="route first-segment direction must match rally_route's"):
+            _ConfigLoader().validate(config)
+
+    def test_validate_rejects_loiter_radius_too_small_for_capture_window(self) -> None:
+        """回归用例：过小的 loiter_radius_m 应在 validate() 阶段就被拒绝（ERR_CONFIG_INVALID），
+        而不是要等到 load_config() 实际构造 RallyJoinPos 时才失败（之前是 ERR_MODULE_INIT_FAILED，
+        语义上属于"配置错误"而不是"模块初始化失败"，且报错时机应尽量提前）。"""
+        from src.runner.sim_control import _ConfigLoader
+
+        config = _rally_config()
+        config.setdefault("rally_cfg", {})["loiter_radius_m"] = 1.0  # type: ignore[index]
+        with self.assertRaises(ValueError, msg="loiter_radius_m too small for capture window"):
             _ConfigLoader().validate(config)
 
     def test_validate_rejects_rally_roles_without_rally_cfg(self) -> None:
