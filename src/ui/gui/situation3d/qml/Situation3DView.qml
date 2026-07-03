@@ -18,15 +18,40 @@ Item {
     property string sceneSummary: "等待快照"
     property real lastMouseX: 0
     property real lastMouseY: 0
+    property bool cameraInitialized: false
 
     ListModel { id: aircraftModel }
     ListModel { id: trailModel }
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
 
-    function updateScene(payload) {
+    function applyPayloadCamera(camera) {
+        if (!camera) {
+            return false
+        }
+        focusX = camera.focusX
+        focusY = camera.focusY
+        focusZ = camera.focusZ
+        distance = camera.distance
+        yaw = camera.yaw
+        pitch = camera.pitch
+        cameraInitialized = true
+        return true
+    }
+
+    function applyFallbackCamera() {
+        focusX = 0
+        focusY = 600
+        focusZ = 0
+        distance = 1800
+        yaw = -38
+        pitch = -34
+        cameraInitialized = false
+    }
+
+    function updateScene(payload, forceCamera) {
         if (!payload || payload.length === 0) {
-            return
+            return false
         }
         const data = JSON.parse(payload)
         aircraftModel.clear()
@@ -87,26 +112,24 @@ Item {
         } else {
             terrainSurfaceModel.visible = false
         }
-        if (data.camera) {
-            focusX = data.camera.focusX
-            focusY = data.camera.focusY
-            focusZ = data.camera.focusZ
-            distance = data.camera.distance
-            yaw = data.camera.yaw
-            pitch = data.camera.pitch
+        let cameraApplied = false
+        if (data.camera && (!cameraInitialized || forceCamera === true)) {
+            cameraApplied = applyPayloadCamera(data.camera)
         }
         sceneTime = Number(data.time || 0).toFixed(1) + "s"
         const counts = data.counts || {}
         sceneSummary = "飞机 " + (counts.aircraft || 0) + " / 障碍 " + (counts.obstacles || 0)
+        return cameraApplied
     }
 
     function resetCamera() {
-        yaw = -38
-        pitch = -34
         cameraMode = "自由"
         if (typeof sceneBridge !== "undefined") {
-            updateScene(sceneBridge.sceneData())
+            if (updateScene(sceneBridge.sceneData(), true)) {
+                return
+            }
         }
+        applyFallbackCamera()
     }
 
     function setTopView() {

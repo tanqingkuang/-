@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF, QRect, Qt
+from PySide6.QtCore import QMetaObject, QPointF, QRect, Qt
 from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
 
 from src.data.geo import GeoOrigin
@@ -155,6 +155,24 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
         self.assertEqual(scene_data["counts"]["obstacles"], 1)
         self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)
+
+        root_object = first_window.quick_view.rootObject()
+        self.assertIsNotNone(root_object)
+        root_object.setProperty("yaw", 12.0)
+        root_object.setProperty("pitch", -20.0)
+        root_object.setProperty("distance", 3456.0)
+        self.window._update_snapshot(self.window.sim.snapshot())
+        self.app.processEvents()
+
+        self.assertAlmostEqual(float(root_object.property("yaw")), 12.0)
+        self.assertAlmostEqual(float(root_object.property("pitch")), -20.0)
+        self.assertAlmostEqual(float(root_object.property("distance")), 3456.0)
+
+        self.assertTrue(QMetaObject.invokeMethod(root_object, "resetCamera"))
+        self.app.processEvents()
+        self.assertAlmostEqual(float(root_object.property("yaw")), scene_data["camera"]["yaw"])
+        self.assertAlmostEqual(float(root_object.property("pitch")), scene_data["camera"]["pitch"])
+        self.assertAlmostEqual(float(root_object.property("distance")), scene_data["camera"]["distance"])
 
         self.window.situation3d_action.trigger()
         self.app.processEvents()
