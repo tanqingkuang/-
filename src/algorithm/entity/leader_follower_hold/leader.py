@@ -31,7 +31,7 @@ from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutp
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
-from src.algorithm.units.process.formation_task.hold import Hold
+from src.algorithm.units.process.formation_task.hold import Hold, HoldTaskInitS
 from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
 from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
@@ -69,7 +69,7 @@ class LeaderEntity(EntityBase):
         self._outbound = LeaderBroadcast()
 
         # 各单元一次性初始化；航路规划注入预置航线，广播注入本机 id 与拓扑
-        self._task.init(None)
+        self._task.init(HoldTaskInitS(initialPattern=cfg.commInit.initialPattern))
         route_lines = waypoint_inputs_to_waylines(cfg.route) if len(cfg.route) >= 2 else None
         self._tra_plan.init(LeaderRouteInitS(route_lines))
         self._pos_calc.init(RouteInterpInitS(lookAheadDistance=_LEADER_L1_DISTANCE_M, leadTimeS=_LEADER_FF_LEAD_TIME_S))

@@ -307,8 +307,8 @@ class RallyTaskInitS(FormationTaskInitS):
     expectedFollowerIds: list[str] = field(default_factory=list)
     # 期望参与集结的僚机 ID 列表；all(arrived) 只在此列表全部满足时成立；空列表→立即通过（测试用）
     staleTimeout_s: float = 2.0           # 超过此时长未收到某机报文则视为数据失效
-    targetPattern: FormPatE = FormPatE.TRIANGLE
-    # 进入 LOOSE/COMPRESS 时 cmd.pattern 写入此值，供 ScaledSlotGeometry 查槽位
+    targetPattern: int = 0
+    # 集结只用单队形（formPos 第 0 行），进入 LOOSE/COMPRESS 时 cmd.pattern 写入此索引，供 ScaledSlotGeometry 查槽位
     dt_s: float = 0.02                    # 控制周期（秒）；进 InitS 才能在 init 时校验 > 0
 
 @dataclass

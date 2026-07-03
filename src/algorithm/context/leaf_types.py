@@ -16,13 +16,6 @@ class FormStageE(IntEnum):
     RECONFIG = 3
 
 
-class FormPatE(IntEnum):
-    """编队队形枚举。注意：枚举值需与配置中的队形名称兼容。"""
-
-    NONE = 0
-    TRIANGLE = 1
-
-
 class CommDirE(IntEnum):
     """通信方向枚举。注意：方向含义需与通信链路配置一致。"""
 
@@ -70,8 +63,9 @@ class FormCommInitS:
     """编队通信与队形初始化配置。注意：三者按队形索引对齐。"""
 
     netWork: list[NetWorkS] = field(default_factory=list)  # 通信拓扑链路集合
-    formPat: list[FormPatE] = field(default_factory=list)  # 各阶段/步可选的队形枚举列表
-    formPos: list[list[FormPosS]] = field(default_factory=list)  # 与 formPat 对应的各队形槽位坐标表
+    formPat: list[str] = field(default_factory=list)  # 各队形名字（仅供显示；索引=队形序号，与 formPos 逐行对齐）
+    formPos: list[list[FormPosS]] = field(default_factory=list)  # 各队形槽位坐标表；cmd.pattern(整型索引)直接取第几行
+    initialPattern: int = 0  # 初始队形索引（cmd.pattern 初值），对应 formPos 的行号
 
 
 @dataclass
@@ -184,7 +178,7 @@ class FormSnapshotS:
     """编队指令/状态快照。注意：在算法各单元间传递当前阶段与队形。"""
 
     stage: FormStageE = FormStageE.NONE  # 当前编队阶段
-    pattern: FormPatE = FormPatE.NONE  # 当前队形
+    pattern: int = 0  # 当前队形索引（formPos 行号），0 起；语义由配置队形列表顺序决定
     step: int = 0  # 阶段内步进计数
 
 
@@ -243,7 +237,7 @@ def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
 def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:
     """复制上下文快照，隔离算法输入和显示输出。注意：新增快照字段时需同步复制。"""
     dst.stage = FormStageE(src.stage)
-    dst.pattern = FormPatE(src.pattern)
+    dst.pattern = int(src.pattern)
     dst.step = int(src.step)
 
 

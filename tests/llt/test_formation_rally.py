@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import (
     CommDirE,
     FollowerStateS,
     FormCommInitS,
-    FormPatE,
     FormPosS,
     FormSelfInitS,
     FormSnapshotS,
@@ -146,7 +145,7 @@ def _follower_status_msg(
 def _leader_msg(
     *,
     stage: FormStageE = FormStageE.RALLY,
-    pattern: FormPatE = FormPatE.TRIANGLE,
+    pattern: int = 0,
     step: int = 0,
     scale: float = 3.0,
     scale_rate: float = 0.0,
@@ -193,7 +192,7 @@ def _rally_task(
             tightRadius_m=2.0,
             expectedFollowerIds=list(expected),
             staleTimeout_s=0.5,
-            targetPattern=FormPatE.TRIANGLE,
+            targetPattern=0,
             dt_s=dt_s,
             catchup_radius_m=catchup_radius_m,
             catchup_stable_s=catchup_stable_s,
@@ -239,7 +238,7 @@ def _comm_init() -> FormCommInitS:
             NetWorkS("R01", "R02", CommDirE.DUPLEX),
             NetWorkS("R01", "R03", CommDirE.DUPLEX),
         ],
-        formPat=[FormPatE.TRIANGLE],
+        formPat=[0],
         formPos=[
             [
                 FormPosS("R01", 0.0, 0.0, 0.0),
@@ -297,7 +296,7 @@ def _rally_cfg(
         tightRadius_m=2.0,
         expectedFollowerIds=list(expected),
         staleTimeout_s=1.0,
-        targetPattern=FormPatE.TRIANGLE,
+        targetPattern=0,
         dt_s=dt_s,
         catchup_stable_s=catchup_stable_s,
     )
@@ -420,12 +419,12 @@ class RallyTaskTests(unittest.TestCase):
 
         _task_step(task, ctx, remote=FormStageE.NONE)
         self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
-        self.assertEqual(ctx.cmd.pattern, FormPatE.NONE)
+        self.assertEqual(ctx.cmd.pattern, 0)
         self.assertAlmostEqual(ctx.slotScale.scale, 3.0)
 
         output = _task_step(task, ctx, remote=FormStageE.HOLD)
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(ctx.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertEqual(ctx.cmd.pattern, 0)
         self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
         self.assertFalse(output.rallyCompleted)
 
@@ -827,7 +826,7 @@ class RallyLeaderBroadcastAndInboundTests(unittest.TestCase):
 
         outbound.step(
             RallyLeaderBroadcastInputS(
-                cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=FormPatE.TRIANGLE, step=2),
+                cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2),
                 selfState=_motion(east=1.0, north=2.0, h=3.0, v_east=4.0),
                 slotScale=RallySlotScaleS(scale=2.0, scaleRate=-0.5),
                 t_ref=12.0,
@@ -928,7 +927,7 @@ class RallyPosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=500.0, v_east=20.0)
         ctx.selfState = _motion(east=80.0, north=210.0, h=500.0, v_east=20.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=FormPatE.TRIANGLE, step=2)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2)
         ctx.slotScale = RallySlotScaleS(scale=2.0, scaleRate=-0.5)
         scaled = ScaledSlotGeometry()
         scaled.init(ScaledSlotInitS(selfId="R02", commInit=_comm_init()))
@@ -959,7 +958,7 @@ class RallyPosCalcTests(unittest.TestCase):
                 ScaledSlotInputS(
                     selfState=_motion(),
                     leaderState=_motion(v_east=20.0),
-                    cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=FormPatE.TRIANGLE),
+                    cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0),
                 ),
                 PosCalcOutputS(selfCmd=MotionProfS()),
             )
@@ -1064,7 +1063,7 @@ class RallyEntityTests(unittest.TestCase):
         follower.step(
             EntityInputS(
                 selfState=state,
-                inbox=[_leader_msg(stage=FormStageE.NONE, pattern=FormPatE.NONE)],
+                inbox=[_leader_msg(stage=FormStageE.NONE, pattern=0)],
             ),
             none_output,
         )
@@ -1089,7 +1088,7 @@ class RallyEntityTests(unittest.TestCase):
         follower.step(
             EntityInputS(
                 selfState=_motion(east=1.0, north=2.0, h=3.0, v_east=20.0),
-                inbox=[_leader_msg(stage=FormStageE.NONE, pattern=FormPatE.NONE)],
+                inbox=[_leader_msg(stage=FormStageE.NONE, pattern=0)],
             ),
             output,
         )

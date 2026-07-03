@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.algorithm.context.leaf_types import FormPatE, FormStageE
+from src.algorithm.context.leaf_types import FormStageE
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
 
 
@@ -31,9 +31,9 @@ class LeaderFollower(InboundBase):
             if not isinstance(state, dict) or not isinstance(cmd, dict):
                 continue
             _write_motion_from_payload(state, y.leaderState)  # 还原长机运动状态
-            # 还原编队指令：int 转回枚举，缺省回退到 NONE/0
+            # 还原编队指令：stage 转回枚举，pattern 为纯整型队形索引，缺省回退到 0
             y.cmd.stage = FormStageE(int(cmd.get("stage", FormStageE.NONE)))
-            y.cmd.pattern = FormPatE(int(cmd.get("pattern", FormPatE.NONE)))
+            y.cmd.pattern = int(cmd.get("pattern", 0))
             y.cmd.step = int(cmd.get("step", 0))
 
     def reset(self) -> None:

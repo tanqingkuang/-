@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from src.algorithm.context.leaf_types import (
-    FormPatE,
     FormSelfInitS,
     FormStageE,
     FormationAnalysisS,
@@ -165,6 +164,8 @@ class _NodeAlgorithm:
         """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
         self._role = role
+        # 初始队形索引：僚机冷启动预置 cmd.pattern 用它，避免冷启动无参考。
+        self._initial_pattern = int(comm_init.initialPattern)
         # 标记长机是否已执行过算法步：未跑前 current_route 回退到航线首段。
         self._has_route_step = False
         # 集结角色从 RALLY 开始；其余角色（leader/wingman）默认 HOLD。
@@ -216,7 +217,7 @@ class _NodeAlgorithm:
         """将僚机冷启动预置写入实体上下文，__init__ 与 reset 共用。"""
         if self._cold_start_leader_state is not None and hasattr(self._entity, "cxt"):
             self._entity.cxt.cmd.stage = FormStageE.HOLD  # type: ignore[attr-defined]
-            self._entity.cxt.cmd.pattern = FormPatE.TRIANGLE  # type: ignore[attr-defined]
+            self._entity.cxt.cmd.pattern = self._initial_pattern  # type: ignore[attr-defined]
             copy_motion(self._cold_start_leader_state, self._entity.cxt.leaderState)  # type: ignore[attr-defined]
 
     def step(

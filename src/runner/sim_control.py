@@ -34,7 +34,6 @@ from src.runner.sim_control_routes import (
     _default_formation_slots,
     _default_leader_wpi,
     _float_from_keys,
-    _formation_pattern_from_config,
     _leader_id_from_nodes,
     _motion_from_aircraft_state,
     _route_point_from_config,

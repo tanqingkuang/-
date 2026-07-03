@@ -7,7 +7,6 @@ import math
 from src.algorithm.context.leaf_types import (
     CommDirE,
     FormCommInitS,
-    FormPatE,
     FormPosS,
     FormSelfInitS,
     MotionProfS,
@@ -72,37 +71,84 @@ def _build_formation_comm_init(
         direction = CommDirE.SIMPLEX if link.get("direction") == "simplex" else CommDirE.DUPLEX
         network.append(NetWorkS(start_id, end_id, direction))
 
-    # 队形（模式 + 槽位）与通信网络一并打包为编队初始化结构。
-    pattern, slots = _build_formation_slots(nodes, config)
+    # 多队形（名字 + 各队形槽位）与通信网络一并打包为编队初始化结构。
+    names, rows, initial_index = _build_formation_slots(nodes, config)
     return FormCommInitS(
         netWork=network,
-        formPat=[pattern],
-        formPos=[slots],
+        formPat=names,
+        formPos=rows,
+        initialPattern=initial_index,
     )
 
 
 def _build_formation_slots(
     nodes: list[object],
     config: dict[str, object] | None,
-) -> tuple[FormPatE, list[FormPosS]]:
-    """根据配置生成编队槽位定义。注意：槽位是队形定义，不应依赖飞机初始位置。"""
-    # formation.slots 一旦显式配置，就要求完整、可校验、按节点顺序输出。
-    # 未配置 slots 时才使用默认三角槽位，避免半配置状态被静默补齐。
-    # 未配置 formation 时回退到默认三角队形。
+) -> tuple[list[str], list[list[FormPosS]], int]:
+    """根据配置生成多队形槽位定义。注意：槽位是队形定义，不应依赖飞机初始位置。
+
+    返回 (队形名列表, 各队形槽位表, 初始队形索引)；三者以队形索引对齐。
+    支持两种写法：
+    - 多队形：formation.formations = [{name, slots}, ...]，初始索引取 formation.initial_index；
+    - 单队形（历史）：formation.pattern + formation.slots，等价于只有一个队形、初始索引 0。
+    """
+    # 未配置 formation 时回退到默认三角单队形。
     formation_config = (config or {}).get("formation")
     if formation_config is None:
-        return FormPatE.TRIANGLE, _default_formation_slots(nodes)
+        return ["default"], [_default_formation_slots(nodes)], 0
     if not isinstance(formation_config, dict):
         raise ValueError("formation must be an object")
 
-    pattern = _formation_pattern_from_config(formation_config.get("pattern", "TRIANGLE"))
-    # 给了 pattern 但未给 slots 时同样用默认槽位。
+    formations = formation_config.get("formations")
+    if formations is not None:
+        return _build_multi_formations(nodes, formation_config, formations)
+
+    # —— 历史单队形写法 ——
+    name = str(formation_config.get("pattern", "default"))
     slot_config = formation_config.get("slots")
     if slot_config is None:
-        return pattern, _default_formation_slots(nodes)
-    if not isinstance(slot_config, list) or not slot_config:
-        raise ValueError("formation.slots must be a non-empty list")
+        # 给了 pattern 但未给 slots 时同样用默认槽位。
+        return [name], [_default_formation_slots(nodes)], 0
     _validate_formation_coordinate_system(formation_config)
+    slots = _parse_slot_list(nodes, slot_config, "formation.slots")
+    return [name], [slots], 0
+
+
+def _build_multi_formations(
+    nodes: list[object],
+    formation_config: dict[str, object],
+    formations: object,
+) -> tuple[list[str], list[list[FormPosS]], int]:
+    """解析 formation.formations 多队形列表。注意：每个队形都必须给全部节点槽位。"""
+    if not isinstance(formations, list) or not formations:
+        raise ValueError("formation.formations must be a non-empty list")
+    # 坐标轴声明在 formation 顶层统一校验一次，各队形共用同一轴序。
+    _validate_formation_coordinate_system(formation_config)
+    names: list[str] = []
+    rows: list[list[FormPosS]] = []
+    for index, item in enumerate(formations):
+        if not isinstance(item, dict):
+            raise ValueError(f"formation.formations[{index}] must be an object")
+        names.append(str(item.get("name", f"formation_{index}")))
+        slot_config = item.get("slots")
+        if not isinstance(slot_config, list) or not slot_config:
+            raise ValueError(f"formation.formations[{index}].slots must be a non-empty list")
+        rows.append(_parse_slot_list(nodes, slot_config, f"formation.formations[{index}].slots"))
+    # 初始队形索引默认 0，必须落在队形数量范围内。
+    initial_index = int(formation_config.get("initial_index", 0))
+    if initial_index < 0 or initial_index >= len(rows):
+        raise ValueError(f"formation.initial_index out of range: {initial_index}")
+    return names, rows, initial_index
+
+
+def _parse_slot_list(
+    nodes: list[object],
+    slot_config: object,
+    prefix: str,
+) -> list[FormPosS]:
+    """解析单个队形的槽位列表并按节点顺序输出。注意：每个已知节点都必须有槽位，缺一即报错。"""
+    if not isinstance(slot_config, list) or not slot_config:
+        raise ValueError(f"{prefix} must be a non-empty list")
 
     # 收集已知节点 ID，用于校验槽位引用的节点是否存在。
     known_node_ids = {
@@ -113,27 +159,27 @@ def _build_formation_slots(
     slots_by_id: dict[str, FormPosS] = {}
     for index, slot in enumerate(slot_config):
         if not isinstance(slot, dict):
-            raise ValueError(f"formation.slots[{index}] must be an object")
+            raise ValueError(f"{prefix}[{index}] must be an object")
         # 兼容 node_id / id 两种键名。
         node_id = str(slot.get("node_id", slot.get("id", "")))
         if not node_id:
-            raise ValueError(f"formation.slots[{index}].node_id is required")
+            raise ValueError(f"{prefix}[{index}].node_id is required")
         # 槽位不得重复或引用未知节点。
         if node_id in slots_by_id:
-            raise ValueError(f"formation.slots contains duplicate node_id {node_id!r}")
+            raise ValueError(f"{prefix} contains duplicate node_id {node_id!r}")
         if known_node_ids and node_id not in known_node_ids:
-            raise ValueError(f"formation.slots contains unknown node_id {node_id!r}")
+            raise ValueError(f"{prefix} contains unknown node_id {node_id!r}")
         slots_by_id[node_id] = FormPosS(
             node_id,
-            _float_from_keys(slot, "formation.slots", index, ("x_m", "x")),
-            _float_from_keys(slot, "formation.slots", index, ("y_m", "y")),
-            _float_from_keys(slot, "formation.slots", index, ("z_m", "z")),
+            _float_from_keys(slot, prefix, index, ("x_m", "x")),
+            _float_from_keys(slot, prefix, index, ("y_m", "y")),
+            _float_from_keys(slot, prefix, index, ("z_m", "z")),
         )
 
     # 每个已知节点都必须有对应槽位，缺一即报错。
     missing = [node_id for node_id in known_node_ids if node_id not in slots_by_id]
     if missing:
-        raise ValueError(f"formation.slots missing node_id {missing[0]!r}")
+        raise ValueError(f"{prefix} missing node_id {missing[0]!r}")
 
     # 按节点声明顺序输出槽位，保证与模型节点顺序对齐。
     ordered_slots: list[FormPosS] = []
@@ -141,7 +187,7 @@ def _build_formation_slots(
         if not isinstance(node, dict):
             continue
         ordered_slots.append(slots_by_id[node_id_from_config(node, index)])
-    return pattern, ordered_slots
+    return ordered_slots
 
 
 def _validate_formation_coordinate_system(formation_config: dict[str, object]) -> None:
@@ -181,21 +227,6 @@ def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
             slots.append(FormPosS(node_id, slot[0], slot[1], slot[2]))
             wing_slot_index += 1
     return slots
-
-
-def _formation_pattern_from_config(raw_pattern: object) -> FormPatE:
-    """从配置中读取队形类型。注意：未知类型按默认队形处理。"""
-    # 字符串按枚举名（大小写无关）解析。
-    if isinstance(raw_pattern, str):
-        try:
-            return FormPatE[raw_pattern.strip().upper()]
-        except KeyError as exc:
-            raise ValueError(f"unknown formation.pattern {raw_pattern!r}") from exc
-    # 否则按枚举整数值解析。
-    try:
-        return FormPatE(int(raw_pattern))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"unknown formation.pattern {raw_pattern!r}") from exc
 
 
 def _float_from_keys(
@@ -500,8 +531,7 @@ def _build_rally_task_init(
         for i, node in enumerate(nodes)
         if isinstance(node, dict) and str(node.get("role") or "") == "rally_follower"
     ]
-    raw_pattern = rally_cfg_raw.get("target_pattern", "TRIANGLE")
-    pattern = _formation_pattern_from_config(raw_pattern)
+    # 集结只用单队形（formPos 只有第 0 行），目标队形索引恒为 0。
     return RallyTaskInitS(
         looseScale=float(rally_cfg_raw.get("loose_scale", 3.0)),
         convergenceRadius_m=float(rally_cfg_raw.get("convergence_radius_m", 5.0)),
@@ -510,7 +540,7 @@ def _build_rally_task_init(
         tightRadius_m=float(rally_cfg_raw.get("tight_radius_m", 2.0)),
         expectedFollowerIds=expected_ids,
         staleTimeout_s=float(rally_cfg_raw.get("stale_timeout_s", 2.0)),
-        targetPattern=pattern,
+        targetPattern=0,
         dt_s=algorithm_period_s,
         loiter_radius_m=float(rally_cfg_raw.get("loiter_radius_m", 200.0)),
         arrival_radius_m=float(rally_cfg_raw.get("arrival_radius_m", 100.0)),

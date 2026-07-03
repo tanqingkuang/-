@@ -145,8 +145,9 @@ class MainWindowLayoutMixin:
         choose_config = QPushButton("选择文件")
         choose_config.clicked.connect(self._choose_config)
         # 场景/算法下拉：窄面板内向右弹出菜单避免被裁切。
+        # “场景”即编队队形选择：选项按配置的队形列表动态填充，运行时热切换。
         self.scenario_select = SelectButton(132, popup_side="right")
-        self.scenario_select.addItems(["三机楔形", "五机纵队", "受限重构"])
+        self.scenario_select.currentIndexChanged.connect(self._on_scenario_selected)
         self.algorithm_select = SelectButton(128, popup_side="right")
         self.algorithm_select.addItems(["Follow", "Consensus", "RuleBased"])
         self.duration_input = QLineEdit()
@@ -216,8 +217,12 @@ class MainWindowLayoutMixin:
         btn_rally = QPushButton("集结演示")
         btn_rally.setToolTip("加载 configs/rally_demo.json — 三机分散后集结演示")
         btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo.json"))
+        btn_change = QPushButton("队形切换")
+        btn_change.setToolTip("加载 configs/change.json — 五机直线，界面选择队形热切换演示")
+        btn_change.clicked.connect(lambda: self._load_demo_config("change.json"))
         demo_layout.addWidget(btn_hold)
         demo_layout.addWidget(btn_rally)
+        demo_layout.addWidget(btn_change)
         layout.addWidget(demo_group)
 
         # 底部弹性占位把上面各分组顶到面板顶部。

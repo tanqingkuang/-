@@ -314,6 +314,21 @@ class ControllerSimulationAdapter:
             self._last_xy_by_node.clear()
         return self.snapshot()
 
+    def formation_names(self) -> list[str]:
+        """返回当前配置的队形名字列表。注意：索引即 switch_formation 下发的整型队形号。"""
+        return self.controller.get_formation_names()
+
+    def formation_index(self) -> int:
+        """返回当前队形索引。注意：供界面下拉框预选。"""
+        return self.controller.get_formation_index()
+
+    def switch_formation(self, index: int) -> Snapshot:
+        """运行时热切换编队队形。注意：不清尾迹，保留切换过程轨迹供观察。"""
+        result = self.controller.switch_formation(index)
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        return self.snapshot()
+
     def set_speed(self, speed: float) -> None:
         """设置播放速度。注意：只影响界面或控制器调度倍率。"""
         # 记录倍率并下发给控制器调度（影响推进节奏，不影响本适配器换算）。
