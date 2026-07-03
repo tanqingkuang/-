@@ -105,7 +105,12 @@ def route_to_internal(route: dict[str, object], origin: GeoOrigin | None = None)
             )
         point = _point_to_enu(raw, route_origin)
         center = point.get("center")
-        if isinstance(center, dict) and _has_geodetic_point(center):
+        if isinstance(center, dict):
+            if not _has_geodetic_point(center):
+                raise ValueError(
+                    f"route.waypoints[{index}].center must be geodetic (latitude_deg + longitude_deg); "
+                    "ENU x_m/y_m route centers are no longer supported"
+                )
             # 已烘焙圆弧的圆心也属于水平几何，必须使用同一个 origin 转 ENU。
             point["center"] = _point_to_enu(center, route_origin)
         converted_waypoints.append(point)

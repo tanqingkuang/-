@@ -96,6 +96,26 @@ class GeoConfigTests(unittest.TestCase):
                 }
             )
 
+    def test_route_to_internal_rejects_enu_arc_center(self) -> None:
+        """反例：圆弧中心点属于航线几何，JSON 中也必须用经纬度，不能混入 ENU center。"""
+        origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
+        p1 = enu_to_geodetic(1000.0, 0.0, origin)
+        with self.assertRaisesRegex(ValueError, r"center.*geodetic"):
+            route_to_internal(
+                {
+                    "waypoints": [
+                        {"latitude_deg": 39.0, "longitude_deg": 116.0, "altitude_m": 1000.0},
+                        {
+                            "latitude_deg": p1[0],
+                            "longitude_deg": p1[1],
+                            "altitude_m": 1000.0,
+                            "turn_sign": 1.0,
+                            "center": {"x_m": 500.0, "y_m": 500.0, "altitude_m": 1000.0},
+                        },
+                    ]
+                }
+            )
+
     def test_route_to_internal_accepts_geodetic_waypoints(self) -> None:
         """正例：经纬航线正常转成内部 ENU，首航点落在 ENU 原点。"""
         origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
