@@ -717,7 +717,11 @@ class SimulationControllerTests(unittest.TestCase):
             controller.close()
 
     def test_off_route_leader_turns_without_snaking_backward(self) -> None:
-        """Leader should smoothly cut toward the route instead of weaving forward/backward."""
+        """Leader should smoothly cut toward the route instead of weaving forward/backward.
+
+        本 fixture 长机初始横偏达 260m。1.2 引入"按侧偏的航迹角变限幅"后，大侧偏下航迹角被限到
+        最多 90°(垂直切入)、不越 90°，故东向不回退、平滑切入(不再有 1.1 中间态那种越过正南的向后蛇行)。
+        """
         controller = SimulationController()
         controller.load_config(str(Path(__file__).resolve().parent / "fixtures" / "test.json"))
         controller.pause()
@@ -782,8 +786,8 @@ class SimulationControllerTests(unittest.TestCase):
             leader = controller._node_algorithms["A01"]._entity
             follower = controller._node_algorithms["A02"]._entity
 
-            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.2)
-            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.2)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.2)
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.2)
             controller.close()
 
     def test_default_algorithm_pid_period_matches_design_contract(self) -> None:
@@ -797,10 +801,10 @@ class SimulationControllerTests(unittest.TestCase):
             leader = controller._node_algorithms["A01"]._entity
             follower = controller._node_algorithms["A02"]._entity
 
-            self.assertAlmostEqual(leader._pos_track._lateral._cfg.dt, 0.05)
-            self.assertAlmostEqual(follower._pos_track._lateral._cfg.dt, 0.05)
-            self.assertAlmostEqual(leader._pos_track._lateral._cfg.outMax, 4.0)
-            self.assertAlmostEqual(follower._pos_track._lateral._cfg.outMax, 4.0)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.05)
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.05)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
             controller.close()
 
     def test_realtime_logging_uses_sim_time_10_hz(self) -> None:

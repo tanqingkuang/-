@@ -27,7 +27,7 @@
       "damping_ratio": 0.65
     },
     "limits": {
-      "acceleration_command_mps2": 8.0,
+      "acceleration_command_mps2": 20.0,
       "max_climb_rate_mps": 3.0,
       "max_descent_rate_mps": 3.0,
       "nx_min": -1.0,
