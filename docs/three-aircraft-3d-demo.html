@@ -1,0 +1,1391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>三维编队态势 Demo</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #071014;
+      --panel: rgba(17, 31, 35, 0.88);
+      --panel-strong: rgba(12, 23, 27, 0.94);
+      --ink: #eef7f4;
+      --muted: #9bb3ad;
+      --line: rgba(168, 194, 187, 0.2);
+      --accent: #35c6a4;
+      --accent-ink: #041512;
+      --blue: #4da3ff;
+      --amber: #f6b84a;
+      --red: #f07070;
+      --green: #65d67f;
+      --field: rgba(255, 255, 255, 0.07);
+      --shadow: 0 18px 44px rgba(0, 0, 0, 0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button,
+    select {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--field);
+      color: var(--ink);
+    }
+
+    button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 11px;
+      cursor: pointer;
+    }
+
+    button:hover,
+    select:hover {
+      border-color: rgba(53, 198, 164, 0.62);
+      background: rgba(53, 198, 164, 0.12);
+    }
+
+    button.active {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
+      font-weight: 700;
+    }
+
+    button.danger {
+      color: #ffd5d5;
+      border-color: rgba(240, 112, 112, 0.46);
+      background: rgba(240, 112, 112, 0.12);
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    select {
+      width: 100%;
+      padding: 0 8px;
+      outline: none;
+    }
+
+    .app {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #sceneHost {
+      position: absolute;
+      inset: 0;
+      background: #071014;
+    }
+
+    #sceneHost canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .topbar {
+      position: absolute;
+      z-index: 4;
+      top: 0;
+      left: 0;
+      right: 0;
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(7, 16, 20, 0.88), rgba(7, 16, 20, 0.5));
+      backdrop-filter: blur(12px);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.2;
+    }
+
+    .summary {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .pill {
+      min-width: 76px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--ink);
+      text-align: center;
+      font-weight: 700;
+    }
+
+    .pill.ok {
+      color: #b8ffca;
+      border-color: rgba(101, 214, 127, 0.36);
+      background: rgba(101, 214, 127, 0.13);
+    }
+
+    .panel {
+      position: absolute;
+      z-index: 5;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .control-panel {
+      top: 66px;
+      left: 12px;
+      width: min(344px, calc(100vw - 24px));
+      max-height: calc(100vh - 86px);
+      overflow: auto;
+      padding: 12px;
+    }
+
+    .side-panel {
+      top: 66px;
+      right: 12px;
+      width: min(324px, calc(100vw - 24px));
+      max-height: calc(100vh - 86px);
+      overflow: auto;
+      padding: 12px;
+    }
+
+    .section + .section {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 9px;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .button-row,
+    .preset-grid,
+    .toggle-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .button-row {
+      grid-template-columns: 1fr 1fr 1fr;
+    }
+
+    .preset-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .toggle-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+      margin-top: 9px;
+    }
+
+    .field-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .stat-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+    }
+
+    .stat {
+      display: grid;
+      grid-template-columns: minmax(86px, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 28px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 13px;
+    }
+
+    .stat:last-child {
+      border-bottom: 0;
+    }
+
+    .stat dt,
+    .stat dd {
+      margin: 0;
+    }
+
+    .stat dt {
+      color: var(--muted);
+    }
+
+    .stat dd {
+      text-align: right;
+      font-weight: 700;
+    }
+
+    .aircraft-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .aircraft-row {
+      display: grid;
+      grid-template-columns: 12px minmax(54px, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 30px;
+      font-size: 13px;
+    }
+
+    .swatch {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12);
+    }
+
+    .aircraft-row strong {
+      font-size: 13px;
+    }
+
+    .aircraft-row span {
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .legend {
+      display: grid;
+      gap: 7px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .legend-item {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .line-sample {
+      width: 18px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+
+    .line-sample.warning {
+      background: var(--red);
+    }
+
+    .line-sample.terrain {
+      background: #8eb97b;
+    }
+
+    .compass {
+      position: absolute;
+      right: 18px;
+      bottom: 18px;
+      z-index: 3;
+      width: 94px;
+      height: 94px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-strong);
+      color: var(--muted);
+      box-shadow: var(--shadow);
+      pointer-events: none;
+    }
+
+    .compass::before,
+    .compass::after {
+      content: "";
+      position: absolute;
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    .compass::before {
+      left: 46px;
+      top: 15px;
+      width: 1px;
+      height: 64px;
+    }
+
+    .compass::after {
+      left: 15px;
+      top: 46px;
+      width: 64px;
+      height: 1px;
+    }
+
+    .compass span {
+      position: absolute;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .compass .north {
+      top: 5px;
+      left: 41px;
+      color: var(--accent);
+    }
+
+    .compass .east {
+      right: 8px;
+      top: 40px;
+    }
+
+    .compass .up {
+      left: 8px;
+      bottom: 7px;
+    }
+
+    .notice {
+      min-height: 30px;
+      padding: 7px 9px;
+      border: 1px solid rgba(53, 198, 164, 0.24);
+      border-radius: 6px;
+      background: rgba(53, 198, 164, 0.1);
+      color: #bff9e5;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .readout {
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 980px) {
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .summary {
+        justify-content: flex-start;
+      }
+
+      .control-panel {
+        top: auto;
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        width: auto;
+        max-height: 48vh;
+      }
+
+      .side-panel {
+        display: none;
+      }
+
+      .compass {
+        right: 10px;
+        bottom: calc(48vh + 24px);
+      }
+    }
+
+    @media (max-width: 560px) {
+      .button-row,
+      .preset-grid,
+      .toggle-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .compass {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div id="sceneHost" aria-label="三维编队态势场景"></div>
+
+    <header class="topbar">
+      <h1>三维编队态势 Demo</h1>
+      <div class="summary">
+        <span class="pill ok" id="runState">LIVE</span>
+        <span>时间 <strong class="readout" id="timeText">0.0s</strong></span>
+        <span>视角 <strong id="cameraModeText">自由</strong></span>
+        <span>焦点 <strong id="focusText">编队中心</strong></span>
+      </div>
+    </header>
+
+    <aside class="panel control-panel">
+      <section class="section">
+        <h2>视角</h2>
+        <div class="preset-grid" id="viewButtons">
+          <button data-view="free" class="active">自由</button>
+          <button data-view="top">俯视</button>
+          <button data-view="side">侧视</button>
+          <button data-view="front">前方</button>
+          <button data-view="follow">追随</button>
+          <button data-view="terrain">山谷</button>
+        </div>
+        <div class="field">
+          <div class="field-label">
+            <span>位置</span>
+            <strong id="targetText">编队中心</strong>
+          </div>
+          <select id="targetSelect">
+            <option value="formation">编队中心</option>
+            <option value="A01">A01 长机</option>
+            <option value="A02">A02 左僚机</option>
+            <option value="A03">A03 右僚机</option>
+            <option value="terrain">山谷入口</option>
+            <option value="risk">障碍候选区</option>
+          </select>
+        </div>
+        <div class="button-row" style="grid-template-columns: 1fr 1fr;">
+          <button id="fitBtn">适配全景</button>
+          <button id="resetViewBtn">重置视角</button>
+        </div>
+        <div class="button-row" style="grid-template-columns: 1fr 1fr;">
+          <button id="zoomInBtn">放大</button>
+          <button id="zoomOutBtn">缩小</button>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>图层</h2>
+        <div class="toggle-grid">
+          <button class="active" data-toggle="terrain">地形</button>
+          <button class="active" data-toggle="trails">轨迹</button>
+          <button class="active" data-toggle="grid">网格</button>
+          <button class="active" data-toggle="risk">风险区</button>
+        </div>
+        <div class="field">
+          <div class="field-label">
+            <span>尾迹长度</span>
+            <strong class="readout" id="trailText">32s</strong>
+          </div>
+          <input id="trailRange" type="range" min="8" max="80" step="4" value="32">
+        </div>
+        <button id="fullscreenBtn" style="width: 100%; margin-top: 9px;">全屏</button>
+      </section>
+    </aside>
+
+    <aside class="panel side-panel">
+      <section class="section">
+        <h2>飞机状态</h2>
+        <div class="aircraft-list" id="aircraftList"></div>
+      </section>
+      <section class="section">
+        <h2>场景状态</h2>
+        <dl class="stat-list">
+          <div class="stat">
+            <dt>地形峰值</dt>
+            <dd id="terrainPeakText">0 m</dd>
+          </div>
+          <div class="stat">
+            <dt>最近风险区</dt>
+            <dd id="riskText">--</dd>
+          </div>
+          <div class="stat">
+            <dt>相机距离</dt>
+            <dd id="cameraDistanceText">0 m</dd>
+          </div>
+          <div class="stat">
+            <dt>轨迹点数</dt>
+            <dd id="sampleCountText">0</dd>
+          </div>
+        </dl>
+      </section>
+      <section class="section">
+        <h2>图例</h2>
+        <div class="legend">
+          <div class="legend-item"><i class="line-sample"></i><span>预生成盘旋轨迹</span></div>
+          <div class="legend-item"><i class="line-sample terrain"></i><span>程序生成山地地形</span></div>
+          <div class="legend-item"><i class="line-sample warning"></i><span>避障风险区占位</span></div>
+        </div>
+      </section>
+      <section class="section">
+        <div class="notice" id="noticeText">轨迹为离线预生成数据，界面自动按时间插值播放。</div>
+      </section>
+    </aside>
+
+    <div class="compass" aria-hidden="true">
+      <span class="north">北</span>
+      <span class="east">东</span>
+      <span class="up">高</span>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.165.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.165.0/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+    const host = document.getElementById("sceneHost");
+    const runState = document.getElementById("runState");
+    const timeText = document.getElementById("timeText");
+    const cameraModeText = document.getElementById("cameraModeText");
+    const focusText = document.getElementById("focusText");
+    const targetText = document.getElementById("targetText");
+    const viewButtons = document.getElementById("viewButtons");
+    const targetSelect = document.getElementById("targetSelect");
+    const fitBtn = document.getElementById("fitBtn");
+    const resetViewBtn = document.getElementById("resetViewBtn");
+    const zoomInBtn = document.getElementById("zoomInBtn");
+    const zoomOutBtn = document.getElementById("zoomOutBtn");
+    const fullscreenBtn = document.getElementById("fullscreenBtn");
+    const trailRange = document.getElementById("trailRange");
+    const trailText = document.getElementById("trailText");
+    const aircraftList = document.getElementById("aircraftList");
+    const terrainPeakText = document.getElementById("terrainPeakText");
+    const riskText = document.getElementById("riskText");
+    const cameraDistanceText = document.getElementById("cameraDistanceText");
+    const sampleCountText = document.getElementById("sampleCountText");
+    const noticeText = document.getElementById("noticeText");
+
+    const WORLD = {
+      width: 3600,
+      depth: 2600,
+      duration: 180,
+      dt: 0.25,
+      maxTerrainHeight: 0,
+    };
+
+    const aircraftConfigs = [
+      {
+        id: "A01",
+        name: "长机",
+        color: 0x4da3ff,
+        center: new THREE.Vector3(-250, 450, -40),
+        radiusX: 690,
+        radiusZ: 470,
+        altitude: 520,
+        verticalAmp: 55,
+        phase: 0,
+        period: 82,
+      },
+      {
+        id: "A02",
+        name: "左僚机",
+        color: 0x65d67f,
+        center: new THREE.Vector3(-430, 410, 160),
+        radiusX: 610,
+        radiusZ: 420,
+        altitude: 470,
+        verticalAmp: 45,
+        phase: 1.95,
+        period: 82,
+      },
+      {
+        id: "A03",
+        name: "右僚机",
+        color: 0xf6b84a,
+        center: new THREE.Vector3(-70, 430, -210),
+        radiusX: 650,
+        radiusZ: 450,
+        altitude: 500,
+        verticalAmp: 62,
+        phase: -1.72,
+        period: 82,
+      },
+    ];
+
+    const layerState = {
+      terrain: true,
+      trails: true,
+      grid: true,
+      risk: true,
+    };
+
+    const state = {
+      time: 0,
+      speed: 1,
+      trailSeconds: Number(trailRange.value),
+      cameraMode: "free",
+      focus: "formation",
+      lastFrameMs: performance.now(),
+    };
+
+    const clock = new THREE.Clock();
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x071014);
+    scene.fog = new THREE.FogExp2(0x071014, 0.00032);
+
+    const camera = new THREE.PerspectiveCamera(55, 1, 1, 9200);
+    camera.position.set(1180, 980, 1280);
+
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: "high-performance",
+      preserveDrawingBuffer: true,
+    });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.domElement.id = "sceneCanvas";
+    host.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.07;
+    controls.enablePan = true;
+    controls.screenSpacePanning = false;
+    controls.minDistance = 160;
+    controls.maxDistance = 5400;
+    controls.maxPolarAngle = Math.PI * 0.48;
+    controls.target.set(-120, 330, -30);
+    controls.saveState();
+    controls.addEventListener("start", () => {
+      if (state.cameraMode === "follow") {
+        setCameraMode("free", false);
+      }
+    });
+
+    const sun = new THREE.DirectionalLight(0xffffff, 2.9);
+    sun.position.set(-900, 1900, 900);
+    sun.castShadow = true;
+    sun.shadow.camera.left = -2400;
+    sun.shadow.camera.right = 2400;
+    sun.shadow.camera.top = 1800;
+    sun.shadow.camera.bottom = -1800;
+    scene.add(sun);
+    scene.add(new THREE.HemisphereLight(0xd8f3ff, 0x49673f, 1.15));
+
+    const aircraftLayer = new THREE.Group();
+    const trailLayer = new THREE.Group();
+    const fullTrackLayer = new THREE.Group();
+    const riskLayer = new THREE.Group();
+    scene.add(aircraftLayer, trailLayer, fullTrackLayer, riskLayer);
+
+    const grid = new THREE.GridHelper(4000, 40, 0x74938b, 0x2e4948);
+    grid.position.y = 6;
+    grid.material.opacity = 0.4;
+    grid.material.transparent = true;
+    scene.add(grid);
+
+    const terrain = buildTerrain();
+    scene.add(terrain.mesh, terrain.wire);
+    WORLD.maxTerrainHeight = terrain.maxHeight;
+    terrainPeakText.textContent = `${Math.round(WORLD.maxTerrainHeight)} m`;
+
+    const riskZones = [
+      { id: "R1", label: "北侧山口", x: 440, z: -360, radius: 155, height: 580 },
+      { id: "R2", label: "东侧山脊", x: 820, z: 300, radius: 190, height: 720 },
+      { id: "R3", label: "中心谷地", x: -40, z: 380, radius: 130, height: 460 },
+    ];
+    buildRiskZones();
+
+    const aircraft = aircraftConfigs.map((config) => {
+      const track = generateTrack(config);
+      const mesh = createAircraftMesh(config);
+      const fullTrack = createTrackLine(track, config.color, 0.26);
+      const recentTrail = createRecentTrail(config.color);
+      aircraftLayer.add(mesh);
+      fullTrackLayer.add(fullTrack);
+      trailLayer.add(recentTrail);
+      return { ...config, track, mesh, fullTrack, recentTrail };
+    });
+    sampleCountText.textContent = `${aircraft.reduce((sum, item) => sum + item.track.length, 0)}`;
+
+    renderAircraftList();
+    applyCameraPreset("free", true);
+    resize();
+    animate();
+
+    function terrainHeight(x, z) {
+      const peaks = [
+        { x: -930, z: -580, h: 410, sx: 430, sz: 360 },
+        { x: -620, z: 720, h: 310, sx: 380, sz: 430 },
+        { x: 720, z: -520, h: 520, sx: 520, sz: 440 },
+        { x: 980, z: 520, h: 470, sx: 500, sz: 400 },
+        { x: 40, z: 760, h: 210, sx: 460, sz: 280 },
+      ];
+      let height = 18;
+      for (const peak of peaks) {
+        const dx = (x - peak.x) / peak.sx;
+        const dz = (z - peak.z) / peak.sz;
+        height += peak.h * Math.exp(-(dx * dx + dz * dz));
+      }
+      height += 34 * Math.sin(x / 240) * Math.cos(z / 210);
+      height += 24 * Math.sin((x + z) / 360);
+      return Math.max(0, height);
+    }
+
+    function buildTerrain() {
+      const geometry = new THREE.PlaneGeometry(WORLD.width, WORLD.depth, 120, 88);
+      geometry.rotateX(-Math.PI / 2);
+      const position = geometry.attributes.position;
+      const colors = [];
+      let maxHeight = 0;
+      const low = new THREE.Color(0x21453a);
+      const mid = new THREE.Color(0x769e68);
+      const high = new THREE.Color(0xd0c7a1);
+      for (let index = 0; index < position.count; index += 1) {
+        const x = position.getX(index);
+        const z = position.getZ(index);
+        const height = terrainHeight(x, z);
+        position.setY(index, height);
+        maxHeight = Math.max(maxHeight, height);
+        const color = height < 210
+          ? low.clone().lerp(mid, height / 210)
+          : mid.clone().lerp(high, Math.min(1, (height - 210) / 360));
+        colors.push(color.r, color.g, color.b);
+      }
+      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+      geometry.computeVertexNormals();
+
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshStandardMaterial({
+          vertexColors: true,
+          roughness: 0.92,
+          metalness: 0,
+        }),
+      );
+      mesh.receiveShadow = true;
+
+      const wire = new THREE.LineSegments(
+        new THREE.WireframeGeometry(geometry),
+        new THREE.LineBasicMaterial({
+          color: 0xc5ddc4,
+          transparent: true,
+          opacity: 0.12,
+          depthWrite: false,
+        }),
+      );
+      wire.position.y = 2;
+      return { mesh, wire, maxHeight };
+    }
+
+    function buildRiskZones() {
+      for (const zone of riskZones) {
+        const heightAtCenter = terrainHeight(zone.x, zone.z);
+        const geometry = new THREE.CylinderGeometry(zone.radius, zone.radius, zone.height, 48, 1, true);
+        const material = new THREE.MeshStandardMaterial({
+          color: 0xf07070,
+          transparent: true,
+          opacity: 0.22,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const cylinder = new THREE.Mesh(geometry, material);
+        cylinder.position.set(zone.x, heightAtCenter + zone.height / 2, zone.z);
+        cylinder.userData.zone = zone;
+        riskLayer.add(cylinder);
+
+        const ring = new THREE.Mesh(
+          new THREE.TorusGeometry(zone.radius, 3.5, 10, 64),
+          new THREE.MeshBasicMaterial({ color: 0xffa0a0 }),
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(zone.x, heightAtCenter + 5, zone.z);
+        riskLayer.add(ring);
+      }
+    }
+
+    function generateTrack(config) {
+      const points = [];
+      for (let t = 0; t <= WORLD.duration + WORLD.dt / 2; t += WORLD.dt) {
+        const angle = (t / config.period) * Math.PI * 2 + config.phase;
+        const x = config.center.x + Math.cos(angle) * config.radiusX;
+        const z = config.center.z + Math.sin(angle) * config.radiusZ;
+        const y = config.altitude + config.verticalAmp * Math.sin(angle * 1.7 + config.phase * 0.4);
+        const dx = -Math.sin(angle) * config.radiusX;
+        const dz = Math.cos(angle) * config.radiusZ;
+        const heading = Math.atan2(dz, dx);
+        const speed = Math.sqrt(dx * dx + dz * dz) * (Math.PI * 2 / config.period);
+        points.push({ t, x, y, z, heading, speed });
+      }
+      return points;
+    }
+
+    function createAircraftMesh(config) {
+      const group = new THREE.Group();
+      const bodyMaterial = new THREE.MeshStandardMaterial({
+        color: config.color,
+        roughness: 0.38,
+        metalness: 0.28,
+      });
+      const darkMaterial = new THREE.MeshStandardMaterial({
+        color: 0x12242b,
+        roughness: 0.5,
+        metalness: 0.12,
+      });
+      const glassMaterial = new THREE.MeshStandardMaterial({
+        color: 0xbfeaff,
+        transparent: true,
+        opacity: 0.7,
+        roughness: 0.12,
+        metalness: 0.08,
+      });
+
+      const trimMaterial = new THREE.MeshStandardMaterial({
+        color: 0xf7fbff,
+        roughness: 0.34,
+        metalness: 0.18,
+      });
+      const propMaterial = new THREE.MeshStandardMaterial({
+        color: 0x0b1114,
+        roughness: 0.46,
+        metalness: 0.26,
+      });
+
+      const body = new THREE.Mesh(new THREE.CapsuleGeometry(15, 104, 8, 24), bodyMaterial);
+      body.rotation.z = Math.PI / 2;
+      body.scale.set(1.15, 0.82, 0.82);
+      body.castShadow = true;
+      group.add(body);
+
+      const nose = new THREE.Mesh(new THREE.ConeGeometry(15.5, 38, 24), trimMaterial);
+      nose.rotation.z = -Math.PI / 2;
+      nose.position.x = 80;
+      nose.castShadow = true;
+      group.add(nose);
+
+      const tailCone = new THREE.Mesh(new THREE.ConeGeometry(12, 34, 20), darkMaterial);
+      tailCone.rotation.z = Math.PI / 2;
+      tailCone.position.x = -77;
+      tailCone.castShadow = true;
+      group.add(tailCone);
+
+      const wing = createFlatPrism(
+        [
+          [14, -112],
+          [32, 0],
+          [14, 112],
+          [-42, 88],
+          [-20, 0],
+          [-42, -88],
+        ],
+        5,
+        bodyMaterial,
+      );
+      wing.position.y = -1;
+      wing.castShadow = true;
+      group.add(wing);
+
+      const wingStripe = createFlatPrism(
+        [
+          [-2, -92],
+          [5, 0],
+          [-2, 92],
+          [-8, 72],
+          [-5, 0],
+          [-8, -72],
+        ],
+        5.8,
+        trimMaterial,
+      );
+      wingStripe.position.y = 2.2;
+      wingStripe.castShadow = true;
+      group.add(wingStripe);
+
+      const tailWing = createFlatPrism(
+        [
+          [-63, -48],
+          [-50, 0],
+          [-63, 48],
+          [-91, 34],
+          [-82, 0],
+          [-91, -34],
+        ],
+        4,
+        darkMaterial,
+      );
+      tailWing.position.y = 8;
+      tailWing.castShadow = true;
+      group.add(tailWing);
+
+      const verticalTail = createFlatPrism(
+        [
+          [-88, 0],
+          [-58, 0],
+          [-72, 48],
+          [-96, 31],
+        ],
+        4.5,
+        darkMaterial,
+      );
+      verticalTail.rotation.x = -Math.PI / 2;
+      verticalTail.position.set(0, 10, 0);
+      verticalTail.castShadow = true;
+      group.add(verticalTail);
+
+      const canopy = new THREE.Mesh(new THREE.SphereGeometry(18, 28, 14), glassMaterial);
+      canopy.scale.set(1.35, 0.46, 0.68);
+      canopy.position.set(26, 14, 0);
+      canopy.castShadow = true;
+      group.add(canopy);
+
+      const propeller = new THREE.Group();
+      propeller.position.x = 101;
+      const spinner = new THREE.Mesh(new THREE.SphereGeometry(7.5, 18, 10), propMaterial);
+      spinner.scale.set(1.22, 0.82, 0.82);
+      spinner.castShadow = true;
+      propeller.add(spinner);
+      for (let i = 0; i < 3; i += 1) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(3.2, 46, 8.5), propMaterial);
+        blade.position.y = 24;
+        blade.rotation.x = (i * Math.PI * 2) / 3;
+        blade.castShadow = true;
+        propeller.add(blade);
+      }
+      group.add(propeller);
+
+      const leftLight = new THREE.Mesh(
+        new THREE.SphereGeometry(4.2, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0xf07070 }),
+      );
+      leftLight.position.set(11, 2.8, -114);
+      group.add(leftLight);
+
+      const rightLight = new THREE.Mesh(
+        new THREE.SphereGeometry(4.2, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0x65d67f }),
+      );
+      rightLight.position.set(11, 2.8, 114);
+      group.add(rightLight);
+
+      const marker = new THREE.PointLight(config.color, 0.82, 260);
+      marker.position.set(0, 18, 0);
+      group.add(marker);
+
+      group.userData.id = config.id;
+      group.userData.propeller = propeller;
+      return group;
+    }
+
+    function createFlatPrism(points, thickness, material) {
+      const half = thickness / 2;
+      const vertices = [];
+      for (const [x, z] of points) {
+        vertices.push(x, half, z);
+      }
+      for (const [x, z] of points) {
+        vertices.push(x, -half, z);
+      }
+
+      const indices = [];
+      for (let i = 1; i < points.length - 1; i += 1) {
+        indices.push(0, i, i + 1);
+        indices.push(points.length, points.length + i + 1, points.length + i);
+      }
+      for (let i = 0; i < points.length; i += 1) {
+        const next = (i + 1) % points.length;
+        indices.push(i, next, points.length + next);
+        indices.push(i, points.length + next, points.length + i);
+      }
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      return new THREE.Mesh(geometry, material);
+    }
+
+    function createTrackLine(track, color, opacity) {
+      const points = track.map((point) => new THREE.Vector3(point.x, point.y, point.z));
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+      });
+      return new THREE.Line(geometry, material);
+    }
+
+    function createRecentTrail(color) {
+      const maxPoints = Math.ceil(80 / WORLD.dt) + 2;
+      const positions = new Float32Array(maxPoints * 3);
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geometry.setDrawRange(0, 0);
+      const material = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+      });
+      return new THREE.Line(geometry, material);
+    }
+
+    function sampleTrack(track, time) {
+      const wrapped = ((time % WORLD.duration) + WORLD.duration) % WORLD.duration;
+      const raw = wrapped / WORLD.dt;
+      const index = Math.floor(raw);
+      const nextIndex = (index + 1) % track.length;
+      const mix = raw - index;
+      const a = track[index];
+      const b = track[nextIndex];
+      const headingDelta = wrapAngle(b.heading - a.heading);
+      return {
+        x: lerp(a.x, b.x, mix),
+        y: lerp(a.y, b.y, mix),
+        z: lerp(a.z, b.z, mix),
+        heading: a.heading + headingDelta * mix,
+        speed: lerp(a.speed, b.speed, mix),
+      };
+    }
+
+    function updateAircraft() {
+      let formation = new THREE.Vector3();
+      const rows = [];
+      for (const item of aircraft) {
+        const point = sampleTrack(item.track, state.time);
+        const ground = terrainHeight(point.x, point.z);
+        item.mesh.position.set(point.x, point.y, point.z);
+        item.mesh.rotation.set(0, -point.heading, 0.12 * Math.sin(state.time / 3 + item.phase));
+        item.mesh.userData.propeller.rotation.x = state.time * 46 + item.phase;
+        item.current = point;
+        item.clearance = point.y - ground;
+        formation.add(item.mesh.position);
+        updateRecentTrail(item);
+        rows.push({ item, point, clearance: item.clearance });
+      }
+      formation.divideScalar(aircraft.length);
+      state.formationCenter = formation;
+      updateAircraftRows(rows);
+      updateRiskReadout(rows);
+    }
+
+    function updateRecentTrail(item) {
+      const maxPoints = item.recentTrail.geometry.attributes.position.count;
+      const count = Math.min(maxPoints, Math.floor(state.trailSeconds / WORLD.dt));
+      const position = item.recentTrail.geometry.attributes.position;
+      for (let i = 0; i < count; i += 1) {
+        const point = sampleTrack(item.track, state.time - (count - 1 - i) * WORLD.dt);
+        position.setXYZ(i, point.x, point.y, point.z);
+      }
+      item.recentTrail.geometry.setDrawRange(0, count);
+      position.needsUpdate = true;
+    }
+
+    function updateAircraftRows(rows) {
+      const parts = rows.map(({ item, point, clearance }) => {
+        const speed = Math.round(point.speed);
+        const height = Math.round(point.y);
+        const margin = Math.round(clearance);
+        return `
+          <div class="aircraft-row">
+            <i class="swatch" style="background: #${item.color.toString(16).padStart(6, "0")}"></i>
+            <strong>${item.id}</strong>
+            <span>${height} m / ${speed} m/s / 裕度 ${margin} m</span>
+          </div>
+        `;
+      });
+      aircraftList.innerHTML = parts.join("");
+    }
+
+    function updateRiskReadout(rows) {
+      let best = null;
+      for (const { item, point } of rows) {
+        for (const zone of riskZones) {
+          const distance = Math.hypot(point.x - zone.x, point.z - zone.z) - zone.radius;
+          if (!best || distance < best.distance) {
+            best = { item, zone, distance };
+          }
+        }
+      }
+      if (!best) {
+        riskText.textContent = "--";
+        return;
+      }
+      const label = best.distance < 0 ? "穿越" : `${Math.round(best.distance)} m`;
+      riskText.textContent = `${best.item.id} / ${best.zone.label} / ${label}`;
+    }
+
+    function renderAircraftList() {
+      const parts = aircraft.map((item) => `
+        <div class="aircraft-row">
+          <i class="swatch" style="background: #${item.color.toString(16).padStart(6, "0")}"></i>
+          <strong>${item.id}</strong>
+          <span>等待数据</span>
+        </div>
+      `);
+      aircraftList.innerHTML = parts.join("");
+    }
+
+    function focusPosition(key = state.focus) {
+      if (key === "formation") {
+        return state.formationCenter ? state.formationCenter.clone() : new THREE.Vector3(-120, 420, -30);
+      }
+      if (key === "terrain") {
+        return new THREE.Vector3(820, terrainHeight(820, -260) + 180, -260);
+      }
+      if (key === "risk") {
+        const zone = riskZones[1];
+        return new THREE.Vector3(zone.x, terrainHeight(zone.x, zone.z) + 230, zone.z);
+      }
+      const found = aircraft.find((item) => item.id === key);
+      return found?.mesh.position.clone() || new THREE.Vector3(-120, 420, -30);
+    }
+
+    function setCameraMode(mode, instant = true) {
+      state.cameraMode = mode;
+      viewButtons.querySelectorAll("button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === mode);
+      });
+      const names = {
+        free: "自由",
+        top: "俯视",
+        side: "侧视",
+        front: "前方",
+        follow: "追随",
+        terrain: "山谷",
+      };
+      cameraModeText.textContent = names[mode] || "自由";
+      applyCameraPreset(mode, instant);
+    }
+
+    function applyCameraPreset(mode, instant = true) {
+      const target = focusPosition();
+      let offset = new THREE.Vector3(1120, 820, 1180);
+      if (mode === "top") {
+        offset = new THREE.Vector3(0, 2100, 0.1);
+      } else if (mode === "side") {
+        offset = new THREE.Vector3(0, 620, 1780);
+      } else if (mode === "front") {
+        offset = new THREE.Vector3(-1560, 620, -260);
+      } else if (mode === "terrain") {
+        offset = new THREE.Vector3(900, 540, 980);
+      } else if (mode === "follow") {
+        updateFollowCamera(true);
+        return;
+      }
+      moveCameraTo(target.clone().add(offset), target, instant);
+      if (mode !== "free") {
+        controls.saveState();
+      }
+    }
+
+    function moveCameraTo(position, target, instant) {
+      if (instant) {
+        camera.position.copy(position);
+        controls.target.copy(target);
+      } else {
+        camera.position.lerp(position, 0.22);
+        controls.target.lerp(target, 0.22);
+      }
+      controls.update();
+    }
+
+    function updateFollowCamera(instant = false) {
+      const focused = aircraft.find((item) => item.id === state.focus) || aircraft[0];
+      const point = focused.current || sampleTrack(focused.track, state.time);
+      const forward = new THREE.Vector3(Math.cos(point.heading), 0, Math.sin(point.heading)).normalize();
+      const target = new THREE.Vector3(point.x, point.y + 24, point.z);
+      const desired = target.clone().addScaledVector(forward, -310).add(new THREE.Vector3(0, 155, 0));
+      moveCameraTo(desired, target, instant);
+    }
+
+    function fitScene() {
+      setCameraMode("free", true);
+      const target = new THREE.Vector3(-30, 380, -20);
+      moveCameraTo(new THREE.Vector3(0, 1850, 2300), target, true);
+      controls.saveState();
+    }
+
+    function zoomBy(factor) {
+      const direction = new THREE.Vector3().subVectors(camera.position, controls.target);
+      direction.multiplyScalar(factor);
+      const distance = direction.length();
+      if (distance < controls.minDistance || distance > controls.maxDistance) {
+        return;
+      }
+      camera.position.copy(controls.target).add(direction);
+      controls.update();
+    }
+
+    function updateReadouts() {
+      runState.textContent = "LIVE";
+      runState.classList.add("ok");
+      timeText.textContent = `${state.time.toFixed(1)}s`;
+      cameraDistanceText.textContent = `${Math.round(camera.position.distanceTo(controls.target))} m`;
+      const focusName = targetSelect.options[targetSelect.selectedIndex]?.textContent || "编队中心";
+      focusText.textContent = focusName;
+      targetText.textContent = focusName;
+    }
+
+    function updateLayers() {
+      terrain.mesh.visible = layerState.terrain;
+      terrain.wire.visible = layerState.terrain;
+      fullTrackLayer.visible = layerState.trails;
+      trailLayer.visible = layerState.trails;
+      grid.visible = layerState.grid;
+      riskLayer.visible = layerState.risk;
+    }
+
+    function resize() {
+      const width = host.clientWidth || window.innerWidth;
+      const height = host.clientHeight || window.innerHeight;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / Math.max(1, height);
+      camera.updateProjectionMatrix();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = Math.min(clock.getDelta(), 0.05);
+      state.time = (state.time + delta * state.speed) % WORLD.duration;
+      updateAircraft();
+      if (state.cameraMode === "follow") {
+        updateFollowCamera(false);
+      }
+      controls.update();
+      updateReadouts();
+      renderer.render(scene, camera);
+    }
+
+    function lerp(a, b, mix) {
+      return a + (b - a) * mix;
+    }
+
+    function wrapAngle(angle) {
+      let value = angle;
+      while (value > Math.PI) value -= Math.PI * 2;
+      while (value < -Math.PI) value += Math.PI * 2;
+      return value;
+    }
+
+    trailRange.addEventListener("input", () => {
+      state.trailSeconds = Number(trailRange.value);
+      trailText.textContent = `${state.trailSeconds}s`;
+    });
+
+    viewButtons.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-view]");
+      if (!button) return;
+      setCameraMode(button.dataset.view, true);
+    });
+
+    targetSelect.addEventListener("change", () => {
+      state.focus = targetSelect.value;
+      const target = focusPosition();
+      controls.target.copy(target);
+      if (state.cameraMode === "follow") {
+        updateFollowCamera(true);
+      } else {
+        controls.update();
+      }
+      updateReadouts();
+    });
+
+    fitBtn.addEventListener("click", () => {
+      fitScene();
+      noticeText.textContent = "已适配完整地形与轨迹范围。";
+    });
+
+    resetViewBtn.addEventListener("click", () => {
+      controls.reset();
+      setCameraMode("free", true);
+      noticeText.textContent = "视角已回到初始状态。";
+    });
+
+    zoomInBtn.addEventListener("click", () => zoomBy(0.78));
+    zoomOutBtn.addEventListener("click", () => zoomBy(1.28));
+
+    document.querySelectorAll("button[data-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const key = button.dataset.toggle;
+        layerState[key] = !layerState[key];
+        button.classList.toggle("active", layerState[key]);
+        updateLayers();
+      });
+    });
+
+    fullscreenBtn.addEventListener("click", async () => {
+      if (!document.fullscreenElement) {
+        await document.documentElement.requestFullscreen();
+        fullscreenBtn.textContent = "退出全屏";
+      } else {
+        await document.exitFullscreen();
+        fullscreenBtn.textContent = "全屏";
+      }
+    });
+
+    window.addEventListener("resize", resize);
+    document.addEventListener("fullscreenchange", () => {
+      fullscreenBtn.textContent = document.fullscreenElement ? "退出全屏" : "全屏";
+      resize();
+    });
+
+    window.__formation3dDemo = {
+      getState: () => ({
+        aircraft: aircraft.map((item) => ({ id: item.id, position: item.mesh.position.toArray() })),
+        time: state.time,
+        cameraMode: state.cameraMode,
+        focus: state.focus,
+      }),
+      setView: (mode) => setCameraMode(mode, true),
+      setFocus: (focus) => {
+        targetSelect.value = focus;
+        targetSelect.dispatchEvent(new Event("change"));
+      },
+    };
+  </script>
+</body>
+</html>
