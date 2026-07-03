@@ -39,8 +39,10 @@ class LateralTrackAngleInitS:
     kd: float = 0.0  # 侧向速度误差/航迹角比例(等价旧并联 kd)，必须非零
     ki: float = 0.0  # 横偏积分(等价旧并联 ki)；串联内环积分 K3=kd·ki/kp
     dt: float = 0.0
-    outMax: float = 0.0  # 侧向加速度限幅(<=0 表示不限)
-    gammaMaxRad: float = math.radians(30.0)  # R 计算用的最大航迹角(转弯半径尺度)，调参旋钮
+    # 执行层限幅用**滚转角**(而非侧向加速度)：协调平飞下 a_lat=g·tan(φ)，故把侧向加速度限到 g·tan(rollMaxRad)。
+    # 比"限侧向加速度"物理(侧向本就是 bank-to-turn)，且与模型滚转硬限(±70°)同量纲、便于对齐。
+    rollMaxRad: float = math.radians(40.0)  # 侧向滚转角限幅(执行层)，必须在 (0, pi/2)
+    gammaMaxRad: float = math.radians(25.0)  # 定变限幅半径 R=V²/(g·sinΓmax)·margin 的最大航迹角(转弯半径尺度)，调参旋钮
     floorRad: float = math.radians(7.0)  # 航迹角限幅地板，避免中心线附近仍大角震荡
     margin: float = 1.2  # R 余量(向上留裕度)
 
@@ -68,6 +70,8 @@ class LateralTrackAngle:
         if cfg.ki != 0.0 and cfg.kp == 0.0:
             # 内环积分 K3=kd·ki/kp 需要 kp 非零；ki=0 时无此约束。
             raise ValueError("kp must be non-zero when ki != 0")
+        if not 0.0 < cfg.rollMaxRad < math.pi / 2:
+            raise ValueError("rollMaxRad must be in (0, pi/2)")
         if not 0.0 < cfg.gammaMaxRad < math.pi / 2:
             raise ValueError("gammaMaxRad must be in (0, pi/2)")
         if not 0.0 <= cfg.floorRad < math.pi / 2:
@@ -75,6 +79,8 @@ class LateralTrackAngle:
         if cfg.margin <= 0.0:
             raise ValueError("margin must be > 0")
         self._cfg = cfg
+        # 滚转角限幅折算成侧向加速度上限：a_lat_max = g·tan(rollMax)。
+        self._acc_max = _GRAVITY_MPS2 * math.tan(cfg.rollMaxRad)
         self.reset()
 
     def track_angle_limit_rad(self, dz_abs: float, v_ground: float) -> float:
@@ -116,18 +122,16 @@ class LateralTrackAngle:
         if cfg.ki != 0.0:
             k3 = cfg.kd * cfg.ki / cfg.kp
             self._integral += k3 * err * cfg.dt
-            if cfg.outMax > 0.0:
-                self._integral = clamp(self._integral, -cfg.outMax, cfg.outMax)
+            self._integral = clamp(self._integral, -self._acc_max, self._acc_max)
             acc += self._integral
 
-        if cfg.outMax > 0.0:
-            acc_clamped = clamp(acc, -cfg.outMax, cfg.outMax)
-            # 抗饱和(反算法)：输出被夹时把溢出从积分回退，防止积分绕死。
-            if cfg.ki != 0.0 and acc_clamped != acc:
-                self._integral -= acc - acc_clamped
-                self._integral = clamp(self._integral, -cfg.outMax, cfg.outMax)
-            return acc_clamped
-        return acc
+        # 执行层滚转角限幅：把侧向加速度夹到 ±g·tan(rollMax)。
+        acc_clamped = clamp(acc, -self._acc_max, self._acc_max)
+        # 抗饱和(反算法)：输出被夹时把溢出从积分回退，防止积分绕死。
+        if cfg.ki != 0.0 and acc_clamped != acc:
+            self._integral -= acc - acc_clamped
+            self._integral = clamp(self._integral, -self._acc_max, self._acc_max)
+        return acc_clamped
 
     def reset(self) -> None:
         """复位 LateralTrackAngle 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

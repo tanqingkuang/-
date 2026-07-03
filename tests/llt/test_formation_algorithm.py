@@ -768,7 +768,7 @@ class LateralTrackAngleTests(unittest.TestCase):
 
     def _cfg(self, **kw: float) -> LateralTrackAngleInitS:
         base = dict(
-            kp=0.02, kd=0.12, ki=0.0, dt=0.05, outMax=4.0,
+            kp=0.02, kd=0.12, ki=0.0, dt=0.05, rollMaxRad=math.radians(40.0),
             gammaMaxRad=math.radians(30.0), floorRad=math.radians(7.0), margin=1.2,
         )
         base.update(kw)
@@ -803,6 +803,14 @@ class LateralTrackAngleTests(unittest.TestCase):
         self.assertAlmostEqual(a1, 0.12 * v * math.sin(math.pi / 2))  # = 2.4，对应 90° 垂直切入
         self.assertAlmostEqual(a1, a2)  # 侧偏放大 1000 倍指令不变：有界拦截，不会越滚越紧
         self.assertGreater(a1, 0.0)     # dZ>0(目标在右) → 向右(正)修正
+
+    def test_roll_limit_clamps_lateral_accel(self) -> None:
+        """执行层限幅用滚转角：侧向加速度被夹到 g·tan(rollMax)(而非旧的固定加速度 4.0)。"""
+        ctrl = LateralTrackAngle()
+        ctrl.init(self._cfg(rollMaxRad=math.radians(40.0)))
+        # 大 velErr 使内环需求 acc=kd·(velErr-velErr_cmd) 远超上限，触发夹幅。
+        out = ctrl.step(1_000.0, 100.0, 20.0)
+        self.assertAlmostEqual(out, 9.80665 * math.tan(math.radians(40.0)))  # ≈8.23 m/s²
 
     def test_rejects_zero_kd(self) -> None:
         """kd=0 时串级 K1=-kp/kd 与内环比例都退化，应在 init 拦截。"""

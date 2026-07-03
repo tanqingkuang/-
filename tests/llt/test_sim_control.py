@@ -803,8 +803,8 @@ class SimulationControllerTests(unittest.TestCase):
 
             self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.05)
             self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.05)
-            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.outMax, 4.0)
-            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.outMax, 4.0)
+            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
+            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
             controller.close()
 
     def test_realtime_logging_uses_sim_time_10_hz(self) -> None:
