@@ -315,6 +315,7 @@ class MainWindowAvoidanceMixin:
         self._invalidate_preview()
         if self.obstacles:
             self.top_view.set_obstacles(self.obstacles, self.clearance_spin.value())
+        self._update_situation3d_snapshot(self.sim.snapshot())
 
     def _on_simplify_clearance_changed(self, _value: object = None) -> None:
         """用户单独调整拉直安全间距。注意：一旦手改，即不再跟随安全间距联动。"""
@@ -373,6 +374,7 @@ class MainWindowAvoidanceMixin:
         self.top_view.viewport().update()
         self._rebuild_obstacle_list()
         self._update_avoidance_status()
+        self._update_situation3d_snapshot(self.sim.snapshot())
 
     def _invalidate_preview(self) -> None:
         """清除当前预览航线并禁用“采用”。注意：障碍勾选/配置变化后调用。"""
@@ -405,6 +407,7 @@ class MainWindowAvoidanceMixin:
         self._rebuild_obstacle_list()
         self._sync_avoidance_param_widgets()
         self._update_avoidance_status()
+        self._update_situation3d_snapshot(self.sim.snapshot())
 
     def _generate_route(self) -> None:
         """响应“生成航线”：跑 plan_avoidance_route，成功则预览，失败则显示 ERR_AVOID_* 原因。"""

@@ -35,7 +35,7 @@ from src.ui.gui.main_window import (
     default_project_root,
     run_gui,
 )
-from src.ui.gui.view_models import PLAYBACK_RATE_SLIDER_MAX
+from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -114,6 +114,45 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(first_window.isVisible())
         self.assertTrue(first_window.isWindow())
         self.assertEqual(first_window.windowTitle(), "3D态势")
+        self.assertEqual(first_window.quick_view.errors(), [])
+
+        self.window.obstacles = [
+            ObstacleView("OBS1", "circle", center_x=80.0, center_y=70.0, radius=25.0),
+        ]
+        self.window.clearance_spin.setValue(5.0)
+        self.window._update_snapshot(
+            Snapshot(
+                time=1.0,
+                duration=10.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[
+                    NodeState(
+                        "A01",
+                        "leader",
+                        10.0,
+                        20.0,
+                        3.0,
+                        4.0,
+                        altitude=30.0,
+                        trail=[TrailPoint(1.0, 2.0, 3.0, 0.0), TrailPoint(4.0, 5.0, 6.0, 1.0)],
+                    ),
+                    NodeState("A02", "wing", -30.0, 12.0, 2.0, 1.0, altitude=40.0),
+                    NodeState("A03", "wing", -34.0, 28.0, 2.0, -1.0, altitude=42.0),
+                ],
+                links=[],
+                route_segments=[ReferenceRoute(0.0, 0.0, 100.0, 100.0, 50.0, 120.0)],
+            )
+        )
+        self.app.processEvents()
+        scene_data = json.loads(first_window.bridge.sceneData())
+        self.assertEqual(scene_data["counts"]["aircraft"], 3)
+        self.assertGreaterEqual(scene_data["counts"]["trailPoints"], 2)
+        self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
+        self.assertEqual(scene_data["counts"]["obstacles"], 1)
+        self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)
 
         self.window.situation3d_action.trigger()
         self.app.processEvents()

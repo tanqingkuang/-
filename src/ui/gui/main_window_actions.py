@@ -61,6 +61,7 @@ class MainWindowActionMixin:
             self.side_view.reset_view()
         self._sync_side_view_controls()
         self._update_tables(snapshot)
+        self._update_situation3d_snapshot(snapshot)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
@@ -597,9 +598,17 @@ class MainWindowActionMixin:
         # 3D 视图后续会承载独立 Qt Quick 3D 场景，主窗口只负责入口和生命周期。
         if self._situation3d_window is None:
             self._situation3d_window = Situation3DWindow(self)
+        self._update_situation3d_snapshot(self.sim.snapshot())
         self._situation3d_window.show()
         self._situation3d_window.raise_()
         self._situation3d_window.activateWindow()
+
+    def _update_situation3d_snapshot(self, snapshot: Snapshot) -> None:
+        """同步 3D 态势窗口数据。注意：窗口未打开时不产生额外 QML 更新。"""
+        if self._situation3d_window is None:
+            return
+        clearance = self.clearance_spin.value() if hasattr(self, "clearance_spin") else 0.0
+        self._situation3d_window.set_snapshot(snapshot, obstacles=self.obstacles, clearance_m=clearance)
 
     def _open_live_monitor(self) -> None:
         """打开实时控制监控窗口。"""
