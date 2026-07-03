@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import (
     FollowerStateS,
-    FormPatE,
     FormStageE,
     RallyPhaseE,
     RallySlotScaleS,
@@ -36,7 +35,7 @@ class RallyTaskInitS(FormationTaskInitS):
     tightRadius_m: float = 2.0  # COMPRESS→HOLD 精度阈值，米
     expectedFollowerIds: list[str] = field(default_factory=list)  # 期望参与集结的僚机 ID；空列表→立即通过（测试用）
     staleTimeout_s: float = 2.0  # 超过此时长未收到某机报文则视为数据失效
-    targetPattern: FormPatE = FormPatE.TRIANGLE  # LOOSE/COMPRESS 时 cmd.pattern 写入此值
+    targetPattern: int = 0  # 集结目标队形索引；集结只用单队形，恒为 0（formPos 第 0 行）
     dt_s: float = 0.02  # 控制周期（秒）；进 InitS 才能在 init 时校验 > 0
     # 集结汇合新增参数（RallyJoinPos 使用，Rally 任务直接透传给实体）
     loiter_radius_m: float = 200.0  # 盘旋圆半径，米
@@ -118,7 +117,7 @@ class Rally(FormationTaskBase):
                 self._reset_timers()
             y.cmd.stage = FormStageE.NONE
             y.cmd.step = RallyPhaseE.JOINING
-            y.cmd.pattern = FormPatE.NONE
+            y.cmd.pattern = 0
             y.slotScale.scale = self._loose_scale
             y.slotScale.scaleRate = 0.0
             return

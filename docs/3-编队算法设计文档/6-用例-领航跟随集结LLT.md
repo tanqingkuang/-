@@ -102,7 +102,7 @@ def _follower_status_msg(
 def _leader_msg(
     *,
     stage=FormStageE.RALLY,
-    pattern=FormPatE.TRIANGLE,
+    pattern=0,
     step=0,
     scale=3.0,
     scale_rate=0.0,
@@ -139,7 +139,7 @@ def _rally_task(
             tightRadius_m=2.0,
             expectedFollowerIds=list(expected),
             staleTimeout_s=0.5,
-            targetPattern=FormPatE.TRIANGLE,
+            targetPattern=0,
             dt_s=dt_s,
         )
     )

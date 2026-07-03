@@ -83,6 +83,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # 避障”采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
         self._leader_route_override: list[WayPointInputS] | None = None
         self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
+        self._formation_names: list[str] = []  # 各队形名字（供界面下拉框显示，索引=队形序号）
+        self._formation_index: int = 0  # 当前/初始队形索引，供界面下拉框预选
         # 控制输出缓存按节点 ID 存放，模型 tick 前后都能生成一致快照。
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
@@ -429,6 +431,48 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             self._latest_snapshot = self._make_snapshot_unlocked()
         return CommandResult("OK", "disturbance injected")
 
+    def get_formation_names(self) -> list[str]:
+        """返回当前配置的队形名字列表。注意：索引即 switch_formation 的整型队形号；未加载配置时为空。"""
+        with self._lock:
+            return list(self._formation_names)
+
+    def get_formation_index(self) -> int:
+        """返回当前队形索引。注意：供界面下拉框预选；初值来自配置 initial_index，随 switch_formation 更新。"""
+        with self._lock:
+            return self._formation_index
+
+    def switch_formation(self, index: int) -> CommandResult:
+        """运行时热切换编队队形（改长机保持任务的目标队形索引）。注意：不重建模块、不复位时间，下一算法拍生效。"""
+        # index 必须是合法整型且落在已配置队形范围内。
+        try:
+            index = int(index)
+        except (TypeError, ValueError):
+            return CommandResult("ERR_INVALID_ARGUMENT", "formation index must be an integer")
+        with self._lock:
+            if self._closed:
+                return CommandResult("ERR_INVALID_STATE", "controller is closed")
+            if self._config is None:
+                return CommandResult("ERR_NO_CONFIG", "load config before switching formation")
+            if not self._formation_names:
+                return CommandResult("ERR_INVALID_STATE", "no formation configured")
+            if index < 0 or index >= len(self._formation_names):
+                return CommandResult("ERR_INVALID_ARGUMENT", f"formation index out of range: {index}")
+            # 定位长机保持任务；只有 HOLD 场景的长机实体持有可切换的 Hold 任务。
+            leader_id = next((nid for nid, role in self._node_roles.items() if role == "leader"), None)
+            algorithm = self._node_algorithms.get(leader_id) if leader_id is not None else None
+            task = getattr(getattr(algorithm, "_entity", None), "_task", None)
+            setter = getattr(task, "set_pattern_index", None)
+            if setter is None:
+                return CommandResult("ERR_INVALID_STATE", "current scenario does not support formation switch")
+            # 改长机目标队形索引：广播随下一拍下发，僚机从已下发的槽位表切到对应行。
+            setter(index)
+            self._formation_index = index
+            self._append_event_unlocked("INFO", "SimControl", f"切换队形: {self._formation_names[index]}")
+            self._latest_snapshot = self._make_snapshot_unlocked()
+            snapshot = self._latest_snapshot
+        self._notify_subscribers(snapshot)
+        return CommandResult("OK", "formation switched")
+
     def subscribe_snapshot(self, callback: Callable[[SimulationSnapshot], None]) -> Subscription:
         """订阅快照刷新回调。注意：回调应快速返回，避免阻塞仿真线程。"""
 
@@ -555,6 +599,9 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         states = self._model.read_states()
         # 由拓扑与队形配置生成编队通信初始化信息（网络连接 + 槽位）。
         formation_comm_init = _build_formation_comm_init(list(nodes), raw_links, config)
+        # 缓存队形名字供界面选择；索引即 switch_formation 下发的整型队形号。
+        self._formation_names = list(formation_comm_init.formPat)
+        self._formation_index = int(formation_comm_init.initialPattern)
         leader_id = _leader_id_from_nodes(list(nodes))
         initial_leader_state = states.get(leader_id)
         # 把长机初始状态转换为算法侧运动表示，供僚机持队参考；无长机则为 None。

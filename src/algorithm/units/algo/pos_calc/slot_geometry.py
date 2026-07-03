@@ -6,7 +6,6 @@ import math
 from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import (
-    FormPatE,
     FormPosS,
     FormSnapshotS,
     MotionProfS,
@@ -17,10 +16,10 @@ from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, Po
 
 @dataclass
 class SlotGeometryInitS(PosCalcInitS):
-    """槽位几何初始化参数。注意：formPat 和 formPos 需要按队形行一一对应。"""
+    """槽位几何初始化参数。注意：formPat(队形名) 和 formPos 按队形行一一对应，仅 formPos 参与解算。"""
 
     selfId: str = ""
-    formPat: list[FormPatE] = field(default_factory=list)
+    formPat: list[str] = field(default_factory=list)
     formPos: list[list[FormPosS]] = field(default_factory=list)
 
 
@@ -38,7 +37,7 @@ class SlotGeometry(PosCalcBase):
     def __init__(self) -> None:
         """初始化 SlotGeometry 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._self_id = ""
-        self._form_pat: list[FormPatE] = []
+        self._form_pat: list[str] = []
         self._form_pos: list[list[FormPosS]] = []
 
     def init(self, cfg: SlotGeometryInitS) -> None:
@@ -51,13 +50,10 @@ class SlotGeometry(PosCalcBase):
         """推进 SlotGeometry 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.leaderState is None or u.cmd is None or y.selfCmd is None:
             raise ValueError("SlotGeometry ports must be bound")
-        pattern = FormPatE(u.cmd.pattern)
-        try:
-            row_index = self._form_pat.index(pattern)
-        except ValueError as exc:
-            raise ValueError(f"unknown formation pattern: {pattern!r}") from exc
-        if row_index >= len(self._form_pos):
-            raise ValueError("formPos does not contain row for pattern")
+        # cmd.pattern 是纯整型队形索引，直接作为 formPos 行号（0 起）。
+        row_index = int(u.cmd.pattern)
+        if row_index < 0 or row_index >= len(self._form_pos):
+            raise ValueError(f"formation pattern index out of range: {row_index}")
         slot = next((item for item in self._form_pos[row_index] if item.id == self._self_id), None)
         if slot is None:
             raise ValueError(f"missing slot for selfId: {self._self_id}")

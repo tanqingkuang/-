@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from src.algorithm.context.leaf_types import FormCommInitS, FormPatE, FormStageE, MotionProfS, PosInEarthS, WayPointInputS
+from src.algorithm.context.leaf_types import FormCommInitS, FormStageE, MotionProfS, PosInEarthS, WayPointInputS
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import arc_radius
 from src.environment.model import AircraftState
@@ -473,7 +473,7 @@ class SimulationControllerTests(unittest.TestCase):
         comm_init = _build_formation_comm_init(nodes, [])
         slots = {slot.id: slot for slot in comm_init.formPos[0]}
 
-        self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
+        self.assertEqual(comm_init.formPat, ["default"])
         self.assertAlmostEqual(slots["A01"].x, 0.0)
         self.assertAlmostEqual(slots["A01"].y, 0.0)
         self.assertAlmostEqual(slots["A02"].x, -54.0)
@@ -505,7 +505,7 @@ class SimulationControllerTests(unittest.TestCase):
         comm_init = _build_formation_comm_init(nodes, [], config)
         slots = {slot.id: slot for slot in comm_init.formPos[0]}
 
-        self.assertEqual(comm_init.formPat, [FormPatE.TRIANGLE])
+        self.assertEqual(comm_init.formPat, ["TRIANGLE"])
         self.assertAlmostEqual(slots["A02"].x, -70.0)
         self.assertAlmostEqual(slots["A02"].y, 5.0)
         self.assertAlmostEqual(slots["A02"].z, -40.0)
@@ -1569,25 +1569,25 @@ class NodeAlgorithmResetTests(unittest.TestCase):
 
         # 构造后预置正确
         self.assertEqual(node._entity.cxt.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(node._entity.cxt.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertEqual(node._entity.cxt.cmd.pattern, 0)
         self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
 
         # reset 后预置应被恢复
         node.reset()
 
         self.assertEqual(node._entity.cxt.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(node._entity.cxt.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertEqual(node._entity.cxt.cmd.pattern, 0)
         self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
 
     def test_reset_clears_rally_completed_flag(self) -> None:
         """reset() 后 _rally_completed 应归 False，允许重新触发集结完成流程。"""
         from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
-        from src.algorithm.context.leaf_types import FormPatE as FP, PosInEarthS as P
+        from src.algorithm.context.leaf_types import PosInEarthS as P
 
         rally_cfg = RallyTaskInitS(
             expectedFollowerIds=[],
             dt_s=0.02,
-            targetPattern=FP.TRIANGLE,
+            targetPattern=0,
         )
         rally_route = [
             WayPointInputS(idx=0, pos=P(east=0.0, north=0.0, h=500.0), vdCmd=20.0),

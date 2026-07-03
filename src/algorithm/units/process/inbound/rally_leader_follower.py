@@ -64,9 +64,9 @@ class RallyLeaderFollower(InboundBase):
                 scale_parsed, scale_rate_parsed = 1.0, 0.0
             # 全部字段解析成功后，一次性写入输出端口，保证多字段一致性。
             _write_motion_from_payload(state, y.leaderState)
-            from src.algorithm.context.leaf_types import FormPatE, FormStageE
+            from src.algorithm.context.leaf_types import FormStageE
             y.cmd.stage = FormStageE(int(cmd.get("stage", FormStageE.NONE)))
-            y.cmd.pattern = FormPatE(int(cmd.get("pattern", FormPatE.NONE)))
+            y.cmd.pattern = int(cmd.get("pattern", 0))
             y.cmd.step = int(cmd.get("step", 0))
             y.slotScale.scale = scale_parsed
             y.slotScale.scaleRate = scale_rate_parsed

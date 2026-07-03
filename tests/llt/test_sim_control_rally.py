@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import FormPatE, FormStageE, FormationAnalysisS
+from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.runner.sim_control import (
@@ -119,7 +119,7 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertIsNotNone(task_init)
         assert task_init is not None
         self.assertEqual(task_init.expectedFollowerIds, ["R02", "R03"])
-        self.assertEqual(task_init.targetPattern, FormPatE.TRIANGLE)
+        self.assertEqual(task_init.targetPattern, 0)
         self.assertAlmostEqual(task_init.dt_s, 0.025)
         self.assertAlmostEqual(task_init.tightRadius_m, 2.0)
 
@@ -133,7 +133,7 @@ class SimControlRallyTests(unittest.TestCase):
         comm = _build_formation_comm_init(nodes, links, config)
         slots = {slot.id: slot for slot in comm.formPos[0]}
 
-        self.assertEqual(comm.formPat, [FormPatE.TRIANGLE])
+        self.assertEqual(comm.formPat, ["TRIANGLE"])
         self.assertEqual([link.startId for link in comm.netWork], ["R01", "R01"])
         self.assertAlmostEqual(slots["R02"].x, -10.0)
         self.assertAlmostEqual(slots["R03"].z, 5.0)

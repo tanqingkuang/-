@@ -175,6 +175,28 @@ class MainWindowActionMixin:
         if snapshot.run_state in {"READY", "PAUSED", "FINISHED"}:
             self.timer.stop()
 
+    def _refresh_formation_options(self) -> None:
+        """按当前配置刷新“场景/队形”下拉选项。注意：程序回填期间屏蔽信号，避免误触发切换。"""
+        names = self.sim.formation_names()
+        combo = self.scenario_select
+        with QSignalBlocker(combo):
+            combo.clear()
+            combo.addItems([f"{index}: {name}" for index, name in enumerate(names)])
+            # 选中当前初始队形；无选项则保持空。
+            if names:
+                combo.setCurrentIndex(self.sim.formation_index(), emit=False)
+        # 无队形或单队形时禁用（无从切换）。
+        combo.setEnabled(len(names) > 1)
+
+    def _on_scenario_selected(self) -> None:
+        """响应“场景/队形”下拉选择并下发热切换命令。注意：失败时记录控制器返回信息。"""
+        index = self.scenario_select.currentIndex()
+        if index < 0:
+            return
+        snapshot = self.sim.switch_formation(index)
+        self._update_snapshot(snapshot)
+        self._log("Formation", f"切换队形 -> index={index}, {self.sim.last_result_code}, state={snapshot.run_state}")
+
     def _inject_disturbance(self, kind: str) -> None:
         """响应扰动按钮并下发扰动命令。注意：失败时需要记录控制器返回信息。"""
         messages = {
@@ -216,6 +238,8 @@ class MainWindowActionMixin:
         snapshot = self.sim.load_config(path)
         if self.sim.last_result_code == "OK":
             self._sync_speed_controls(self.sim.speed)
+            # 按新配置刷新队形下拉框选项。
+            self._refresh_formation_options()
             # 先注入障碍再铺满，使自适应视野包含障碍区。
             self._set_obstacles_from_config(path)
         self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)

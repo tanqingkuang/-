@@ -101,6 +101,16 @@ class SelectButton(QPushButton):
         self.clicked.connect(self.show_menu)
         self._menu.aboutToHide.connect(lambda: self.setDown(False))
 
+    def clear(self) -> None:
+        """清空全部选项并复位选中态。注意：不发信号，供动态重填选项前调用。"""
+        self._items = []
+        self._index = -1
+        self.setText("  ▾")
+
+    def currentIndex(self) -> int:
+        """返回当前选中项索引。注意：无选项时返回 -1。"""
+        return self._index
+
     def addItem(self, text: str, data: object | None = None) -> None:
         """向控件添加一个选项。注意：选项文本和附加数据需保持对应。"""
         self._items.append((text, data))

@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import (
     AccInEarthS,
     CommDirE,
     FormCommInitS,
-    FormPatE,
     FormPosS,
     FormSelfInitS,
     FormSnapshotS,
@@ -376,12 +375,12 @@ class PosCalcTests(unittest.TestCase):
 
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=12.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
         slot = SlotGeometry()
         slot.init(
             SlotGeometryInitS(
                 selfId="A02",
-                formPat=[FormPatE.TRIANGLE],
+                formPat=[0],
                 formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, -5.0, -20.0)]],
             )
         )
@@ -403,12 +402,12 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=8.0)
         ctx.selfState = _motion(east=16.0, north=258.0, h=1000.0, v_east=8.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
         slot = SlotGeometry()
         slot.init(
             SlotGeometryInitS(
                 selfId="A02",
-                formPat=[FormPatE.TRIANGLE],
+                formPat=[0],
                 formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 0.0, -58.0)]],
             )
         )
@@ -430,12 +429,12 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.leaderState = _motion(east=6000.0, north=200.0, h=1000.0, v_east=0.0, v_north=35.0)
         ctx.selfState = _motion(east=6058.0, north=146.0, h=1000.0, v_east=0.0, v_north=35.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
         slot = SlotGeometry()
         slot.init(
             SlotGeometryInitS(
                 selfId="A03",
-                formPat=[FormPatE.TRIANGLE],
+                formPat=[0],
                 formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A03", -54.0, 0.0, 58.0)]],
             )
         )
@@ -455,12 +454,12 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0)
         ctx.selfState = _motion(east=70.0, north=220.0, h=1000.0, v_east=5.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
         slot = SlotGeometry()
         slot.init(
             SlotGeometryInitS(
                 selfId="A02",
-                formPat=[FormPatE.TRIANGLE],
+                formPat=[0],
                 formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
             )
         )
@@ -481,12 +480,12 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=8.0)
         ctx.selfState = _motion(east=46.0, north=250.0, h=1000.0, v_east=8.0)
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
         slot = SlotGeometry()
         slot.init(
             SlotGeometryInitS(
                 selfId="A02",
-                formPat=[FormPatE.TRIANGLE],
+                formPat=[0],
                 formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 0.0, -58.0)]],
             )
         )
@@ -509,12 +508,12 @@ class PosCalcTests(unittest.TestCase):
         for self_id, right_offset, expect_along in (("A02", -58.0, 30.0 - 58.0 * omega), ("A03", 58.0, 30.0 + 58.0 * omega)):
             ctx = FormContextS()
             ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=30.0, d_vpsi=omega)
-            ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE)
+            ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
             slot = SlotGeometry()
             slot.init(
                 SlotGeometryInitS(
                     selfId=self_id,
-                    formPat=[FormPatE.TRIANGLE],
+                    formPat=[0],
                     formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS(self_id, -54.0, 0.0, right_offset)]],
                 )
             )
@@ -926,7 +925,7 @@ class ProcessUnitTests(unittest.TestCase):
         )
 
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(ctx.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertEqual(ctx.cmd.pattern, 0)
 
     def test_leader_route_selects_current_segment_from_route(self) -> None:
         """验证长机轨迹规划持有整条航线，每拍只向黑板写当前航段。"""
@@ -1047,7 +1046,7 @@ class ProcessUnitTests(unittest.TestCase):
         """验证长机广播按拓扑生成多播目标，僚机收消息解析长机状态和编队指令。"""
 
         ctx = FormContextS()
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=FormPatE.TRIANGLE, step=2)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0, step=2)
         ctx.selfState = _motion(east=1.0, north=2.0, h=3.0, v_east=4.0, v_north=5.0)
         outbound = LeaderBroadcast()
         outbound.init(
@@ -1073,7 +1072,7 @@ class ProcessUnitTests(unittest.TestCase):
         inbound.step(InboundInputS(inbox=out.outbox), InboundOutputS(follower_ctx.leaderState, follower_ctx.cmd))
 
         self.assertEqual(follower_ctx.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(follower_ctx.cmd.pattern, FormPatE.TRIANGLE)
+        self.assertEqual(follower_ctx.cmd.pattern, 0)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
 
         inbound.step(InboundInputS(inbox=[]), InboundOutputS(follower_ctx.leaderState, follower_ctx.cmd))
@@ -1096,7 +1095,7 @@ class EntityTests(unittest.TestCase):
 
         comm = FormCommInitS(
             netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
-            formPat=[FormPatE.TRIANGLE],
+            formPat=[0],
             formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
         )
         leader = LeaderEntity()
@@ -1138,7 +1137,7 @@ class EntityTests(unittest.TestCase):
 
         comm = FormCommInitS(
             netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
-            formPat=[FormPatE.TRIANGLE],
+            formPat=[0],
             formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
         )
         leader = LeaderEntity()
