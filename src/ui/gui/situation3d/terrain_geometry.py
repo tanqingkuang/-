@@ -9,20 +9,21 @@ from PySide6.QtCore import QByteArray, Property, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 
-# 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
+# 顶点布局使用 32 字节：position(3) + normal(3) + uv(2)。
 _FLOAT_SIZE = 4
-_SURFACE_COMPONENTS = 12
+_SURFACE_COMPONENTS = 8
 _SURFACE_STRIDE = _SURFACE_COMPONENTS * _FLOAT_SIZE
 # 曲面分辨率要覆盖 0.8km 小丘陵，20km 地图下约 210m 一个采样点。
 _SURFACE_COLUMNS = 96
 _SURFACE_ROWS = 96
 # 丘陵按米定义半径，适配 20km x 20km 态势地图。
-# 元组字段依次为局部 x、局部 z、可见半径、相对高度。
+# 元组字段依次为局部 x、局部 z、长半轴、短半轴、旋转角、相对高度。
+# 半轴都控制在 0.8km 到 3km 附近，避免做成整张地图的大山包。
 _HILL_PROFILES = (
-    (-5200.0, -3600.0, 3000.0, 0.58),
-    (3600.0, -2200.0, 2200.0, 0.76),
-    (-1800.0, 4300.0, 1400.0, 0.48),
-    (6100.0, 4400.0, 900.0, 0.34),
+    (-5200.0, -3600.0, 3000.0, 1900.0, -18.0, 0.58),
+    (3600.0, -2200.0, 2400.0, 1500.0, 24.0, 0.74),
+    (-1800.0, 4300.0, 1500.0, 950.0, 37.0, 0.46),
+    (6100.0, 4400.0, 950.0, 680.0, -32.0, 0.32),
 )
 
 
@@ -166,18 +167,13 @@ class TerrainGeometry(_TerrainGeometryBase):
             6 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
-        # 顶点色承担地形高度分层和稳定明暗，避免 20km 场景纯灯光过黑。
-        self.addAttribute(
-            QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
-            8 * _FLOAT_SIZE,
-            QQuick3DGeometry.Attribute.ComponentType.F32Type,
-        )
         # 索引属性指向独立 indexData，减少重复顶点上传。
         self.addAttribute(
             QQuick3DGeometry.Attribute.Semantic.IndexSemantic,
             0,
             QQuick3DGeometry.Attribute.ComponentType.U32Type,
         )
+        # 先设置包围盒再提交数据，保证首帧视锥裁剪拿到最新范围。
         self._apply_bounds()
         self.setVertexData(QByteArray(bytes(vertices)))
         self.setIndexData(QByteArray(bytes(indices)))
@@ -189,11 +185,9 @@ class TerrainGeometry(_TerrainGeometryBase):
         y = self._height_at(x, z)
         # 法线使用同一高度函数，保证光照方向和实际顶点高度一致。
         normal = self._normal_at(x, z)
-        # 颜色随高度和法线变化，QML 侧使用顶点色避免大地图灯光失真。
-        color = self._color_at(y, normal)
         vertices.extend(
             struct.pack(
-                "<ffffffffffff",
+                "<ffffffff",
                 x,
                 y,
                 z,
@@ -202,10 +196,6 @@ class TerrainGeometry(_TerrainGeometryBase):
                 normal.z(),
                 u_coord,
                 v_coord,
-                color[0],
-                color[1],
-                color[2],
-                color[3],
             )
         )
 
@@ -242,23 +232,6 @@ class TerrainGeometry(_TerrainGeometryBase):
         normal.normalize()
         return normal
 
-    def _color_at(self, height: float, normal: QVector3D) -> tuple[float, float, float, float]:
-        """计算地形顶点色。注意：颜色包含稳定的高度分层和伪光照明暗。"""
-
-        # 0.72 留出余量，让最高丘陵接近但不直接夹到纯顶色。
-        height_ratio = max(0.0, min(1.0, (height - 4.0) / max(1.0, self._amplitude_value * 0.72)))
-        # 低地偏沉稳绿色，丘顶偏浅黄绿，便于无光照模式下读高度。
-        low_color = (0.30, 0.48, 0.35)
-        high_color = (0.66, 0.86, 0.55)
-        base = tuple(low_color[index] + (high_color[index] - low_color[index]) * height_ratio for index in range(3))
-        # 伪光源只影响顶点色，不让 Qt 实时光照把背坡压成黑斑。
-        light = QVector3D(-0.42, 0.78, 0.46)
-        light.normalize()
-        light_mix = max(0.0, QVector3D.dotProduct(normal, light))
-        # shade 下限高于 0，背坡不会再掉成黑斑。
-        shade = 0.78 + 0.18 * light_mix + 0.08 * height_ratio
-        return (min(1.0, base[0] * shade), min(1.0, base[1] * shade), min(1.0, base[2] * shade), 1.0)
-
     def _apply_bounds(self) -> None:
         """设置地形包围盒。注意：包围盒影响 Qt Quick 3D 视锥裁剪。"""
 
@@ -273,30 +246,45 @@ def _height_value(x: float, z: float, width: float, depth: float, amplitude: flo
 
     nx = x / width
     nz = z / depth
-    # 轻微底噪只打破完全平面，不能抢过 3-4 个主体丘陵。
-    rolling = 0.006 * (
+    # 低频起伏只提供地表微弯，不再做可见纹理。
+    rolling = 0.012 * (
         math.sin(nx * math.tau * 3.0 + 0.4)
         + math.cos(nz * math.tau * 2.4 - 0.2)
         + 0.5 * math.sin((nx + nz) * math.tau * 2.2)
     )
     height_mix = rolling
-    for center_x, center_z, radius, weight in _HILL_PROFILES:
-        # 每个丘陵的可见半径保持在 0.8km 到 3km，和 20km 地图尺度匹配。
-        height_mix += weight * _radial_hill(x, z, center_x, center_z, radius)
+    for center_x, center_z, radius_x, radius_z, angle_deg, weight in _HILL_PROFILES:
+        # 旋转椭圆丘陵避免俯视时出现机械圆斑。
+        height_mix += weight * _elliptic_hill(x, z, center_x, center_z, radius_x, radius_z, angle_deg)
+    # 这里只输出几何高度，颜色和材质交给 QML，避免伪纹理再次变成碎斑。
     # 边缘衰减让地形接近地面，避免可见边界处像被切开的实体。
     return 4.0 + amplitude * _edge_falloff(nx, nz) * max(0.0, height_mix)
 
 
-def _radial_hill(x: float, z: float, center_x: float, center_z: float, radius: float) -> float:
-    """返回米制径向丘陵权重。注意：radius 近似为视觉半径而不是高斯标准差。"""
+def _elliptic_hill(
+    x: float,
+    z: float,
+    center_x: float,
+    center_z: float,
+    radius_x: float,
+    radius_z: float,
+    angle_deg: float,
+) -> float:
+    """返回米制旋转椭圆丘陵权重。注意：半轴是丘陵的主要可见范围。"""
 
-    # 有限半径避免高斯长尾把整张地图染成连续碎坡。
-    distance_ratio = math.hypot(x - center_x, z - center_z) / radius
+    angle_rad = math.radians(angle_deg)
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    dx = x - center_x
+    dz = z - center_z
+    # 先旋转到丘陵局部坐标，再按长短半轴归一化距离。
+    local_x = (dx * cos_a + dz * sin_a) / radius_x
+    local_z = (-dx * sin_a + dz * cos_a) / radius_z
+    distance_ratio = math.hypot(local_x, local_z)
     if distance_ratio >= 1.0:
         return 0.0
-    falloff = 1.0 - distance_ratio * distance_ratio
-    # smootherstep 在峰顶和半径边界都更平滑。
-    return falloff * falloff * falloff * (10.0 - 15.0 * falloff + 6.0 * falloff * falloff)
+    # 余弦缓坡没有平顶，边界处也没有硬折线。
+    return 0.5 + 0.5 * math.cos(math.pi * distance_ratio)
 
 
 def _edge_falloff(nx: float, nz: float) -> float:

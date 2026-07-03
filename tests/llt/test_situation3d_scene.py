@@ -92,7 +92,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
             for offset in range(0, len(vertex_data), geometry.stride())
         ]
 
-        self.assertEqual(geometry.stride(), 48)
+        self.assertEqual(geometry.stride(), 32)
         self.assertGreater(geometry.vertexData().size(), 0)
         self.assertGreater(geometry.indexData().size(), 0)
         self.assertLessEqual(geometry.boundsMin().y(), 0.0)
@@ -113,9 +113,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("Qt.MiddleButton", qml)
         self.assertIn("mouse.buttons & Qt.MiddleButton", qml)
         self.assertIn("TerrainGeometry", qml)
-        self.assertIn("vertexColorsEnabled", qml)
-        self.assertIn("PrincipledMaterial.NoLighting", qml)
+        self.assertNotIn("vertexColorsEnabled", qml)
+        self.assertNotIn("PrincipledMaterial.NoLighting", qml)
         self.assertNotIn("hillModel", qml)
+        self.assertIn("Math.min(50000", qml)
 
 
 if __name__ == "__main__":

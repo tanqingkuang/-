@@ -16,7 +16,7 @@ MAX_TRAIL_POINTS_PER_NODE = 28
 MAX_ROUTE_POINTS_PER_SEGMENT = 32
 DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
-DEFAULT_TERRAIN_RELIEF_M = 760.0
+DEFAULT_TERRAIN_RELIEF_M = 1500.0
 
 
 def build_scene_payload(
@@ -207,6 +207,7 @@ def _scene_bounds(
 def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
     """生成连续高度场地形参数。注意：只影响 3D 显示背景，不改变仿真状态。"""
 
+    # 地图默认保持 20km x 20km，较大的仿真范围再按实际包围盒外扩。
     span_x = max(bounds["spanX"], DEFAULT_TERRAIN_SPAN_M)
     span_z = max(bounds["spanZ"], DEFAULT_TERRAIN_SPAN_M)
     center_x = bounds["centerX"]
@@ -237,6 +238,7 @@ def _camera_payload(bounds: dict[str, float], aircraft: list[dict[str, object]])
     focus_x = _average([float(item["x"]) for item in aircraft], bounds["centerX"])
     focus_y = _average([float(item["y"]) for item in aircraft], max(320.0, bounds["maxY"] * 0.55))
     focus_z = _average([float(item["z"]) for item in aircraft], bounds["centerZ"])
+    # 相机距离跟随 20km 基准跨度，避免初始视角只看到局部山包。
     span = max(bounds["spanX"], bounds["spanZ"], bounds["maxY"] - bounds["minY"], DEFAULT_TERRAIN_SPAN_M)
     return {
         "focusX": focus_x,

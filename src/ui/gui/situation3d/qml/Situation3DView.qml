@@ -77,11 +77,6 @@ Item {
                 heightValue: item.height
             })
         }
-        const ground = data.terrain && data.terrain.ground ? data.terrain.ground : null
-        if (ground) {
-            groundModel.position = Qt.vector3d(ground.x, ground.y, ground.z)
-            groundModel.scale = Qt.vector3d(ground.width / 100.0, ground.height / 100.0, ground.depth / 100.0)
-        }
         const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
         if (surface) {
             terrainSurfaceModel.visible = true
@@ -176,32 +171,20 @@ Item {
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-44, -48, 0)
-            brightness: 2.4
+            eulerRotation: Qt.vector3d(-38, -52, 0)
+            brightness: 4.2
             castsShadow: false
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 138, 0)
-            brightness: 1.15
+            brightness: 0.28
             castsShadow: false
         }
 
         PointLight {
             position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
-            brightness: 8
-        }
-
-        Model {
-            id: groundModel
-            source: "#Cube"
-            position: Qt.vector3d(0, -8, 0)
-            scale: Qt.vector3d(30, 0.16, 22)
-            receivesShadows: true
-            materials: PrincipledMaterial {
-                baseColor: "#101923"
-                roughness: 0.95
-            }
+            brightness: 5.6
         }
 
         Model {
@@ -213,12 +196,11 @@ Item {
             receivesShadows: false
             castsShadows: false
             materials: PrincipledMaterial {
-                baseColor: "#ffffff"
+                baseColor: Qt.rgba(0.30, 0.45, 0.32, 1.0)
                 cullMode: Material.NoCulling
-                lighting: PrincipledMaterial.NoLighting
-                vertexColorsEnabled: true
-                roughness: 0.86
-                specularAmount: 0.04
+                emissiveFactor: Qt.vector3d(0.010, 0.018, 0.012)
+                roughness: 0.96
+                specularAmount: 0.02
             }
         }
 
@@ -370,7 +352,7 @@ Item {
         }
         onWheel: function(wheel) {
             const factor = wheel.angleDelta.y > 0 ? 0.88 : 1.14
-            root.distance = Math.max(220, Math.min(12000, root.distance * factor))
+            root.distance = Math.max(220, Math.min(50000, root.distance * factor))
             root.cameraMode = "自由"
             wheel.accepted = true
         }
