@@ -203,7 +203,7 @@ def _scene_bounds(
 
 
 def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
-    """生成平滑地形晕染层。注意：后续可替换为 HeightField 或真实地形资产。"""
+    """生成连续高度场地形参数。注意：只影响 3D 显示背景，不改变仿真状态。"""
 
     span_x = max(bounds["spanX"], 1200.0)
     span_z = max(bounds["spanZ"], 900.0)
@@ -218,11 +218,14 @@ def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
             "depth": span_z,
             "height": 16.0,
         },
-        "hills": [
-            {"x": center_x - span_x * 0.26, "y": 1.4, "z": center_z - span_z * 0.18, "width": 640.0, "height": 2.8, "depth": 440.0},
-            {"x": center_x + span_x * 0.30, "y": 1.8, "z": center_z + span_z * 0.20, "width": 760.0, "height": 3.6, "depth": 520.0},
-            {"x": center_x + span_x * 0.04, "y": 1.1, "z": center_z - span_z * 0.34, "width": 520.0, "height": 2.2, "depth": 360.0},
-        ],
+        "surface": {
+            "x": center_x,
+            "y": 0.0,
+            "z": center_z,
+            "width": span_x,
+            "depth": span_z,
+            "height": min(320.0, max(180.0, max(span_x, span_z) * 0.12)),
+        },
     }
 
 

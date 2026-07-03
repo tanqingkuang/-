@@ -7,12 +7,27 @@ from pathlib import Path
 # 显式导入 QtQuick3D，保证 PyInstaller 收集 QML 侧 QtQuick3D 运行插件。
 from PySide6 import QtQuick3D  # noqa: F401
 from PySide6.QtCore import QUrl
+from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickView
 from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
 
 from src.ui.gui.situation3d.bridge import Situation3DBridge
 from src.ui.gui.situation3d.scene_data import build_scene_payload
+from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry, TerrainGridGeometry
 from src.ui.gui.view_models import ObstacleView, Snapshot
+
+_QML_TYPES_REGISTERED = False
+
+
+def _register_qml_types() -> None:
+    """注册 3D 态势 QML 类型。注意：重复注册会触发 Qt 告警。"""
+
+    global _QML_TYPES_REGISTERED
+    if _QML_TYPES_REGISTERED:
+        return
+    qmlRegisterType(TerrainGeometry, "Simu3D", 1, 0, "TerrainGeometry")
+    qmlRegisterType(TerrainGridGeometry, "Simu3D", 1, 0, "TerrainGridGeometry")
+    _QML_TYPES_REGISTERED = True
 
 
 class Situation3DWindow(QDialog):
@@ -29,6 +44,7 @@ class Situation3DWindow(QDialog):
         self.root_layout.setContentsMargins(0, 0, 0, 0)
         self.root_layout.setSpacing(0)
         self.bridge = Situation3DBridge()
+        _register_qml_types()
         self.quick_view = QQuickView()
         self.quick_view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
         self.quick_view.rootContext().setContextProperty("sceneBridge", self.bridge)

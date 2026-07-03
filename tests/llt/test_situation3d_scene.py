@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 
 from src.ui.gui.situation3d.scene_data import build_scene_payload, enu_to_quick3d
+from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry, TerrainGridGeometry
 from src.ui.gui.view_models import (
     LinkState,
     NodeState,
@@ -67,13 +68,40 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreaterEqual(payload["counts"]["routePoints"], 2)
         self.assertEqual(payload["counts"]["obstacles"], 1)
         self.assertGreater(payload["terrain"]["ground"]["width"], 0.0)
-        self.assertTrue(all(item["height"] <= 4.0 for item in payload["terrain"]["hills"]))
-        self.assertTrue(all(item["y"] <= 2.0 for item in payload["terrain"]["hills"]))
+        self.assertGreater(payload["terrain"]["surface"]["width"], 0.0)
+        self.assertGreater(payload["terrain"]["surface"]["depth"], 0.0)
+        self.assertGreater(payload["terrain"]["surface"]["height"], 0.0)
 
         obstacle_payload = payload["obstacles"][0]
         self.assertEqual(obstacle_payload["kind"], "circle")
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
+
+    def test_terrain_geometry_builds_connected_heightfield(self) -> None:
+        """验证 3D 地形使用一张连续 mesh，而不是多个独立山体模型。"""
+
+        geometry = TerrainGeometry()
+        geometry.widthValue = 1200.0
+        geometry.depthValue = 900.0
+        geometry.amplitudeValue = 180.0
+
+        self.assertEqual(geometry.stride(), 32)
+        self.assertGreater(geometry.vertexData().size(), 0)
+        self.assertGreater(geometry.indexData().size(), 0)
+        self.assertLessEqual(geometry.boundsMin().y(), 0.0)
+        self.assertGreater(geometry.boundsMax().y(), 180.0)
+
+    def test_terrain_grid_geometry_follows_heightfield(self) -> None:
+        """验证地形线框也由连续高度场生成。"""
+
+        geometry = TerrainGridGeometry()
+        geometry.widthValue = 1200.0
+        geometry.depthValue = 900.0
+        geometry.amplitudeValue = 180.0
+
+        self.assertEqual(geometry.stride(), 12)
+        self.assertGreater(geometry.vertexData().size(), 0)
+        self.assertGreater(geometry.boundsMax().y(), 180.0)
 
     def test_disabled_obstacle_is_not_exported_to_scene(self) -> None:
         obstacle = ObstacleView("OFF", "circle", enabled=False, center_x=1.0, center_y=2.0, radius=3.0)
@@ -88,6 +116,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         self.assertIn("Qt.MiddleButton", qml)
         self.assertIn("mouse.buttons & Qt.MiddleButton", qml)
+        self.assertIn("TerrainGeometry", qml)
+        self.assertIn("TerrainGridGeometry", qml)
+        self.assertNotIn("hillModel", qml)
 
 
 if __name__ == "__main__":

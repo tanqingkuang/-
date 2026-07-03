@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick3D
+import Simu3D 1.0
 
 Item {
     id: root
@@ -22,7 +23,6 @@ Item {
     ListModel { id: trailModel }
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
-    ListModel { id: hillModel }
     ListModel { id: gridLineModel }
 
     function gridStepFor(span) {
@@ -126,18 +126,6 @@ Item {
                 heightValue: item.height
             })
         }
-        hillModel.clear()
-        const hills = data.terrain && data.terrain.hills ? data.terrain.hills : []
-        for (const item of hills) {
-            hillModel.append({
-                sx: item.x,
-                sy: item.y,
-                sz: item.z,
-                widthValue: item.width,
-                depthValue: item.depth,
-                heightValue: item.height
-            })
-        }
         const ground = data.terrain && data.terrain.ground ? data.terrain.ground : null
         if (ground) {
             groundModel.position = Qt.vector3d(ground.x, ground.y, ground.z)
@@ -145,6 +133,22 @@ Item {
             refreshGrid(ground)
         } else {
             gridLineModel.clear()
+        }
+        const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
+        if (surface) {
+            terrainSurfaceModel.visible = true
+            terrainGridModel.visible = true
+            terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
+            terrainGridModel.position = terrainSurfaceModel.position
+            terrainGeometry.widthValue = surface.width
+            terrainGeometry.depthValue = surface.depth
+            terrainGeometry.amplitudeValue = surface.height
+            terrainGridGeometry.widthValue = surface.width
+            terrainGridGeometry.depthValue = surface.depth
+            terrainGridGeometry.amplitudeValue = surface.height
+        } else {
+            terrainSurfaceModel.visible = false
+            terrainGridModel.visible = false
         }
         if (data.camera) {
             focusX = data.camera.focusX
@@ -252,6 +256,37 @@ Item {
             }
         }
 
+        Model {
+            id: terrainSurfaceModel
+            geometry: TerrainGeometry {
+                id: terrainGeometry
+            }
+            position: Qt.vector3d(0, 0, 0)
+            receivesShadows: true
+            castsShadows: false
+            materials: PrincipledMaterial {
+                baseColor: Qt.rgba(0.34, 0.49, 0.40, 0.96)
+                roughness: 0.96
+                specularAmount: 0.12
+            }
+        }
+
+        Model {
+            id: terrainGridModel
+            geometry: TerrainGridGeometry {
+                id: terrainGridGeometry
+            }
+            position: Qt.vector3d(0, 0, 0)
+            castsShadows: false
+            receivesShadows: false
+            materials: PrincipledMaterial {
+                baseColor: Qt.rgba(0.63, 0.80, 0.66, 0.34)
+                alphaMode: PrincipledMaterial.Blend
+                opacity: 0.34
+                roughness: 0.9
+            }
+        }
+
         Repeater3D {
             model: gridLineModel
             delegate: Model {
@@ -263,23 +298,6 @@ Item {
                     alphaMode: PrincipledMaterial.Blend
                     opacity: model.opacityValue
                     roughness: 0.9
-                }
-            }
-        }
-
-        Repeater3D {
-            model: hillModel
-            delegate: Model {
-                source: "#Cylinder"
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(model.widthValue / 100.0, model.heightValue / 100.0, model.depthValue / 100.0)
-                receivesShadows: false
-                castsShadows: false
-                materials: PrincipledMaterial {
-                    baseColor: Qt.rgba(0.32, 0.44, 0.46, 0.34)
-                    alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.48
-                    roughness: 0.95
                 }
             }
         }
