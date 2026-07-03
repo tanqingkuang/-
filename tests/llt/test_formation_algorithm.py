@@ -25,7 +25,7 @@ from src.algorithm.context.leaf_types import (
     WayPointS,
 )
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
-from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
+from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity, _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
@@ -47,6 +47,7 @@ from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutp
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.units.process.tra_plan.noop import Noop
 from src.common.envelope import MessageEnvelope
+from src.environment.model import AircraftState, ModelIterator, PointMass3DoFModel
 
 
 def _motion(
@@ -807,6 +808,57 @@ class LateralTrackAngleTests(unittest.TestCase):
         """kd=0 时串级 K1=-kp/kd 与内环比例都退化，应在 init 拦截。"""
         with self.assertRaisesRegex(ValueError, "kd"):
             LateralTrackAngle().init(self._cfg(kd=0.0))
+
+
+class PosTrackClosedLoopTests(unittest.TestCase):
+    """PidCompose(僚机增益) + 三自由度质点模型闭环回归：复现"目标在机头后方偏右→转圈"原始故障。"""
+
+    def test_follower_behind_right_slot_tracks_without_circling(self) -> None:
+        """槽位随编队东向 20m/s 移动，僚机初始在槽位**前方 40m、右侧 80m**(即槽位落在其机头右后方)。
+
+        旧实现(本机航迹系度量误差)：右后方目标→右滚消侧偏，但目标在后、侧偏反增，飞机转整圈追踪。
+        新实现(1.1 目标速度系 + 1.2 航迹角变限幅)：应靠降速让槽位追上、有界右滚(不越 90°)平滑切入并收敛，
+        航向相对编队航向的最大偏离远小于半圈。此用例即该故障的闭环回归护栏。
+        """
+        model = PointMass3DoFModel(ModelIterator._default_config())
+        tracker = PidCompose()
+        tracker.init(_follower_tracker_init(0.05))
+        state = AircraftState(
+            node_id="F", x_m=40.0, y_m=80.0, altitude_m=1000.0, speed_mps=20.0,
+            theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
+            ax_rate_mps3=0.0, ay_rate_mps3=0.0, az_rate_mps3=0.0,
+            nx=0.0, nz=0.0, phi_rad=0.0, psi_dot_deg_s=0.0,
+        )
+        slot_e, slot_n, slot_h, slot_v = 0.0, 0.0, 1000.0, 20.0  # 槽位起于原点、沿东向匀速
+        dt = 0.05
+        self_cmd, self_state, acc = MotionProfS(), MotionProfS(), AccInEarthS()
+        d0 = math.hypot(state.x_m - slot_e, state.y_m - slot_n)
+        max_heading_dev = 0.0
+
+        for _ in range(int(40.0 / dt)):
+            self_state.pos = PosInEarthS(state.x_m, state.y_m, state.altitude_m)
+            self_state.v = VdInEarthS(
+                vEast=state.vx_mps, vNorth=state.vy_mps, vUp=state.vz_mps,
+                vd=math.hypot(state.vx_mps, state.vy_mps), vPsi=state.psi_rad,
+            )
+            self_cmd.pos = PosInEarthS(slot_e, slot_n, slot_h)
+            self_cmd.v = VdInEarthS(vEast=slot_v, vNorth=0.0, vUp=0.0, vd=slot_v, vPsi=0.0, dVPsi=0.0)
+            tracker.step(
+                PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
+                PosTrackOutputS(accCmd=acc),
+            )
+            state.update_from_vector(
+                model.step(state.as_vector(), (acc.accEast, acc.accNorth, acc.accUp), (0.0, 0.0, 0.0), dt)
+            )
+            slot_e += slot_v * dt  # 槽位随编队前移
+            max_heading_dev = max(max_heading_dev, abs(math.atan2(math.sin(state.psi_rad), math.cos(state.psi_rad))))
+
+        final = math.hypot(state.x_m - slot_e, state.y_m - slot_n)
+        # 不转圈：航向相对编队航向(东)的最大偏离远小于半圈(转一圈会扫过 ≥180°)。
+        self.assertLess(max_heading_dev, math.radians(90.0))
+        # 收敛到槽位：既绝对收敛，也相对初始 89m 大幅收敛。
+        self.assertLess(final, 5.0)
+        self.assertLess(final, 0.1 * d0)
 
 
 class ProcessUnitTests(unittest.TestCase):
