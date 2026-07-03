@@ -43,6 +43,7 @@ configs/base.json
 ```
 
 该配置仅作为默认演示场景入口，具体节点、航线、仿真时长和步长等参数会随验证需求调整，以文件内容为准。
+示例配置会通过 `route_file`、`avoidance.obstacles_file` 和 `formation.formation_files` 引用 `configs/element/` 下的外部文件，移动配置时需要保持这些相对路径有效。
 
 ## Windows x64 打包
 

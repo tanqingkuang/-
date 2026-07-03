@@ -71,6 +71,51 @@ class LineFileTests(unittest.TestCase):
         self.assertEqual(resolved["route"]["speed_mps"], 20.0)
         self.assertEqual(resolved["rally_route"]["speed_mps"], 18.0)
 
+    def test_config_loader_resolves_formation_files(self) -> None:
+        """formation_files 应按主配置位置展开成内部 formations 列表。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            element = root / "element" / "formations"
+            element.mkdir(parents=True)
+            (element / "triangle.json").write_text(
+                json.dumps({
+                    "name": "TRIANGLE",
+                    "slots": [
+                        {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                        {"node_id": "A02", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0},
+                    ],
+                }),
+                encoding="utf-8",
+            )
+
+            resolved = resolve_config_references(
+                {
+                    "formation": {
+                        "coordinate_system": "x_forward_y_up_z_right",
+                        "formation_files": ["element/formations/triangle.json"],
+                    }
+                },
+                root / "base.json",
+            )
+
+        formations = resolved["formation"]["formations"]  # type: ignore[index]
+        self.assertEqual(formations[0]["name"], "TRIANGLE")
+        self.assertEqual(formations[0]["slots"][1]["node_id"], "A02")
+
+    def test_config_loader_rejects_inline_formation_config(self) -> None:
+        """文件入口不再接受旧的 pattern/slots 内联队形写法。"""
+        with self.assertRaisesRegex(ValueError, "formation_files"):
+            resolve_config_references(
+                {
+                    "formation": {
+                        "pattern": "TRIANGLE",
+                        "coordinate_system": "x_forward_y_up_z_right",
+                        "slots": [{"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0}],
+                    }
+                },
+                "base.json",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

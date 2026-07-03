@@ -493,12 +493,16 @@ class SimulationControllerTests(unittest.TestCase):
         ]
         config = {
             "formation": {
-                "pattern": "TRIANGLE",
                 "coordinate_system": "x_forward_y_up_z_right",
-                "slots": [
-                    {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
-                    {"node_id": "A02", "x_m": -70.0, "y_m": 5.0, "z_m": -40.0},
-                    {"node_id": "A03", "x_m": -70.0, "y_m": -5.0, "z_m": 40.0},
+                "formations": [
+                    {
+                        "name": "TRIANGLE",
+                        "slots": [
+                            {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                            {"node_id": "A02", "x_m": -70.0, "y_m": 5.0, "z_m": -40.0},
+                            {"node_id": "A03", "x_m": -70.0, "y_m": -5.0, "z_m": 40.0},
+                        ],
+                    }
                 ],
             }
         }
@@ -522,10 +526,14 @@ class SimulationControllerTests(unittest.TestCase):
         ]
         config = {
             "formation": {
-                "pattern": "TRIANGLE",
-                "slots": [
-                    {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
-                    {"node_id": "A02", "x_m": -30.0, "y_m": 20.0, "z_m": 0.0},
+                "formations": [
+                    {
+                        "name": "TRIANGLE",
+                        "slots": [
+                            {"node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                            {"node_id": "A02", "x_m": -30.0, "y_m": 20.0, "z_m": 0.0},
+                        ],
+                    }
                 ],
             }
         }
@@ -534,7 +542,7 @@ class SimulationControllerTests(unittest.TestCase):
             _build_formation_comm_init(nodes, [], config)
 
     def test_default_triangle_slots_reject_extra_wingmen(self) -> None:
-        """Default wedge geometry should fail fast when more wingmen need explicit slots."""
+        """Default wedge geometry should fail fast when more wingmen need formation files."""
         nodes = [
             {"node_id": "A01", "role": "leader"},
             {"node_id": "A02", "role": "wingman"},
@@ -542,7 +550,7 @@ class SimulationControllerTests(unittest.TestCase):
             {"node_id": "A04", "role": "wingman"},
         ]
 
-        with self.assertRaisesRegex(ValueError, "explicit slots"):
+        with self.assertRaisesRegex(ValueError, "formation_files"):
             _build_formation_comm_init(nodes, [])
 
     def test_vel_cmd_limit_absent_block_means_unbounded(self) -> None:
@@ -770,10 +778,22 @@ class SimulationControllerTests(unittest.TestCase):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config["duration_s"] = 60.0
         vertical_offsets = {"A01": 60.0, "A02": 30.0, "A03": 0.0, "A04": -30.0, "A05": -60.0}
-        for slot in config["formation"]["formations"][1]["slots"]:  # type: ignore[index]
-            slot["y_m"] = vertical_offsets[str(slot["node_id"])]
 
         with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            formation_dir = root / "element" / "formations"
+            formation_dir.mkdir(parents=True)
+            formation_files = []
+            for index, relative in enumerate(config["formation"]["formation_files"]):  # type: ignore[index]
+                source = config_path.parent / str(relative)
+                payload = json.loads(source.read_text(encoding="utf-8"))
+                if index == 1:
+                    for slot in payload["slots"]:
+                        slot["y_m"] = vertical_offsets[str(slot["node_id"])]
+                target = formation_dir / source.name
+                target.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                formation_files.append(str(target.relative_to(root)).replace("\\", "/"))
+            config["formation"]["formation_files"] = formation_files  # type: ignore[index]
             probe_path = Path(tmp) / "vertical_switch_probe.json"
             probe_path.write_text(json.dumps(config), encoding="utf-8")
             controller = SimulationController()

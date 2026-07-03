@@ -12,18 +12,14 @@
     "compress_time_s": 20.0,
     "tight_radius_m": 5.0,
     "stale_timeout_s": 3.0,
-    "target_pattern": "TRIANGLE",
     "loiter_radius_m": 200.0,
     "arrival_radius_m": 100.0,
     "catchup_radius_m": 200.0
   },
   "formation": {
-    "pattern": "TRIANGLE",
     "coordinate_system": "x_forward_y_up_z_right",
-    "slots": [
-      { "node_id": "R01", "x_m":   0.0, "y_m": 0.0, "z_m":   0.0 },
-      { "node_id": "R02", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0 },
-      { "node_id": "R03", "x_m": -54.0, "y_m": 0.0, "z_m":  58.0 }
+    "formation_files": [
+      "element/formations/rally_triangle_r01_r03.json"
     ]
   },
   "model": {

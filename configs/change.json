@@ -24,37 +24,10 @@
     "coordinate_system": "x_forward_y_up_z_right",
     "reference_node_id": "A03",
     "initial_index": 0,
-    "formations": [
-      {
-        "name": "楔形",
-        "slots": [
-          { "node_id": "A01", "x_m": -90.0, "y_m": 0.0, "z_m": -90.0 },
-          { "node_id": "A02", "x_m": -45.0, "y_m": 0.0, "z_m": -45.0 },
-          { "node_id": "A03", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0 },
-          { "node_id": "A04", "x_m": -45.0, "y_m": 0.0, "z_m": 45.0 },
-          { "node_id": "A05", "x_m": -90.0, "y_m": 0.0, "z_m": 90.0 }
-        ]
-      },
-      {
-        "name": "横队",
-        "slots": [
-          { "node_id": "A01", "x_m": 0.0, "y_m": 0.0, "z_m": -100.0 },
-          { "node_id": "A02", "x_m": 0.0, "y_m": 0.0, "z_m": -50.0 },
-          { "node_id": "A03", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0 },
-          { "node_id": "A04", "x_m": 0.0, "y_m": 0.0, "z_m": 50.0 },
-          { "node_id": "A05", "x_m": 0.0, "y_m": 0.0, "z_m": 100.0 }
-        ]
-      },
-      {
-        "name": "双纵队",
-        "slots": [
-          { "node_id": "A01", "x_m": -100.0, "y_m": 0.0, "z_m": -25.0 },
-          { "node_id": "A02", "x_m": -50.0, "y_m": 0.0, "z_m": -25.0 },
-          { "node_id": "A03", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0 },
-          { "node_id": "A04", "x_m": -50.0, "y_m": 0.0, "z_m": 25.0 },
-          { "node_id": "A05", "x_m": -100.0, "y_m": 0.0, "z_m": 25.0 }
-        ]
-      }
+    "formation_files": [
+      "element/formations/change_wedge_a01_a05.json",
+      "element/formations/change_line_abreast_a01_a05.json",
+      "element/formations/change_double_column_a01_a05.json"
     ]
   },
   "model": {
