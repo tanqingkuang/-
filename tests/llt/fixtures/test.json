@@ -7,20 +7,20 @@
     "speed_mps": 20.0,
     "waypoints": [
       {
-        "x_m": 0.0,
-        "y_m": 0.0,
+        "latitude_deg": 39.0,
+        "longitude_deg": 116.0,
         "altitude_m": 1000.0,
         "R": 0.0
       },
       {
-        "x_m": 2000.0,
-        "y_m": 0.0,
+        "latitude_deg": 38.9999977,
+        "longitude_deg": 116.0230876,
         "altitude_m": 1000.0,
         "R": 400.0
       },
       {
-        "x_m": 2000.0,
-        "y_m": 2000.0,
+        "latitude_deg": 39.0180132,
+        "longitude_deg": 116.0230935,
         "altitude_m": 1000.0,
         "R": 0.0
       }

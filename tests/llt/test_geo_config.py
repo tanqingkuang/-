@@ -10,6 +10,7 @@ from pathlib import Path
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import inside, make_polygon
 from src.data.config_loader import resolve_config_references
 from src.data.geo import GeoOrigin, enu_to_geodetic, geodetic_to_enu
+from src.data.geo_config import route_to_internal
 
 
 class GeoConversionTests(unittest.TestCase):
@@ -75,6 +76,29 @@ class GeoConfigTests(unittest.TestCase):
         obstacle = config["avoidance"]["obstacles"][0]
         self.assertEqual(obstacle["type"], "polygon")
         self.assertEqual(len(obstacle["vertices"]), 4)
+
+    def test_route_to_internal_rejects_enu_waypoints(self) -> None:
+        """反例：非经纬(ENU x_m/y_m)航线在转换期直接报错——JSON 不再支持非经纬航线。"""
+        with self.assertRaisesRegex(ValueError, "geodetic"):
+            route_to_internal(
+                {"waypoints": [{"x_m": 0.0, "y_m": 0.0}, {"x_m": 1000.0, "y_m": 0.0}]}
+            )
+
+    def test_route_to_internal_accepts_geodetic_waypoints(self) -> None:
+        """正例：经纬航线正常转成内部 ENU，首航点落在 ENU 原点。"""
+        origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
+        p1 = enu_to_geodetic(1000.0, 0.0, origin)
+        resolved, route_origin = route_to_internal(
+            {
+                "waypoints": [
+                    {"latitude_deg": 39.0, "longitude_deg": 116.0, "altitude_m": 1000.0},
+                    {"latitude_deg": p1[0], "longitude_deg": p1[1], "altitude_m": 1000.0},
+                ]
+            }
+        )
+        self.assertIsNotNone(route_origin)
+        self.assertAlmostEqual(resolved["waypoints"][0]["x_m"], 0.0, places=3)
+        self.assertAlmostEqual(resolved["waypoints"][1]["x_m"], 1000.0, places=3)
 
     def test_polygon_obstacle_preserves_rotation(self) -> None:
         obstacle = make_polygon("R1", [(0.0, 0.0), (100.0, 100.0), (0.0, 200.0), (-100.0, 100.0)])

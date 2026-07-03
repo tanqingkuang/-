@@ -9,6 +9,7 @@ from pathlib import Path
 
 from src.data.linefile import LineFileManager, LineFileStrategyFactory
 from src.data.config_loader import resolve_config_references
+from tests.llt._geo_route import geodetic_route
 
 
 class LineFileTests(unittest.TestCase):
@@ -54,11 +55,11 @@ class LineFileTests(unittest.TestCase):
             element = root / "element"
             element.mkdir()
             (element / "mission.json").write_text(
-                json.dumps({"speed_mps": 20.0, "waypoints": [{"x_m": 1.0, "y_m": 2.0, "altitude_m": 3.0}]}),
+                json.dumps(geodetic_route({"speed_mps": 20.0, "waypoints": [{"x_m": 1.0, "y_m": 2.0, "altitude_m": 3.0}]})),
                 encoding="utf-8",
             )
             (element / "rally.json").write_text(
-                json.dumps({"speed_mps": 18.0, "waypoints": [{"x_m": 4.0, "y_m": 5.0, "altitude_m": 6.0}]}),
+                json.dumps(geodetic_route({"speed_mps": 18.0, "waypoints": [{"x_m": 4.0, "y_m": 5.0, "altitude_m": 6.0}]})),
                 encoding="utf-8",
             )
 

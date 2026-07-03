@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS
+from tests.llt._geo_route import geodetic_config
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.runner.sim_control import (
@@ -19,7 +20,10 @@ from src.runner.sim_control import (
 
 
 def _rally_config() -> dict[str, object]:
-    """构造最小可运行的三机集结配置。"""
+    """构造最小可运行的三机集结配置（航线为 ENU，供直接调用 _build_* 的单元测试）。
+
+    注意：经 load_config 加载的用例由 _write_json 转成经纬航线（产品约定）。
+    """
 
     return {
         "duration_s": 0.05,
@@ -87,10 +91,10 @@ def _rally_config() -> dict[str, object]:
 
 
 def _write_json(directory: Path, config: dict[str, object]) -> Path:
-    """把配置写入临时 JSON 文件。"""
+    """把配置写入临时 JSON 文件。注意：航线转经纬后写盘，符合"JSON 只支持经纬航线"约定。"""
 
     path = directory / "rally_case.json"
-    path.write_text(json.dumps(config), encoding="utf-8")
+    path.write_text(json.dumps(geodetic_config(config)), encoding="utf-8")
     return path
 
 
@@ -153,8 +157,9 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertIsInstance(controller._node_algorithms["R03"]._entity, RallyFollowerEntity)
             self.assertIsNotNone(snapshot.route)
             assert snapshot.route is not None
-            self.assertAlmostEqual(snapshot.route.start_x_m, 100.0)
-            self.assertAlmostEqual(snapshot.route.end_x_m, 200.0)
+            # 经纬航线以首航点为 ENU 原点：原 (100,0)->(200,0) 重定为 (0,0)->(100,0)。
+            self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=2)
+            self.assertAlmostEqual(snapshot.route.end_x_m, 100.0, places=2)
 
     def test_rally_cfg_approach_speed_is_injected_into_followers(self) -> None:
         """验证 rally_cfg.approach_speed_mps 会注入僚机 RallyJoinPos。"""
