@@ -599,7 +599,7 @@ class MainWindowActionMixin:
         if self._situation3d_window is None:
             self._situation3d_window = Situation3DWindow(self)
         self._update_situation3d_snapshot(self.sim.snapshot())
-        self._situation3d_window.showFullScreen()
+        self._situation3d_window.showMaximized()
         self._situation3d_window.raise_()
         self._situation3d_window.activateWindow()
 

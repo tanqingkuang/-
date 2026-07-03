@@ -113,7 +113,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsNotNone(first_window)
         self.assertTrue(first_window.isVisible())
         self.assertTrue(first_window.isWindow())
-        self.assertTrue(first_window.isFullScreen())
+        self.assertTrue(first_window.isMaximized())
+        self.assertFalse(first_window.isFullScreen())
         self.assertEqual(first_window.windowTitle(), "3D态势")
         self.assertEqual(first_window.quick_view.errors(), [])
 
@@ -160,7 +161,8 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertIs(self.window._situation3d_window, first_window)
         self.assertTrue(first_window.isVisible())
-        self.assertTrue(first_window.isFullScreen())
+        self.assertTrue(first_window.isMaximized())
+        self.assertFalse(first_window.isFullScreen())
 
     def test_data_analysis_menu_opens_independent_window(self) -> None:
         self.window._open_data_analysis_window()
