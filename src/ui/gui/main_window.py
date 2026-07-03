@@ -134,6 +134,7 @@ class MainWindow(
         self._live_monitor: "LiveMonitorWindow | None" = None
         self._offline_plot: "OfflinePlotWindow | None" = None
         self._data_analysis_window: "DataAnalysisWindow | None" = None
+        self._situation3d_window: "Situation3DWindow | None" = None
         self.avoidance_window: AvoidanceWindow | None = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()

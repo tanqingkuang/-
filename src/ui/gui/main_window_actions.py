@@ -591,6 +591,16 @@ class MainWindowActionMixin:
         self._data_analysis_window.show()
         self._data_analysis_window.raise_()
 
+    def _open_situation3d_window(self) -> None:
+        """打开 3D 态势窗口。注意：重复触发复用同一个窗口实例。"""
+        from src.ui.gui.situation3d import Situation3DWindow
+        # 3D 视图后续会承载独立 Qt Quick 3D 场景，主窗口只负责入口和生命周期。
+        if self._situation3d_window is None:
+            self._situation3d_window = Situation3DWindow(self)
+        self._situation3d_window.show()
+        self._situation3d_window.raise_()
+        self._situation3d_window.activateWindow()
+
     def _open_live_monitor(self) -> None:
         """打开实时控制监控窗口。"""
         from src.ui.gui.live_monitor import LiveMonitorWindow
@@ -615,5 +625,7 @@ class MainWindowActionMixin:
             self._offline_plot.close()
         if self._data_analysis_window is not None:
             self._data_analysis_window.close()
+        if self._situation3d_window is not None:
+            self._situation3d_window.close()
         self.sim.close()
         super().closeEvent(event)
