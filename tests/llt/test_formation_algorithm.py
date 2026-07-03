@@ -868,6 +868,52 @@ class PosTrackClosedLoopTests(unittest.TestCase):
         self.assertLess(final, 5.0)
         self.assertLess(final, 0.1 * d0)
 
+    def test_follower_lateral_offset_converges_without_sustained_overshoot(self) -> None:
+        """僚机纯横偏(150m)切入随编队东向匀速的槽位：应收敛且不大幅过冲到对侧、末段不再持续摆动。
+
+        换到目标速度系度量误差后，丢了自身航迹系随机头旋转的纯追踪前置阻尼；若侧向阻尼(kd)照搬旧自身系
+        并联式的偏小值就会欠阻尼——过冲到对侧、持续摆动(base.json 僚机切入曾复现)。kd 整定到 0.30 后收敛。
+        本用例用真实僚机增益 `_follower_tracker_init`，是该整定的回归护栏(若把 kd 调回欠阻尼即失败)。
+        """
+        model = PointMass3DoFModel(ModelIterator._default_config())
+        tracker = PidCompose()
+        tracker.init(_follower_tracker_init(0.05))
+        state = AircraftState(
+            node_id="F", x_m=0.0, y_m=150.0, altitude_m=1000.0, speed_mps=20.0,
+            theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
+            ax_rate_mps3=0.0, ay_rate_mps3=0.0, az_rate_mps3=0.0,
+            nx=0.0, nz=0.0, phi_rad=0.0, psi_dot_deg_s=0.0,
+        )
+        slot_e, slot_n, slot_h, slot_v = 0.0, 0.0, 1000.0, 20.0  # 槽位在东向直线上匀速
+        dt = 0.05
+        self_cmd, self_state, acc = MotionProfS(), MotionProfS(), AccInEarthS()
+        crosses: list[float] = []
+
+        for i in range(int(60.0 / dt)):
+            self_state.pos = PosInEarthS(state.x_m, state.y_m, state.altitude_m)
+            self_state.v = VdInEarthS(
+                vEast=state.vx_mps, vNorth=state.vy_mps, vUp=state.vz_mps,
+                vd=math.hypot(state.vx_mps, state.vy_mps), vPsi=state.psi_rad,
+            )
+            self_cmd.pos = PosInEarthS(slot_e, slot_n, slot_h)
+            self_cmd.v = VdInEarthS(vEast=slot_v, vNorth=0.0, vUp=0.0, vd=slot_v, vPsi=0.0, dVPsi=0.0)
+            tracker.step(
+                PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
+                PosTrackOutputS(accCmd=acc),
+            )
+            state.update_from_vector(
+                model.step(state.as_vector(), (acc.accEast, acc.accNorth, acc.accUp), (0.0, 0.0, 0.0), dt)
+            )
+            slot_e += slot_v * dt
+            if i % 20 == 0:  # 每 1s 记一次横偏(北向偏移=相对东向槽位线的横偏)
+                crosses.append(state.y_m - slot_n)
+
+        overshoot = max(0.0, -min(crosses))  # 从北侧(+150)切入，冲到南侧(负)的最大幅值
+        tail = crosses[-10:]
+        self.assertLess(overshoot, 5.0)               # 不大幅过冲到对侧(欠阻尼时会到 -20~-34)
+        self.assertLess(abs(crosses[-1]), 3.0)        # 收敛到槽位
+        self.assertLess(max(tail) - min(tail), 3.0)   # 末段不再持续摆动
+
 
 class ProcessUnitTests(unittest.TestCase):
     def test_hold_writes_hold_triangle(self) -> None:

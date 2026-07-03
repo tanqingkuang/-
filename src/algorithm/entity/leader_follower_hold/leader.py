@@ -188,11 +188,13 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
     """按给定前向增益生成位置跟踪器配置。注意：前向/垂向走串级 P+PI(可限速)，侧向恒为位置环 Pid，长机与僚机只在前向通道有别。"""
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
-    # 侧向(侧偏)改串级(P+PI)+航迹角变限幅：增益 kp/kd/ki 与旧并联式一一等价(无饱和+ki=0 时严格相等)，
+    # 侧向(侧偏)改串级(P+PI)+航迹角变限幅：结构上仍等价于并联式 kp·dZ+kd·velErr(无饱和+ki=0)。
+    # 注意 kd 已从旧自身系并联的 0.12 上调到 0.30——误差改到"目标速度系"度量后，丢了自身航迹系
+    # 随机头旋转带来的纯追踪前置阻尼，照搬旧增益会欠阻尼振荡(base.json 僚机切入持续摆动)，故需更高阻尼。
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
     # rollMax/gammaMax/floor/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
     gain_lateral = LateralTrackAngleInitS(
-        kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
+        kp=0.02, ki=0.0, kd=0.30, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
         gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD, margin=_LATERAL_R_MARGIN,
     )
     # 垂向改串级 P+PI：等价旧 kp=0.2/kd=0.6(kpPos=kp/kd)，acc 限幅沿用 ±6；
