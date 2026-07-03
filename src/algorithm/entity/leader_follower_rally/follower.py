@@ -36,7 +36,13 @@ from src.algorithm.units.process.outbound.base import OutboundOutputS
 from src.algorithm.units.process.outbound.follower_broadcast import FollowerBroadcast, FollowerBroadcastInitS, FollowerBroadcastInputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.noop import Noop
-from src.algorithm.entity.leader_follower_rally import fill_output
+from src.algorithm.entity.leader_follower_rally import (
+    fill_output,
+    loiter_speed_bounds,
+    rally_loose_target,
+    rally_route_heading_rad,
+    resolve_formation_slot,
+)
 
 
 class RallyFollowerEntity(EntityBase):
@@ -44,20 +50,28 @@ class RallyFollowerEntity(EntityBase):
 
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 RallyFollowerEntity。"""
-        if cfg.rally_target is None:
-            raise ValueError("RallyFollowerEntity: rally_target is required")
+        if not cfg.rally_route or len(cfg.rally_route) < 2:
+            raise ValueError("RallyFollowerEntity: rally_route 至少需要两个航点")
         rally_cfg = cfg.rally_cfg
         if not isinstance(rally_cfg, RallyTaskInitS):
             raise ValueError("RallyFollowerEntity: rally_cfg must be RallyTaskInitS")
+
+        # 从集结航线第一航段计算任务航向，再按目标队形槽位算本机松散目标点
+        _A = cfg.rally_route[0].pos
+        _heading = rally_route_heading_rad(cfg.rally_route)
+        _slot = resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)
+        if _slot is None:
+            raise ValueError(
+                f"RallyFollowerEntity: 节点 {cfg.selfInit.id!r} 在目标队形 {rally_cfg.targetPattern!r} "
+                "的槽位表中未找到对应条目（目标队形不在 formPat 中，或 formPos 缺少该队形/该节点）"
+            )
+        _rally_target = rally_loose_target(_A, _heading, rally_cfg.looseScale, _slot)
 
         self.cxt = FormContextS()
         self._inbox: list = []
         self._outbox: list = []
 
-        fwd_min = cfg.velCmdLimit.forwardMin
-        fwd_max = cfg.velCmdLimit.forwardMax
-        loiter_min = fwd_min if (math.isfinite(fwd_min) and fwd_min > 0) else 14.0
-        loiter_max = fwd_max if (math.isfinite(fwd_max) and fwd_max > 0) else 25.0
+        loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
 
         slow_radius_m = max(rally_cfg.arrival_radius_m * 3.0, 60.0)
 
@@ -76,24 +90,25 @@ class RallyFollowerEntity(EntityBase):
         v_up_min = cfg.velCmdLimit.verticalMin if math.isfinite(cfg.velCmdLimit.verticalMin) else -3.0
         v_up_max = cfg.velCmdLimit.verticalMax if math.isfinite(cfg.velCmdLimit.verticalMax) else 3.0
         self._rally_join.init(RallyJoinPosInitS(
-            loose_slot=cfg.rally_target,
+            loose_slot=_rally_target,
             approach_speed_mps=cfg.rally_approach_speed_mps,
             slow_radius_m=slow_radius_m,
             arrival_radius_m=rally_cfg.arrival_radius_m,
             loiter_radius_m=rally_cfg.loiter_radius_m,
             loiter_speed_min_mps=loiter_min,
             loiter_speed_max_mps=loiter_max,
-            mission_heading_rad=math.radians(rally_cfg.mission_heading_deg),
+            mission_heading_rad=_heading,
             mission_speed_mps=cfg.rally_approach_speed_mps,
             v_up_min_mps=v_up_min,
             v_up_max_mps=v_up_max,
+            control_period_s=cfg.control_period_s,
         ))
         self._catchup.init(CatchupAlignInitS(
             selfId=cfg.selfInit.id,
             commInit=cfg.commInit,
-            mission_heading_rad=math.radians(rally_cfg.mission_heading_deg),
-            mi_east=cfg.rally_target.east,
-            mi_north=cfg.rally_target.north,
+            mission_heading_rad=_heading,
+            mi_east=_rally_target.east,
+            mi_north=_rally_target.north,
             nominal_speed_mps=cfg.rally_approach_speed_mps,
             kp_speed=rally_cfg.catchup_kp_speed,
             speed_min_mps=loiter_min,
@@ -211,6 +226,7 @@ class RallyFollowerEntity(EntityBase):
         """将 RallyJoinPos 状态同步到出站端口。"""
         self._outbound_u.rally_state = self._rally_join.state
         self._outbound_u.eta_s = self._rally_join.eta_s
+        self._outbound_u.reached_slot_once = self._rally_join.reached_slot_once
         self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
         # CATCHUP 阶段 selfCmd.pos = 前视点，dist3d(self, selfCmd) 不代表到槽位距离；用 CatchupAlign 直接暴露的 pos_err_m
         if self.cxt.cmd.step == RallyPhaseE.CATCHUP:

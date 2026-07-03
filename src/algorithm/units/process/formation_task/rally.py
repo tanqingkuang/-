@@ -40,7 +40,6 @@ class RallyTaskInitS(FormationTaskInitS):
     # 集结汇合新增参数（RallyJoinPos 使用，Rally 任务直接透传给实体）
     loiter_radius_m: float = 200.0  # 盘旋圆半径，米
     arrival_radius_m: float = 100.0  # 进入盘旋的触发距离，米
-    mission_heading_deg: float = 0.0  # 切出后飞行方向（度，从东向起算）
     catchup_radius_m: float = 200.0  # CATCHUP→LOOSE 位置误差阈值（dist2d to slot），米
     catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
     catchup_stable_s: float = 3.0  # CATCHUP→LOOSE 需连续满足的时长，秒
@@ -56,7 +55,8 @@ class RallyTaskInputS(FormationTaskInputS):
     now_s: float = 0.0  # 当前仿真时间（秒），由实体从边界输入注入，用于超时判断
     leader_eta_s: float = 0.0  # 长机自身 RallyJoinPos.eta_s（由长机实体每帧注入）
     leader_join_exited: bool = False  # 长机自身是否已 EXITED（由长机实体每帧注入）
-    leader_join_flying: bool = False  # 长机自身是否仍在 FLYING 状态（用于 T_ref 计算，LOITERING 不计入）
+    leader_join_flying: bool = False  # 长机自身是否仍在 FLYING 状态（用于 T_ref 计算）
+    leader_join_reached_slot_once: bool = False  # 长机自身是否已至少一次路过 M_i（由长机实体每帧注入，用于 T_ref 计算）
 
 
 @dataclass
@@ -159,15 +159,23 @@ class Rally(FormationTaskBase):
         # slotScale 每拍都写出，确保僚机漏收上一帧广播后仍可从最新消息恢复。
         if step == RallyPhaseE.JOINING:
             expected_states = [state_map[fid] for fid in self._expected_ids if fid in state_map]
-            # 计算 T_ref：所有仍在 FLYING 状态的有效参与者中 ETA 最大值
+            # 计算 T_ref：仍需被等待的参与者 ETA 最大值。FLYING 全部计入；LOITERING 只有尚未首次路过
+            # M_i 时才计入——切入点 T 到 M_i 之间可能还有很长一段弧要飞，进 LOITERING 不等于已到 M_i，
+            # 过早排除会让 T_ref 提前塌缩到更快参与者的 ETA；已路过至少一次后不再计入，避免盘旋等待期间
+            # 每圈波动的 eta_s 反复推高 T_ref（旧版进 LOITERING 就等价于到了 M_i，这个区分不需要；
+            # 本次"切线进圆"重构后才需要用 reachedSlotOnce 精确区分这两种 LOITERING）。
             flying_etas = [
                 s.eta_s for s in expected_states
                 if self._is_valid(s, now_s)
-                and s.rally_state == RALLY_STATE_FLYING
+                and s.rally_state != RALLY_STATE_EXITED
+                and (s.rally_state == RALLY_STATE_FLYING or not s.reachedSlotOnce)
                 and math.isfinite(s.eta_s)
                 and s.eta_s > 0.0
             ]
-            if u.leader_join_flying and math.isfinite(u.leader_eta_s) and u.leader_eta_s > 0.0:
+            leader_counts_toward_t_ref = not u.leader_join_exited and (
+                u.leader_join_flying or not u.leader_join_reached_slot_once
+            )
+            if leader_counts_toward_t_ref and math.isfinite(u.leader_eta_s) and u.leader_eta_s > 0.0:
                 flying_etas.append(u.leader_eta_s)
             # 有 FLYING 参与者时更新 t_ref；全部离开后锁存最后值，避免"最后一架到达时塌缩为 now_s"。
             if flying_etas:

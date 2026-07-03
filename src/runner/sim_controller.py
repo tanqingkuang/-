@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import replace
 from typing import Callable
 
-from src.algorithm.context.leaf_types import PosInEarthS, PosTrackDiagS, WayLineS, WayPointInputS, to_display_inputs
+from src.algorithm.context.leaf_types import PosTrackDiagS, WayLineS, WayPointInputS, to_display_inputs
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.common.envelope import MessageEnvelope
 from src.environment.comm import CommunicationChannel
@@ -29,12 +29,12 @@ from src.runner.sim_control_routes import (
     _build_formation_comm_init,
     _build_leader_route,
     _build_rally_approach_speed,
+    _build_rally_join_geometry,
     _build_rally_route,
     _build_rally_task_init,
     _build_vel_cmd_limit,
     _leader_id_from_nodes,
     _motion_from_aircraft_state,
-    _route_point_from_config,
     _route_state_from_wayline,
 )
 from src.runner.sim_control_snapshot import SimulationControllerSnapshotMixin
@@ -85,6 +85,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
         self._formation_names: list[str] = []  # 各队形名字（供界面下拉框显示，索引=队形序号）
         self._formation_index: int = 0  # 当前/初始队形索引，供界面下拉框预选
+        self._rally_geometry: dict[str, object] = {}  # RallyJoinGeometryState 按 node_id 索引，供 GUI 展示盘旋圆/关键点
         # 控制输出缓存按节点 ID 存放，模型 tick 前后都能生成一致快照。
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
@@ -628,17 +629,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         rally_route = _build_rally_route(config)
         rally_task_init = _build_rally_task_init(config, self._algorithm_period_s, list(nodes))
         rally_approach_speed = _build_rally_approach_speed(config)
+        # 集结辅助几何（盘旋圆/切入点/切出点）只依赖静态配置和已解析初始状态，init 时算一次即可，供 GUI 展示。
+        self._rally_geometry = _build_rally_join_geometry(
+            list(nodes), rally_route, formation_comm_init, rally_task_init, states
+        )
         self._formation_completed_analysis = None
         rally_leader_id = _leader_id_from_nodes(list(nodes))
-        _node_rally_targets: dict[str, PosInEarthS | None] = {
-            node_id_from_config(node, i): (
-                _route_point_from_config(node["rally_target"], f"nodes[{i}].rally_target")
-                if isinstance(node.get("rally_target"), dict)
-                else None
-            )
-            for i, node in enumerate(nodes)
-            if isinstance(node, dict)
-        }
         # 为每个节点创建算法适配器（角色决定实体类型）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
@@ -651,7 +647,6 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 vel_cmd_limit,
                 rally_route=rally_route,
                 rally_cfg=rally_task_init,
-                rally_target=_node_rally_targets.get(node_id),
                 rally_leader_id=rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed,
             )

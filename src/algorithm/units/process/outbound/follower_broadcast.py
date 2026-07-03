@@ -29,6 +29,7 @@ class FollowerBroadcastInputS(OutboundInputS):
     selfArrived: int = 0  # 兼容旧协议；新协议使用 rally_state
     rally_state: str = "FLYING"  # 集结汇合状态：FLYING / LOITERING / EXITED
     eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）
+    reached_slot_once: bool = False  # 是否已至少一次路过 M_i；LOITERING 但尚未路过时仍应计入长机 T_ref 聚合
     pos_err_m_override: float | None = None  # 不为 None 时直接作为 posErr_m 广播（CATCHUP 阶段用 dist2d(self,slot)）
 
 
@@ -74,6 +75,7 @@ class FollowerBroadcast(OutboundBase):
                     "arrived": int(u.selfArrived),
                     "rally_state": u.rally_state,
                     "eta_s": float(u.eta_s),
+                    "reached_slot_once": bool(u.reached_slot_once),
                 },
             )
         )

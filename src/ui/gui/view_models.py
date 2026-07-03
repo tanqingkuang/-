@@ -182,6 +182,20 @@ def reference_route_points(route: ReferenceRoute, step_deg: float = 6.0) -> list
 
 
 @dataclass
+class RallyGeometryView:
+    """单个集结节点的盘旋圆与关键点，用于俯视图叠加显示。注意：按静态配置预计算，不随仿真推进变化。"""
+
+    node_id: str
+    slot_x: float  # 松散目标点 M_i（盘旋圆上的切出点），east
+    slot_y: float  # north
+    center_x: float  # 盘旋圆圆心，east
+    center_y: float  # north
+    radius: float  # 盘旋圆半径
+    entry_x: float  # 切入点 T，east
+    entry_y: float  # north
+
+
+@dataclass
 class ObstacleView:
     """俯视图显示用的二维障碍（无限高柱体）。注意：当前仅供 UI 显示与勾选，规划后端后续接入。"""
 
@@ -221,6 +235,7 @@ class Snapshot:
     route: ReferenceRoute | None = None
     route_segments: list[ReferenceRoute] = field(default_factory=list)
     cpu_utilization: float = 0.0
+    rally_geometry: list[RallyGeometryView] = field(default_factory=list)
 
 
 def is_leader_node(node: NodeState) -> bool:

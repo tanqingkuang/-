@@ -168,7 +168,7 @@ def _rally_task(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_entity_input_contains_now_s_default_zero` | `EntityInputS().now_s == 0.0` |
-| `test_entity_init_contains_rally_route_target_and_cfg` | `EntityInitS` 含 `rally_route/rally_target/rally_cfg/rally_approach_speed_mps/rally_leader_id`，默认值符合 LLD（`rally_leader_id=""` 为默认值，`RallyFollowerEntity.init` 须将其注入 `FollowerBroadcastInitS.leaderId`） |
+| `test_entity_boundary_defaults_include_rally_fields` | `EntityInitS` 含 `rally_route: list[WayPointInputS] \| None`（不再有 `rally_target`，M_i 由 init 按 `rally_route`+队形槽位自动推导）、`rally_cfg/rally_approach_speed_mps/rally_leader_id`，默认值符合 LLD（`rally_leader_id=""` 为默认值，`RallyFollowerEntity.init` 须将其注入 `FollowerBroadcastInitS.leaderId`） |
 | `test_entity_output_contains_optional_formation_analysis` | `EntityOutputS().formationAnalysis is None` |
 | `test_existing_hold_entities_accept_extended_boundary_types` | 现有 `LeaderEntity/FollowerEntity` 使用扩展后的 `EntityInputS/OutputS` 构造并 step 不抛异常 |
 
@@ -264,18 +264,56 @@ def _rally_task(
 
 ---
 
-## 9. TestRallyApproach - 飞向目标集结点
+## 9. TestRallyJoinPos - 切入盘旋圆与圆弧汇合
+
+> 本节原名 TestRallyApproach，描述旧版"FLYING 直飞 M_i"的测试点；本次"切线进圆"重构后 FLYING 改为直飞
+> 切入点 T，旧测试点已随之失效，替换为下列覆盖切入点/盘旋圆/切出航向的用例。均位于
+> `tests/llt/test_formation_rally.py::RallyPosCalcTests`，直接单测 `RallyJoinPos`（不经实体/仿真控制器）。
+
+**`loiter_speed_bounds()` 直接单测**（velCmdLimit → 盘旋速度上下限的推导与序校验，位于
+`tests/llt/test_formation_rally.py::RallyLoiterSpeedBoundsTests`；回归覆盖"只显式配置一侧、另一侧退回
+默认值导致反序"这一配置期漏判）：
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_outputs_target_position` | `selfCmd.pos` 恒等于初始化注入的 M_i |
-| `test_normal_branch_sets_horizontal_speed` | `dHoriz>=epsilon` 时 `hypot(vNorth,vEast)==approachSpeed_mps` |
-| `test_normal_branch_heading_uses_atan2_north_east` | 目标在正北方向时 `vPsi≈pi/2`，证明公式为 `atan2(dN,dE)` |
-| `test_normal_branch_clamps_vertical_speed` | 水平距离很小且高度差大时，`abs(vUp)<=vUpMax_mps` |
-| `test_near_zero_horizontal_branch_stops_horizontal_motion` | `dHoriz<epsilon` 时 `vNorth==0`、`vEast==0`、`vd==0` |
-| `test_near_zero_horizontal_branch_keeps_heading` | 近零分支 `vPsi` 等于 `selfState.v.vPsi` |
-| `test_near_zero_horizontal_branch_clamps_altitude_loop` | 近零分支 `vUp=clamp(dH*k_alt, +/-vUpMax_mps)` |
-| `test_init_rejects_invalid_speed_or_limits` | `approachSpeed_mps<0`、`vUpMax_mps<=0`、`k_alt<0` 抛 `ValueError` |
+| `test_only_forward_max_configured_below_default_min_rejected` | 只配 `forwardMax=10`（< 默认 `loiter_min=14`）时，`(14, 10)` 是非法区间，`loiter_speed_bounds()` 显式拒绝 |
+| `test_only_forward_min_configured_above_default_max_rejected` | 只配 `forwardMin=30`（> 默认 `loiter_max=25`）时，`(30, 25)` 是非法区间，`loiter_speed_bounds()` 显式拒绝 |
+| `test_both_unconfigured_uses_valid_defaults` | 两侧都不配置时退回默认 `(14.0, 25.0)`，自洽，不报错 |
+| `test_both_explicitly_configured_and_consistent_passes_through` | 两侧都显式配置且自洽（如 18/22）时原样透传，不受默认值影响 |
+
+**`rally_loose_target()` 直接单测**（M_i 的旋转/右侧轴符号/缩放/高度计算，位于
+`tests/llt/test_formation_rally.py::RallyLooseTargetTests`；此前只被实体级测试间接覆盖，未单独验证过
+旋转矩阵方向、右手轴符号、`looseScale` 是否只缩放水平分量）：
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_pure_forward_offset_at_zero_heading` | `heading=0`（正东）时，纯前向偏置（`slot.x`）直接映射为东向偏置，北向不变 |
+| `test_right_axis_sign_at_zero_heading` | `heading=0`（正东）时，纯右侧偏置（`slot.z`，正值=右）映射为**负**的北向偏置（面向正东时右手边是正南），符号搞反会让编队槽位左右镜像 |
+| `test_rotates_forward_offset_with_heading` | `heading=90°`（正北）时，纯前向偏置旋转成北向偏置，验证旋转矩阵方向而不只测 `heading=0` 这一特例 |
+| `test_looseScale_multiplies_horizontal_offset_only` | `looseScale` 线性放大水平偏置（east/north），但高度偏置（`slot.y`）保持固定、不随 scale 扩展 |
+| `test_route_start_offset_carries_through` | 集结区起点 A 非原点时，M_i 在 A 的基础上叠加旋转/缩放后的偏置，而非忽略 A |
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_rally_join_pos_entry_point_lies_on_loiter_circle` | FLYING 阶段算出的切入点 T 落在盘旋圆上（到圆心距离等于 `loiter_radius_m`），且一般不等于 `loose_slot` |
+| `test_rally_join_pos_flying_to_loitering_transition_heading_jump_is_small` | 回归用例：即便 `arrival_radius_m` 配置得较大（如 100m），FLYING→LOITERING 切换瞬间的指令航向跳变也被内部夹到较小量级（<10°），不会随配置值线性放大（旧版 100m 时实测 ~26°） |
+| `test_rally_join_pos_heading_jump_bound_holds_across_loiter_radii` | 回归用例：跳变角上限按 `loiter_radius_m` 反解触发半径（ψ=atan(d/R)），合法半径范围（200/100/50m）内跳变角都保持较小量级，不随 R 变小显著放大（旧版固定 15m 触发半径时 R=10m 能到 ~56°） |
+| `test_rally_join_pos_rejects_loiter_radius_too_small_for_capture_window` | `loiter_radius_m` 太小（如 10m）时 `init()` 显式拒绝，而不是静默产出远超 5° 承诺的跳变角，或让触发窗口比每步飞行距离还窄而错过切入 |
+| `test_rally_join_pos_rejects_arrival_radius_too_small_even_with_valid_loiter_radius` | 回归用例：即便 `loiter_radius_m` 合法，`arrival_radius_m` 单独配置得过小（如 1m）时 `init()` 仍显式拒绝——`min(arrival_radius_m, _arc_capture_radius_m)` 里 `arrival_radius_m` 可能是生效的更小值，只校验 `loiter_radius_m` 会漏判 |
+| `test_rally_join_pos_capture_window_uses_worst_case_of_approach_and_loiter_min_speed` | 回归用例：`required_capture_radius_m` 按 `max(approach_speed_mps, loiter_speed_min_mps)` 取更快一侧的速度反解单步安全边界，不能只看 `approach_speed_mps`（LOITERING 圆弧巡航速度若显著更快，用较慢的 approach 速度反解会算出偏小的安全边界） |
+| `test_rally_join_pos_exit_heading_matches_mission_heading_from_opposite_arrival` | 回归用例：即便从任务航向正对侧飞来（旧版会导致切出反向），切出速度方向仍精确等于 `mission_heading_rad` |
+| `test_rally_join_pos_does_not_exit_immediately_when_entry_point_lands_just_past_slot_angle` | 回归用例：切入点 T 弦长离 M_i 很近但真实 CCW 弧长约 350°（T 在角度上"刚越过" M_i）时，不会被对称弧距 `ang_dist` 误判成"已到达"而跳过圆弧直接切出 |
+| `test_rally_join_pos_reached_slot_once_stays_false_when_entry_point_lands_just_past_slot_angle` | 回归用例：同一个"弦长近、真实弧长约 350°"场景下，进 LOITERING 那一拍 `reached_slot_once` 必须仍是 False，不能被对称弧距误判成"已到达"（复现过一次：`_step_loitering` 里独立的 `ang_dist` 判断会把 `_enter_arc` 刚设对的 False 立刻翻回 True，修复为复用 `_away_from_slot` 同一判据） |
+| `test_rally_join_pos_loitering_targets_nominal_radius_not_actual` | LOITERING 阶段的位置指令/向心前馈按期望半径 `loiter_radius_m` 给出，不跟随飞机此刻的实际半径漂移 |
+| `test_rally_join_pos_falls_back_to_direct_flight_when_starting_inside_circle` | 已知限制：起点落在盘旋圆内部/圆上（无切线可求）时退化为直飞 `loose_slot`，不抛异常 |
+
+**T_ref 聚合新增回归用例**（`reached_slot_once`，修复"到达切入点 T 就过早退出 T_ref 聚合"问题，位于
+`tests/llt/test_formation_rally.py::RallyTaskTests`，与本节其余 `RallyJoinPos` 单测不同类）：
+
+| 测试名 | 断言 |
+| ------ | ---- |
+| `test_t_ref_counts_loitering_follower_that_has_not_reached_slot_once` | LOITERING 但尚未首次路过 M_i（`reachedSlotOnce=False`）的僚机 ETA 仍计入 T_ref，不因状态从 FLYING 变成 LOITERING 就被剔除 |
+| `test_t_ref_excludes_loitering_follower_after_reaching_slot_once` | 已首次路过 M_i（`reachedSlotOnce=True`）、纯粹盘旋等待的僚机不再计入 T_ref，避免其每圈波动的 ETA 反复推高/拉低基准时间 |
 
 ---
 
@@ -287,7 +325,7 @@ def _rally_task(
 | `test_scale_two_doubles_position_offset` | `scale=2.0` 时槽位偏置相对长机扩大 2 倍 |
 | `test_scale_rate_adds_compression_velocity` | `scaleRate<0` 时速度多出 `scaleRate * R(heading) * offset` 分量 |
 | `test_turn_feedforward_uses_scaled_offset` | 长机 `dVPsi!=0` 时，刚体旋转速度使用 `scale * slot.x/z` |
-| `test_vertical_offset_and_scale_rate_affect_up_command` | `slot.y` 被 `scale` 放大，`vUp` 含 `scaleRate * slot.y` |
+| `test_scaled_slot_geometry_altitude_fixed_not_scaled` | 高度偏置固定不随 `scale` 放大：`pos.h == leader.h + slot.y`（与 `scale` 无关），`vUp` 保持父类 `SlotGeometry` 写入值，不含 `scaleRate` 修正项 |
 | `test_velocity_scalar_and_heading_are_recomputed` | 输出 `vd=hypot(vEast,vNorth)`，`vPsi=atan2(vNorth,vEast)` |
 | `test_undefined_leader_track_falls_back_consistently` | 长机水平速度为 0 时，按现有 `SlotGeometry` 的东向兜底策略计算 |
 | `test_missing_pattern_or_slot_raises` | 未知 `pattern` 或找不到本机槽位时抛 `ValueError` |
@@ -304,8 +342,7 @@ def _rally_task(
 | `test_hold_uses_mission_route_after_completion` | 正常完成到 HOLD 后推进 `_tra_plan_mission`，`wayLine` 来自 `cfg.route` |
 | `test_remote_none_outputs_zero_command_without_route_interp` | `remote=NONE` 时不调用空航线插值，`selfCmd` 为当前位置零速，`selfAccCmd` 为零 |
 | `test_remote_none_still_broadcasts_none` | `NONE` 分支仍广播 `cmd.stage=NONE` 和当前 `slotScale` |
-| `test_route_continuity_validation_accepts_connected_routes` | `mission_route` 起点与 `rally_route` 终点距离小于阈值时初始化通过 |
-| `test_route_continuity_validation_rejects_gap` | 两条航线不连续时初始化抛 `ValueError` |
+| `test_rally_leader_init_rejects_empty_route_list` | `rally_route` 少于两个航点（含空列表）时初始化抛 `ValueError`；`mission_route` 与 `rally_route` 的连续性**不再由 init 做运行时校验**，改为航线设计阶段保证（见 LLD 7.1.3 节） |
 | `test_formation_analysis_emits_once_after_normal_completion` | COMPRESS 正常完成后首帧 `formationAnalysis` 非空，下一帧为 None |
 | `test_forced_hold_does_not_emit_formation_analysis` | `remote=HOLD` 强制中断不输出完成分析 |
 | `test_reset_clears_completion_flag_context_and_outbox` | `reset()` 清理 `_rally_completed`、上下文、outbox、双航线规划器状态 |
@@ -334,12 +371,14 @@ def _rally_task(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_rally_demo_config_exists_and_loads` | `configs/rally_demo.json` 存在且能被 `sim_control.load_config()` 正常解析（文件须作为交付物提交） |
-| `test_config_loader_accepts_rally_route_waypoints` | 配置中的 `rally_route.waypoints` 被解析为 `RouteS`，并注入长机 `EntityInitS.rally_route` |
+| `test_config_loader_accepts_rally_route_waypoints` | 配置中的 `rally_route.waypoints` 被解析为 `list[WayPointInputS]`，并注入所有集结节点（长机与僚机共用同一份）的 `EntityInitS.rally_route` |
 | `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `RallyLeaderEntity`，`role="rally_follower"` 创建 `RallyFollowerEntity` |
 | `test_legacy_roles_still_select_hold_entities` | `leader/wingman` 角色仍创建现有 hold 实体，保持既有场景兼容 |
 | `test_rally_config_builds_expected_follower_ids` | `rally.expected_follower_ids` 注入 `RallyTaskInitS.expectedFollowerIds` |
-| `test_rally_node_target_is_required_for_rally_follower` | `rally_follower` 缺少 `rally_target` 时配置校验失败 |
-| `test_rally_leader_requires_rally_route` | `rally_leader` 缺少 `rally_route` 时配置校验失败 |
+| `test_rally_leader_requires_rally_route` | `rally_leader` 缺少 `rally_route` 时配置校验失败；`rally_follower` 不再需要单独的 `rally_target` 字段（该字段已移除，M_i 由 init 自动推导） |
+| `test_validate_rejects_mission_route_start_far_from_rally_route_start` | `route`（mission_route）起点与 `rally_route` 起点 A 相距 >= 1.0m 时 `validate()` 拒绝配置 |
+| `test_validate_rejects_mission_route_first_segment_direction_mismatch` | `route` 首段方向与 `rally_route` 首段方向（任务航向）夹角 >= 10° 时 `validate()` 拒绝配置，即便起点位置本身对得上 |
+| `test_validate_rejects_loiter_radius_too_small_for_capture_window` | `validate()` 在配置加载阶段就调用 `validate_capture_geometry()`（与 `RallyJoinPos.init()` 复用同一份逻辑），`loiter_radius_m` 太小时直接拒绝，不必等到实体构造才失败 |
 | `test_rally_remote_defaults_to_rally_until_completion` | 集结场景运行时 `_NodeAlgorithm.step` 下发 `RemoteCmdS(FormStageE.RALLY)` |
 | `test_hold_scene_remote_remains_hold` | 非集结场景仍下发 `RemoteCmdS(FormStageE.HOLD)` |
 | `test_now_s_is_injected_to_entity_input` | `_NodeAlgorithm.step(..., time_s=t)` 构造 `EntityInputS(now_s=t)` |
