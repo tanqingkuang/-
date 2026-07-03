@@ -53,15 +53,18 @@ def _rally_config() -> dict[str, object]:
             "compress_time_s": 0.2,
             "tight_radius_m": 2.0,
             "stale_timeout_s": 1.0,
-            "target_pattern": "TRIANGLE",
         },
         "formation": {
-            "pattern": "TRIANGLE",
             "coordinate_system": "x_forward_y_up_z_right",
-            "slots": [
-                {"node_id": "R01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
-                {"node_id": "R02", "x_m": -10.0, "y_m": 0.0, "z_m": -5.0},
-                {"node_id": "R03", "x_m": -10.0, "y_m": 0.0, "z_m": 5.0},
+            "formations": [
+                {
+                    "name": "TRIANGLE",
+                    "slots": [
+                        {"node_id": "R01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                        {"node_id": "R02", "x_m": -10.0, "y_m": 0.0, "z_m": -5.0},
+                        {"node_id": "R03", "x_m": -10.0, "y_m": 0.0, "z_m": 5.0},
+                    ],
+                }
             ],
         },
         "nodes": [
@@ -93,6 +96,19 @@ def _rally_config() -> dict[str, object]:
 def _write_json(directory: Path, config: dict[str, object]) -> Path:
     """把配置写入临时 JSON 文件。注意：航线转经纬后写盘，符合"JSON 只支持经纬航线"约定。"""
 
+    config = json.loads(json.dumps(config))
+    formation = config.get("formation")
+    if isinstance(formation, dict):
+        formations = formation.pop("formations", None)
+        if isinstance(formations, list):
+            formation_dir = directory / "element" / "formations"
+            formation_dir.mkdir(parents=True, exist_ok=True)
+            formation_files = []
+            for index, item in enumerate(formations):
+                formation_path = formation_dir / f"rally_formation_{index}.json"
+                formation_path.write_text(json.dumps(item, ensure_ascii=False), encoding="utf-8")
+                formation_files.append(str(formation_path.relative_to(directory)).replace("\\", "/"))
+            formation["formation_files"] = formation_files
     path = directory / "rally_case.json"
     path.write_text(json.dumps(geodetic_config(config)), encoding="utf-8")
     return path
@@ -128,7 +144,7 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertAlmostEqual(task_init.tightRadius_m, 2.0)
 
     def test_formation_comm_init_accepts_rally_roles_in_slots(self) -> None:
-        """验证集结角色同样使用 formation.slots 注入通信初始化结构。"""
+        """验证集结角色同样使用展开后的队形槽位注入通信初始化结构。"""
 
         config = _rally_config()
         nodes = list(config["nodes"])  # type: ignore[arg-type]

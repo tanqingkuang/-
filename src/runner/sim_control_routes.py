@@ -94,9 +94,7 @@ def _build_formation_slots(
     """根据配置生成多队形槽位定义。注意：槽位是队形定义，不应依赖飞机初始位置。
 
     返回 (队形名列表, 各队形槽位表, 初始队形索引)；三者以队形索引对齐。
-    支持两种写法：
-    - 多队形：formation.formations = [{name, slots}, ...]，初始索引取 formation.initial_index；
-    - 单队形（历史）：formation.pattern + formation.slots，等价于只有一个队形、初始索引 0。
+    显式队形只接受配置加载器由 formation.formation_files 展开的 formation.formations。
     """
     # 未配置 formation 时回退到默认三角单队形。
     formation_config = (config or {}).get("formation")
@@ -106,18 +104,12 @@ def _build_formation_slots(
         raise ValueError("formation must be an object")
 
     formations = formation_config.get("formations")
-    if formations is not None:
-        return _build_multi_formations(nodes, formation_config, formations)
-
-    # —— 历史单队形写法 ——
-    name = str(formation_config.get("pattern", "default"))
-    slot_config = formation_config.get("slots")
-    if slot_config is None:
-        # 给了 pattern 但未给 slots 时同样用默认槽位。
-        return [name], [_default_formation_slots(nodes)], 0
-    _validate_formation_coordinate_system(formation_config)
-    slots = _parse_slot_list(nodes, slot_config, "formation.slots")
-    return [name], [slots], 0
+    if formations is None:
+        raise ValueError(
+            "formation.formations is required after loading formation.formation_files; "
+            "inline formation.pattern/slots is no longer supported"
+        )
+    return _build_multi_formations(nodes, formation_config, formations)
 
 
 def _build_multi_formations(
@@ -201,7 +193,7 @@ def _validate_formation_coordinate_system(formation_config: dict[str, object]) -
     raw_value = formation_config.get("coordinate_system")
     if raw_value is None:
         raise ValueError(
-            "formation.coordinate_system is required when formation.slots is configured; "
+            "formation.coordinate_system is required when formation.formation_files is configured; "
             f"use {_FORMATION_COORDINATE_SYSTEM!r}"
         )
     if str(raw_value).strip() != _FORMATION_COORDINATE_SYSTEM:
@@ -213,7 +205,7 @@ def _validate_formation_coordinate_system(formation_config: dict[str, object]) -
 
 def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
     """生成默认三机队形槽位。注意：仅在配置未给出队形时兜底。"""
-    # 默认槽位只服务最小三机示例；更多僚机必须显式给出 formation.slots。
+    # 默认槽位只服务最小三机示例；更多僚机必须显式给出 formation.formation_files。
     # 输出顺序仍跟随 nodes，保证算法实体和模型节点顺序一致。
     leader_id = _leader_id_from_nodes(nodes)
     slots: list[FormPosS] = []
@@ -228,7 +220,7 @@ def _default_formation_slots(nodes: list[object]) -> list[FormPosS]:
         else:
             # 僚机按预设左右两翼槽位依次分配；超过两机需显式配置。
             if wing_slot_index >= len(_DEFAULT_TRIANGLE_WING_SLOTS):
-                raise ValueError("default triangle formation requires explicit slots for more than two wingmen")
+                raise ValueError("default triangle formation requires formation.formation_files for more than two wingmen")
             slot = _DEFAULT_TRIANGLE_WING_SLOTS[wing_slot_index]
             slots.append(FormPosS(node_id, slot[0], slot[1], slot[2]))
             wing_slot_index += 1

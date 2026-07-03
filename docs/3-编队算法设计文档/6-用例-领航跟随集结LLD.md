@@ -1093,19 +1093,15 @@ class EntityInitS:
     "compress_time_s": 30.0,
     "tight_radius_m": 2.0,
     "stale_timeout_s": 2.0,
-    "target_pattern": "TRIANGLE",
     "expected_follower_ids": ["follower_1", "follower_2"],
     "approach_speed_mps": 20.0,
     "k_alt": 0.5,
     "v_up_max_mps": 5.0
   },
   "formation": {
-    "pattern": "TRIANGLE",
     "coordinate_system": "x_forward_y_up_z_right",
-    "slots": [
-      { "node_id": "leader",     "x_m":   0.0, "y_m": 0.0, "z_m":  0.0 },
-      { "node_id": "follower_1", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0 },
-      { "node_id": "follower_2", "x_m": -54.0, "y_m": 0.0, "z_m":  58.0 }
+    "formation_files": [
+      "element/formations/rally_triangle.json"
     ]
   },
   "nodes": [
@@ -1127,9 +1123,22 @@ class EntityInitS:
 }
 ```
 
+队形文件 `element/formations/rally_triangle.json`：
+
+```json
+{
+  "name": "TRIANGLE",
+  "slots": [
+    { "node_id": "leader",     "x_m":   0.0, "y_m": 0.0, "z_m":  0.0 },
+    { "node_id": "follower_1", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0 },
+    { "node_id": "follower_2", "x_m": -54.0, "y_m": 0.0, "z_m":  58.0 }
+  ]
+}
+```
+
 > `route_file` 加载后展开为顶层 `route`（mission_route），`rally_route_file` 加载后展开为 `rally_route`。`route` 起点必须等于 `rally_route` 起点 A（不是终点 B——B 不参与任何计算）——此约束由航线设计保证（见 7.1.3 节），最简单的做法是将两者设为同一文件。
 >
-> **M_i 自动计算**：从机的松散目标点由实体 init 自动推导，无需在配置文件中逐机写死。实体读取 `rally_route[0]`（A）和 `rally_route[1]` 推导 θ，再结合 `formation.slots` 和 `loose_scale` 计算 M_i。
+> **M_i 自动计算**：从机的松散目标点由实体 init 自动推导，无需在配置文件中逐机写死。实体读取 `rally_route[0]`（A）和 `rally_route[1]` 推导 θ，再结合 `formation.formation_files` 展开后的目标队形槽位和 `loose_scale` 计算 M_i。
 >
 > `k_alt` / `v_up_max_mps` 可省略，省略时使用 `RallyApproachInitS` 中的默认值（0.5/s，5.0 m/s）。
 
