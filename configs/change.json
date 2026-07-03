@@ -25,9 +25,9 @@
     "reference_node_id": "A03",
     "initial_index": 0,
     "formation_files": [
-      "element/formations/change_wedge_a01_a05.json",
-      "element/formations/change_line_abreast_a01_a05.json",
-      "element/formations/change_double_column_a01_a05.json"
+      "element/formations/wedge_5_aircraft_a01_a05.json",
+      "element/formations/line_abreast_5_aircraft_a01_a05.json",
+      "element/formations/double_column_5_aircraft_a01_a05.json"
     ]
   },
   "model": {

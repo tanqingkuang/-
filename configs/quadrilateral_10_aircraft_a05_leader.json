@@ -44,7 +44,7 @@
     "lateral_spacing_m": 46.19,
     "reference_node_id": "A05",
     "formation_files": [
-      "element/formations/quadrilateral_triangle_a01_a10.json"
+      "element/formations/triangle_10_aircraft_a01_a10.json"
     ]
   },
   "model": {

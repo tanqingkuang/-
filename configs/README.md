@@ -8,7 +8,7 @@
 - 航线速度为 `20 m/s`，包含东向平飞后北向平飞的基础折线航线。
 - 基础航线从 `element/line.json` 引用，主配置只保留 `route_file` 相对路径。
 - 避障障碍库从 `element/obstacles.json` 引用，主配置只保留 `avoidance.obstacles_file` 相对路径。
-- 编队从 `element/formations/base_triangle_a01_a03.json` 引用，主配置只保留 `formation.formation_files` 相对路径。
+- 编队从 `element/formations/triangle_3_aircraft_a01_a03.json` 引用，主配置只保留 `formation.formation_files` 相对路径。
 - 编队为 1 架长机加 2 架僚机的三角队形，用于 GUI、控制器和基础回归验证。
 
 ## `element/line.json`
@@ -23,7 +23,7 @@
 - 任务航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `route_file` 相对路径。
 - 集结长机航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `rally_route_file` 相对路径。
 - 两个外部航线文件加载后分别展开为控制器和算法消费的 `route` 与 `rally_route`。
-- 集结目标队形从 `element/formations/rally_triangle_r01_r03.json` 引用。
+- 集结目标队形复用 `element/formations/triangle_3_aircraft_a01_a03.json`。
 
 ## `element/obstacles.json`
 
@@ -46,7 +46,7 @@
 - 爬升段和下滑段水平距离均为 `2000 m`，按 `20 m/s` 约需 `100 s`，对应垂向速度约 `1 m/s`。
 - 飞机模型爬升和下滑限幅均设为 `4 m/s`，高于航线目标垂向速度，便于观察限幅裕度。
 - 十架飞机采用 `1、2、3、4` 四行三角编队。前后行距为 `40 m`，按等边三角形关系计算同行横向间距：`2 * 40 / sqrt(3) = 46.19 m`。
-- 队形槽位从 `element/formations/quadrilateral_triangle_a01_a10.json` 引用。
+- 队形槽位从 `element/formations/triangle_10_aircraft_a01_a10.json` 引用。
 - 初始编队中心位于第一航段反向延长线上，节点带有小幅航迹角、高度、侧偏和速度偏差，用于观察收敛过程。
 - A05 作为 `leader` 和队形参考原点，A01 改为前方槽位，其他槽位整体按 A05 原槽位平移重算。
 - 通信链路采用 A05 星形拓扑，保证僚机能接收 A05 长机广播。
@@ -54,7 +54,7 @@
 ## `change.json`
 
 - 五机队形热切换演示场景，航线为直线任务航线。
-- 队形列表按 `formation.formation_files` 顺序决定索引：`0` 为 `element/formations/change_wedge_a01_a05.json`，`1` 为 `element/formations/change_line_abreast_a01_a05.json`，`2` 为 `element/formations/change_double_column_a01_a05.json`。
+- 队形列表按 `formation.formation_files` 顺序决定索引：`0` 为 `element/formations/wedge_5_aircraft_a01_a05.json`，`1` 为 `element/formations/line_abreast_5_aircraft_a01_a05.json`，`2` 为 `element/formations/double_column_5_aircraft_a01_a05.json`。
 - 运行时切换只广播队形索引，算法层按展开后的 `formPat/formPos` 查槽位。
 
 ## `element/formations/*.json`
