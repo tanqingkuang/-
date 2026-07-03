@@ -67,6 +67,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreaterEqual(payload["counts"]["routePoints"], 2)
         self.assertEqual(payload["counts"]["obstacles"], 1)
         self.assertGreater(payload["terrain"]["ground"]["width"], 0.0)
+        self.assertTrue(all(item["height"] <= 4.0 for item in payload["terrain"]["hills"]))
+        self.assertTrue(all(item["y"] <= 2.0 for item in payload["terrain"]["hills"]))
 
         obstacle_payload = payload["obstacles"][0]
         self.assertEqual(obstacle_payload["kind"], "circle")

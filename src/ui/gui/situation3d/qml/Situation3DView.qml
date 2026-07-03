@@ -270,15 +270,15 @@ Item {
         Repeater3D {
             model: hillModel
             delegate: Model {
-                source: "#Sphere"
+                source: "#Cylinder"
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
                 scale: Qt.vector3d(model.widthValue / 100.0, model.heightValue / 100.0, model.depthValue / 100.0)
-                receivesShadows: true
-                castsShadows: true
+                receivesShadows: false
+                castsShadows: false
                 materials: PrincipledMaterial {
-                    baseColor: Qt.rgba(0.22, 0.31, 0.30, 0.74)
+                    baseColor: Qt.rgba(0.32, 0.44, 0.46, 0.34)
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.82
+                    opacity: 0.48
                     roughness: 0.95
                 }
             }

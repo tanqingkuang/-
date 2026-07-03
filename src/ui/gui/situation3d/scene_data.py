@@ -203,7 +203,7 @@ def _scene_bounds(
 
 
 def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
-    """生成简单山地数据。注意：后续可替换为 HeightField 或真实地形资产。"""
+    """生成平滑地形晕染层。注意：后续可替换为 HeightField 或真实地形资产。"""
 
     span_x = max(bounds["spanX"], 1200.0)
     span_z = max(bounds["spanZ"], 900.0)
@@ -219,9 +219,9 @@ def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
             "height": 16.0,
         },
         "hills": [
-            {"x": center_x - span_x * 0.26, "y": 58.0, "z": center_z - span_z * 0.18, "width": 420.0, "height": 120.0, "depth": 320.0},
-            {"x": center_x + span_x * 0.30, "y": 78.0, "z": center_z + span_z * 0.20, "width": 500.0, "height": 160.0, "depth": 360.0},
-            {"x": center_x + span_x * 0.04, "y": 46.0, "z": center_z - span_z * 0.34, "width": 360.0, "height": 92.0, "depth": 270.0},
+            {"x": center_x - span_x * 0.26, "y": 1.4, "z": center_z - span_z * 0.18, "width": 640.0, "height": 2.8, "depth": 440.0},
+            {"x": center_x + span_x * 0.30, "y": 1.8, "z": center_z + span_z * 0.20, "width": 760.0, "height": 3.6, "depth": 520.0},
+            {"x": center_x + span_x * 0.04, "y": 1.1, "z": center_z - span_z * 0.34, "width": 520.0, "height": 2.2, "depth": 360.0},
         ],
     }
 
