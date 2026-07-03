@@ -157,11 +157,12 @@ class PidCompose(PosTrackBase):
             y.diag.track_vel_err_y_mps = vel_err[1] if self._diag_vel_enabled[1] else 0.0
             y.diag.track_vel_err_z_mps = vel_err[2] if self._diag_vel_enabled[2] else 0.0
 
-        # 航迹偏航角速率前馈(向心加速度)：在目标速度系侧向直接补出维持转弯所需的 v_S·dVPsi。
+        # 航迹偏航角速率前馈(向心加速度)：在侧向轴直接补出维持转弯所需的 a_lat = vd·dVPsi。
         # 侧向轴(lateral_right)以右为正，而 dVPsi>0 为左转，故取负号。
-        # 目标系下向心量应按**目标点自身**的地速 selfCmd.v.vd 与角速率算(v_S/R_S=dVPsi)，
-        # 与参照航向自洽；外/内侧僚机的半径与速度差异经槽位几何已折入 selfCmd(见 slot_geometry)。
-        lateral_ff = -u.selfCmd.v.dVPsi * u.selfCmd.v.vd
+        # 必须用**本机自身地速** selfState.v.vd：飞机偏航率 psi_dot=a_lat/V_self(见 model.py)，
+        # 要用前馈产生角速率 dVPsi 就得按本机速度换算 a_lat=dVPsi·V_self；用目标速度会在
+        # V_self≠V_cmd(加减速/速度未收敛)时给出错误前馈。外/内侧僚机半径速度差异经 dVPsi 自动吸收。
+        lateral_ff = -u.selfCmd.v.dVPsi * u.selfState.v.vd
         # 前向/法向：step(位置误差, 速度前馈, 实测速度)——Pid 走并联式、PPI 走串级 P+PI。
         # 横侧向：LateralTrackAngle 走串级 + 航迹角变限幅(消除大侧偏持续滚转→转圈)，需本机地速；
         #        无该配置时退回并联/串级 Pid(旧行为)。两路均叠加向心前馈 lateral_ff。

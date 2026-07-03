@@ -635,6 +635,27 @@ class PosTrackTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 25.0)
         self.assertAlmostEqual(ctx.selfAccCmd.accUp, 0.0)
 
+    def test_pid_compose_centripetal_ff_uses_self_speed_not_target_speed(self) -> None:
+        """向心前馈须按本机自身地速换算(a_lat=dVPsi·V_self)，而非目标速度。
+
+        本机东向 10、目标东向 20(dVPsi=0.1)、位置零误差、各轴增益关：侧向仅剩前馈
+        lateral_ff=-dVPsi·V_self=-1.0，目标系(东)侧向轴=(0,-1,0) → accNorth=+1.0(取本机速度 10)。
+        若误用目标速度 20 则会得到 2.0。
+        """
+        tracker = PidCompose()
+        tracker.init(PidComposeInitS(vMin=3.0))  # 三轴增益缺省为零，隔离出纯前馈
+        ctx = FormContextS()
+        ctx.selfState = _motion(east=0.0, north=0.0, h=0.0, v_east=10.0)
+        ctx.selfCmd = _motion(east=0.0, north=0.0, h=0.0, v_east=20.0, d_vpsi=0.1)
+
+        tracker.step(
+            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 1.0)  # dVPsi·V_self = 0.1·10
+        self.assertAlmostEqual(ctx.selfAccCmd.accEast, 0.0)
+
     def test_pid_compose_writes_control_diagnostics(self) -> None:
         """验证 PosTrack 通过 diag 输出目标指令和控制误差，不把诊断量写入 Context。"""
 
