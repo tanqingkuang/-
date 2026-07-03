@@ -19,7 +19,7 @@
   "formation": {
     "coordinate_system": "x_forward_y_up_z_right",
     "formation_files": [
-      "element/formations/rally_triangle_r01_r03.json"
+      "element/formations/triangle_3_aircraft_a01_a03.json"
     ]
   },
   "model": {
@@ -51,7 +51,7 @@
   },
   "nodes": [
     {
-      "node_id": "R01",
+      "node_id": "A01",
       "role": "rally_leader",
       "x_m": 2000.0,
       "y_m": -1000.0,
@@ -62,7 +62,7 @@
       "distance_to_go_m": 0.0
     },
     {
-      "node_id": "R02",
+      "node_id": "A02",
       "role": "rally_follower",
       "x_m": -1500.0,
       "y_m": -1000.0,
@@ -73,7 +73,7 @@
       "distance_to_go_m": 0.0
     },
     {
-      "node_id": "R03",
+      "node_id": "A03",
       "role": "rally_follower",
       "x_m": 1500.0,
       "y_m": 1000.0,
@@ -86,21 +86,21 @@
   ],
   "links": [
     {
-      "link_id": "R01-R02",
+      "link_id": "A01-A02",
       "direction": "duplex",
       "latency_ms": 18.0,
       "loss_rate": 0.01,
       "status": "normal"
     },
     {
-      "link_id": "R01-R03",
+      "link_id": "A01-A03",
       "direction": "duplex",
       "latency_ms": 21.0,
       "loss_rate": 0.01,
       "status": "normal"
     },
     {
-      "link_id": "R02-R03",
+      "link_id": "A02-A03",
       "direction": "duplex",
       "latency_ms": 30.0,
       "loss_rate": 0.02,

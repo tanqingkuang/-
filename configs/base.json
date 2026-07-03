@@ -22,7 +22,7 @@
   "formation": {
     "coordinate_system": "x_forward_y_up_z_right",
     "formation_files": [
-      "element/formations/base_triangle_a01_a03.json"
+      "element/formations/triangle_3_aircraft_a01_a03.json"
     ]
   },
   "model": {

@@ -1101,37 +1101,37 @@ class EntityInitS:
   "formation": {
     "coordinate_system": "x_forward_y_up_z_right",
     "formation_files": [
-      "element/formations/rally_triangle.json"
+      "element/formations/triangle_3_aircraft_a01_a03.json"
     ]
   },
   "nodes": [
     {
-      "node_id": "leader",
+      "node_id": "A01",
       "role": "rally_leader"
     },
     {
-      "node_id": "follower_1",
+      "node_id": "A02",
       "role": "rally_follower",
-      "leader_id": "leader"
+      "leader_id": "A01"
     },
     {
-      "node_id": "follower_2",
+      "node_id": "A03",
       "role": "rally_follower",
-      "leader_id": "leader"
+      "leader_id": "A01"
     }
   ]
 }
 ```
 
-队形文件 `element/formations/rally_triangle.json`：
+队形文件 `element/formations/triangle_3_aircraft_a01_a03.json`：
 
 ```json
 {
-  "name": "TRIANGLE",
+  "name": "三机三角",
   "slots": [
-    { "node_id": "leader",     "x_m":   0.0, "y_m": 0.0, "z_m":  0.0 },
-    { "node_id": "follower_1", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0 },
-    { "node_id": "follower_2", "x_m": -54.0, "y_m": 0.0, "z_m":  58.0 }
+    { "node_id": "A01", "x_m":   0.0, "y_m": 0.0, "z_m":  0.0 },
+    { "node_id": "A02", "x_m": -54.0, "y_m": 0.0, "z_m": -58.0 },
+    { "node_id": "A03", "x_m": -54.0, "y_m": 0.0, "z_m":  58.0 }
   ]
 }
 ```
@@ -1433,7 +1433,7 @@ def _load_demo(self, kind: str) -> None:
 
 **此文件已作为本 LLD 的交付物新增到仓库**（`configs/rally_demo.json`，与 LLD 同步提交）。
 
-集结实体未实现期间，`rally_demo.json` 角色仍使用 `"leader"` / `"wingman"`，节点 ID 为 `R01/R02/R03`，初始坐标分散放置以模拟集结前离散态。文件可正常加载，仿真以 Hold 行为运行，按钮不报错。
+`rally_demo.json` 角色使用 `"rally_leader"` / `"rally_follower"`，节点 ID 为 `A01/A02/A03`，初始坐标分散放置以模拟集结前离散态。文件复用三机三角队形文件，可正常加载并运行集结流程。
 
 实体就绪后需完整替换为正式配置：
 
