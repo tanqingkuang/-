@@ -117,7 +117,7 @@ def _route_payload(route: ReferenceRoute) -> list[dict[str, object]]:
         mix = index / count
         altitude_m = route.start_altitude + (route.end_altitude - route.start_altitude) * mix
         coord = enu_to_quick3d(east_m, north_m, altitude_m)
-        points.append({"color": "#7dd3fc", "size": 9.0, **coord})
+        points.append({"color": "#22d3ee", "size": 9.0, **coord})
     return points
 
 
@@ -126,29 +126,30 @@ def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, o
 
     # 安全间距在显示层膨胀半径/包围盒，便于和避障预览里的风险边界对应。
     safe_clearance = max(0.0, float(clearance_m))
+    column_height_m = 720.0
     if obstacle.kind == "circle":
         radius = max(1.0, obstacle.radius + safe_clearance)
-        coord = enu_to_quick3d(obstacle.center_x, obstacle.center_y, 420.0)
+        coord = enu_to_quick3d(obstacle.center_x, obstacle.center_y, column_height_m / 2.0)
         return {
             "kind": "circle",
             "id": obstacle.obstacle_id,
             "radius": radius,
             "width": radius * 2.0,
             "depth": radius * 2.0,
-            "height": 840.0,
+            "height": column_height_m,
             **coord,
         }
     min_x, max_x, min_y, max_y = _obstacle_bounds(obstacle)
     width = max(1.0, max_x - min_x + safe_clearance * 2.0)
     depth = max(1.0, max_y - min_y + safe_clearance * 2.0)
-    coord = enu_to_quick3d((min_x + max_x) / 2.0, (min_y + max_y) / 2.0, 420.0)
+    coord = enu_to_quick3d((min_x + max_x) / 2.0, (min_y + max_y) / 2.0, column_height_m / 2.0)
     return {
         "kind": "box",
         "id": obstacle.obstacle_id,
         "radius": max(width, depth) / 2.0,
         "width": width,
         "depth": depth,
-        "height": 840.0,
+        "height": column_height_m,
         **coord,
     }
 
@@ -218,9 +219,9 @@ def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
             "height": 16.0,
         },
         "hills": [
-            {"x": center_x - span_x * 0.24, "y": 90.0, "z": center_z - span_z * 0.18, "width": 520.0, "height": 220.0, "depth": 420.0},
-            {"x": center_x + span_x * 0.28, "y": 130.0, "z": center_z + span_z * 0.18, "width": 620.0, "height": 300.0, "depth": 480.0},
-            {"x": center_x + span_x * 0.05, "y": 70.0, "z": center_z - span_z * 0.34, "width": 460.0, "height": 170.0, "depth": 360.0},
+            {"x": center_x - span_x * 0.26, "y": 58.0, "z": center_z - span_z * 0.18, "width": 420.0, "height": 120.0, "depth": 320.0},
+            {"x": center_x + span_x * 0.30, "y": 78.0, "z": center_z + span_z * 0.20, "width": 500.0, "height": 160.0, "depth": 360.0},
+            {"x": center_x + span_x * 0.04, "y": 46.0, "z": center_z - span_z * 0.34, "width": 360.0, "height": 92.0, "depth": 270.0},
         ],
     }
 
@@ -246,10 +247,10 @@ def _node_color(role: str, health: str) -> str:
     """返回节点显示颜色。注意：异常健康状态优先于角色颜色。"""
 
     if health != "normal":
-        return "#f87171"
+        return "#f59e0b"
     if role.strip().lower() in {"leader", "rally_leader"}:
-        return "#4da3ff"
-    return "#65d67f"
+        return "#60a5fa"
+    return "#c084fc"
 
 
 def _heading_yaw_deg(vx_mps: float, vy_mps: float) -> float:

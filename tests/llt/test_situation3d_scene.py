@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 
 from src.ui.gui.situation3d.scene_data import build_scene_payload, enu_to_quick3d
@@ -13,6 +14,8 @@ from src.ui.gui.view_models import (
     Snapshot,
     TrailPoint,
 )
+
+QML_VIEW_PATH = Path(__file__).resolve().parents[2] / "src" / "ui" / "gui" / "situation3d" / "qml" / "Situation3DView.qml"
 
 
 class Situation3DSceneDataTests(unittest.TestCase):
@@ -77,6 +80,12 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         self.assertEqual(payload["counts"]["obstacles"], 0)
         self.assertEqual(payload["obstacles"], [])
+
+    def test_qml_accepts_middle_button_for_focus_pan(self) -> None:
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("Qt.MiddleButton", qml)
+        self.assertIn("mouse.buttons & Qt.MiddleButton", qml)
 
 
 if __name__ == "__main__":

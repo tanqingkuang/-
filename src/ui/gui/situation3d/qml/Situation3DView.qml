@@ -23,6 +23,55 @@ Item {
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
     ListModel { id: hillModel }
+    ListModel { id: gridLineModel }
+
+    function gridStepFor(span) {
+        const target = Math.max(80, span / 10.0)
+        const base = Math.pow(10, Math.floor(Math.log10(target)))
+        const ratio = target / base
+        if (ratio > 5) {
+            return base * 10
+        }
+        if (ratio > 2) {
+            return base * 5
+        }
+        if (ratio > 1) {
+            return base * 2
+        }
+        return base
+    }
+
+    function refreshGrid(ground) {
+        gridLineModel.clear()
+        const step = gridStepFor(Math.max(ground.width, ground.depth))
+        const xCount = Math.min(12, Math.max(2, Math.floor(ground.width / step / 2)))
+        const zCount = Math.min(12, Math.max(2, Math.floor(ground.depth / step / 2)))
+        const lineY = ground.y + ground.height / 2.0 + 0.8
+        for (let index = -xCount; index <= xCount; index++) {
+            const axis = index === 0
+            gridLineModel.append({
+                sx: ground.x + index * step,
+                sy: lineY,
+                sz: ground.z,
+                widthValue: axis ? 3.2 : 1.4,
+                depthValue: ground.depth,
+                colorValue: axis ? "#475569" : "#243141",
+                opacityValue: axis ? 0.82 : 0.48
+            })
+        }
+        for (let index = -zCount; index <= zCount; index++) {
+            const axis = index === 0
+            gridLineModel.append({
+                sx: ground.x,
+                sy: lineY,
+                sz: ground.z + index * step,
+                widthValue: ground.width,
+                depthValue: axis ? 3.2 : 1.4,
+                colorValue: axis ? "#475569" : "#243141",
+                opacityValue: axis ? 0.82 : 0.48
+            })
+        }
+    }
 
     function updateScene(payload) {
         if (!payload || payload.length === 0) {
@@ -93,6 +142,9 @@ Item {
         if (ground) {
             groundModel.position = Qt.vector3d(ground.x, ground.y, ground.z)
             groundModel.scale = Qt.vector3d(ground.width / 100.0, ground.height / 100.0, ground.depth / 100.0)
+            refreshGrid(ground)
+        } else {
+            gridLineModel.clear()
         }
         if (data.camera) {
             focusX = data.camera.focusX
@@ -159,7 +211,7 @@ Item {
         anchors.fill: parent
         environment: SceneEnvironment {
             backgroundMode: SceneEnvironment.Color
-            clearColor: "#071014"
+            clearColor: "#101923"
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.High
         }
@@ -178,9 +230,14 @@ Item {
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-48, -34, 0)
-            brightness: 2.6
+            eulerRotation: Qt.vector3d(-50, -35, 0)
+            brightness: 2.25
             castsShadow: true
+        }
+
+        PointLight {
+            position: Qt.vector3d(root.focusX - 520, root.focusY + 780, root.focusZ + 420)
+            brightness: 18
         }
 
         Model {
@@ -190,8 +247,23 @@ Item {
             scale: Qt.vector3d(30, 0.16, 22)
             receivesShadows: true
             materials: PrincipledMaterial {
-                baseColor: "#2f604a"
+                baseColor: "#101923"
                 roughness: 0.95
+            }
+        }
+
+        Repeater3D {
+            model: gridLineModel
+            delegate: Model {
+                source: "#Cube"
+                position: Qt.vector3d(model.sx, model.sy, model.sz)
+                scale: Qt.vector3d(model.widthValue / 100.0, 0.01, model.depthValue / 100.0)
+                materials: PrincipledMaterial {
+                    baseColor: model.colorValue
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: model.opacityValue
+                    roughness: 0.9
+                }
             }
         }
 
@@ -204,8 +276,10 @@ Item {
                 receivesShadows: true
                 castsShadows: true
                 materials: PrincipledMaterial {
-                    baseColor: "#6e8f5c"
-                    roughness: 0.9
+                    baseColor: Qt.rgba(0.22, 0.31, 0.30, 0.74)
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.82
+                    roughness: 0.95
                 }
             }
         }
@@ -218,7 +292,7 @@ Item {
                 scale: Qt.vector3d(model.size / 100.0, model.size / 100.0, model.size / 100.0)
                 materials: PrincipledMaterial {
                     baseColor: model.color
-                    emissiveFactor: Qt.vector3d(0.25, 0.55, 0.75)
+                    emissiveFactor: Qt.vector3d(0.10, 0.42, 0.52)
                 }
             }
         }
@@ -233,7 +307,7 @@ Item {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
                     opacity: model.opacity
-                    emissiveFactor: Qt.vector3d(0.16, 0.22, 0.18)
+                    emissiveFactor: Qt.vector3d(0.12, 0.10, 0.18)
                 }
             }
         }
@@ -246,9 +320,10 @@ Item {
                 scale: Qt.vector3d(model.widthValue / 100.0, model.heightValue / 100.0, model.depthValue / 100.0)
                 receivesShadows: true
                 materials: PrincipledMaterial {
-                    baseColor: Qt.rgba(1.0, 0.28, 0.28, 0.28)
+                    baseColor: Qt.rgba(0.97, 0.45, 0.45, 0.20)
                     alphaMode: PrincipledMaterial.Blend
-                    roughness: 0.72
+                    opacity: 0.58
+                    roughness: 0.78
                 }
             }
         }
@@ -262,66 +337,69 @@ Item {
                 Model {
                     source: "#Cylinder"
                     eulerRotation: Qt.vector3d(0, 0, 90)
-                    scale: Qt.vector3d(0.13, 0.54, 0.13)
+                    scale: Qt.vector3d(0.10, 0.68, 0.10)
                     castsShadows: true
                     materials: PrincipledMaterial {
                         baseColor: model.color
-                        roughness: 0.38
-                        metalness: 0.12
+                        emissiveFactor: Qt.vector3d(0.05, 0.06, 0.09)
+                        roughness: 0.32
+                        metalness: 0.18
                     }
                 }
 
                 Model {
                     source: "#Cone"
-                    position: Qt.vector3d(58, 0, 0)
+                    position: Qt.vector3d(72, 0, 0)
                     eulerRotation: Qt.vector3d(0, 0, -90)
-                    scale: Qt.vector3d(0.14, 0.22, 0.14)
+                    scale: Qt.vector3d(0.10, 0.24, 0.10)
                     castsShadows: true
                     materials: PrincipledMaterial {
-                        baseColor: "#e5edf5"
+                        baseColor: "#e7edf4"
+                        roughness: 0.30
+                        metalness: 0.10
+                    }
+                }
+
+                Model {
+                    source: "#Cube"
+                    position: Qt.vector3d(-8, -2, 0)
+                    scale: Qt.vector3d(0.30, 0.020, 1.36)
+                    castsShadows: true
+                    materials: PrincipledMaterial {
+                        baseColor: model.color
+                        emissiveFactor: Qt.vector3d(0.03, 0.04, 0.08)
                         roughness: 0.36
                     }
                 }
 
                 Model {
                     source: "#Cube"
-                    position: Qt.vector3d(-4, 0, 0)
-                    scale: Qt.vector3d(0.24, 0.035, 1.08)
+                    position: Qt.vector3d(-66, 7, 0)
+                    scale: Qt.vector3d(0.18, 0.020, 0.58)
                     castsShadows: true
                     materials: PrincipledMaterial {
-                        baseColor: model.color
-                        roughness: 0.42
+                        baseColor: "#334155"
+                        roughness: 0.52
                     }
                 }
 
                 Model {
                     source: "#Cube"
-                    position: Qt.vector3d(-54, 10, 0)
-                    scale: Qt.vector3d(0.18, 0.04, 0.48)
+                    position: Qt.vector3d(-72, 26, 0)
+                    scale: Qt.vector3d(0.12, 0.34, 0.036)
                     castsShadows: true
                     materials: PrincipledMaterial {
-                        baseColor: "#18252d"
-                        roughness: 0.6
-                    }
-                }
-
-                Model {
-                    source: "#Cube"
-                    position: Qt.vector3d(-60, 24, 0)
-                    scale: Qt.vector3d(0.12, 0.36, 0.05)
-                    castsShadows: true
-                    materials: PrincipledMaterial {
-                        baseColor: "#18252d"
-                        roughness: 0.6
+                        baseColor: "#334155"
+                        roughness: 0.52
                     }
                 }
 
                 Model {
                     source: "#Sphere"
                     position: Qt.vector3d(22, 14, 0)
-                    scale: Qt.vector3d(0.23, 0.09, 0.14)
+                    scale: Qt.vector3d(0.20, 0.072, 0.12)
                     materials: PrincipledMaterial {
-                        baseColor: Qt.rgba(0.72, 0.92, 1.0, 0.72)
+                        baseColor: Qt.rgba(0.75, 0.90, 1.0, 0.68)
                         alphaMode: PrincipledMaterial.Blend
                         roughness: 0.18
                     }
@@ -332,7 +410,7 @@ Item {
 
     MouseArea {
         anchors.fill: parent
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
         onPressed: function(mouse) {
             root.lastMouseX = mouse.x
             root.lastMouseY = mouse.y
@@ -344,7 +422,7 @@ Item {
                 root.yaw += dx * 0.25
                 root.pitch = Math.max(-88, Math.min(-6, root.pitch + dy * 0.18))
                 root.cameraMode = "自由"
-            } else if (mouse.buttons & Qt.RightButton) {
+            } else if ((mouse.buttons & Qt.RightButton) || (mouse.buttons & Qt.MiddleButton)) {
                 root.focusX -= dx * root.distance / 1800.0
                 root.focusZ += dy * root.distance / 1800.0
                 root.cameraMode = "自由"
@@ -369,8 +447,8 @@ Item {
         width: 240
         height: 136
         radius: 8
-        color: "#dd0f1c20"
-        border.color: "#34545a"
+        color: "#dd151d26"
+        border.color: "#2a3644"
 
         Column {
             anchors.fill: parent
@@ -379,14 +457,14 @@ Item {
 
             Text {
                 text: "3D态势  " + root.sceneTime
-                color: "#eef7f4"
+                color: "#e7edf4"
                 font.pixelSize: 15
                 font.bold: true
             }
 
             Text {
                 text: root.sceneSummary + " / 视角 " + root.cameraMode
-                color: "#a9c3bd"
+                color: "#94a3b8"
                 font.pixelSize: 12
             }
 
@@ -407,13 +485,13 @@ Item {
         width: 48
         height: 30
         radius: 6
-        color: mouseArea.containsMouse ? "#35c6a4" : "#23343a"
-        border.color: "#3c5960"
+        color: mouseArea.containsMouse ? "#14b8a6" : "#0f1720"
+        border.color: mouseArea.containsMouse ? "#14b8a6" : "#2a3644"
 
         Text {
             anchors.centerIn: parent
             text: button.label
-            color: mouseArea.containsMouse ? "#041512" : "#eef7f4"
+            color: mouseArea.containsMouse ? "#071318" : "#e7edf4"
             font.pixelSize: 12
             font.bold: true
         }
