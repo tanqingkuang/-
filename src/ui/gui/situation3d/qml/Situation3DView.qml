@@ -23,55 +23,6 @@ Item {
     ListModel { id: trailModel }
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
-    ListModel { id: gridLineModel }
-
-    function gridStepFor(span) {
-        const target = Math.max(80, span / 10.0)
-        const base = Math.pow(10, Math.floor(Math.log10(target)))
-        const ratio = target / base
-        if (ratio > 5) {
-            return base * 10
-        }
-        if (ratio > 2) {
-            return base * 5
-        }
-        if (ratio > 1) {
-            return base * 2
-        }
-        return base
-    }
-
-    function refreshGrid(ground) {
-        gridLineModel.clear()
-        const step = gridStepFor(Math.max(ground.width, ground.depth))
-        const xCount = Math.min(12, Math.max(2, Math.floor(ground.width / step / 2)))
-        const zCount = Math.min(12, Math.max(2, Math.floor(ground.depth / step / 2)))
-        const lineY = ground.y + ground.height / 2.0 + 0.8
-        for (let index = -xCount; index <= xCount; index++) {
-            const axis = index === 0
-            gridLineModel.append({
-                sx: ground.x + index * step,
-                sy: lineY,
-                sz: ground.z,
-                widthValue: axis ? 3.2 : 1.4,
-                depthValue: ground.depth,
-                colorValue: axis ? "#475569" : "#243141",
-                opacityValue: axis ? 0.82 : 0.48
-            })
-        }
-        for (let index = -zCount; index <= zCount; index++) {
-            const axis = index === 0
-            gridLineModel.append({
-                sx: ground.x,
-                sy: lineY,
-                sz: ground.z + index * step,
-                widthValue: ground.width,
-                depthValue: axis ? 3.2 : 1.4,
-                colorValue: axis ? "#475569" : "#243141",
-                opacityValue: axis ? 0.82 : 0.48
-            })
-        }
-    }
 
     function updateScene(payload) {
         if (!payload || payload.length === 0) {
@@ -130,25 +81,16 @@ Item {
         if (ground) {
             groundModel.position = Qt.vector3d(ground.x, ground.y, ground.z)
             groundModel.scale = Qt.vector3d(ground.width / 100.0, ground.height / 100.0, ground.depth / 100.0)
-            refreshGrid(ground)
-        } else {
-            gridLineModel.clear()
         }
         const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
         if (surface) {
             terrainSurfaceModel.visible = true
-            terrainGridModel.visible = true
             terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
-            terrainGridModel.position = terrainSurfaceModel.position
             terrainGeometry.widthValue = surface.width
             terrainGeometry.depthValue = surface.depth
             terrainGeometry.amplitudeValue = surface.height
-            terrainGridGeometry.widthValue = surface.width
-            terrainGridGeometry.depthValue = surface.depth
-            terrainGridGeometry.amplitudeValue = surface.height
         } else {
             terrainSurfaceModel.visible = false
-            terrainGridModel.visible = false
         }
         if (data.camera) {
             focusX = data.camera.focusX
@@ -234,14 +176,20 @@ Item {
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-50, -35, 0)
-            brightness: 2.25
-            castsShadow: true
+            eulerRotation: Qt.vector3d(-44, -48, 0)
+            brightness: 2.4
+            castsShadow: false
+        }
+
+        DirectionalLight {
+            eulerRotation: Qt.vector3d(-68, 138, 0)
+            brightness: 1.15
+            castsShadow: false
         }
 
         PointLight {
-            position: Qt.vector3d(root.focusX - 520, root.focusY + 780, root.focusZ + 420)
-            brightness: 18
+            position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
+            brightness: 8
         }
 
         Model {
@@ -262,43 +210,15 @@ Item {
                 id: terrainGeometry
             }
             position: Qt.vector3d(0, 0, 0)
-            receivesShadows: true
-            castsShadows: false
-            materials: PrincipledMaterial {
-                baseColor: Qt.rgba(0.34, 0.49, 0.40, 0.96)
-                roughness: 0.96
-                specularAmount: 0.12
-            }
-        }
-
-        Model {
-            id: terrainGridModel
-            geometry: TerrainGridGeometry {
-                id: terrainGridGeometry
-            }
-            position: Qt.vector3d(0, 0, 0)
-            castsShadows: false
             receivesShadows: false
+            castsShadows: false
             materials: PrincipledMaterial {
-                baseColor: Qt.rgba(0.63, 0.80, 0.66, 0.34)
-                alphaMode: PrincipledMaterial.Blend
-                opacity: 0.34
-                roughness: 0.9
-            }
-        }
-
-        Repeater3D {
-            model: gridLineModel
-            delegate: Model {
-                source: "#Cube"
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(model.widthValue / 100.0, 0.01, model.depthValue / 100.0)
-                materials: PrincipledMaterial {
-                    baseColor: model.colorValue
-                    alphaMode: PrincipledMaterial.Blend
-                    opacity: model.opacityValue
-                    roughness: 0.9
-                }
+                baseColor: "#ffffff"
+                cullMode: Material.NoCulling
+                lighting: PrincipledMaterial.NoLighting
+                vertexColorsEnabled: true
+                roughness: 0.86
+                specularAmount: 0.04
             }
         }
 

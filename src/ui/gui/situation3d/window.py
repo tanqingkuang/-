@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
 
 from src.ui.gui.situation3d.bridge import Situation3DBridge
 from src.ui.gui.situation3d.scene_data import build_scene_payload
-from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry, TerrainGridGeometry
+from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
 from src.ui.gui.view_models import ObstacleView, Snapshot
 
 _QML_TYPES_REGISTERED = False
@@ -26,7 +26,6 @@ def _register_qml_types() -> None:
     if _QML_TYPES_REGISTERED:
         return
     qmlRegisterType(TerrainGeometry, "Simu3D", 1, 0, "TerrainGeometry")
-    qmlRegisterType(TerrainGridGeometry, "Simu3D", 1, 0, "TerrainGridGeometry")
     _QML_TYPES_REGISTERED = True
 
 

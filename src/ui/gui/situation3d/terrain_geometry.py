@@ -9,20 +9,21 @@ from PySide6.QtCore import QByteArray, Property, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 
-# 顶点布局使用 32 字节：position(3) + normal(3) + uv(2)。
+# 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
 _FLOAT_SIZE = 4
-_SURFACE_COMPONENTS = 8
+_SURFACE_COMPONENTS = 12
 _SURFACE_STRIDE = _SURFACE_COMPONENTS * _FLOAT_SIZE
-# 线框只需要 position，减少 QQuick3D 上传的数据量。
-_POSITION_STRIDE = 3 * _FLOAT_SIZE
-# 曲面分辨率保持低频平滑，避免 GUI 场景因地形过密卡顿。
-_SURFACE_COLUMNS = 58
-_SURFACE_ROWS = 42
-# 线框采样比曲面更稀疏，让网格可读而不是糊成一片。
-_GRID_COLUMNS = 36
-_GRID_ROWS = 26
-# 线框略高于地表，避免与地表深度冲突产生闪烁。
-_GRID_LIFT = 3.5
+# 曲面分辨率要覆盖 0.8km 小丘陵，20km 地图下约 210m 一个采样点。
+_SURFACE_COLUMNS = 96
+_SURFACE_ROWS = 96
+# 丘陵按米定义半径，适配 20km x 20km 态势地图。
+# 元组字段依次为局部 x、局部 z、可见半径、相对高度。
+_HILL_PROFILES = (
+    (-5200.0, -3600.0, 3000.0, 0.58),
+    (3600.0, -2200.0, 2200.0, 0.76),
+    (-1800.0, 4300.0, 1400.0, 0.48),
+    (6100.0, 4400.0, 900.0, 0.34),
+)
 
 
 class _TerrainGeometryBase(QQuick3DGeometry):
@@ -165,6 +166,12 @@ class TerrainGeometry(_TerrainGeometryBase):
             6 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
+        # 顶点色承担地形高度分层和稳定明暗，避免 20km 场景纯灯光过黑。
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
+            8 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
         # 索引属性指向独立 indexData，减少重复顶点上传。
         self.addAttribute(
             QQuick3DGeometry.Attribute.Semantic.IndexSemantic,
@@ -182,9 +189,11 @@ class TerrainGeometry(_TerrainGeometryBase):
         y = self._height_at(x, z)
         # 法线使用同一高度函数，保证光照方向和实际顶点高度一致。
         normal = self._normal_at(x, z)
+        # 颜色随高度和法线变化，QML 侧使用顶点色避免大地图灯光失真。
+        color = self._color_at(y, normal)
         vertices.extend(
             struct.pack(
-                "<ffffffff",
+                "<ffffffffffff",
                 x,
                 y,
                 z,
@@ -193,6 +202,10 @@ class TerrainGeometry(_TerrainGeometryBase):
                 normal.z(),
                 u_coord,
                 v_coord,
+                color[0],
+                color[1],
+                color[2],
+                color[3],
             )
         )
 
@@ -229,6 +242,23 @@ class TerrainGeometry(_TerrainGeometryBase):
         normal.normalize()
         return normal
 
+    def _color_at(self, height: float, normal: QVector3D) -> tuple[float, float, float, float]:
+        """计算地形顶点色。注意：颜色包含稳定的高度分层和伪光照明暗。"""
+
+        # 0.72 留出余量，让最高丘陵接近但不直接夹到纯顶色。
+        height_ratio = max(0.0, min(1.0, (height - 4.0) / max(1.0, self._amplitude_value * 0.72)))
+        # 低地偏沉稳绿色，丘顶偏浅黄绿，便于无光照模式下读高度。
+        low_color = (0.30, 0.48, 0.35)
+        high_color = (0.66, 0.86, 0.55)
+        base = tuple(low_color[index] + (high_color[index] - low_color[index]) * height_ratio for index in range(3))
+        # 伪光源只影响顶点色，不让 Qt 实时光照把背坡压成黑斑。
+        light = QVector3D(-0.42, 0.78, 0.46)
+        light.normalize()
+        light_mix = max(0.0, QVector3D.dotProduct(normal, light))
+        # shade 下限高于 0，背坡不会再掉成黑斑。
+        shade = 0.78 + 0.18 * light_mix + 0.08 * height_ratio
+        return (min(1.0, base[0] * shade), min(1.0, base[1] * shade), min(1.0, base[2] * shade), 1.0)
+
     def _apply_bounds(self) -> None:
         """设置地形包围盒。注意：包围盒影响 Qt Quick 3D 视锥裁剪。"""
 
@@ -238,97 +268,35 @@ class TerrainGeometry(_TerrainGeometryBase):
         )
 
 
-class TerrainGridGeometry(_TerrainGeometryBase):
-    """贴合地表的网格线。注意：用于显示地形曲面起伏，不参与交互拾取。"""
-
-    def _rebuild(self) -> None:
-        """重建地表线框数据。注意：线段直接贴合高度场并略微抬高避免闪烁。"""
-
-        vertices = bytearray()
-        # 横向线提供地形深度方向的尺度参照。
-        for row in range(_GRID_ROWS):
-            for column in range(_GRID_COLUMNS - 1):
-                self._append_line(vertices, row, column, row, column + 1)
-        # 纵向线提供地形宽度方向的尺度参照。
-        for column in range(_GRID_COLUMNS):
-            for row in range(_GRID_ROWS - 1):
-                self._append_line(vertices, row, column, row + 1, column)
-        # 对角线模拟 demo 中的三角网格感，帮助用户读出曲面坡度。
-        for row in range(_GRID_ROWS - 1):
-            for column in range(_GRID_COLUMNS - 1):
-                self._append_line(vertices, row, column, row + 1, column + 1)
-
-        # 线框使用 Lines primitive，不占用三角面索引。
-        self.clear()
-        self.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Lines)
-        self.setStride(_POSITION_STRIDE)
-        self.addAttribute(
-            QQuick3DGeometry.Attribute.Semantic.PositionSemantic,
-            0,
-            QQuick3DGeometry.Attribute.ComponentType.F32Type,
-        )
-        self.setBounds(
-            QVector3D(-self._width_value / 2.0, 0.0, -self._depth_value / 2.0),
-            QVector3D(self._width_value / 2.0, self._amplitude_value * 1.35 + 24.0, self._depth_value / 2.0),
-        )
-        self.setVertexData(QByteArray(bytes(vertices)))
-        self.update()
-
-    def _append_line(
-        self,
-        vertices: bytearray,
-        start_row: int,
-        start_column: int,
-        end_row: int,
-        end_column: int,
-    ) -> None:
-        """追加一条地表网格线段。注意：行列索引会映射到当前地形宽深。"""
-
-        start = self._grid_point(start_row, start_column)
-        end = self._grid_point(end_row, end_column)
-        vertices.extend(struct.pack("<ffffff", start.x(), start.y(), start.z(), end.x(), end.y(), end.z()))
-
-    def _grid_point(self, row: int, column: int) -> QVector3D:
-        """返回网格采样点坐标。注意：高度比地表略高，避免与地表深度冲突。"""
-
-        # 行列索引映射到局部坐标，使线框随 payload 尺寸等比缩放。
-        x = -self._width_value / 2.0 + self._width_value * column / (_GRID_COLUMNS - 1)
-        z = -self._depth_value / 2.0 + self._depth_value * row / (_GRID_ROWS - 1)
-        return QVector3D(x, self._height_at(x, z) + _GRID_LIFT, z)
-
-
 def _height_value(x: float, z: float, width: float, depth: float, amplitude: float) -> float:
     """计算连续地形高度。注意：多个宽高斯峰叠加，避免独立石块感。"""
 
-    # nx/nz 采用 [-0.5, 0.5] 左右的局部比例，场景放大时山形保持相似。
     nx = x / width
     nz = z / depth
-    # 轻微起伏打破完全轴对齐的人工感，但幅值足够小，不会变成噪声地形。
-    rolling = 0.035 * (math.sin(nx * math.tau * 2.0 + 0.4) + math.cos(nz * math.tau * 1.8 - 0.2))
-    height_mix = (
-        # 左前宽峰。
-        0.88 * _gaussian(nx, nz, -0.30, -0.22, 0.20, 0.18)
-        # 右后主峰。
-        + 0.98 * _gaussian(nx, nz, 0.28, 0.18, 0.26, 0.22)
-        # 中后低峰。
-        + 0.58 * _gaussian(nx, nz, 0.02, -0.34, 0.18, 0.15)
-        # 中央宽脊把几个峰连成连续地形。
-        + 0.34 * _gaussian(nx, nz, -0.06, 0.02, 0.48, 0.36)
-        # 左后补峰让画面不只剩单一山头。
-        + 0.22 * _gaussian(nx, nz, -0.34, 0.26, 0.24, 0.18)
-        + rolling
+    # 轻微底噪只打破完全平面，不能抢过 3-4 个主体丘陵。
+    rolling = 0.006 * (
+        math.sin(nx * math.tau * 3.0 + 0.4)
+        + math.cos(nz * math.tau * 2.4 - 0.2)
+        + 0.5 * math.sin((nx + nz) * math.tau * 2.2)
     )
+    height_mix = rolling
+    for center_x, center_z, radius, weight in _HILL_PROFILES:
+        # 每个丘陵的可见半径保持在 0.8km 到 3km，和 20km 地图尺度匹配。
+        height_mix += weight * _radial_hill(x, z, center_x, center_z, radius)
     # 边缘衰减让地形接近地面，避免可见边界处像被切开的实体。
     return 4.0 + amplitude * _edge_falloff(nx, nz) * max(0.0, height_mix)
 
 
-def _gaussian(nx: float, nz: float, center_x: float, center_z: float, sigma_x: float, sigma_z: float) -> float:
-    """返回二维高斯权重。注意：输入坐标为地形宽深归一化后的局部比例。"""
+def _radial_hill(x: float, z: float, center_x: float, center_z: float, radius: float) -> float:
+    """返回米制径向丘陵权重。注意：radius 近似为视觉半径而不是高斯标准差。"""
 
-    # sigma 分别控制东西向、南北向宽度，允许生成椭圆缓坡。
-    dx = (nx - center_x) / sigma_x
-    dz = (nz - center_z) / sigma_z
-    return math.exp(-0.5 * (dx * dx + dz * dz))
+    # 有限半径避免高斯长尾把整张地图染成连续碎坡。
+    distance_ratio = math.hypot(x - center_x, z - center_z) / radius
+    if distance_ratio >= 1.0:
+        return 0.0
+    falloff = 1.0 - distance_ratio * distance_ratio
+    # smootherstep 在峰顶和半径边界都更平滑。
+    return falloff * falloff * falloff * (10.0 - 15.0 * falloff + 6.0 * falloff * falloff)
 
 
 def _edge_falloff(nx: float, nz: float) -> float:

@@ -15,6 +15,8 @@ from src.ui.gui.view_models import (
 MAX_TRAIL_POINTS_PER_NODE = 28
 MAX_ROUTE_POINTS_PER_SEGMENT = 32
 DEFAULT_GROUND_MARGIN_M = 420.0
+DEFAULT_TERRAIN_SPAN_M = 20000.0
+DEFAULT_TERRAIN_RELIEF_M = 760.0
 
 
 def build_scene_payload(
@@ -205,8 +207,8 @@ def _scene_bounds(
 def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
     """生成连续高度场地形参数。注意：只影响 3D 显示背景，不改变仿真状态。"""
 
-    span_x = max(bounds["spanX"], 1200.0)
-    span_z = max(bounds["spanZ"], 900.0)
+    span_x = max(bounds["spanX"], DEFAULT_TERRAIN_SPAN_M)
+    span_z = max(bounds["spanZ"], DEFAULT_TERRAIN_SPAN_M)
     center_x = bounds["centerX"]
     center_z = bounds["centerZ"]
     return {
@@ -224,7 +226,7 @@ def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
             "z": center_z,
             "width": span_x,
             "depth": span_z,
-            "height": min(320.0, max(180.0, max(span_x, span_z) * 0.12)),
+            "height": DEFAULT_TERRAIN_RELIEF_M,
         },
     }
 
@@ -235,7 +237,7 @@ def _camera_payload(bounds: dict[str, float], aircraft: list[dict[str, object]])
     focus_x = _average([float(item["x"]) for item in aircraft], bounds["centerX"])
     focus_y = _average([float(item["y"]) for item in aircraft], max(320.0, bounds["maxY"] * 0.55))
     focus_z = _average([float(item["z"]) for item in aircraft], bounds["centerZ"])
-    span = max(bounds["spanX"], bounds["spanZ"], bounds["maxY"] - bounds["minY"], 1000.0)
+    span = max(bounds["spanX"], bounds["spanZ"], bounds["maxY"] - bounds["minY"], DEFAULT_TERRAIN_SPAN_M)
     return {
         "focusX": focus_x,
         "focusY": focus_y,
