@@ -40,6 +40,14 @@ from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, Leade
 _LEADER_L1_DISTANCE_M = 0.0 # 关闭L1前瞻，直接按航段投影解算目标航迹。大侧偏限角保护已由横侧向变限幅(1.2)接管，L1 不再需要。
 _LEADER_FF_LEAD_TIME_S = 0.5 # 曲率前馈前瞻时间 σ(秒)，前瞻窗长 L2=σ·vd；配为0则关闭曲率前馈。调参旋钮。
 
+# —— 横侧向"航迹角变限幅"调参旋钮（长机僚机共用；见 lateral_track_angle.py 与 docs/横侧向点号切入问题）——
+# 变限幅半径 R = V² / (g·sin(_LATERAL_GAMMA_MAX_RAD)) · _LATERAL_R_MARGIN；据此把大侧偏拦截角限到 [地板, 90°]。
+# 注意：以下三值暂借自《横侧向点号切入问题》(快速固定翼单机点号切入报告)，**尚未按本项目慢速编队机整定**，
+# 是留给后续手动调参的旋钮；改动只影响大侧偏切入的快慢/陡缓，不影响小侧偏(无饱和)时与旧并联式的等价行为。
+_LATERAL_GAMMA_MAX_RAD = math.radians(30.0)  # 定 R 的最大航迹角(转弯半径尺度)：越小→R 越大→垂直切入触发越晚、切入越缓
+_LATERAL_FLOOR_RAD = math.radians(7.0)       # 航迹角限幅地板：中心线附近的最小拦截角，防近线残余大角引发震荡
+_LATERAL_R_MARGIN = 1.2                       # R 余量系数(>1 更保守，向上留裕度)
+
 
 class LeaderEntity(EntityBase):
     """长机实体：串联任务编排、航路规划、位置解算、跟踪与广播五级处理链。注意：上下文 cxt 在各单元间共享，单元仅读写各自绑定的端口。"""
@@ -180,7 +188,11 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
         raise ValueError("control_period_s must be positive")
     # 侧向(侧偏)改串级(P+PI)+航迹角变限幅：增益 kp/kd/ki 与旧并联式一一等价(无饱和+ki=0 时严格相等)，
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
-    gain_lateral = LateralTrackAngleInitS(kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0)
+    # gammaMax/floor/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。
+    gain_lateral = LateralTrackAngleInitS(
+        kp=0.02, ki=0.0, kd=0.12, dt=control_period_s, outMax=4.0,
+        gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD, margin=_LATERAL_R_MARGIN,
+    )
     # 垂向改串级 P+PI：等价旧 kp=0.2/kd=0.6(kpPos=kp/kd)，acc 限幅沿用 ±6；
     # 垂向速度限幅 vCmdMin/vCmdMax 由配置注入(默认 ±inf 不限)。
     gain_vertical = PPIInitS(
