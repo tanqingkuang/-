@@ -112,6 +112,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         first_window = self.window._situation3d_window
         self.assertIsNotNone(first_window)
         self.assertTrue(first_window.isVisible())
+        self.assertTrue(first_window.isWindow())
         self.assertEqual(first_window.windowTitle(), "3D态势")
 
         self.window.situation3d_action.trigger()

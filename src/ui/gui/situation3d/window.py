@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QWidget
 
 
-class Situation3DWindow(QWidget):
+class Situation3DWindow(QDialog):
     """3D 态势独立窗口。注意：窗口生命周期由 MainWindow 持有和复用。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化 Situation3DWindow 实例，建立后续嵌入 Qt Quick 3D 的容器。"""
         super().__init__(parent)
+        self.setModal(False)
         self.setWindowTitle("3D态势")
         self.resize(1120, 760)
         self.setMinimumSize(900, 620)
