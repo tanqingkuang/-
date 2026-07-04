@@ -117,6 +117,8 @@ class MainWindowStyleMixin:
             QLineEdit {{
                 background: {theme.field.name()};
                 color: {theme.ink.name()};
+                selection-background-color: {theme.accent.name()};
+                selection-color: #ffffff;
                 border: 1px solid {theme.line.name()};
                 border-radius: 6px;
                 min-height: 30px;
