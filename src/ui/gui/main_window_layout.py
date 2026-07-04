@@ -222,12 +222,8 @@ class MainWindowLayoutMixin:
         btn_rally = QPushButton("集结演示")
         btn_rally.setToolTip("加载 configs/rally_demo.json — 三机分散后集结演示")
         btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo.json"))
-        btn_change = QPushButton("队形切换")
-        btn_change.setToolTip("加载 configs/change.json — 五机直线，界面选择队形热切换演示")
-        btn_change.clicked.connect(lambda: self._load_demo_config("change.json"))
         demo_layout.addWidget(btn_hold)
         demo_layout.addWidget(btn_rally)
-        demo_layout.addWidget(btn_change)
         layout.addWidget(demo_group)
 
         # 底部弹性占位把上面各分组顶到面板顶部。
