@@ -49,32 +49,43 @@ configs/base.json
 
 Windows exe 需要在 Windows x64 环境构建。PySide6/Qt 依赖目标平台的 Python wheel、Qt DLL 和 platform plugin，不建议在 macOS 上直接交叉打包。
 
+仓库提供全量版和裁剪版两组入口，差异说明见 [Windows 编译入口说明](docs/10-Windows编译入口说明.md)。
+
 开发期快速打包：
 
 ```powershell
-.\scripts\build_windows_exe_dev.ps1
+.\scripts\build_windows_full_dev.ps1
+.\scripts\build_windows_lite_dev.ps1
 ```
 
 首次打包或依赖变化后可加 `-InstallDependencies`。
 
-产物路径：
+全量版开发期产物路径：
 
 ```text
 dist\编队仿真.exe
 ```
 
-开发期打包仍会在 `dist\编队仿真\` 放置运行依赖文件，请和 exe 保持在同一目录层级。
+裁剪版开发期产物路径：
 
-发布期完整打包：
+```text
+dist\编队仿真-裁剪版.exe
+```
+
+开发期打包仍会在同名目录下放置运行依赖文件，请和 exe 保持在同一目录层级。
+
+发布期打包：
 
 ```powershell
-.\scripts\build_windows_exe_release.ps1
+.\scripts\build_windows_full_release.ps1
+.\scripts\build_windows_lite_release.ps1
 ```
 
-产物路径：
+发布期产物路径：
 
 ```text
 dist\编队仿真.exe
+dist\编队仿真-裁剪版.exe
 ```
 
 仓库也提供 GitHub Actions workflow：
@@ -83,7 +94,7 @@ dist\编队仿真.exe
 .github/workflows/build-windows-exe.yml
 ```
 
-推送 `main` 或手动触发 workflow 后，会生成 `formation-sim-windows-x64` artifact。
+推送 `main` 或手动触发 workflow 后，会生成 `formation-sim-windows-x64-full` 和 `formation-sim-windows-x64-lite` artifact。
 
 ## 基本检查
 

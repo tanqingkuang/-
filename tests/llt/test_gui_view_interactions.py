@@ -103,14 +103,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertFalse(self.window.light_theme_action.isChecked())
 
     def test_situation3d_menu_opens_independent_window(self) -> None:
-        self.assertIsNone(self.window._situation3d_window)
+        self.assertIsNone(self.window.features.situation3d.window)
         menu_titles = [action.text() for action in self.window.menuBar().actions()]
         self.assertIn("3D态势(&3)", menu_titles)
 
         self.window.situation3d_action.trigger()
         self.app.processEvents()
 
-        first_window = self.window._situation3d_window
+        first_window = self.window.features.situation3d.window
         self.assertIsNotNone(first_window)
         self.assertTrue(first_window.isVisible())
         self.assertTrue(first_window.isWindow())
@@ -178,7 +178,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window.situation3d_action.trigger()
         self.app.processEvents()
 
-        self.assertIs(self.window._situation3d_window, first_window)
+        self.assertIs(self.window.features.situation3d.window, first_window)
         self.assertTrue(first_window.isVisible())
         self.assertTrue(first_window.isMaximized())
         self.assertFalse(first_window.isFullScreen())
@@ -187,8 +187,47 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window._open_data_analysis_window()
         self.app.processEvents()
 
-        self.assertIsNotNone(self.window._data_analysis_window)
-        self.assertEqual(self.window._data_analysis_window.windowTitle(), "离线控制效果分析")
+        self.assertIsNotNone(self.window.features.data_analysis.window)
+        self.assertEqual(self.window.features.data_analysis.window.windowTitle(), "离线控制效果分析")
+
+    def test_lite_profile_hides_trimmed_feature_menus_and_keeps_modules_unloaded(self) -> None:
+        """裁剪版应隐藏整块功能入口，并且构造阶段不能导入被裁剪模块。"""
+        trimmed_modules = [
+            "src.ui.gui.live_monitor",
+            "src.ui.gui.offline_plot",
+            "src.ui.gui.data_analysis_window",
+            "src.data.control_effect_analysis",
+            "src.ui.gui.situation3d",
+        ]
+        for module_name in list(sys.modules):
+            if any(module_name == trimmed or module_name.startswith(f"{trimmed}.") for trimmed in trimmed_modules):
+                sys.modules.pop(module_name)
+
+        with patch.dict(os.environ, {"SIMU_GUI_FEATURE_PROFILE": "lite"}):
+            window = MainWindow(auto_load_config=False)
+
+        try:
+            menu_titles = [action.text() for action in window.menuBar().actions()]
+            self.assertEqual(window.features.profile, "lite")
+            self.assertNotIn("控制监控(&V)", menu_titles)
+            self.assertNotIn("数据分析(&D)", menu_titles)
+            self.assertNotIn("3D态势(&3)", menu_titles)
+            self.assertIn("避障规划(&O)", menu_titles)
+            self.assertIn("帮助(&H)", menu_titles)
+            for trimmed in trimmed_modules:
+                self.assertNotIn(trimmed, sys.modules)
+
+            window._open_live_monitor()
+            window._open_data_analysis_window()
+            window._open_situation3d_window()
+            self.app.processEvents()
+
+            self.assertIsNone(window.features.control_monitor.live_monitor)
+            self.assertIsNone(window.features.control_monitor.offline_plot)
+            self.assertIsNone(window.features.data_analysis.window)
+            self.assertIsNone(window.features.situation3d.window)
+        finally:
+            window.close()
 
     def test_grid_toggle_controls_top_and_side_views(self) -> None:
         self.assertTrue(self.window.grid_toggle.isChecked())
@@ -1462,9 +1501,9 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window._open_live_monitor()
         self.app.processEvents()
 
-        self.assertIsNotNone(self.window._live_monitor)
-        self.assertIsNotNone(self.window._live_monitor._ctrl)
-        self.assertIs(self.window._live_monitor._ctrl, self.window.sim.controller)
+        self.assertIsNotNone(self.window.features.control_monitor.live_monitor)
+        self.assertIsNotNone(self.window.features.control_monitor.live_monitor._ctrl)
+        self.assertIs(self.window.features.control_monitor.live_monitor._ctrl, self.window.sim.controller)
 
     def test_step_binds_live_monitor_controller(self) -> None:
         """Regression: _step() 未调用 follow()，单步后监控窗口 _ctrl 仍为 None。"""
@@ -1474,15 +1513,15 @@ class GuiViewInteractionTests(unittest.TestCase):
             self.skipTest("PySide6.QtCharts not available")
 
         self._load_ui_config()
-        self.window._live_monitor = LiveMonitorWindow(self.window)
+        self.window.features.control_monitor.live_monitor = LiveMonitorWindow(self.window)
         # _ctrl 未绑定，模拟旧代码中打开监控但未 follow 的状态
-        self.assertIsNone(self.window._live_monitor._ctrl)
+        self.assertIsNone(self.window.features.control_monitor.live_monitor._ctrl)
 
         self.window._step()
         self.app.processEvents()
 
-        self.assertIsNotNone(self.window._live_monitor._ctrl)
-        self.assertIs(self.window._live_monitor._ctrl, self.window.sim.controller)
+        self.assertIsNotNone(self.window.features.control_monitor.live_monitor._ctrl)
+        self.assertIs(self.window.features.control_monitor.live_monitor._ctrl, self.window.sim.controller)
 
     def _load_ui_config(
         self,
