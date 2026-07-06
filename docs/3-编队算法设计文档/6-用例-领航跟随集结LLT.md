@@ -15,11 +15,12 @@
 - `src/algorithm/units/process/outbound/rally_leader_broadcast.py`
 - `src/algorithm/units/process/inbound/follower_status.py`
 - `src/algorithm/units/process/inbound/rally_leader_follower.py`
-- `src/algorithm/units/algo/pos_calc/rally_approach.py`
+- `src/algorithm/units/algo/pos_calc/rally_join_pos.py`（原 `rally_approach.py`，已整体替换并删除）
+- `src/algorithm/units/algo/pos_calc/catchup_align.py`
 - `src/algorithm/units/algo/pos_calc/scaled_slot_geometry.py`
 - `src/algorithm/entity/leader_follower_rally/leader.py`
 - `src/algorithm/entity/leader_follower_rally/follower.py`
-- `src/runner/sim_control.py`
+- `src/runner/sim_control_modules.py`、`src/runner/sim_control_routes.py`、`src/runner/sim_controller.py`（原 `sim_control.py`，已拆分为多个模块）
 
 设计依据：`docs/3-编队算法设计文档/6-用例-领航跟随集结LLD.md`
 
@@ -27,123 +28,175 @@
 
 ## 测试辅助
 
+> 下列辅助函数摘自 `tests/llt/test_formation_rally.py` 当前实现（原文档版本节点用 `leader`/`follower_1`
+> 等占位名、且 `_rally_task`/`FollowerStateS` 还带着已删除的 `arrive_hold_s`/`arriveHold_s`，与实际测试
+> 文件的三机 `R01/R02/R03` 命名和当前 `RallyTaskInitS` 字段严重脱节，此处按实际代码重写）：
+
 ```python
-def _pos(east=0.0, north=0.0, h=0.0) -> PosInEarthS:
+def _pos(east: float = 0.0, north: float = 0.0, h: float = 0.0) -> PosInEarthS:
     return PosInEarthS(east=east, north=north, h=h)
 
 
 def _motion(
-    east=0.0,
-    north=0.0,
-    h=0.0,
-    v_east=0.0,
-    v_north=0.0,
-    v_up=0.0,
-    vd=0.0,
-    v_psi=0.0,
-    d_v_psi=0.0,
+    east: float = 0.0,
+    north: float = 0.0,
+    h: float = 0.0,
+    v_east: float = 0.0,
+    v_north: float = 0.0,
+    v_up: float = 0.0,
+    vd: float | None = None,   # None 时取水平速度模长 hypot(v_east, v_north)
+    v_psi: float = 0.0,
+    d_v_psi: float = 0.0,
 ) -> MotionProfS:
-    state = MotionProfS()
-    state.pos = PosInEarthS(east=east, north=north, h=h)
-    state.v = VdInEarthS(
-        vEast=v_east,
-        vNorth=v_north,
-        vUp=v_up,
-        vd=vd,
-        vPsi=v_psi,
-        dVPsi=d_v_psi,
+    ground_speed = math.hypot(v_east, v_north) if vd is None else vd
+    return MotionProfS(
+        pos=PosInEarthS(east=east, north=north, h=h),
+        v=VdInEarthS(vEast=v_east, vNorth=v_north, vUp=v_up, vd=ground_speed, vPsi=v_psi, dVPsi=d_v_psi),
     )
-    return state
 
 
 def _follower_state(
     node_id: str,
     *,
-    pos_err_m=0.0,
-    arrived=0,
-    valid=True,
-    last_update_s=0.0,
+    pos_err_m: float = 0.0,
+    arrived: int = 0,
+    valid: bool = True,
+    last_update_s: float = 0.0,
+    rally_state: str = "EXITED",
+    eta_s: float = 0.0,
+    reached_slot_once: bool = False,
 ) -> FollowerStateS:
     return FollowerStateS(
-        id=node_id,
-        pos=PosInEarthS(),
-        posErr_m=pos_err_m,
-        arrived=arrived,
-        valid=valid,
-        lastUpdate_s=last_update_s,
+        id=node_id, pos=PosInEarthS(), posErr_m=pos_err_m, arrived=arrived, valid=valid,
+        lastUpdate_s=last_update_s, rally_state=rally_state, eta_s=eta_s, reachedSlotOnce=reached_slot_once,
     )
 
 
 def _follower_status_msg(
-    source="follower_1",
+    source: str = "R02",
     *,
-    pos_east=0.0,
-    pos_north=0.0,
-    pos_h=500.0,
-    pos_err_m=0.0,
-    arrived=0,
+    pos_east: float = 0.0,
+    pos_north: float = 0.0,
+    pos_h: float = 500.0,
+    pos_err_m: float = 0.0,
+    arrived: int = 0,
+    rally_state: str = "EXITED",
+    eta_s: float = 0.0,
 ) -> MessageEnvelope:
     return MessageEnvelope(
-        topic="formation.follower_status",
-        source=source,
-        target="leader",
-        timestamp=0.0,
+        topic=FOLLOWER_STATUS_TOPIC, source=source, target="R01", timestamp=0.0,
         payload={
-            "id": source,
-            "pos_east": pos_east,
-            "pos_north": pos_north,
-            "pos_h": pos_h,
-            "pos_err_m": pos_err_m,
-            "arrived": arrived,
+            "id": source, "pos_east": pos_east, "pos_north": pos_north, "pos_h": pos_h,
+            "pos_err_m": pos_err_m, "arrived": arrived, "rally_state": rally_state, "eta_s": eta_s,
         },
     )
 
 
 def _leader_msg(
     *,
-    stage=FormStageE.RALLY,
-    pattern=0,
-    step=0,
-    scale=3.0,
-    scale_rate=0.0,
+    stage: FormStageE = FormStageE.RALLY,
+    pattern: int = 0,
+    step: int = 0,
+    scale: float = 3.0,
+    scale_rate: float = 0.0,
+    leader_state: MotionProfS | None = None,
+    t_ref: float = 0.0,
+    t_ref_valid: bool = True,
 ) -> MessageEnvelope:
+    state = leader_state or _motion(east=100.0, north=200.0, h=500.0, v_east=20.0)
     return MessageEnvelope(
-        topic="formation.leader",
-        source="leader",
-        target=["follower_1"],
-        timestamp=0.0,
+        topic="formation.leader", source="R01", target=["R02"], timestamp=0.0,
         payload={
-            "leader_state": _motion_payload(_motion(v_east=20.0, vd=20.0)),
+            "leader_state": _motion_payload(state),
             "cmd": {"stage": int(stage), "pattern": int(pattern), "step": step},
             "slot_scale": {"scale": scale, "scale_rate": scale_rate},
+            "t_ref": t_ref,
+            "t_ref_valid": t_ref_valid,
         },
     )
 
 
 def _rally_task(
-    expected=("follower_1", "follower_2"),
+    expected: tuple[str, ...] = ("R02", "R03"),
     *,
-    dt_s=0.1,
-    arrive_hold_s=0.2,
-    stable_hold_s=0.2,
-    compress_time_s=1.0,
+    dt_s: float = 0.1,
+    stable_hold_s: float = 0.2,
+    compress_time_s: float = 1.0,
+    catchup_radius_m: float = 200.0,
+    catchup_stable_s: float = 0.0,
 ) -> Rally:
     task = Rally()
     task.init(
         RallyTaskInitS(
-            looseScale=3.0,
-            convergenceRadius_m=5.0,
-            arriveHold_s=arrive_hold_s,
-            stableHold_s=stable_hold_s,
-            compressTime_s=compress_time_s,
-            tightRadius_m=2.0,
-            expectedFollowerIds=list(expected),
-            staleTimeout_s=0.5,
-            targetPattern=0,
-            dt_s=dt_s,
+            looseScale=3.0, convergenceRadius_m=5.0, stableHold_s=stable_hold_s,
+            compressTime_s=compress_time_s, tightRadius_m=2.0, expectedFollowerIds=list(expected),
+            staleTimeout_s=0.5, targetPattern=0, dt_s=dt_s,
+            catchup_radius_m=catchup_radius_m, catchup_stable_s=catchup_stable_s,
         )
     )
     return task
+
+
+def _task_step(
+    task: Rally,
+    ctx: FormContextS,
+    *,
+    remote: FormStageE,
+    states: list[FollowerStateS] | None = None,
+    now_s: float = 0.0,
+    leader_join_exited: bool = True,
+    leader_join_flying: bool = False,
+    leader_join_reached_slot_once: bool = False,
+    leader_eta_s: float = 0.0,
+) -> RallyTaskOutputS:
+    """推进 Rally 任务一拍并返回输出端口。"""
+    output = RallyTaskOutputS(cmd=ctx.cmd, slotScale=ctx.slotScale)
+    task.step(
+        RallyTaskInputS(
+            remote=RemoteCmdS(remote), cmd=ctx.cmd, followerStates=states or [], now_s=now_s,
+            leader_join_exited=leader_join_exited, leader_join_flying=leader_join_flying,
+            leader_join_reached_slot_once=leader_join_reached_slot_once, leader_eta_s=leader_eta_s,
+        ),
+        output,
+    )
+    return output
+
+
+def _comm_init() -> FormCommInitS:
+    """构造三机集结通信与三角队形槽位。"""
+    return FormCommInitS(
+        netWork=[NetWorkS("R01", "R02", CommDirE.DUPLEX), NetWorkS("R01", "R03", CommDirE.DUPLEX)],
+        formPat=[0],
+        formPos=[[
+            FormPosS("R01", 0.0, 0.0, 0.0),
+            FormPosS("R02", -10.0, 0.0, -5.0),
+            FormPosS("R03", -10.0, 0.0, 5.0),
+        ]],
+    )
+
+
+def _route(start: tuple, end: tuple, speed: float = 20.0) -> list[WayPointInputS]:
+    """构造两点航线（WayPointInputS 列表）。"""
+    return [
+        WayPointInputS(idx=0, pos=PosInEarthS(*start), vdCmd=speed),
+        WayPointInputS(idx=1, pos=PosInEarthS(*end), vdCmd=speed),
+    ]
+
+
+def _rally_cfg(
+    *,
+    expected: tuple[str, ...] = ("R02", "R03"),
+    dt_s: float = 0.1,
+    stable_hold_s: float = 0.1,
+    compress_time_s: float = 0.1,
+    catchup_stable_s: float = 0.0,
+) -> RallyTaskInitS:
+    """构造实体测试用集结配置。"""
+    return RallyTaskInitS(
+        looseScale=3.0, convergenceRadius_m=5.0, stableHold_s=stable_hold_s,
+        compressTime_s=compress_time_s, tightRadius_m=2.0, expectedFollowerIds=list(expected),
+        staleTimeout_s=1.0, targetPattern=0, dt_s=dt_s, catchup_stable_s=catchup_stable_s,
+    )
 ```
 
 ---
@@ -332,41 +385,28 @@ def _rally_task(
 
 ---
 
-## 11. TestRallyLeaderEntity - 集结长机实体
+## 11/12. TestRallyEntity - 集结长机/僚机实体主链路
+
+> 本节原分为 TestRallyLeaderEntity/TestRallyFollowerEntity 两节，列出的测试名（`test_rally_before_arrival_uses_rally_approach`、
+> `_self_arrived`、`_rally_target` 等）描述的是 `RallyApproach` 直飞 M_i、到达即锁存的旧流程测试点，随
+> `RallyJoinPos`（切线进圆）重构已全部替换。当前长机/僚机实体级测试合并为同一个 `RallyEntityTests`
+> 类（`tests/llt/test_formation_rally.py`），下表按实际用例重写。
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_init_binds_rally_ports_to_context` | `slotScale/followerStates/cmd/wayLine/selfCmd` 端口绑定到同一 `FormContextS` 对象 |
-| `test_step_injects_now_s_to_follower_status_and_rally_task` | `EntityInputS.now_s` 被传给入站状态解析和 Rally 任务 |
-| `test_remote_rally_uses_rally_route` | `remote=RALLY` 时推进 `_tra_plan_rally`，`wayLine` 来自 `cfg.rally_route` |
-| `test_hold_uses_mission_route_after_completion` | 正常完成到 HOLD 后推进 `_tra_plan_mission`，`wayLine` 来自 `cfg.route` |
-| `test_remote_none_outputs_zero_command_without_route_interp` | `remote=NONE` 时不调用空航线插值，`selfCmd` 为当前位置零速，`selfAccCmd` 为零 |
-| `test_remote_none_still_broadcasts_none` | `NONE` 分支仍广播 `cmd.stage=NONE` 和当前 `slotScale` |
-| `test_rally_leader_init_rejects_empty_route_list` | `rally_route` 少于两个航点（含空列表）时初始化抛 `ValueError`；`mission_route` 与 `rally_route` 的连续性**不再由 init 做运行时校验**，改为航线设计阶段保证（见 LLD 7.1.3 节） |
-| `test_formation_analysis_emits_once_after_normal_completion` | COMPRESS 正常完成后首帧 `formationAnalysis` 非空，下一帧为 None |
-| `test_forced_hold_does_not_emit_formation_analysis` | `remote=HOLD` 强制中断不输出完成分析 |
-| `test_reset_clears_completion_flag_context_and_outbox` | `reset()` 清理 `_rally_completed`、上下文、outbox、双航线规划器状态 |
+| `test_rally_follower_latches_arrival_and_switches_to_scaled_slot_after_step_one` | 僚机位于目标点且 T_ref 已有效时 `RallyJoinPos` 进入 `EXITED`，上报 `arrived=1`/`rally_state=EXITED`；长机推进到 `step=1`（CATCHUP）后 `selfCmd.pos` 变为本机在任务航线"杆"上的正交投影，速度航向锁定 `mission_heading` |
+| `test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start` | 冷启动尚无有效 T_ref（`t_ref_valid=False`）时，即便已到目标点附近，`RallyJoinPos` 进入 `LOITERING` 而非直接 `EXITED`，上报 `arrived=0` |
+| `test_rally_follower_none_resets_join_state_for_restart` | 已 `EXITED` 的僚机收到 `stage=NONE` 后，`RallyJoinPos` 复位回 `FLYING`，上报 `arrived=0`，允许下一轮重新执行 JOINING |
+| `test_rally_follower_none_outputs_current_position_zero_velocity` | `stage=NONE` 时 `selfCmd.pos` 复制本机当前位置、`selfCmd.v` 为零速，上报 `arrived=0` |
+| `test_rally_leader_completes_and_outputs_formation_analysis_once` | 长机汇合子状态置 `EXITED` 后推进多帧，COMPRESS 正常完成分析 `formationAnalysis` 只在首帧非 None，其余帧为 None，字段值（`posErrMax_m/posErrRms_m/inPositionCount/totalCount`）与僚机回报一致 |
+| `test_rally_leader_none_resets_join_and_completion_latches` | 长机处于 `HOLD` 且已 `EXITED`/`_rally_completed=True` 时收到 `remote=NONE`，`RallyJoinPos` 复位回 `FLYING`，`_rally_completed` 复位为 `False` |
+| `test_rally_leader_init_rejects_empty_route_list` | `route=[]`（空列表而非 `None`）时 `init()` 显式抛 `ValueError`，不应因空列表索引抛 `IndexError` |
+| `test_rally_route_heading_rejects_horizontally_degenerate_first_segment` | 回归用例：`rally_route_heading_rad()` 遇到 A/A1 水平坐标重合（仅高度不同也算）时显式抛 `ValueError`，不静默按 `atan2(0,0)` 退化为正东 |
+| `test_rally_leader_init_rejects_horizontally_degenerate_rally_route` | 长机 `init()` 同样拒绝水平退化的 `rally_route` 第一航段，而不是算出错误航向静默通过 |
 
 ---
 
-## 12. TestRallyFollowerEntity - 集结僚机实体
-
-| 测试名 | 断言 |
-| ------ | ---- |
-| `test_none_stage_outputs_current_position_zero_speed` | 未收到 RALLY 时 `selfCmd.pos` 复制本机位置，速度为零，不直飞 M_i |
-| `test_none_stage_broadcasts_arrived_zero` | `cmd.stage=NONE` 时仍发送在线状态，`arrived=0` |
-| `test_rally_before_arrival_uses_rally_approach` | `cmd.stage=RALLY` 且 `_self_arrived=False` 时目标为 M_i |
-| `test_arrival_uses_self_state_to_target_distance` | 到达判定使用 `selfState.pos` 与 `_rally_target` 的 3D 距离，不使用 `selfCmd.pos` |
-| `test_arrival_latches_and_does_not_revert` | 到达 M_i 后 `_self_arrived=True`，后续误差回升也不回到 Approach |
-| `test_after_arrival_uses_scaled_slot_geometry_even_when_cmd_step_approach` | 系统仍是 APPROACH 时，先到机已切槽位跟随 |
-| `test_hold_forces_slot_geometry_even_if_not_arrived` | 外部强制 HOLD 时，无论 `_self_arrived` 都使用最终槽位 |
-| `test_compress_uses_leader_slot_scale` | `slotScale.scale/scaleRate` 来自长机广播并传入 `ScaledSlotGeometry` |
-| `test_broadcast_uses_latched_self_arrived` | 出站 `selfArrived` 等于实体锁存值 |
-| `test_reset_clears_self_arrived_and_buffers` | `reset()` 后 `_self_arrived=False`，inbox/outbox 清空 |
-
----
-
-## 13. TestRallySimControlIntegration - 仿真控制接入
+## 11. TestRallySimControlIntegration - 仿真控制接入
 
 | 测试名 | 断言 |
 | ------ | ---- |
@@ -390,7 +430,7 @@ def _rally_task(
 
 ---
 
-## 14. TestRallyEndToEndScenario - 小规模闭环场景
+## 12. TestRallyEndToEndScenario - 小规模闭环场景
 
 | 测试名 | 断言 |
 | ------ | ---- |
@@ -414,15 +454,16 @@ def _rally_task(
 | expectedFollowerIds、valid、lastUpdate_s、超时冻结 | TestRallyTaskApproachLooseCompress, TestFollowerStatusInbound |
 | `cmd.pattern` 首拍写入 targetPattern | TestRallyTaskApproachLooseCompress |
 | `slotScale.scale/scaleRate` 输出 | TestRallyTaskApproachLooseCompress, TestScaledSlotGeometry |
-| 僚机状态广播与锁存 arrived | TestFollowerBroadcast, TestRallyFollowerEntity |
+| 僚机状态广播与锁存 arrived/rally_state/eta_s/reached_slot_once | TestFollowerBroadcast, TestRallyEntity |
 | 长机解析僚机回报 | TestFollowerStatusInbound |
 | 长机广播保持既有 payload 并追加 `slot_scale` | TestRallyLeaderBroadcastAndInbound |
 | 僚机解析长机 `slot_scale`，缺字段默认 | TestRallyLeaderBroadcastAndInbound |
-| RallyApproach 速度、航向、高度限幅 | TestRallyApproach |
+| RallyJoinPos 切入盘旋圆、圆弧汇合、切出航向 | TestRallyJoinPos |
+| `rally_loose_target()` 旋转/右侧轴符号/缩放/高度 | TestRallyLooseTarget |
+| `loiter_speed_bounds()` 上下限推导与序校验 | TestRallyLoiterSpeedBounds |
 | ScaledSlotGeometry 缩放、压缩速度前馈、转弯前馈 | TestScaledSlotGeometry |
-| RallyLeaderEntity 双航线切换与 NONE 零速 | TestRallyLeaderEntity |
-| RallyFollowerEntity cmd.stage 门控与单机到达锁存 | TestRallyFollowerEntity |
-| FormationAnalysis 只在正常完成后输出一次 | TestRallyLeaderEntity |
+| RallyLeaderEntity/RallyFollowerEntity 主链路（JOINING→CATCHUP/LOOSE/COMPRESS、NONE 复位） | TestRallyEntity |
+| FormationAnalysis 只在正常完成后输出一次 | TestRallyEntity |
 | 配置解析、角色映射、now_s 注入、remote=RALLY 接入、完成后自动切 HOLD、锁存清空 | TestRallySimControlIntegration |
 | 多机闭环集结、断链冻结、恢复继续、重启 | TestRallyEndToEndScenario |
 

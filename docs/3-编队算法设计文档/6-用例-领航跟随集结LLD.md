@@ -379,7 +379,15 @@ class FormContextS:
 
 **文件**：`units/process/formation_task/rally.py`
 
-作用：管理 APPROACH→LOOSE→COMPRESS→HOLD 状态机，写出 `cmd`（stage/step）和 `slotScale`。
+作用：管理 `JOINING→CATCHUP→LOOSE→COMPRESS→HOLD` 状态机（`cmd.step` 编码为 `RallyPhaseE`
+`JOINING=0/CATCHUP=1/LOOSE=2/COMPRESS=3`），写出 `cmd`（stage/step/pattern）和 `slotScale`，并计算
+T_ref（`t_ref`/`t_ref_valid`）供 JOINING 阶段的 `RallyJoinPos` 做盘旋协调切出。
+
+> 本节原描述"APPROACH→LOOSE→COMPRESS"三段式（`arriveHold_s`/`_arrive_timer`/`all_followers_arrived()`
+> 按僚机锁存的 `arrived` 标志判定到达），是 `RallyJoinPos`（切线进圆汇合）之前的旧设计。当前实现在
+> APPROACH 与 LOOSE 之间插入了独立的 CATCHUP 子阶段（`_all_catchup_ok()` 按位置+航向双阈值门控），且
+> JOINING 阶段的到达判定完全交给 `RallyJoinPos.state`/`reached_slot_once`（见第二步 JOINING 阶段说明），
+> `arriveHold_s`/`_arrive_timer` 已不存在。以下按实际实现更正。
 
 #### 5.1.1 抽象类扩展
 
@@ -389,100 +397,127 @@ class FormContextS:
 @dataclass
 class RallyTaskInitS(FormationTaskInitS):
     looseScale: float = 3.0               # 松散槽位放大倍数（松散间距=最终间距×looseScale）
-    convergenceRadius_m: float = 5.0      # 到达判定阈值，米
-    arriveHold_s: float = 3.0             # APPROACH→LOOSE 需持续在阈值内的时间
+    convergenceRadius_m: float = 5.0      # LOOSE→COMPRESS 槽位误差阈值，米
     stableHold_s: float = 5.0             # LOOSE→COMPRESS 需稳定的时间
     compressTime_s: float = 30.0          # COMPRESS 阶段持续时间（scale 从 looseScale→1.0）
     tightRadius_m: float = 2.0            # COMPRESS→HOLD 精度阈值，米
     expectedFollowerIds: list[str] = field(default_factory=list)
-    # 期望参与集结的僚机 ID 列表；all(arrived) 只在此列表全部满足时成立；空列表→立即通过（测试用）
+    # 期望参与集结的僚机 ID 列表；空列表→各门控立即通过（测试用）
     staleTimeout_s: float = 2.0           # 超过此时长未收到某机报文则视为数据失效
     targetPattern: int = 0
-    # 集结只用单队形（formPos 第 0 行），进入 LOOSE/COMPRESS 时 cmd.pattern 写入此索引，供 ScaledSlotGeometry 查槽位
+    # 集结只用单队形（formPos 第 0 行），cmd.pattern 恒写入此索引，供 ScaledSlotGeometry 查槽位
     dt_s: float = 0.02                    # 控制周期（秒）；进 InitS 才能在 init 时校验 > 0
+    # 以下为 RallyJoinPos/CatchupAlign 参数，Rally 任务只透传给实体，不参与本单元自身状态机
+    loiter_radius_m: float = 200.0        # 盘旋圆半径，米
+    arrival_radius_m: float = 100.0       # 进入盘旋的触发距离，米
+    catchup_radius_m: float = 200.0       # CATCHUP→LOOSE 位置误差阈值（dist2d to slot），米
+    catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
+    catchup_stable_s: float = 3.0         # CATCHUP→LOOSE 需连续满足的时长，秒
+    catchup_kp_speed: float = 0.05        # 沿航迹误差→速度增益（m/s per m）
 
 @dataclass
 class RallyTaskInputS(FormationTaskInputS):
     # 继承 remote: RemoteCmdS, cmd: FormSnapshotS
     followerStates: list[FollowerStateS] = None  # 端口 → Context.followerStates
     now_s: float = 0.0    # 当前仿真时间（秒），由实体从边界输入注入，用于超时判断
+    leader_eta_s: float = 0.0               # 长机自身 RallyJoinPos.eta_s（长机实体每帧注入）
+    leader_join_exited: bool = False        # 长机自身是否已 EXITED
+    leader_join_flying: bool = False        # 长机自身是否仍在 FLYING（用于 T_ref 计算）
+    leader_join_reached_slot_once: bool = False  # 长机自身是否已至少一次路过 M_i（用于 T_ref 计算）
 
 @dataclass
 class RallyTaskOutputS(FormationTaskOutputS):
     # 继承 cmd: FormSnapshotS
     slotScale: RallySlotScaleS = None       # 端口 → Context.slotScale
     rallyCompleted: bool = False            # COMPRESS→HOLD 正常完成时置 True，仅该拍有效；实体据此输出 FormationAnalysisS
-    t_ref: float = 0.0                      # 本拍计算的最晚 ETA
-    t_ref_valid: bool = False               # 是否已收齐所有参与者首个有效汇合状态
+    t_ref: float = 0.0                      # 本拍计算的集结基准时刻（最晚 ETA），供长机广播给僚机
+    t_ref_valid: bool = False               # 是否已收齐长机与全部期望僚机的首个有效汇合状态
 ```
 
 #### 5.1.2 Rally 子类实现逻辑
 
-**`init`**：存储配置参数，初始化内部计时器 `_arrive_timer`、`_stable_timer`、`_compress_elapsed`。参数合法性断言（`dt_s` 在 InitS 中，init 时即可校验，违反则抛出异常）：`looseScale >= 1.0`、`compressTime_s > 0`、`staleTimeout_s > 0`、`dt_s > 0`。
+**`init`**：存储配置参数，初始化内部计时器 `_catchup_stable_timer`、`_stable_timer`、`_compress_elapsed`
+及 T_ref 锁存 `_t_ref`。参数合法性断言（违反则抛 `ValueError`）：`looseScale >= 1.0`、`compressTime_s > 0`、
+`staleTimeout_s > 0`、`dt_s > 0`。
 
-**`step`** 顶层逻辑（先处理 remote，再按 cmd.step 路由）：
+**`step`** 顶层逻辑（先处理 remote，再按 `cmd.step` 路由）：
 
-> **每拍开头先置 `y.rallyCompleted = False`**，再进入 remote/step 路由。OutputS 对象可能被复用，不显式置 False 则上一拍的 True 会泄漏到后续帧。
->
-> `u.remote` 由实体缓存为 `self._remote`（默认 `RemoteCmdS(stage=NONE)`），仅在外部 `EntityInputS.remote` 非 None 时更新，故 Rally 单元侧收到的 `u.remote` 始终非 None，无需空值保护。
+> **每拍开头先置 `y.rallyCompleted = False`、`y.t_ref_valid = False`**，再进入 remote/step 路由。OutputS
+> 对象可能被复用，不显式置 False 则上一拍的值会泄漏到后续帧。
 
 ```text
 remote == NONE:
   若 cmd.stage in {RALLY, HOLD}:       # 正在集结或已完成，收到 NONE 复位
     reset 所有计时器
-    实体同步 reset RallyJoinPos；长机清除 _rally_completed 和上一轮 followerStates
-  输出 cmd.stage=NONE, cmd.step=0, cmd.pattern=NONE, slotScale.scale=looseScale, scaleRate=0
+    实体同步 reset RallyJoinPos/CatchupAlign；长机清除 _rally_completed 和上一轮 followerStates
+  输出 cmd.stage=NONE, cmd.step=JOINING(0), cmd.pattern=0, slotScale.scale=looseScale, scaleRate=0
   return
 
 remote == HOLD:
   若 cmd.stage == RALLY:               # 外部强制切 HOLD（中断集结）
     reset 所有计时器
-  输出 cmd.stage=HOLD, cmd.step=0, cmd.pattern=targetPattern, slotScale.scale=1.0, scaleRate=0
+  输出 cmd.stage=HOLD, cmd.step=JOINING(0), cmd.pattern=targetPattern, slotScale.scale=1.0, scaleRate=0
   return
 
 remote == RALLY:
   若 cmd.stage == HOLD:                # 集结已完成，HOLD 是终态；忽略 RALLY 重启
-    输出 cmd.stage=HOLD, cmd.step=0, cmd.pattern=targetPattern,
+    输出 cmd.stage=HOLD, cmd.step=JOINING(0), cmd.pattern=targetPattern,
          slotScale.scale=1.0, slotScale.scaleRate=0
     return                             # 只有先发 NONE 再发 RALLY 才能重新集结
   若 cmd.stage == NONE:               # 首次进入集结
     reset 所有计时器
-    cmd.step = 0
+    cmd.step = JOINING(0)
   # cmd.stage == RALLY → 继续集结，按 cmd.step 路由
 ```
 
-**`step`** 按 `u.cmd.step` 路由（只在 remote.stage == RALLY 且 cmd.stage != HOLD 时执行）：
+**`step`** 按 `u.cmd.step` 路由（只在 `remote.stage == RALLY` 且 `cmd.stage != HOLD` 时执行）：
 
 ```text
 辅助函数 is_valid(entry):
   entry 未找到 OR valid==False OR (now_s - lastUpdate_s) > staleTimeout_s → False；否则 True
 
-辅助函数 all_followers_arrived():
-  （用于 APPROACH→LOOSE：检查每机是否已到达 M_i，依赖僚机锁存的 arrived 标志）
-  若 expectedFollowerIds 为空 → True（测试用）
-  对每个 id: is_valid(entry)==False OR arrived!=1 → False
-  全部通过 → True
+辅助函数 all_participants_exited(leader_exited):
+  （用于 JOINING→CATCHUP：期望僚机与长机自身是否都已 RallyJoinPos.state==EXITED）
+  长机未 EXITED → False；expectedFollowerIds 为空 → True（长机已 EXITED 即可）
+  对每个 id：entry 缺失 → False；已 EXITED → 视为终态跳过（不因随后丢链被撤销）；
+             否则要求 is_valid(entry)，新鲜报文但 state!=EXITED → False
+
+辅助函数 all_catchup_ok():
+  （用于 CATCHUP→LOOSE：位置 dist2d(self,slot) 和航向误差双阈值）
+  expectedFollowerIds 为空 → True
+  对每个 id：entry 缺失/无效 OR posErr_m>=catchup_radius_m OR headingErr_rad>=catchup_heading_thresh_rad → False
 
 辅助函数 all_followers_ok(threshold_m):
   （用于 LOOSE→COMPRESS 和 COMPRESS→HOLD：检查槽位误差收敛）
-  若 expectedFollowerIds 为空 → True
+  expectedFollowerIds 为空 → True
   对每个 id: is_valid(entry)==False OR posErr_m >= threshold_m → False
   全部通过 → True
 
 （说明：各子阶段先计算 next_step/next_stage，本拍统一输出新值，避免输出与内部状态矛盾）
 
-sub=APPROACH:
-  检查 all_followers_arrived()
-    是 → _arrive_timer += dt_s；若达到 arriveHold_s → next_step=1（LOOSE），_arrive_timer=0
-    否 → _arrive_timer = 0；next_step=0
+sub=JOINING:
+  按 expectedFollowerIds 中有效条目和长机自身状态计算 T_ref：
+    FLYING 状态全部计入；LOITERING 只有尚未 reached_slot_once 时才计入（避免"到切入点 T 就过早
+    剔除"——T 到 M_i 之间可能还有很长一段弧要飞）；已 EXITED 不计入
+    有 FLYING/未路过 M_i 的参与者时更新 _t_ref = max(这些 eta_s)；全部离开后锁存最后值
+    t_ref_valid = 长机已完成首拍汇合解算 AND 全部期望僚机也已完成首拍汇合解算
+  检查 all_participants_exited(leader_join_exited)
+    是 → next_step = CATCHUP
+    否 → next_step = JOINING
+  输出 cmd.stage=RALLY, cmd.step=next_step, cmd.pattern=targetPattern,
+       slotScale.scale=looseScale, slotScale.scaleRate=0, t_ref/t_ref_valid=上述计算结果
+
+sub=CATCHUP:
+  检查 all_catchup_ok()
+    是 → _catchup_stable_timer += dt_s；若达到 catchup_stable_s → next_step=LOOSE，计时器清零
+    否 → _catchup_stable_timer = 0；next_step=CATCHUP
   输出 cmd.stage=RALLY, cmd.step=next_step, cmd.pattern=targetPattern,
        slotScale.scale=looseScale, slotScale.scaleRate=0
-  （注：从第一拍起就写 cmd.pattern；next_step=1 时本拍输出已切换，僚机下拍进入 LOOSE）
 
 sub=LOOSE:
   检查 all_followers_ok(convergenceRadius_m)（posErr_m 此时为到松散槽位的误差）
-    是 → _stable_timer += dt_s；若达到 stableHold_s → next_step=2（COMPRESS），_stable_timer=0
-    否 → _stable_timer = 0；next_step=1
+    是 → _stable_timer += dt_s；若达到 stableHold_s → next_step=COMPRESS，_stable_timer=0
+    否 → _stable_timer = 0；next_step=LOOSE
   输出 cmd.stage=RALLY, cmd.step=next_step, cmd.pattern=targetPattern,
        slotScale.scale=looseScale, slotScale.scaleRate=0
 
@@ -495,23 +530,27 @@ sub=COMPRESS:
   否则:
     scaleRate = -(looseScale-1.0) / compressTime_s
   若 scale==1.0 且 all_followers_ok(tightRadius_m):
-    next_stage=HOLD, next_step=0, y.rallyCompleted=True
+    next_stage=HOLD, next_step=JOINING(0), y.rallyCompleted=True
   否则:
-    next_stage=RALLY, next_step=2
+    next_stage=RALLY, next_step=COMPRESS
   输出 cmd.stage=next_stage, cmd.step=next_step, cmd.pattern=targetPattern,
        slotScale.scale=scale, slotScale.scaleRate=scaleRate
 ```
 
-**`reset`**：清零所有内部计时器，`cmd.stage=NONE, cmd.step=0, cmd.pattern=NONE`，`slotScale.scale=looseScale, slotScale.scaleRate=0`。
+**`reset`**：清零所有内部计时器（含 `_t_ref`），不改配置；`cmd`/`slotScale` 由下一次 `step()` 按
+`remote==NONE` 分支重新写出。
 
 测试用例：
 
-- expectedFollowerIds 为空 → 计时器立即累加（测试）
-- 期望列表非空但 followerStates 为空 → all_followers_arrived=False，不切换
+- expectedFollowerIds 为空 → 各门控立即通过、计时器立即累加（测试用）
+- 期望列表非空但 followerStates 为空 → 门控 False，不切换
 - 某机超时（断链）→ is_valid=False，计时器冻结
-- 某机 arrived==0（未到 M_i）→ all_followers_arrived=False，_arrive_timer 不推进
-- 某机 arrived==1 但槽位误差大 → APPROACH 照常推进（arrived 与 posErr 语义分离），LOOSE 阶段该机 posErr 不满足则 _stable_timer 重置
-- COMPRESS 过程 scale 线性变化验证
+- JOINING：某机仍在 FLYING/LOITERING（未 EXITED）→ all_participants_exited=False，不进 CATCHUP；
+  已 EXITED 的机不因随后断链被撤销
+- CATCHUP：位置或航向任一超阈值 → `_catchup_stable_timer` 清零；两者同时达标并连续满足
+  `catchup_stable_s` → 进 LOOSE
+- LOOSE 阶段某机 posErr 不满足 → `_stable_timer` 重置
+- COMPRESS 过程 scale 线性变化验证；`scale==1.0` 且槽位误差 < `tightRadius_m` → 完成并置 HOLD
 
 ---
 
@@ -530,8 +569,12 @@ class FollowerBroadcastInitS(OutboundInitS):
 @dataclass
 class FollowerBroadcastInputS(OutboundInputS):
     # 继承 cmd: FormSnapshotS, selfState: MotionProfS
-    selfCmd: MotionProfS = None    # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
-    selfArrived: int = 0           # 实体锁存的到达标志（_self_arrived），单次集结过程中锁存；仅 reset() 清零
+    selfCmd: MotionProfS = None       # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
+    selfArrived: int = 0              # 兼容旧协议；新协议以 rally_state 为准，由 _update_outbound() 从 RallyJoinPos.state==EXITED 派生
+    rally_state: str = "FLYING"       # 集结汇合状态：FLYING / LOITERING / EXITED（来自 RallyJoinPos.state）
+    eta_s: float = 0.0                # 预计到达松散点的仿真时刻（秒），来自 RallyJoinPos.eta_s
+    reached_slot_once: bool = False   # 是否已至少一次路过 M_i，来自 RallyJoinPos.reached_slot_once
+    pos_err_m_override: float | None = None  # 非 None 时直接作为 posErr_m 广播（CATCHUP 阶段用 CatchupAlign.pos_err_m）
 
 @dataclass
 class FollowerBroadcastOutputS(OutboundOutputS):
@@ -669,51 +712,48 @@ for envelope in inbox:
 
 ## 六、新增算法组单元
 
-### 6.1 PosCalc/RallyApproach — 飞向目标集结点
+### 6.1 PosCalc/RallyJoinPos — 切入盘旋圆汇合（原 RallyApproach，已整体替换）
 
-**文件**：`units/algo/pos_calc/rally_approach.py`
+> 本节原描述 `RallyApproach`（APPROACH 子阶段直飞预分配目标点 M_i，水平/垂向各自独立比例控制、无盘旋
+> 协调）。`RallyJoinPos`（切线进圆 + 盘旋协调汇合）设计定稿后，`rally_approach.py` 已整个删除，JOINING
+> 阶段（`cmd.step==RallyPhaseE.JOINING`）完全由 `RallyJoinPos` 负责位置解算，不存在替代关系之外的共存。
 
-作用：APPROACH 子阶段专用，输出"直飞预分配目标点 M_i"的目标运动状态。不感知 Mode，纯计算。
+**文件**：`units/algo/pos_calc/rally_join_pos.py`
+
+作用：JOINING 子阶段专用（长机与僚机共用同一个类），内部 `FLYING → LOITERING → EXITED` 状态机：直飞盘旋圆
+的 CCW 切入点 T → 沿圆弧盘旋协调到达时刻 → 从 M_i 沿任务航向切出。完整算法（盘旋圆几何、切入触发半径、
+LOITERING 半径跟踪、T_ref 聚合协议）见「二、总体策略与状态机」第二步；本节只列初始化/输入端口的 API 形状：
 
 ```python
 @dataclass
-class RallyApproachInitS(PosCalcInitS):
-    target: PosInEarthS = field(default_factory=PosInEarthS)  # 本机目标集结点 M_i
-    approachSpeed_mps: float = 20.0   # 飞向目标时的水平地速
-    k_alt: float = 0.5                # 近零水平距离时的高度比例增益（1/s）
-    vUpMax_mps: float = 5.0           # 高度环输出限幅（m/s）
+class RallyJoinPosInitS(PosCalcInitS):
+    loose_slot: PosInEarthS = field(default_factory=PosInEarthS)  # 本机固定松散目标点 M_i，同时是盘旋圆上的切出点
+    approach_speed_mps: float = 20.0   # 飞向切入点 T 的速度
+    slow_radius_m: float = 0.0         # 近场降速半径；>0 时在此范围内线性减速
+    arrival_radius_m: float = 100.0    # 到达切入点、转入圆弧飞行的触发距离
+    loiter_radius_m: float = 200.0     # 盘旋圆半径（固定）
+    loiter_speed_min_mps: float = 14.0
+    loiter_speed_max_mps: float = 25.0
+    mission_heading_rad: float = 0.0   # 切出后的飞行方向（弧度，东向为 0）
+    mission_speed_mps: float = 20.0    # 切出后的飞行速度
+    v_up_min_mps: float = -3.0         # 天向速度下限（来自 velCmdLimit.verticalMin）
+    v_up_max_mps: float = 3.0          # 天向速度上限（来自 velCmdLimit.verticalMax）
+    control_period_s: float = 0.05     # 控制周期；用于校验切入圆弧触发半径的离散步进安全余量
 
 @dataclass
-class RallyApproachInputS(PosCalcInputS):
+class RallyJoinPosInputS(PosCalcInputS):
     # 继承 selfState: MotionProfS → Context.selfState
-    pass
+    t_ref: float = 0.0        # 集结基准时刻（长机广播的最晚 ETA）
+    t_ref_valid: bool = False # False 时只允许进入/保持盘旋，不允许切出
+    t_now: float = 0.0        # 当前仿真时间
 
-# 输出复用 PosCalcOutputS（selfCmd → Context.selfCmd）
+# 输出复用 PosCalcOutputS（selfCmd → Context.selfCmd）；state/eta_s/reached_slot_once 三个只读属性供外部广播
 ```
 
-实现（令 `dN = target.north - self.north`，`dE = target.east - self.east`，`dH = target.h - self.h`，`dHoriz = sqrt(dN²+dE²)`，近零阈值 `ε_horiz = 0.5 m`）：
-
-`vd` 是水平地速，水平和垂向独立计算；近零水平距离单独处理：
-
-```text
-selfCmd.pos = target
-
-若 dHoriz >= ε_horiz:                        # 正常飞向目标
-  vPsi   = atan2(dN, dE)
-  vNorth = approachSpeed_mps × dN / dHoriz
-  vEast  = approachSpeed_mps × dE / dHoriz
-  vUp    = clamp(approachSpeed_mps × dH / dHoriz, -vUpMax_mps, vUpMax_mps)
-  # 水平距离接近 ε_horiz 时 dH/dHoriz 可能很大，须限幅
-  vd     = approachSpeed_mps               # 水平地速指令幅值
-
-否则（dHoriz < ε_horiz，水平上已到目标正上/正下方）:
-  保持当前航向不变（vPsi = selfState.v.vPsi）
-  vNorth = 0, vEast = 0
-  vd     = 0.0                             # 水平速度为零，与 hypot(vNorth,vEast) 一致
-  vUp    = clamp(dH × k_alt, -vUpMax_mps, vUpMax_mps)   # 纯高度环，参数来自 RallyApproachInitS
-```
-
-测试：`dHoriz >= ε_horiz` → hypot(vNorth, vEast) ≈ approachSpeed，vUp 被限制在 vUpMax_mps 内；`dHoriz < ε_horiz` → vNorth=vEast=0，vd=0，vUp 被限制在 vUpMax_mps 内；两分支 vUp 均不超限。
+`init()` 会调用 `validate_capture_geometry()` 校验 `loiter_radius_m`/`arrival_radius_m` 相对
+`approach_speed_mps`/`loiter_speed_min_mps`/`control_period_s` 是否留有足够的离散步进安全余量，不合法
+直接抛 `ValueError`（`_ConfigLoader.validate()` 在配置加载阶段复用同一函数提前校验，见第二步 JOINING
+阶段说明）。
 
 ---
 
@@ -992,65 +1032,97 @@ mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 → 发消息(FollowerBroadcast)               ← 回报位置 + posErr + arrived
 ```
 
-PosCalc 切换逻辑（L1 职责）：
+PosCalc 切换逻辑（L1 职责，摘自 `follower.py::step`；替换本节曾描述的"RallyApproach 直飞 M_i + `_self_arrived`
+锁存到达"旧流程——那是 `RallyJoinPos` 出现之前的设计，已和当前实现不符）：
 
 ```python
+if u.selfState is not None:
+    copy_motion(u.selfState, self.cxt.selfState)
+previous_stage = self.cxt.cmd.stage
+self._inbox.clear(); self._inbox.extend(u.inbox)
+
+self._inbound.step(self._inbound_u, self._inbound_y)          # 解析长机广播 → leaderState/cmd/slotScale
+self.cxt.rally_t_ref = self._inbound_y.t_ref                   # T_ref 直接落 Context，供 RallyJoinPos 用
+self.cxt.rally_t_ref_valid = self._inbound_y.t_ref_valid
+self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)        # Noop 空策略
+
 stage = self.cxt.cmd.stage
 
 if stage == FormStageE.NONE:
-    # 集结未开始，输出当前位置零速，不驱动跟踪
+    # 从 RALLY/HOLD 回到 NONE 时复位 RallyJoinPos/CatchupAlign 内部状态，
+    # 避免下次再进 RALLY 时残留上一轮的 FLYING/LOITERING/EXITED 状态机相位
+    if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
+        self._rally_join.reset()
+        self._catchup.reset()
     copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)  # 逐字段复制，避免别名
     zero_velocity(self.cxt.selfCmd.v)
-    zero_acceleration(self.cxt.selfAccCmd)  # 清加速度，防止上一帧残留
-    # 仍执行 FollowerBroadcast，发送 arrived=0（让长机知道本机在线但尚未集结）
-    self._follower_broadcast_u.selfArrived = 0
+    zero_acceleration(self.cxt.selfAccCmd)
+    self._update_outbound()   # rally_state/eta_s/reached_slot_once/selfArrived 一并写入出站端口
     self._outbound.step(self._outbound_u, self._outbound_y)
-    # EntityOutputS 回填，与现有 hold 实体风格一致：
-    # 调用方未提供容器则直接引用；否则逐字段写入，避免改变其对象引用
-    if y.selfAccCmd is None:
-        y.selfAccCmd = self.cxt.selfAccCmd
-    else:
-        y.selfAccCmd.accEast  = self.cxt.selfAccCmd.accEast   # 逐字段写入，避免改变引用
-        y.selfAccCmd.accNorth = self.cxt.selfAccCmd.accNorth
-        y.selfAccCmd.accUp    = self.cxt.selfAccCmd.accUp
-    if y.selfCmd is None:
-        y.selfCmd = self.cxt.selfCmd
-    else:
-        copy_motion(self.cxt.selfCmd, y.selfCmd)
-    y.outbox.clear(); y.outbox.extend(self._outbound_y.outbox)
+    fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
     return
 
-elif stage == FormStageE.RALLY:
-    # 本机自判到达：一旦到达 M_i 则锁存，不因误差回升而反转
-    if not self._self_arrived:
-        self._pos_calc_approach.step(self._approach_u, self._pos_calc_y)
-        # 用 selfState.pos 与配置的 rally_target（M_i）比较，不用 selfCmd.pos
-        # （RallyApproach 已把 selfCmd.pos 设为 target，比较二者距离永远为 0）
-        dist = |self.cxt.selfState.pos - self._rally_target|  # 3D 距离
-        if dist < self._arrive_threshold_m:
-            self._self_arrived = True
-    else:
-        self._pos_calc_slot.step(self._slot_u, self._pos_calc_y)
-    self._follower_broadcast_u.selfArrived = 1 if self._self_arrived else 0  # 每拍注入锁存值
-
-else:  # HOLD：外部强制 HOLD，无论本机是否到达，均跟标准槽位
+if stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.JOINING:
+    # JOINING：RallyJoinPos 内部 FLYING→LOITERING→EXITED，见"总体策略与状态机"一节
+    self._rally_join_u.t_ref = self.cxt.rally_t_ref
+    self._rally_join_u.t_ref_valid = self.cxt.rally_t_ref_valid
+    self._rally_join_u.t_now = u.now_s
+    self._rally_join.step(self._rally_join_u, self._pos_calc_y)
+    self._pos_track.step(self._pos_track_u, self._pos_track_y)
+elif stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.CATCHUP:
+    # CATCHUP：锁任务航向，靠速度调节收敛到松散槽位（不改航向，避免转弯超调）
+    self._catchup.step(self._slot_u, self._pos_calc_y)
+    self._pos_track.step(self._pos_track_u, self._pos_track_y)
+    # selfCmd.pos 是 CatchupAlign 的前视投影点，不是真实槽位；诊断展示改用其暴露的真实槽位坐标
+    self._pos_track_diag.cmd_pos_east_m = self._catchup.true_slot_east
+    self._pos_track_diag.cmd_pos_north_m = self._catchup.true_slot_north
+else:
+    # RALLY step>=2（LOOSE/COMPRESS）或 HOLD：二维槽位跟随
     self._pos_calc_slot.step(self._slot_u, self._pos_calc_y)
-    self._follower_broadcast_u.selfArrived = 1 if self._self_arrived else 0  # 保持广播状态
+    self._pos_track.step(self._pos_track_u, self._pos_track_y)
+self._update_outbound()
+self._outbound.step(self._outbound_u, self._outbound_y)
+fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
 ```
 
-> **说明**：`cmd.step` 是长机广播的系统级状态，反映"期望僚机是否全部到达"，而非驱动单机切换。单机到达即切换 PosCalc，让先到机以松散槽位跟随长机低速飞行，后到机仍在直飞追赶，两者可以并存于同一 APPROACH 系统阶段内。`cmd.step==2`（COMPRESS）开始时，`_self_arrived` 必已为 True，故本逻辑在 COMPRESS 阶段亦正确。
+`_update_outbound()`（每拍把 `RallyJoinPos` 状态同步到出站端口，供长机做 T_ref 聚合与到达判定）：
+
+```python
+self._outbound_u.rally_state = self._rally_join.state
+self._outbound_u.eta_s = self._rally_join.eta_s
+self._outbound_u.reached_slot_once = self._rally_join.reached_slot_once
+self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
+if self.cxt.cmd.step == RallyPhaseE.CATCHUP:
+    self._outbound_u.pos_err_m_override = self._catchup.pos_err_m
+else:
+    self._outbound_u.pos_err_m_override = None
+```
+
+> **说明**：`cmd.step` 是长机广播的系统级状态（`RallyPhaseE.JOINING/CATCHUP/LOOSE/COMPRESS`），驱动本机
+> PosCalc 单元切换，本机是否"到达"改由 `RallyJoinPos.state == RALLY_STATE_EXITED`（切出）和
+> `reached_slot_once`（是否已路过 M_i 一次）两个信号表达，不再有独立的 `_self_arrived` 锁存字段——
+> `selfArrived` 直接从 `_rally_join.state` 派生，`reached_slot_once` 单独广播供长机 T_ref 聚合使用（见
+> 第二步 JOINING 阶段 T_ref 计算一节）。
 
 #### 7.2.3 初始化（init）关键点
 
-- `_rally_target`：在 `init()` 中根据 `rally_route[0]`（A 点）、`rally_route[1]`（第一航段终点）及队形槽位本地计算（`A + R(θ) × (looseScale × slot_i_ENU)`），高度偏置固定为 `slot.y`（不随 `looseScale` 扩展），**不从配置字段读取**
-- `_arrive_threshold_m`：从 `cfg.rally_cfg.convergenceRadius_m` 读入（与 Rally 单元保持一致）
-- `_self_arrived`：初始化为 `False`，到达 M_i 后置 `True`，`reset()` 时归零
-- 每拍 `step()` 中：`follower_broadcast_u.selfArrived = 1 if self._self_arrived else 0`（实体负责注入锁存值）
+- `loose_slot`（M_i）：在 `init()` 中调用 `rally_loose_target(A, mission_heading_rad, rally_cfg.looseScale, slot)`
+  计算（`A=rally_route[0].pos`，`mission_heading_rad` 由 `rally_route_heading_rad(rally_route)` 推导第一航段
+  方向，`slot` 由 `resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)` 按目标队形
+  索引查表得到），高度偏置固定为 `slot.y`（不随 `looseScale` 扩展），**不从配置字段读取**（逐节点
+  `rally_target` 配置字段已移除）
+- `loiter_speed_min/max_mps`：由 `loiter_speed_bounds(cfg.velCmdLimit)` 推导（未显式配置的一侧退回默认
+  14/25 m/s，并校验两者不反序，见第二步 JOINING 阶段说明）
+- `RallyJoinPosInitS.control_period_s`：传入 `cfg.control_period_s`，用于校验切入圆弧触发半径的离散步进安全余量
+- `RallyJoinPos`/`CatchupAlign` 均在 `stage` 变为 `NONE` 时 `reset()`，清除内部相位状态（`FLYING/
+  LOITERING/EXITED`、`reached_slot_once` 等），避免下一次进 RALLY 时状态污染
 - **端口绑定（不可遗漏）**：
-  - `RallyLeaderFollower` Inbound 的 `slotScale` 输出端口 → `Context.slotScale`
-  - `ScaledSlotGeometry` 的 `leaderState` 端口 → `Context.leaderState`
-  - `ScaledSlotGeometry` 的 `cmd` 端口 → `Context.cmd`
-  - `ScaledSlotGeometry` 的 `slotScale` 端口 → `Context.slotScale`
+  - `RallyLeaderFollower` Inbound 的 `slotScale`/`t_ref`/`t_ref_valid` 输出 → 每拍写入 `Context.slotScale`/`rally_t_ref`/`rally_t_ref_valid`
+  - `RallyJoinPos` 的 `selfState` 端口在 init 时绑定到 `Context.selfState`；`t_ref`/`t_ref_valid`/`t_now` 不是一次性端口绑定，
+    而是每拍在 `step()` 里从 `Context.rally_t_ref`/`rally_t_ref_valid`/`u.now_s` 赋值（T_ref 每拍可能变化）
+  - `CatchupAlign` 的 `selfState`/`leaderState`/`slotScale` 端口 → `Context.selfState`/`Context.leaderState`/`Context.slotScale`
+  - `ScaledSlotGeometry` 的 `leaderState`/`cmd`/`slotScale` 端口 → `Context.leaderState`/`Context.cmd`/`Context.slotScale`
+  - `FollowerBroadcast` 的 `rally_state`/`eta_s`/`reached_slot_once`/`selfArrived` 端口由 `_update_outbound()` 每拍写入
 
 ---
 
@@ -1083,20 +1155,19 @@ class EntityInitS:
 
 ```json
 {
-  "route_file": "element/rally_demo_route.json",
+  "route_file": "element/rally_demo_rally_route.json",
   "rally_route_file": "element/rally_demo_rally_route.json",
-  "rally": {
+  "rally_cfg": {
     "loose_scale": 3.0,
-    "convergence_radius_m": 5.0,
-    "arrive_hold_s": 3.0,
-    "stable_hold_s": 5.0,
-    "compress_time_s": 30.0,
-    "tight_radius_m": 2.0,
-    "stale_timeout_s": 2.0,
-    "expected_follower_ids": ["follower_1", "follower_2"],
-    "approach_speed_mps": 20.0,
-    "k_alt": 0.5,
-    "v_up_max_mps": 5.0
+    "convergence_radius_m": 30.0,
+    "stable_hold_s": 4.0,
+    "compress_time_s": 20.0,
+    "tight_radius_m": 5.0,
+    "stale_timeout_s": 3.0,
+    "loiter_radius_m": 200.0,
+    "arrival_radius_m": 100.0,
+    "catchup_radius_m": 200.0,
+    "approach_speed_mps": 20.0
   },
   "formation": {
     "coordinate_system": "x_forward_y_up_z_right",
@@ -1138,9 +1209,14 @@ class EntityInitS:
 
 > `route_file` 加载后展开为顶层 `route`（mission_route），`rally_route_file` 加载后展开为 `rally_route`。`route` 起点必须等于 `rally_route` 起点 A（不是终点 B——B 不参与任何计算）——此约束由航线设计保证（见 7.1.3 节），最简单的做法是将两者设为同一文件。
 >
-> **M_i 自动计算**：从机的松散目标点由实体 init 自动推导，无需在配置文件中逐机写死。实体读取 `rally_route[0]`（A）和 `rally_route[1]` 推导 θ，再结合 `formation.formation_files` 展开后的目标队形槽位和 `loose_scale` 计算 M_i。
+> **M_i 自动计算**：从机的松散目标点由实体 init 自动推导，无需在配置文件中逐机写死。实体读取 `rally_route[0]`（A）和 `rally_route[1]` 推导 θ，再结合 `formation.formation_files` 展开后的目标队形槽位和 `loose_scale` 计算 M_i；**已不存在逐节点 `rally_target` 配置字段**。
 >
-> `k_alt` / `v_up_max_mps` 可省略，省略时使用 `RallyApproachInitS` 中的默认值（0.5/s，5.0 m/s）。
+> **顶层键名是 `rally_cfg`，不是 `rally`**（历史文档遗留错误，此处已更正）。`expected_follower_ids` **不是**配置字段——参与集结的僚机 ID 由 `_build_rally_task_init` 从 `nodes` 中 `role=="rally_follower"` 的节点自动收集，配置里写了也会被忽略。`target_pattern` 同理：集结只用单队形，`_build_rally_task_init` 恒将 `targetPattern` 置 0（`formPos` 第 0 行），配置里的 `target_pattern` 键当前不参与任何计算。
+>
+> `approach_speed_mps` 省略时默认 20 m/s（`EntityInitS.rally_approach_speed_mps` 默认值）。天向速度限幅
+> 不再来自 `rally_cfg`（旧版 `k_alt`/`v_up_max_mps` 字段已随 `RallyApproach` 一起移除），而是与其余实体
+> 共用顶层 `control.velocity_command_limits.vertical_min_mps`/`vertical_max_mps`（见 `configs/rally_demo.json`
+> 实际配置），未配置时退回 `RallyJoinPosInitS`/`CatchupAlignInitS` 的默认值 ±3 m/s。
 
 ---
 
@@ -1161,7 +1237,8 @@ src/algorithm/
     │   └── pos_calc/
     │       ├── route_interp.py           ← 不动
     │       ├── slot_geometry.py          ← 不动
-    │       ├── rally_approach.py         ← 新建
+    │       ├── rally_join_pos.py         ← 新建（切入盘旋圆汇合，原 rally_approach.py 已整体替换并删除）
+    │       ├── catchup_align.py          ← 新建（CATCHUP 追赶对齐）
     │       └── scaled_slot_geometry.py   ← 新建
     └── process/
         ├── formation_task/
@@ -1256,7 +1333,8 @@ if role not in {"leader", "rally_leader", "rally_follower"} and initial_leader_s
 
 `RallyFollowerEntity.init` 额外需要：
 
-- `cfg.rally_target`：从节点配置 `rally_target` 字段解析为 `PosInEarthS`
+- `cfg.rally_route`/`cfg.rally_cfg`：与长机共用同一份（M_i 由 `init()` 按 `rally_route[0/1]`、`formation.slots`
+  与 `rally_cfg.looseScale` 自动推导，**不再有逐节点 `rally_target` 配置字段**，见第八节 8.2/8.3）
 - `cfg.rally_approach_speed_mps`：从 JSON `rally.approach_speed_mps` 读取
 - `cfg.rally_leader_id`：从节点配置 `leader_id` 字段读取（`str`），传给 `FollowerBroadcastInitS.leaderId`
 
