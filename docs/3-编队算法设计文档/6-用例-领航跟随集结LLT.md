@@ -16,7 +16,7 @@
 - `src/algorithm/units/process/inbound/follower_status.py`
 - `src/algorithm/units/process/inbound/rally_leader_follower.py`
 - `src/algorithm/units/algo/pos_calc/rally_join_pos.py`（原 `rally_approach.py`，已整体替换并删除）
-- `src/algorithm/units/algo/pos_calc/scaled_slot_geometry.py`（CATCHUP/LOOSE/COMPRESS 共用；原 `catchup_align.py` 已删除）
+- `src/algorithm/units/algo/pos_calc/slot_geometry.py`（CATCHUP/LOOSE/COMPRESS 共用；原 `catchup_align.py` 已删除）
 - `src/algorithm/entity/leader_follower_rally/leader.py`
 - `src/algorithm/entity/leader_follower_rally/follower.py`
 - `src/runner/sim_control_modules.py`、`src/runner/sim_control_routes.py`、`src/runner/sim_controller.py`（原 `sim_control.py`，已拆分为多个模块）
@@ -369,7 +369,7 @@ def _rally_cfg(
 
 ---
 
-## 10. TestScaledSlotGeometry - 带缩放槽位几何
+## 10. TestSlotGeometry - 带缩放槽位几何
 
 | 测试名 | 断言 |
 | ------ | ---- |
@@ -377,7 +377,7 @@ def _rally_cfg(
 | `test_scale_two_doubles_position_offset` | `scale=2.0` 时槽位偏置相对长机扩大 2 倍 |
 | `test_scale_rate_adds_compression_velocity` | `scaleRate<0` 时速度多出 `scaleRate * R(heading) * offset` 分量 |
 | `test_turn_feedforward_uses_scaled_offset` | 长机 `dVPsi!=0` 时，刚体旋转速度使用 `scale * slot.x/z` |
-| `test_scaled_slot_geometry_altitude_fixed_not_scaled` | 高度偏置固定不随 `scale` 放大：`pos.h == leader.h + slot.y`（与 `scale` 无关），`vUp` 保持父类 `SlotGeometry` 写入值，不含 `scaleRate` 修正项 |
+| `test_slot_geometry_altitude_fixed_not_scaled` | 高度偏置固定不随 `scale` 放大：`pos.h == leader.h + slot.y`（与 `scale` 无关），`vUp` 保持标准槽位写入值，不含 `scaleRate` 修正项 |
 | `test_velocity_scalar_and_heading_are_recomputed` | 输出 `vd=hypot(vEast,vNorth)`，`vPsi=atan2(vNorth,vEast)` |
 | `test_undefined_leader_track_falls_back_consistently` | 长机水平速度为 0 时，按现有 `SlotGeometry` 的东向兜底策略计算 |
 | `test_missing_pattern_or_slot_raises` | 未知 `pattern` 或找不到本机槽位时抛 `ValueError` |
@@ -393,7 +393,7 @@ def _rally_cfg(
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_rally_follower_latches_arrival_and_switches_to_scaled_slot_after_step_one` | 僚机位于目标点且 T_ref 已有效时 `RallyJoinPos` 进入 `EXITED`，上报 `arrived=1`/`rally_state=EXITED`；长机推进到 `step=1`（CATCHUP）后 `selfCmd.pos` 变为 `ScaledSlotGeometry` 按长机状态算出的真实缩放槽位（与 LOOSE 同一算法） |
+| `test_rally_follower_latches_arrival_and_switches_to_slot_scale_after_step_one` | 僚机位于目标点且 T_ref 已有效时 `RallyJoinPos` 进入 `EXITED`，上报 `arrived=1`/`rally_state=EXITED`；长机推进到 `step=1`（CATCHUP）后 `selfCmd.pos` 变为 `SlotGeometry` 按长机状态算出的真实缩放槽位（与 LOOSE 同一算法） |
 | `test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start` | 冷启动尚无有效 T_ref（`t_ref_valid=False`）时，即便已到目标点附近，`RallyJoinPos` 进入 `LOITERING` 而非直接 `EXITED`，上报 `arrived=0` |
 | `test_rally_follower_none_resets_join_state_for_restart` | 已 `EXITED` 的僚机收到 `stage=NONE` 后，`RallyJoinPos` 复位回 `FLYING`，上报 `arrived=0`，允许下一轮重新执行 JOINING |
 | `test_rally_follower_none_outputs_current_position_zero_velocity` | `stage=NONE` 时 `selfCmd.pos` 复制本机当前位置、`selfCmd.v` 为零速，上报 `arrived=0` |
@@ -452,7 +452,7 @@ def _rally_cfg(
 | APPROACH/LOOSE/COMPRESS/HOLD 状态流转 | TestRallyTaskApproachLooseCompress |
 | expectedFollowerIds、valid、lastUpdate_s、超时冻结 | TestRallyTaskApproachLooseCompress, TestFollowerStatusInbound |
 | `cmd.pattern` 首拍写入 targetPattern | TestRallyTaskApproachLooseCompress |
-| `slotScale.scale/scaleRate` 输出 | TestRallyTaskApproachLooseCompress, TestScaledSlotGeometry |
+| `slotScale.scale/scaleRate` 输出 | TestRallyTaskApproachLooseCompress, TestSlotGeometry |
 | 僚机状态广播与锁存 arrived/rally_state/eta_s/reached_slot_once | TestFollowerBroadcast, TestRallyEntity |
 | 长机解析僚机回报 | TestFollowerStatusInbound |
 | 统一长机广播保持既有 payload 并携带默认/动态 `slot_scale` | TestRallyLeaderBroadcastAndInbound |
@@ -460,7 +460,7 @@ def _rally_cfg(
 | RallyJoinPos 切入盘旋圆、圆弧汇合、切出航向 | TestRallyJoinPos |
 | `rally_loose_target()` 旋转/右侧轴符号/缩放/高度 | TestRallyLooseTarget |
 | `loiter_speed_bounds()` 上下限推导与序校验 | TestRallyLoiterSpeedBounds |
-| ScaledSlotGeometry 缩放、压缩速度前馈、转弯前馈 | TestScaledSlotGeometry |
+| SlotGeometry 缩放、压缩速度前馈、转弯前馈 | TestSlotGeometry |
 | RallyLeaderEntity/RallyFollowerEntity 主链路（JOINING→CATCHUP/LOOSE/COMPRESS、NONE 复位） | TestRallyEntity |
 | FormationAnalysis 只在正常完成后输出一次 | TestRallyEntity |
 | 配置解析、角色映射、now_s 注入、remote=RALLY 接入、完成后自动切 HOLD、锁存清空 | TestRallySimControlIntegration |

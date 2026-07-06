@@ -231,8 +231,7 @@ src/algorithm/
     │   ├── pos_calc/                #   PosCalc 位置解算
     │   │   ├── base.py              #     PosCalcBase + InitS/InputS/OutputS
     │   │   ├── route_interp.py      #     航线插值（长机）
-    │   │   ├── slot_geometry.py     #     标准槽位几何（ScaledSlotGeometry 的父类）
-    │   │   └── scaled_slot_geometry.py #  带缩放槽位几何（普通保持 scale=1，集结压缩 scale 动态变化）
+    │   │   └── slot_geometry.py     #     槽位几何（普通保持 scale=1，集结压缩 scale 动态变化）
     │   ├── pos_track/               #   PosTrack 跟踪（含求偏差）→ pid_compose.py
     │   ├── ctrl/                    #   Ctrl 原子控制律 → pid.py
     │   └── formation_math/          #   FormationMath 纯工具函数（非策略族）
