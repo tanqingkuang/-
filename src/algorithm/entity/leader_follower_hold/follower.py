@@ -8,7 +8,7 @@ from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
+from src.algorithm.units.algo.pos_calc.scaled_slot_geometry import ScaledSlotGeometry, ScaledSlotInitS, ScaledSlotInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.inbound.base import InboundInputS
@@ -29,13 +29,13 @@ class FollowerEntity(EntityBase):
         # 僚机处理链：入站解析 -> 空规划(占位) -> 槽位几何 -> 位置跟踪
         self._inbound = RallyLeaderFollower()
         self._tra_plan = Noop()  # 僚机不自规划航线，用空实现占位以对齐链路结构
-        self._pos_calc = SlotGeometry()
+        self._pos_calc = ScaledSlotGeometry()
         self._pos_track = PidCompose()
 
         # 槽位几何需注入本机 id 及队形配置，据此从长机状态推算自身目标位
         self._inbound.init(None)
         self._tra_plan.init(None)
-        self._pos_calc.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
+        self._pos_calc.init(ScaledSlotInitS(selfId=cfg.selfInit.id, commInit=cfg.commInit))
         self._pos_track.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
@@ -47,10 +47,13 @@ class FollowerEntity(EntityBase):
         )
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
-        # 槽位几何输入：长机状态 + 编队指令即可定出僚机目标位，前向待飞距闭环已下沉到 PidCompose，无需本机状态
-        self._pos_calc_u = SlotGeometryInputS(
+        # 槽位几何输入：长机状态 + 编队指令即可定出僚机目标位，前向待飞距闭环已下沉到 PidCompose，无需本机状态。
+        # slotScale 端口必须绑定（ScaledSlotGeometry 强制校验非 None）；hold 场景 Context 默认 scale=1.0/
+        # scaleRate=0.0，行为精确等价于原来的 SlotGeometry（已有测试覆盖该等价性）。
+        self._pos_calc_u = ScaledSlotInputS(
             leaderState=self.cxt.leaderState,
             cmd=self.cxt.cmd,
+            slotScale=self.cxt.slotScale,
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
