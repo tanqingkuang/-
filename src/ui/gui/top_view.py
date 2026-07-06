@@ -51,6 +51,8 @@ class TopView(QGraphicsView):
         self.offset = self._default_offset()
         self.auto_center = False
         self.show_grid = True
+        # 通信链路默认显示，可由主窗口工具条复选框关闭。
+        self.show_links = True
         # _manual_view 为真表示用户手动调过视角，此后禁止自动铺满抢镜。
         self._manual_view = False
         # 中键拖拽起点；左键框选起止点（None 表示当前无对应操作进行中）。
@@ -230,7 +232,8 @@ class TopView(QGraphicsView):
             if self.snapshot.nodes and self.preview_route_polyline is None:
                 self._draw_route(painter)
             self._draw_rally_geometry(painter, self.snapshot)
-            self._draw_links(painter, self.snapshot)
+            if self.show_links:
+                self._draw_links(painter, self.snapshot)
             self._draw_slot_targets(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
         # 选框是屏幕坐标元素，需先复位变换再绘制，避免被缩放。

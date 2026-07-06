@@ -74,7 +74,7 @@ class MainWindowStyleMixin:
                 color: {theme.wingman.name()};
                 font-weight: 700;
             }}
-            QLabel#legendLink {{
+            QLabel#legendLink, QCheckBox#legendLink {{
                 color: {theme.link.name()};
                 font-weight: 700;
             }}

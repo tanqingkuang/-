@@ -511,6 +511,12 @@ class MainWindowActionMixin:
         self.top_view.viewport().update()
         self.side_view.update()
 
+    def _on_link_visibility_changed(self) -> None:
+        """处理通信链路显示开关。注意：只影响俯视图渲染，不修改链路状态。"""
+        # 链路表与仿真数据保持不变，仅隐藏或恢复俯视图中的连线。
+        self.top_view.show_links = self.legend_link.isChecked()
+        self.top_view.viewport().update()
+
     def _disable_auto_center(self) -> None:
         """关闭自动居中选项。注意：用户手动平移或缩放后应避免自动抢回视图。"""
         # 取消勾选会再次触发 _on_auto_center_changed，从而同步关闭俯视图自动居中。

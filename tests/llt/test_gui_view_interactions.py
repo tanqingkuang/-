@@ -428,6 +428,17 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(thin, thick, delta=2)
 
+    def test_link_visibility_checkbox_hides_top_view_links(self) -> None:
+        self.assertTrue(self.window.legend_link.isChecked())
+        self.assertTrue(self.window.top_view.show_links)
+        self.assertTrue(self._link_stroke_rows_at_scale(1.0))
+
+        self.window.legend_link.setChecked(False)
+        self.app.processEvents()
+
+        self.assertFalse(self.window.top_view.show_links)
+        self.assertEqual(self._link_stroke_rows_at_scale(1.0), [])
+
     def test_top_view_reset_refits_side_altitude_axis(self) -> None:
         self._load_ui_config()
         self.window.side_view.altitude_min = 1180.0
@@ -1615,6 +1626,11 @@ class GuiViewInteractionTests(unittest.TestCase):
         return QRect(left, top, right - left + 1, bottom - top + 1)
 
     def _link_stroke_height_at_scale(self, scale: float) -> int:
+        touched = self._link_stroke_rows_at_scale(scale)
+        self.assertTrue(touched)
+        return max(touched) - min(touched) + 1
+
+    def _link_stroke_rows_at_scale(self, scale: float) -> list[int]:
         view = self.window.top_view
         view.show_grid = False
         view.snapshot = Snapshot(
@@ -1638,9 +1654,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         image = view.grab().toImage()
         canvas = self.window.theme.canvas.name()
         x = round(view.offset.x())
-        touched = [y for y in range(image.height()) if image.pixelColor(x, y).name() != canvas]
-        self.assertTrue(touched)
-        return max(touched) - min(touched) + 1
+        return [y for y in range(image.height()) if image.pixelColor(x, y).name() != canvas]
 
     def _wait_for_controller_time(self, timeout_s: float = 1.0):
         deadline = time.monotonic() + timeout_s

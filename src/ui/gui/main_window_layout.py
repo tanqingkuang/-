@@ -261,18 +261,21 @@ class MainWindowLayoutMixin:
         toolbar.addWidget(self.top_view_coordinate)
         toolbar.addWidget(self.top_view_coordinate_hint)
         toolbar.addStretch(1)
-        # 图例标签（颜色由样式表按 objectName 着色）。
+        # 图例与链路显示开关（颜色由样式表按 objectName 着色）。
         self.legend_leader = QLabel("● 长机")
         self.legend_leader.setObjectName("legendLeader")
         self.legend_wingman = QLabel("● 僚机")
         self.legend_wingman.setObjectName("legendWingman")
-        self.legend_link = QLabel("● 通信链路")
+        self.legend_link = QCheckBox("通信链路")
         self.legend_link.setObjectName("legendLink")
+        self.legend_link.setChecked(True)
+        self.legend_link.setToolTip("显示或隐藏俯视图中的通信链路线")
+        self.legend_link.stateChanged.connect(self._on_link_visibility_changed)
         self.legend_warn = QLabel("● 异常状态")
         self.legend_warn.setObjectName("legendWarn")
-        for label in [self.legend_leader, self.legend_wingman, self.legend_link, self.legend_warn]:
-            label.setContentsMargins(0, 0, 2, 0)
-            toolbar.addWidget(label)
+        for widget in [self.legend_leader, self.legend_wingman, self.legend_link, self.legend_warn]:
+            widget.setContentsMargins(0, 0, 2, 0)
+            toolbar.addWidget(widget)
         # 网格开关默认开；居中/重置视图绑定到对应槽函数。
         self.grid_toggle = QCheckBox("网格")
         self.grid_toggle.setChecked(True)
