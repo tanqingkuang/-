@@ -261,6 +261,7 @@ class MainWindowLayoutMixin:
         toolbar.addWidget(fullscreen)
         toolbar.addWidget(self.top_view_coordinate)
         toolbar.addWidget(self.top_view_coordinate_hint)
+        # 尾迹长度拆成标签和数值框，避免把长中文前缀挤进 spinbox 文本区。
         self.trail_seconds_label = QLabel("尾迹长度")
         self.trail_seconds_label.setObjectName("coordinateHint")
         self.trail_seconds_label.setToolTip("尾迹保留时长，0 表示关闭尾迹。")
@@ -268,6 +269,7 @@ class MainWindowLayoutMixin:
         self.trail_seconds_input.setRange(0.0, 600.0)
         self.trail_seconds_input.setDecimals(1)
         self.trail_seconds_input.setSingleStep(1.0)
+        # 单位固定显示为秒；业务含义中的“0=关闭”由 tooltip 和槽函数共同表达。
         self.trail_seconds_input.setSuffix(" s")
         self.trail_seconds_input.setValue(TRAIL_SECONDS)
         self.trail_seconds_input.setFixedWidth(108)
