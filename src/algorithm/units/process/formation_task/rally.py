@@ -40,10 +40,9 @@ class RallyTaskInitS(FormationTaskInitS):
     # 集结汇合新增参数（RallyJoinPos 使用，Rally 任务直接透传给实体）
     loiter_radius_m: float = 200.0  # 盘旋圆半径，米
     arrival_radius_m: float = 100.0  # 进入盘旋的触发距离，米
-    catchup_radius_m: float = 200.0  # CATCHUP→LOOSE 位置误差阈值（dist2d to slot），米
+    catchup_radius_m: float = 200.0  # CATCHUP→LOOSE 位置误差阈值（dist3d to slot），米
     catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
     catchup_stable_s: float = 3.0  # CATCHUP→LOOSE 需连续满足的时长，秒
-    catchup_kp_speed: float = 0.05  # 沿航迹误差→速度增益（m/s per m）
 
 
 @dataclass
@@ -299,7 +298,7 @@ class Rally(FormationTaskBase):
         return entry.rally_state in (RALLY_STATE_LOITERING, RALLY_STATE_EXITED)
 
     def _all_catchup_ok(self, state_map: dict[str, FollowerStateS], now_s: float) -> bool:
-        """CATCHUP→LOOSE 门控：期望僚机同时满足位置（dist2d to slot）和航向误差阈值。"""
+        """CATCHUP→LOOSE 门控：期望僚机同时满足三维位置（dist3d to slot）和航向误差阈值。"""
         if not self._expected_ids:
             return True
         for fid in self._expected_ids:

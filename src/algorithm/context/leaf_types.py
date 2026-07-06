@@ -273,7 +273,7 @@ class FollowerStateS:
 
     id: str = ""  # 节点 ID，与 envelope.source 对应
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 实际位置
-    posErr_m: float = 0.0  # 到当前目标的合距离，米；CATCHUP 阶段为 dist2d(self, slot)
+    posErr_m: float = 0.0  # 到当前目标的三维距离，米；CATCHUP 阶段为 dist3d(self, slot)
     headingErr_rad: float = 0.0  # 当前航向与目标航向之差的绝对值，弧度
     arrived: int = 0  # 兼容旧协议；新协议以 rally_state == EXITED 为准
     valid: bool = False  # 本帧数据是否有效（收到最新报文则置 True）

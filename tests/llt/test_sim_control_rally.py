@@ -208,8 +208,6 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertEqual(result.code, "OK")
             self.assertAlmostEqual(follower._rally_join._v_up_min, -2.0)
             self.assertAlmostEqual(follower._rally_join._v_up_max, 2.5)
-            self.assertAlmostEqual(follower._catchup._v_up_min, -2.0)
-            self.assertAlmostEqual(follower._catchup._v_up_max, 2.5)
 
     def test_manual_step_runs_rally_stage_and_sends_leader_broadcast(self) -> None:
         """验证手动步进后集结长机进入 RALLY 并通过通信信道投递长机广播。"""
