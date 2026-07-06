@@ -1139,8 +1139,20 @@ class EntityTests(unittest.TestCase):
         self.assertEqual(follower_out.outbox, [])
         self.assertIsNotNone(follower_out.selfCmd)
         self.assertIsNotNone(follower_out.controlDiag)
-        self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -25.0)
-        self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 20.0)
+        # 相对槽位 TD 首帧按当前位置播种(软接管)：命令起点贴合本机 (-30, 15)，而非直接跳到槽位。
+        self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -30.0, delta=0.5)
+        self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 15.0, delta=0.5)
+        # 续喂同一长机广播，TD 应把命令平滑收敛到 leader+slot 几何目标 (-25, 20)，验证槽位几何正确。
+        for _ in range(300):
+            follower.step(
+                EntityInputS(
+                    selfState=_motion(east=-30.0, north=15.0, h=1000.0, v_east=8.0),
+                    inbox=leader_out.outbox,
+                ),
+                follower_out,
+            )
+        self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -25.0, delta=0.2)
+        self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 20.0, delta=0.2)
 
     def test_entity_reset_clears_context_and_boundary_buffers(self) -> None:
         """验证实体 reset 会原地复位 Context、边界缓存和子单元状态。"""
