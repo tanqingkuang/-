@@ -39,6 +39,13 @@
 - 避障障碍库从 `element/single_avoidance_80km_obstacles.json` 引用，包含 2 个圆形、2 个轴对齐矩形和 2 个斜放矩形。
 - 避障规划参数使用 `turn_radius_m=600 m`、`leg_length_margin_m=0 m`、`grid.resolution_m=50 m`，其余参数按避障设计文档建议给出初始默认值。
 
+## `diamond.json`
+
+- 钻石项目 XML 航线格式演示场景，整体仿真参数复用 `single_avoidance_80km.json`。
+- 基础航线从 `element/航线1 钻石默认航线 2026年7月6日10时8分18秒.XML` 引用，航点坐标复用 `single_avoidance_80km_route.json`，由钻石 XML 策略在加载时补 `45 m/s` 航线速度。
+- 避障障碍库复用 `element/single_avoidance_80km_obstacles.json`，避免重复维护同一批障碍。
+- `avoidance.allow_arc=false`，使默认生成的避障航线保持折线输出，便于直接导出为钻石 XML。
+
 ## `quadrilateral_10_aircraft_a05_leader.json`
 
 - 十机四边形航线场景，航段速度为 `20 m/s`。

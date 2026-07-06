@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import xml.etree.ElementTree as ET
 from decimal import Decimal
 import tempfile
 import unittest
@@ -520,6 +521,87 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.assertAlmostEqual(parsed[0].turnSign, 1.0)
         self.assertAlmostEqual(parsed[0].center.east, 0.0, places=2)
         self.assertAlmostEqual(parsed[0].center.north, 100.0, places=2)
+
+    def test_export_route_can_write_diamond_xml(self) -> None:
+        """航线输出选择钻石 XML 时，应走 XML 策略并生成规范文件名。"""
+        window = self._window()
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        output = Path(temp_dir.name) / "manual_name"
+        window._preview_route = [
+            WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
+        ]
+        window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=31.0, longitude_deg=118.0)
+        window.export_route_button.setEnabled(True)
+
+        with patch(
+            "src.ui.gui.main_window.QFileDialog.getSaveFileName",
+            return_value=(str(output), "钻石 XML (*.XML *.xml)"),
+        ):
+            window._export_route()
+
+        saved_files = list(Path(temp_dir.name).glob("航线25 芜湖自动避障航线 *.XML"))
+        self.assertEqual(len(saved_files), 1)
+        xml_root = ET.parse(saved_files[0]).getroot()
+        self.assertEqual(xml_root.findtext("Item/SkywayNo"), "25")
+        self.assertEqual(xml_root.findtext("Item/SkypointNo"), "1")
+        self.assertEqual(xml_root.findtext("Item/IdAllNum"), "2")
+        self.assertEqual(xml_root.findtext("Item/ByLineName"), "芜湖自动避障航线")
+        self.assertEqual(xml_root.find("Item1").attrib["id"], "1")
+        self.assertIn("已输出航线", window.avoidance_status.text())
+
+    def test_export_route_dialog_uses_current_route_file_strategy_filename(self) -> None:
+        """当前配置使用 XML 航线时，导出对话框默认文件名和过滤器应来自 XML 策略。"""
+        window = self._window()
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        config_path = Path(temp_dir.name) / "diamond.json"
+        config_path.write_text(
+            json.dumps({"route_file": "element/input.XML"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        window.current_config_path = config_path
+        window._preview_route = [
+            WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
+        ]
+
+        with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
+            window._export_route()
+
+        default_path = Path(dialog.call_args.args[2])
+        self.assertRegex(default_path.name, r"^航线25 芜湖自动避障航线 .+\.XML$")
+        self.assertEqual(dialog.call_args.args[4], "钻石 XML (*.XML *.xml)")
+
+    def test_export_route_reports_diamond_xml_arc_error(self) -> None:
+        """钻石 XML 不支持圆弧航段，界面应把策略错误反馈到状态栏。"""
+        window = self._window()
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        output = Path(temp_dir.name) / "manual_name.XML"
+        window._preview_route = [
+            WayPointInputS(
+                idx=0,
+                pos=PosInEarthS(0.0, 0.0, 2400.0),
+                vdCmd=45.0,
+                turnSign=1.0,
+                center=PosInEarthS(0.0, 100.0, 2400.0),
+            ),
+            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 100.0, 2400.0), vdCmd=45.0),
+        ]
+        window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=31.0, longitude_deg=118.0)
+        window.export_route_button.setEnabled(True)
+
+        with patch(
+            "src.ui.gui.main_window.QFileDialog.getSaveFileName",
+            return_value=(str(output), "钻石 XML (*.XML *.xml)"),
+        ):
+            window._export_route()
+
+        self.assertIn("航线输出失败", window.avoidance_status.text())
+        self.assertIn("不支持圆弧航段", window.avoidance_status.text())
+        self.assertEqual(list(Path(temp_dir.name).glob("航线25 芜湖自动避障航线 *.XML")), [])
 
 
 if __name__ == "__main__":

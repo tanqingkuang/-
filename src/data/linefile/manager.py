@@ -24,8 +24,11 @@ class LineFileManager:
         """按主配置位置生成 route_file。注意：返回实际写入路径，便于界面提示。"""
         route_path = self.resolve_path(config_path, route_file)
         # save 与 load 使用同一个工厂，保证同一后缀读写策略一致。
-        self._factory.create(route_path).save(route_path, route)
-        return route_path
+        return self._factory.create(route_path).save(route_path, route)
+
+    def default_output_filename(self, route_file: str | Path) -> str:
+        """按 route_file 对应策略返回建议输出文件名。注意：只看格式，不读取文件内容。"""
+        return self._factory.create(route_file).default_output_filename()
 
     @staticmethod
     def resolve_path(config_path: str | Path, route_file: object) -> Path:
