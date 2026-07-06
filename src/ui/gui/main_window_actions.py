@@ -514,6 +514,16 @@ class MainWindowActionMixin:
         self.top_view.show_links = self.legend_link.isChecked()
         self.top_view.viewport().update()
 
+    def _on_trail_seconds_changed(self) -> None:
+        """处理尾迹长度输入。注意：0 表示关闭尾迹显示与缓存。"""
+        seconds = self.trail_seconds_input.value()
+        # 数据源负责缓存裁剪，视图负责按当前秒数即时隐藏或淡出已有快照。
+        self.sim.set_trail_seconds(seconds)
+        self.top_view.trail_seconds = seconds
+        self.side_view.trail_seconds = seconds
+        self.top_view.viewport().update()
+        self.side_view.update()
+
     def _disable_auto_center(self) -> None:
         """关闭自动居中选项。注意：用户手动平移或缩放后应避免自动抢回视图。"""
         # 取消勾选会再次触发 _on_auto_center_changed，从而同步关闭俯视图自动居中。
