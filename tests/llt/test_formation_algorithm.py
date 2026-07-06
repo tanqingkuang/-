@@ -41,8 +41,8 @@ from src.algorithm.units.process.formation_task.base import FormationTaskInputS,
 from src.algorithm.units.process.formation_task.hold import Hold
 from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
-from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
-from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
+from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
+from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.units.process.tra_plan.noop import Noop
@@ -1049,7 +1049,7 @@ class ProcessUnitTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0, step=2)
         ctx.selfState = _motion(east=1.0, north=2.0, h=3.0, v_east=4.0, v_north=5.0)
-        outbound = LeaderBroadcast()
+        outbound = RallyLeaderBroadcast()
         outbound.init(
             OutboundInitS(
                 selfId="A01",
@@ -1062,7 +1062,7 @@ class ProcessUnitTests(unittest.TestCase):
         )
         out = OutboundOutputS()
 
-        outbound.step(OutboundInputS(cmd=ctx.cmd, selfState=ctx.selfState), out)
+        outbound.step(RallyLeaderBroadcastInputS(cmd=ctx.cmd, selfState=ctx.selfState, slotScale=ctx.slotScale), out)
 
         self.assertEqual(len(out.outbox), 1)
         self.assertEqual(out.outbox[0].source, "A01")
@@ -1078,7 +1078,7 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertEqual(follower_ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(follower_ctx.cmd.pattern, 0)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
-        # LeaderBroadcast(hold 长机)不携带 slot_scale，按 scale=1.0/scaleRate=0.0 兜底
+        # hold 长机的 ctx.slotScale 停在默认值，广播出去就是 scale=1.0/scaleRate=0.0
         self.assertAlmostEqual(follower_ctx.slotScale.scale, 1.0)
         self.assertAlmostEqual(follower_ctx.slotScale.scaleRate, 0.0)
 
