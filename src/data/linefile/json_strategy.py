@@ -23,8 +23,13 @@ class JsonLineFileStrategy(LineFileStrategy):
             raise ValueError("route_file must point to a route object")
         return data
 
-    def save(self, path: Path, route: dict[str, object]) -> None:
-        """写入 JSON 航线文件。注意：保持中文和缩进，便于客户直接编辑。"""
+    def save(self, path: Path, route: dict[str, object]) -> Path:
+        """写入 JSON 航线文件并返回实际路径。注意：保持中文和缩进，便于客户直接编辑。"""
         # 生成时自动建目录，便于后续 GUI 直接输出到 configs/element 之类的新路径。
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(route, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def default_output_filename(self) -> str:
+        """返回 JSON 避障航线默认输出名。注意：保持历史 GUI 默认行为。"""
+        return "avoidance_route.json"

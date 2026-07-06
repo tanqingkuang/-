@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Root>
+  <Item>
+    <SkywayNo>1</SkywayNo>
+    <SkypointNo>1</SkypointNo>
+    <IdAllNum>10</IdAllNum>
+    <ByLineName>钻石默认航线</ByLineName>
+    <StLineExp />
+    <CreatTimer>2026/7/6 10:08:18</CreatTimer>
+  </Item>
+  <Item1 id="1">
+    <Longitude>121.4737</Longitude>
+    <Latitude>31.2304</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item1>
+  <Item2 id="2">
+    <Longitude>121.5996527</Longitude>
+    <Latitude>31.2303383</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item2>
+  <Item3 id="3">
+    <Longitude>121.7363014</Longitude>
+    <Latitude>31.3022861</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item3>
+  <Item4 id="4">
+    <Longitude>121.9463831</Longitude>
+    <Latitude>31.3016859</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item4>
+  <Item5 id="5">
+    <Longitude>122.1573795</Longitude>
+    <Latitude>31.4270083</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item5>
+  <Item6 id="6">
+    <Longitude>122.2730804</Longitude>
+    <Latitude>31.4263426</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item6>
+  <Item7 id="7">
+    <Longitude>122.2746176</Longitude>
+    <Latitude>31.6067179</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item7>
+  <Item8 id="8">
+    <Longitude>122.0646472</Longitude>
+    <Latitude>31.7341166</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item8>
+  <Item9 id="9">
+    <Longitude>121.8535939</Longitude>
+    <Latitude>31.734909</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item9>
+  <Item10 id="10">
+    <Longitude>121.6850391</Longitude>
+    <Latitude>31.8615597</Latitude>
+    <Altitude>1200</Altitude>
+    <WaypointTask>0010</WaypointTask>
+  </Item10>
+</Root>

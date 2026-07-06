@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.data.linefile.diamond_xml_strategy import DiamondXmlLineFileStrategy
 from src.data.linefile.json_strategy import JsonLineFileStrategy
 from src.data.linefile.strategy import LineFileStrategy
 
@@ -12,9 +13,9 @@ class LineFileStrategyFactory:
     """根据航线文件路径选择策略。注意：后续客户格式通过注册策略扩展。"""
 
     def __init__(self, strategies: list[LineFileStrategy] | None = None) -> None:
-        """初始化策略工厂。注意：默认只注册标准 JSON 策略。"""
+        """初始化策略工厂。注意：默认注册标准 JSON 与钻石 XML 策略。"""
         # 测试或客户集成可以注入自定义策略列表，避免修改默认工厂代码。
-        self._strategies = strategies or [JsonLineFileStrategy()]
+        self._strategies = strategies or [JsonLineFileStrategy(), DiamondXmlLineFileStrategy()]
 
     def create(self, path: str | Path) -> LineFileStrategy:
         """选择支持 path 的航线文件策略。注意：无匹配策略时抛出明确错误。"""

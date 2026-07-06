@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
@@ -34,12 +35,40 @@ from src.ui.gui.avoidance_tools import (
     route_to_polyline,
 )
 
+_JSON_ROUTE_FILTER = "JSON 文件 (*.json)"
+_DIAMOND_XML_ROUTE_FILTER = "钻石 XML (*.XML *.xml)"
+_ROUTE_EXPORT_FILTERS = f"{_JSON_ROUTE_FILTER};;{_DIAMOND_XML_ROUTE_FILTER}"
+
 
 def _plan_avoidance_route_for_ui(*args, **kwargs):  # noqa: ANN002, ANN003
     """从公开入口取避障规划函数。注意：保留旧测试和外部 patch 路径。"""
     from src.ui.gui import main_window
 
     return main_window.plan_avoidance_route(*args, **kwargs)
+
+
+def _route_file_from_config(path: Path) -> str | None:
+    """读取当前配置声明的 route_file。注意：仅用于导出默认文件名，失败时回退 JSON 默认值。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    route_file = data.get("route_file") if isinstance(data, dict) else None
+    return route_file if isinstance(route_file, str) and route_file.strip() else None
+
+
+def _route_export_defaults(config_path: Path) -> tuple[Path, str]:
+    """根据当前 route_file 策略生成导出默认路径和过滤器。注意：不读取航线文件内容。"""
+    route_file = _route_file_from_config(config_path)
+    if route_file is None:
+        return config_path.parent / "avoidance_route.json", _JSON_ROUTE_FILTER
+    route_path = _LINE_FILE_MANAGER.resolve_path(config_path, route_file)
+    try:
+        filename = _LINE_FILE_MANAGER.default_output_filename(route_path)
+    except ValueError:
+        return config_path.parent / "avoidance_route.json", _JSON_ROUTE_FILTER
+    selected_filter = _DIAMOND_XML_ROUTE_FILTER if Path(filename).suffix.lower() == ".xml" else _JSON_ROUTE_FILTER
+    return config_path.parent / filename, selected_filter
 
 
 class MainWindowAvoidanceMixin:
@@ -470,19 +499,21 @@ class MainWindowAvoidanceMixin:
             self.avoidance_status.setText("请先生成航线，再输出。")
             return
         config_path = self.current_config_path or (self.project_root / "configs" / "base.json")
-        default_path = config_path.parent / "avoidance_route.json"
-        selected, _ = QFileDialog.getSaveFileName(
+        default_path, default_filter = _route_export_defaults(config_path)
+        selected, selected_filter = QFileDialog.getSaveFileName(
             self.avoidance_window or self,
             "输出避障航线",
             str(default_path),
-            "JSON 文件 (*.json)",
+            _ROUTE_EXPORT_FILTERS,
+            default_filter,
         )
         if not selected:
             return
         route_path = Path(selected)
         if not route_path.suffix:
-            # QFileDialog 在部分平台不会自动追加过滤器后缀，这里统一补成 JSON。
-            route_path = route_path.with_suffix(".json")
+            # QFileDialog 在部分平台不会自动追加过滤器后缀，这里按用户选中的格式补齐。
+            suffix = ".XML" if "XML" in selected_filter or "xml" in selected_filter else ".json"
+            route_path = route_path.with_suffix(suffix)
         speed_mps = self._avoidance_params.speed_mps if self._avoidance_params is not None else self._preview_route[0].vdCmd
         geo_origin = self._avoidance_params.geo_origin if self._avoidance_params is not None else None
         route_config = route_inputs_to_config(self._preview_route, speed_mps, geo_origin)
