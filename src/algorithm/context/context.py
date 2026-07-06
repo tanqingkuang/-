@@ -29,7 +29,7 @@ class FormContextS:
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
-    slotScale: RallySlotScaleS = field(default_factory=RallySlotScaleS)  # 槽位缩放因子(Rally写/ScaledSlotGeometry读)
+    slotScale: RallySlotScaleS = field(default_factory=RallySlotScaleS)  # 槽位缩放因子(Rally写/SlotGeometry读)
     followerStates: list[FollowerStateS] = field(default_factory=list)  # 僚机集结状态(FollowerStatus写/Rally读)
     rally_t_ref: float = 0.0  # 集结基准时刻：所有 FLYING 参与者中最晚 ETA（秒）
     rally_t_ref_valid: bool = False  # 基准时刻是否已收齐参与者首个有效汇合状态

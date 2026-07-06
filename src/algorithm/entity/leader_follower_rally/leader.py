@@ -34,9 +34,8 @@ from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.formation_task.base import FormationTaskOutputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInitS, FollowerStatusInputS, FollowerStatusOutputS
-from src.algorithm.units.process.outbound.base import OutboundOutputS
+from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
 from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
-from src.algorithm.units.process.outbound.leader_broadcast import OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.entity.leader_follower_rally import fill_output, loiter_speed_bounds, rally_route_heading_rad
