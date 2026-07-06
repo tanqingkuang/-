@@ -40,6 +40,7 @@ from src.ui.gui.top_view import TopView
 from src.ui.gui.view_models import (
     PLAYBACK_RATE_SLIDER_MAX,
     PLAYBACK_RATE_SLIDER_MIN,
+    TRAIL_SECONDS,
     playback_rate_to_slider_value,
     Snapshot,
 )
@@ -260,6 +261,20 @@ class MainWindowLayoutMixin:
         toolbar.addWidget(fullscreen)
         toolbar.addWidget(self.top_view_coordinate)
         toolbar.addWidget(self.top_view_coordinate_hint)
+        self.trail_seconds_label = QLabel("尾迹长度")
+        self.trail_seconds_label.setObjectName("coordinateHint")
+        self.trail_seconds_label.setToolTip("尾迹保留时长，0 表示关闭尾迹。")
+        self.trail_seconds_input = QDoubleSpinBox()
+        self.trail_seconds_input.setRange(0.0, 600.0)
+        self.trail_seconds_input.setDecimals(1)
+        self.trail_seconds_input.setSingleStep(1.0)
+        self.trail_seconds_input.setSuffix(" s")
+        self.trail_seconds_input.setValue(TRAIL_SECONDS)
+        self.trail_seconds_input.setFixedWidth(108)
+        self.trail_seconds_input.setToolTip("尾迹保留时长，0 表示关闭尾迹。")
+        self.trail_seconds_input.valueChanged.connect(self._on_trail_seconds_changed)
+        toolbar.addWidget(self.trail_seconds_label)
+        toolbar.addWidget(self.trail_seconds_input)
         toolbar.addStretch(1)
         # 图例与链路显示开关（颜色由样式表按 objectName 着色）。
         self.legend_leader = QLabel("● 长机")

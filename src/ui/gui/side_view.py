@@ -44,6 +44,7 @@ class SideView(QWidget):
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
         self.show_grid = True
+        self.trail_seconds = TRAIL_SECONDS
         self.segment_locked = True
         self.auto_center = False
         self.view_angle_deg = 0.0
@@ -359,6 +360,8 @@ class SideView(QWidget):
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 trails 画面元素。注意：只做渲染，不修改仿真状态。"""
+        if self.trail_seconds <= 0.0:
+            return
         # 尾迹按当前横轴投影后再裁剪屏幕范围，减少不可见线段绘制。
         # 透明度随时间衰减，和俯视图一致表达“越新越醒目”。
         for node in snapshot.nodes:
@@ -372,7 +375,9 @@ class SideView(QWidget):
                 if (x1 < -24 and x2 < -24) or (x1 > self.width() + 24 and x2 > self.width() + 24):
                     continue
                 age = max(0.0, snapshot.time - current.time)
-                alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
+                if age > self.trail_seconds:
+                    continue
+                alpha = max(0.08, 1.0 - age / self.trail_seconds)
                 color = QColor(base)
                 color.setAlphaF((0.48 if is_leader else 0.40) * alpha)
                 painter.setPen(QPen(color, 2))
