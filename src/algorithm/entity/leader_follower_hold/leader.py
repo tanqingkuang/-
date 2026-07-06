@@ -235,7 +235,7 @@ def _default_tracker_init(
     gain_forward = PPIInitS(
         kpPos=0.0,
         kpVel=1.0,
-        kiVel=0.0,
+        kiVel=0.2,
         dt=control_period_s,
         accMin=-6.0,
         accMax=6.0,
@@ -253,9 +253,9 @@ def _follower_tracker_init(
     # 前向速度限幅由配置注入；按含加速度滤波的四阶闭环协调配极点整定——真实主导阻尼 zeta≈0.65、
     # 带宽较旧值(0.12/0.32,实测过阻尼 zeta≈0.83)抬约 1.3 倍。kpPos=wn/(2zeta), kpVel=2zeta·wn。
     gain_forward = PPIInitS(
-        kpPos=0.194,
-        kpVel=0.334,
-        kiVel=0.0,
+        kpPos=0.2,
+        kpVel=1.0,
+        kiVel=0.2,
         dt=control_period_s,
         accMin=-6.0,
         accMax=6.0,
