@@ -1,14 +1,14 @@
-"""集结僚机解析长机广播：在 LeaderFollower 基础上额外解析 slot_scale 字段。注意：多消息同帧后到覆盖先到，三字段来自同一条消息保证一致性。"""
+"""僚机解析长机广播：唯一的入站实现，额外解析 slot_scale/t_ref 字段。注意：hold 场景长机若不广播这些字段（旧格式），按 scale=1.0/t_ref_valid=False 兜底；多消息同帧后到覆盖先到，各字段来自同一条消息保证一致性。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import MotionProfS, RallySlotScaleS
+from src.algorithm.context.leaf_types import RallySlotScaleS
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
 from src.algorithm.units.process.inbound.leader_follower import (
     LEADER_BROADCAST_TOPIC,
-    LeaderFollower,
+    _write_cmd_from_payload,
     _write_motion_from_payload,
 )
 
@@ -64,10 +64,7 @@ class RallyLeaderFollower(InboundBase):
                 scale_parsed, scale_rate_parsed = 1.0, 0.0
             # 全部字段解析成功后，一次性写入输出端口，保证多字段一致性。
             _write_motion_from_payload(state, y.leaderState)
-            from src.algorithm.context.leaf_types import FormStageE
-            y.cmd.stage = FormStageE(int(cmd.get("stage", FormStageE.NONE)))
-            y.cmd.pattern = int(cmd.get("pattern", 0))
-            y.cmd.step = int(cmd.get("step", 0))
+            _write_cmd_from_payload(cmd, y.cmd)
             y.slotScale.scale = scale_parsed
             y.slotScale.scaleRate = scale_rate_parsed
             y.t_ref = t_ref_parsed

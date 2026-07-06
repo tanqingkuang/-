@@ -18,6 +18,7 @@ from src.algorithm.context.leaf_types import (
     NetWorkS,
     PosInEarthS,
     PosTrackDiagS,
+    RallySlotScaleS,
     RemoteCmdS,
     VdInEarthS,
     WayLineS,
@@ -38,8 +39,8 @@ from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackA
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
 from src.algorithm.units.process.formation_task.hold import Hold
-from src.algorithm.units.process.inbound.base import InboundInputS, InboundOutputS
-from src.algorithm.units.process.inbound.leader_follower import LeaderFollower
+from src.algorithm.units.process.inbound.base import InboundInputS
+from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
 from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
 from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
@@ -1068,14 +1069,20 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertEqual(out.outbox[0].target, ["A02", "A03"])
 
         follower_ctx = FormContextS()
-        inbound = LeaderFollower()
-        inbound.step(InboundInputS(inbox=out.outbox), InboundOutputS(follower_ctx.leaderState, follower_ctx.cmd))
+        inbound = RallyLeaderFollower()
+        inbound_y = RallyLeaderFollowerOutputS(
+            leaderState=follower_ctx.leaderState, cmd=follower_ctx.cmd, slotScale=follower_ctx.slotScale
+        )
+        inbound.step(InboundInputS(inbox=out.outbox), inbound_y)
 
         self.assertEqual(follower_ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(follower_ctx.cmd.pattern, 0)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
+        # LeaderBroadcast(hold 长机)不携带 slot_scale，按 scale=1.0/scaleRate=0.0 兜底
+        self.assertAlmostEqual(follower_ctx.slotScale.scale, 1.0)
+        self.assertAlmostEqual(follower_ctx.slotScale.scaleRate, 0.0)
 
-        inbound.step(InboundInputS(inbox=[]), InboundOutputS(follower_ctx.leaderState, follower_ctx.cmd))
+        inbound.step(InboundInputS(inbox=[]), inbound_y)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
 
     def test_inbound_skips_non_leader_follower_messages(self) -> None:
@@ -1084,7 +1091,10 @@ class ProcessUnitTests(unittest.TestCase):
         ctx = FormContextS()
         msg = MessageEnvelope("node.status", "A99", "A02", 0.0, {"health": "normal"})
 
-        LeaderFollower().step(InboundInputS(inbox=[msg]), InboundOutputS(ctx.leaderState, ctx.cmd))
+        RallyLeaderFollower().step(
+            InboundInputS(inbox=[msg]),
+            RallyLeaderFollowerOutputS(leaderState=ctx.leaderState, cmd=ctx.cmd, slotScale=RallySlotScaleS()),
+        )
 
         self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
 
