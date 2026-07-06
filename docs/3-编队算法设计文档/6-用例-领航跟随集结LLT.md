@@ -16,8 +16,7 @@
 - `src/algorithm/units/process/inbound/follower_status.py`
 - `src/algorithm/units/process/inbound/rally_leader_follower.py`
 - `src/algorithm/units/algo/pos_calc/rally_join_pos.py`（原 `rally_approach.py`，已整体替换并删除）
-- `src/algorithm/units/algo/pos_calc/catchup_align.py`
-- `src/algorithm/units/algo/pos_calc/scaled_slot_geometry.py`
+- `src/algorithm/units/algo/pos_calc/scaled_slot_geometry.py`（CATCHUP/LOOSE/COMPRESS 共用；原 `catchup_align.py` 已删除）
 - `src/algorithm/entity/leader_follower_rally/leader.py`
 - `src/algorithm/entity/leader_follower_rally/follower.py`
 - `src/runner/sim_control_modules.py`、`src/runner/sim_control_routes.py`、`src/runner/sim_controller.py`（原 `sim_control.py`，已拆分为多个模块）
@@ -394,7 +393,7 @@ def _rally_cfg(
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_rally_follower_latches_arrival_and_switches_to_scaled_slot_after_step_one` | 僚机位于目标点且 T_ref 已有效时 `RallyJoinPos` 进入 `EXITED`，上报 `arrived=1`/`rally_state=EXITED`；长机推进到 `step=1`（CATCHUP）后 `selfCmd.pos` 变为本机在任务航线"杆"上的正交投影，速度航向锁定 `mission_heading` |
+| `test_rally_follower_latches_arrival_and_switches_to_scaled_slot_after_step_one` | 僚机位于目标点且 T_ref 已有效时 `RallyJoinPos` 进入 `EXITED`，上报 `arrived=1`/`rally_state=EXITED`；长机推进到 `step=1`（CATCHUP）后 `selfCmd.pos` 变为 `ScaledSlotGeometry` 按长机状态算出的真实缩放槽位（与 LOOSE 同一算法） |
 | `test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start` | 冷启动尚无有效 T_ref（`t_ref_valid=False`）时，即便已到目标点附近，`RallyJoinPos` 进入 `LOITERING` 而非直接 `EXITED`，上报 `arrived=0` |
 | `test_rally_follower_none_resets_join_state_for_restart` | 已 `EXITED` 的僚机收到 `stage=NONE` 后，`RallyJoinPos` 复位回 `FLYING`，上报 `arrived=0`，允许下一轮重新执行 JOINING |
 | `test_rally_follower_none_outputs_current_position_zero_velocity` | `stage=NONE` 时 `selfCmd.pos` 复制本机当前位置、`selfCmd.v` 为零速，上报 `arrived=0` |

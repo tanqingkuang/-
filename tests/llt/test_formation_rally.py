@@ -1484,20 +1484,25 @@ class RallyEntityTests(unittest.TestCase):
         second = EntityOutputS()
         follower.step(
             EntityInputS(
-                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
+                selfState=_motion(east=10.0, north=20.0, h=490.0, v_east=20.0),
                 inbox=[_leader_msg(step=1, scale=2.0, leader_state=_motion(east=100.0, north=200.0, h=500.0, v_east=20.0))],
             ),
             second,
         )
 
         assert second.selfCmd is not None
-        # CATCHUP 阶段 selfCmd.pos = 本机在"杆"上的正交投影
-        # 杆横侧向 = M_i.cross = M_i.north = 20（East 航向，mi_cross=-mi_e*0+mi_n*1=20）
-        # 投影点 = (self.along=10, mi_cross=20) → ENU = (10, 20)
-        self.assertAlmostEqual(second.selfCmd.pos.east, 10.0)
-        self.assertAlmostEqual(second.selfCmd.pos.north, 20.0)
-        # 速度航向锁定到 mission_heading=0（East）
+        # CATCHUP 阶段直接复用 ScaledSlotGeometry：R02 槽位偏置 (x=-10,z=-5)，长机航迹东向，
+        # 未缩放偏置投影为 (east=-10, north=5)；scale=2.0 → 真实槽位 = leader + scale*offset
+        # = (100-20, 200+10) = (80, 210)。
+        self.assertAlmostEqual(second.selfCmd.pos.east, 80.0)
+        self.assertAlmostEqual(second.selfCmd.pos.north, 210.0)
+        # 长机沿东向以 20 m/s 直飞（无偏航角速率），槽位只透传自身速度前馈；
+        # CATCHUP 不得再按位置误差额外调速，追赶速度修正由 PidCompose 前向外环生成。
+        self.assertAlmostEqual(second.selfCmd.v.vEast, 20.0)
+        self.assertAlmostEqual(second.selfCmd.v.vd, 20.0)
         self.assertAlmostEqual(second.selfCmd.v.vPsi, 0.0)
+        # CATCHUP 门控统一使用到真实槽位的三维距离，高度误差也必须计入 pos_err_m。
+        self.assertAlmostEqual(second.outbox[0].payload["pos_err_m"], math.sqrt(70.0**2 + 190.0**2 + 10.0**2))
         self.assertEqual(second.outbox[0].target, "R01")
 
     def test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start(self) -> None:

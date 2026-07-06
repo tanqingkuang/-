@@ -19,7 +19,6 @@ from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.catchup_align import CatchupAlign, CatchupAlignInitS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RallyJoinPos,
@@ -79,7 +78,6 @@ class RallyFollowerEntity(EntityBase):
         self._inbound = RallyLeaderFollower()
         self._tra_plan = Noop()
         self._rally_join = RallyJoinPos()
-        self._catchup = CatchupAlign()
         self._pos_calc_slot = ScaledSlotGeometry()
         self._pos_track = PidCompose()
         self._outbound = FollowerBroadcast()
@@ -102,19 +100,6 @@ class RallyFollowerEntity(EntityBase):
             v_up_min_mps=v_up_min,
             v_up_max_mps=v_up_max,
             control_period_s=cfg.control_period_s,
-        ))
-        self._catchup.init(CatchupAlignInitS(
-            selfId=cfg.selfInit.id,
-            commInit=cfg.commInit,
-            mission_heading_rad=_heading,
-            mi_east=_rally_target.east,
-            mi_north=_rally_target.north,
-            nominal_speed_mps=cfg.rally_approach_speed_mps,
-            kp_speed=rally_cfg.catchup_kp_speed,
-            speed_min_mps=loiter_min,
-            speed_max_mps=loiter_max,
-            v_up_min_mps=v_up_min,
-            v_up_max_mps=v_up_max,
         ))
         self._pos_calc_slot.init(ScaledSlotInitS(
             selfId=cfg.selfInit.id,
@@ -173,7 +158,6 @@ class RallyFollowerEntity(EntityBase):
         if stage == FormStageE.NONE:
             if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
                 self._rally_join.reset()
-                self._catchup.reset()
             copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)
             zero_velocity(self.cxt.selfCmd.v)
             zero_acceleration(self.cxt.selfAccCmd)
@@ -189,15 +173,10 @@ class RallyFollowerEntity(EntityBase):
             self._rally_join_u.t_now = u.now_s
             self._rally_join.step(self._rally_join_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
-        elif stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.CATCHUP:
-            # CATCHUP 阶段：锁定任务航向，速度调节收敛到松散槽位
-            self._catchup.step(self._slot_u, self._pos_calc_y)
-            self._pos_track.step(self._pos_track_u, self._pos_track_y)
-            # selfCmd.pos 是投影点（非真实槽位），覆盖 diag 确保 GUI 显示正确位置
-            self._pos_track_diag.cmd_pos_east_m = self._catchup.true_slot_east
-            self._pos_track_diag.cmd_pos_north_m = self._catchup.true_slot_north
         else:
-            # RALLY step>=2（LOOSE/COMPRESS）或 HOLD：二维槽位跟随
+            # RALLY step>=1（CATCHUP/LOOSE/COMPRESS）或 HOLD：三维槽位跟随
+            # CATCHUP 与 LOOSE/COMPRESS 用同一套算法——slotScale 处于松散值时即是 CATCHUP/LOOSE，
+            # 二者的区别只在 Rally 任务的阶段门控上，位置解算本身不需要区分。
             self._pos_calc_slot.step(self._slot_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
         self._update_outbound()
@@ -210,7 +189,6 @@ class RallyFollowerEntity(EntityBase):
         self._inbound.reset()
         self._tra_plan.reset()
         self._rally_join.reset()
-        self._catchup.reset()
         self._pos_calc_slot.reset()
         self._pos_track.reset()
         self._outbound.reset()
@@ -228,8 +206,3 @@ class RallyFollowerEntity(EntityBase):
         self._outbound_u.eta_s = self._rally_join.eta_s
         self._outbound_u.reached_slot_once = self._rally_join.reached_slot_once
         self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
-        # CATCHUP 阶段 selfCmd.pos = 前视点，dist3d(self, selfCmd) 不代表到槽位距离；用 CatchupAlign 直接暴露的 pos_err_m
-        if self.cxt.cmd.step == RallyPhaseE.CATCHUP:
-            self._outbound_u.pos_err_m_override = self._catchup.pos_err_m
-        else:
-            self._outbound_u.pos_err_m_override = None
