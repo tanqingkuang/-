@@ -8,12 +8,25 @@ on:
     paths:
       - "src/**"
       - "requirements-gui.txt"
-      - "scripts/build_windows_exe_*.ps1"
+      - "scripts/build_windows_*.ps1"
+      - "scripts/pyinstaller_hooks/**"
       - ".github/workflows/build-windows-exe.yml"
 
 jobs:
   build-windows-x64:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: full
+            script: ./scripts/build_windows_full_release.ps1
+            artifact: formation-sim-windows-x64-full
+            exe_path: dist/编队仿真.exe
+          - profile: lite
+            script: ./scripts/build_windows_lite_release.ps1
+            artifact: formation-sim-windows-x64-lite
+            exe_path: dist/编队仿真-裁剪版.exe
 
     steps:
       - name: Checkout
@@ -25,12 +38,12 @@ jobs:
           python-version: "3.12"
           architecture: "x64"
 
-      - name: Build exe
+      - name: Build ${{ matrix.profile }} exe
         shell: pwsh
-        run: ./scripts/build_windows_exe_release.ps1
+        run: ${{ matrix.script }}
 
-      - name: Upload exe
+      - name: Upload ${{ matrix.profile }} exe
         uses: actions/upload-artifact@v4
         with:
-          name: formation-sim-windows-x64
-          path: dist/编队仿真.exe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.exe_path }}

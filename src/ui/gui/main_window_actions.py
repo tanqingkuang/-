@@ -61,7 +61,7 @@ class MainWindowActionMixin:
             self.side_view.reset_view()
         self._sync_side_view_controls()
         self._update_tables(snapshot)
-        self._update_situation3d_snapshot(snapshot)
+        self.features.on_snapshot_updated(self, snapshot)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
@@ -132,8 +132,7 @@ class MainWindowActionMixin:
         # 只有控制器确认 OK 才开启刷新定时器，避免空转。
         if self.sim.last_result_code == "OK":
             self.timer.start()
-            if self._live_monitor is not None:
-                self._live_monitor.follow(self.sim.controller)
+            self.features.on_controller_ready(self)
         self._log("UI", f"start -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _pause(self) -> None:
@@ -154,8 +153,8 @@ class MainWindowActionMixin:
         snapshot = self.sim.single_step()
         self._update_snapshot(snapshot)
         self._log("UI", f"step -> {self.sim.last_result_code}, state={snapshot.run_state}")
-        if self.sim.last_result_code == "OK" and self._live_monitor is not None:
-            self._live_monitor.follow(self.sim.controller)
+        if self.sim.last_result_code == "OK":
+            self.features.on_controller_ready(self)
 
     def _reset(self) -> None:
         """响应重置按钮并恢复初始状态。注意：保留当前配置路径。"""
@@ -163,8 +162,7 @@ class MainWindowActionMixin:
         snapshot = self.sim.reset()
         # 重置后队形回到初值，请求俯视图与侧视图重新自适应铺满。
         self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
-        if self._live_monitor is not None:
-            self._live_monitor.unfollow()
+        self.features.on_controller_unavailable()
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
@@ -256,8 +254,7 @@ class MainWindowActionMixin:
             # remember=False 用于“自动加载上次配置”场景，避免重复写回。
             if remember:
                 self._save_last_config_path(config_path)
-            if self._live_monitor is not None:
-                self._live_monitor.unfollow()
+            self.features.on_controller_unavailable()
         else:
             # 失败只记录告警，不改动当前已加载配置。
             self._log("WARN", f"加载配置失败 {Path(path).name}: {self.sim.last_result_message}")
@@ -607,48 +604,23 @@ class MainWindowActionMixin:
 
     def _open_offline_plot(self) -> None:
         """打开离线控制误差回放窗口。"""
-        from src.ui.gui.offline_plot import OfflinePlotWindow
-        if self._offline_plot is None:
-            self._offline_plot = OfflinePlotWindow(self)
-        self._offline_plot.show()
-        self._offline_plot.raise_()
+        self.features.control_monitor.open_offline_plot(self)
 
     def _open_data_analysis_window(self) -> None:
         """打开离线控制效果数据分析窗口。"""
-        from src.ui.gui.data_analysis_window import DataAnalysisWindow
-        # 新数据分析窗口独立持有，避免影响旧 OfflinePlotWindow 生命周期。
-        if self._data_analysis_window is None:
-            self._data_analysis_window = DataAnalysisWindow(self)
-        self._data_analysis_window.show()
-        self._data_analysis_window.raise_()
+        self.features.data_analysis.open(self)
 
     def _open_situation3d_window(self) -> None:
         """打开 3D 态势窗口。注意：重复触发复用同一个窗口实例。"""
-        from src.ui.gui.situation3d import Situation3DWindow
-        # 3D 视图后续会承载独立 Qt Quick 3D 场景，主窗口只负责入口和生命周期。
-        if self._situation3d_window is None:
-            self._situation3d_window = Situation3DWindow(self)
-        self._update_situation3d_snapshot(self.sim.snapshot())
-        self._situation3d_window.showMaximized()
-        self._situation3d_window.raise_()
-        self._situation3d_window.activateWindow()
+        self.features.situation3d.open(self)
 
     def _update_situation3d_snapshot(self, snapshot: Snapshot) -> None:
         """同步 3D 态势窗口数据。注意：窗口未打开时不产生额外 QML 更新。"""
-        if self._situation3d_window is None:
-            return
-        clearance = self.clearance_spin.value() if hasattr(self, "clearance_spin") else 0.0
-        self._situation3d_window.set_snapshot(snapshot, obstacles=self.obstacles, clearance_m=clearance)
+        self.features.situation3d.update_snapshot(self, snapshot)
 
     def _open_live_monitor(self) -> None:
         """打开实时控制监控窗口。"""
-        from src.ui.gui.live_monitor import LiveMonitorWindow
-        if self._live_monitor is None:
-            self._live_monitor = LiveMonitorWindow(self)
-        if self.sim.snapshot().run_state != "UNLOADED":
-            self._live_monitor.follow(self.sim.controller)
-        self._live_monitor.show()
-        self._live_monitor.raise_()
+        self.features.control_monitor.open_live_monitor(self)
 
     def _log(self, source: str, message: str) -> None:
         """追加一条界面日志。注意：日志容量由日志面板负责裁剪。"""
@@ -658,13 +630,6 @@ class MainWindowActionMixin:
         """处理窗口关闭事件。注意：关闭前需要释放控制器资源。"""
         # 关窗前停定时器并释放控制器资源，避免后台线程泄漏。
         self.timer.stop()
-        if self._live_monitor is not None:
-            self._live_monitor.close()
-        if self._offline_plot is not None:
-            self._offline_plot.close()
-        if self._data_analysis_window is not None:
-            self._data_analysis_window.close()
-        if self._situation3d_window is not None:
-            self._situation3d_window.close()
+        self.features.close()
         self.sim.close()
         super().closeEvent(event)

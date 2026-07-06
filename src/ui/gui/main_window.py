@@ -37,6 +37,7 @@ from src.ui.gui.avoidance_tools import (
     route_to_polyline,
 )
 from src.ui.gui.dialogs import LogDialog, StageFullscreenDialog
+from src.ui.gui.features.registry import build_gui_feature_registry
 from src.ui.gui.main_window_actions import MainWindowActionMixin
 from src.ui.gui.main_window_avoidance import MainWindowAvoidanceMixin
 from src.ui.gui.main_window_layout import MainWindowLayoutMixin
@@ -106,6 +107,8 @@ class MainWindow(
         self.setMinimumSize(1280, 780)
         # 接入真实控制器适配器作为数据源。
         self.sim = ControllerSimulationAdapter()
+        # GUI 可选功能按运行档位选择具体实现，裁剪逻辑不散落在主窗口流程里。
+        self.features = build_gui_feature_registry()
         self.theme_key = "light"
         self.theme = THEMES[self.theme_key]
         # 100ms 定时器驱动运行期界面刷新（约 10 FPS）。
@@ -131,10 +134,6 @@ class MainWindow(
         self._preview_route: list[WayPointInputS] | None = None
         self._top_view_geo_origin: GeoOrigin | None = None
         self._segment_lock_preferred = True
-        self._live_monitor: "LiveMonitorWindow | None" = None
-        self._offline_plot: "OfflinePlotWindow | None" = None
-        self._data_analysis_window: "DataAnalysisWindow | None" = None
-        self._situation3d_window: "Situation3DWindow | None" = None
         self.avoidance_window: AvoidanceWindow | None = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()

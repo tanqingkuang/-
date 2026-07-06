@@ -73,25 +73,16 @@ class MainWindowLayoutMixin:
 
     def _build_menus(self) -> None:
         """构建菜单栏入口。注意：常驻控制集中到菜单，避免占用主界面高度。"""
-        # 保存菜单引用，避免 PySide 临时包装对象回收后测试或后续逻辑无法稳定访问。
-        self.monitor_menu = self.menuBar().addMenu("控制监控(&V)")
-        self.monitor_menu.addAction("数据监控(&M)").triggered.connect(self._open_live_monitor)
-        # 离线分析是 upstream 新增入口，rebase 后继续归在控制监控菜单下。
-        self.monitor_menu.addAction("离线分析(&A)").triggered.connect(self._open_offline_plot)
-
-        # 数据分析是独立离线工具入口，不复用控制监控下的旧离线回放窗口。
-        self.data_analysis_menu = self.menuBar().addMenu("数据分析(&D)")
-        self.data_analysis_menu.addAction("控制效果分析(&A)").triggered.connect(self._open_data_analysis_window)
+        # 控制监控和数据分析可能被裁剪，菜单注册交给功能注册表决定。
+        self.features.register_primary_menus(self)
 
         # 避障规划放到菜单栏顶层入口，避免窄左栏承载复杂参数面板。
         self.avoidance_action = QAction("避障规划(&O)", self)
         self.avoidance_action.triggered.connect(self._open_avoidance_window)
         self.menuBar().addAction(self.avoidance_action)
 
-        # 3D 态势放到顶层入口；窗口主体独立在 situation3d 包中，降低主界面冲突面。
-        self.situation3d_action = QAction("3D态势(&3)", self)
-        self.situation3d_action.triggered.connect(self._open_situation3d_window)
-        self.menuBar().addAction(self.situation3d_action)
+        # 3D 态势位于避障之后；裁剪版不注册该入口。
+        self.features.register_secondary_menus(self)
 
         # 帮助菜单承载低频入口，避免主题/日志控件常驻占用主画布顶部空间。
         self.help_menu = self.menuBar().addMenu("帮助(&H)")
