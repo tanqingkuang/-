@@ -53,6 +53,7 @@ class TopView(QGraphicsView):
         self.show_grid = True
         # 通信链路默认显示，可由主窗口工具条复选框关闭。
         self.show_links = True
+        self.trail_seconds = TRAIL_SECONDS
         # _manual_view 为真表示用户手动调过视角，此后禁止自动铺满抢镜。
         self._manual_view = False
         # 中键拖拽起点；左键框选起止点（None 表示当前无对应操作进行中）。
@@ -640,11 +641,27 @@ class TopView(QGraphicsView):
             painter.scale(1.0 / self.scale_value, 1.0 / self.scale_value)
             painter.setBrush(color)
             painter.setPen(QPen(self.theme.panel, 2))
-            # 用箭头状多边形表示飞机：尖端朝 +x（机头），尾部带内凹缺口。
-            path = QPainterPath(QPointF(12, 0))
-            path.lineTo(-9, -7)
-            path.lineTo(-4.5, 0)
-            path.lineTo(-9, 7)
+            # 用民航机俯视剪影表示飞机：钝鼻朝 +x，主翼与尾翼保留可辨识的屏幕尺寸。
+            path = QPainterPath(QPointF(18, -1.35))
+            path.lineTo(13.2, -2.85)
+            path.lineTo(3, -3.4)
+            path.lineTo(-6, -18)
+            path.lineTo(-8, -17)
+            path.lineTo(-3, -3)
+            path.lineTo(-15.5, -2.4)
+            path.lineTo(-16.5, -7.2)
+            path.lineTo(-18.6, -6.8)
+            path.lineTo(-17.4, 0)
+            path.lineTo(-18.6, 6.8)
+            path.lineTo(-16.5, 7.2)
+            path.lineTo(-15.5, 2.4)
+            path.lineTo(-3, 3)
+            path.lineTo(-8, 17)
+            path.lineTo(-6, 18)
+            path.lineTo(3, 3.4)
+            path.lineTo(13.2, 2.85)
+            path.lineTo(18, 1.35)
+            path.quadTo(QPointF(21, 0), QPointF(18, -1.35))
             path.closeSubpath()
             painter.drawPath(path)
             painter.restore()
@@ -684,15 +701,19 @@ class TopView(QGraphicsView):
 
     def _draw_trail(self, painter: QPainter, node: NodeState, is_leader: bool, current_time: float) -> None:
         """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
+        # 0 秒时直接跳过绘制，避免后续透明度计算出现除零分支。
         # 两个采样点即可表达刚启动后的位移，避免运行初期看起来像静止。
-        if len(node.trail) <= 1:
+        if self.trail_seconds <= 0.0 or len(node.trail) <= 1:
             return
         base = self.theme.leader if is_leader else self.theme.wingman
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
         for previous, current in zip(node.trail, node.trail[1:]):
             age = max(0.0, current_time - current.time)
+            # 数据源可能保留旧点，绘制端仍按当前设置再兜底裁剪一次。
+            if age > self.trail_seconds:
+                continue
             # 透明度随存活时间线性衰减，并设 0.08 下限防止完全消失突变。
-            alpha = max(0.08, 1.0 - age / TRAIL_SECONDS)
+            alpha = max(0.08, 1.0 - age / self.trail_seconds)
             color = QColor(base)
             # 长机尾迹整体比僚机略浓。
             color.setAlphaF((0.52 if is_leader else 0.44) * alpha)

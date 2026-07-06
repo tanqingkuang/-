@@ -1,16 +1,40 @@
-"""集结僚机解析长机广播：在 LeaderFollower 基础上额外解析 slot_scale 字段。注意：多消息同帧后到覆盖先到，三字段来自同一条消息保证一致性。"""
+"""僚机解析长机广播：唯一的入站实现，额外解析 slot_scale/t_ref 字段。注意：hold 场景长机若不广播这些字段（旧格式），按 scale=1.0/t_ref_valid=False 兜底；多消息同帧后到覆盖先到，各字段来自同一条消息保证一致性。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import MotionProfS, RallySlotScaleS
+from src.algorithm.context.leaf_types import FormSnapshotS, FormStageE, RallySlotScaleS
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
-from src.algorithm.units.process.inbound.leader_follower import (
-    LEADER_BROADCAST_TOPIC,
-    LeaderFollower,
-    _write_motion_from_payload,
-)
+
+LEADER_BROADCAST_TOPIC = "formation.leader"
+
+
+def _write_motion_from_payload(payload: dict[str, object], dst: object) -> None:
+    """把收到的长机运动载荷写入输出端口。注意：消息字段缺失时保持目标对象默认值。"""
+    pos = payload.get("pos")
+    vd = payload.get("vd")
+    # 位置或速度子结构缺失则整体放弃，保留目标对象原值
+    if not isinstance(pos, dict) or not isinstance(vd, dict):
+        return
+    # 逐字段以 float 还原，缺省补 0；字段名须与出站 _motion_payload 一致
+    dst.pos.east = float(pos.get("east", 0.0))
+    dst.pos.north = float(pos.get("north", 0.0))
+    dst.pos.h = float(pos.get("h", 0.0))
+    dst.v.vEast = float(vd.get("vEast", 0.0))
+    dst.v.vNorth = float(vd.get("vNorth", 0.0))
+    dst.v.vUp = float(vd.get("vUp", 0.0))
+    dst.v.vTheta = float(vd.get("vTheta", 0.0))
+    dst.v.vPsi = float(vd.get("vPsi", 0.0))
+    dst.v.vd = float(vd.get("vd", 0.0))
+    dst.v.dVPsi = float(vd.get("dVPsi", 0.0))
+
+
+def _write_cmd_from_payload(payload: dict[str, object], dst: FormSnapshotS) -> None:
+    """把收到的编队指令载荷写入输出端口。注意：stage 转回枚举，pattern 为纯整型队形索引，字段缺省回退到 0。"""
+    dst.stage = FormStageE(int(payload.get("stage", FormStageE.NONE)))
+    dst.pattern = int(payload.get("pattern", 0))
+    dst.step = int(payload.get("step", 0))
 
 
 @dataclass
@@ -64,10 +88,7 @@ class RallyLeaderFollower(InboundBase):
                 scale_parsed, scale_rate_parsed = 1.0, 0.0
             # 全部字段解析成功后，一次性写入输出端口，保证多字段一致性。
             _write_motion_from_payload(state, y.leaderState)
-            from src.algorithm.context.leaf_types import FormStageE
-            y.cmd.stage = FormStageE(int(cmd.get("stage", FormStageE.NONE)))
-            y.cmd.pattern = int(cmd.get("pattern", 0))
-            y.cmd.step = int(cmd.get("step", 0))
+            _write_cmd_from_payload(cmd, y.cmd)
             y.slotScale.scale = scale_parsed
             y.slotScale.scaleRate = scale_rate_parsed
             y.t_ref = t_ref_parsed

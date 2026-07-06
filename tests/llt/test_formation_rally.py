@@ -40,7 +40,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RallyJoinPosInitS,
     RallyJoinPosInputS,
 )
-from src.algorithm.units.algo.pos_calc.scaled_slot_geometry import ScaledSlotGeometry, ScaledSlotInitS, ScaledSlotInputS
+from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInputS, FollowerStatusOutputS
@@ -52,8 +52,11 @@ from src.algorithm.units.process.outbound.follower_broadcast import (
     FollowerBroadcastInitS,
     FollowerBroadcastInputS,
 )
-from src.algorithm.units.process.outbound.leader_broadcast import _motion_payload
-from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
+from src.algorithm.units.process.outbound.rally_leader_broadcast import (
+    RallyLeaderBroadcast,
+    RallyLeaderBroadcastInputS,
+    _motion_payload,
+)
 from src.common.envelope import MessageEnvelope
 
 
@@ -1052,7 +1055,7 @@ class RallyLoiterSpeedBoundsTests(unittest.TestCase):
 class RallyPosCalcTests(unittest.TestCase):
     """验证集结专用位置解算单元。"""
 
-    def test_scaled_slot_geometry_scales_position_and_adds_compress_feedforward(self) -> None:
+    def test_slot_geometry_scales_position_and_adds_compress_feedforward(self) -> None:
         """验证槽位偏置缩放和 scaleRate 速度前馈。"""
 
         ctx = FormContextS()
@@ -1060,11 +1063,12 @@ class RallyPosCalcTests(unittest.TestCase):
         ctx.selfState = _motion(east=80.0, north=210.0, h=500.0, v_east=20.0)
         ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2)
         ctx.slotScale = RallySlotScaleS(scale=2.0, scaleRate=-0.5)
-        scaled = ScaledSlotGeometry()
-        scaled.init(ScaledSlotInitS(selfId="R02", commInit=_comm_init()))
+        comm_init = _comm_init()
+        slot = SlotGeometry()
+        slot.init(SlotGeometryInitS("R02", comm_init.formPat, comm_init.formPos))
 
-        scaled.step(
-            ScaledSlotInputS(
+        slot.step(
+            SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 cmd=ctx.cmd,
@@ -1079,7 +1083,7 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.v.vEast, 25.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -2.5)
 
-    def test_scaled_slot_geometry_altitude_fixed_not_scaled(self) -> None:
+    def test_slot_geometry_altitude_fixed_not_scaled(self) -> None:
         """验证高度偏置不随 scale 扩展：slot.y=30 时，h = leader.h + 30，与 scale 无关。"""
 
         comm_init_alt = FormCommInitS(
@@ -1102,11 +1106,11 @@ class RallyPosCalcTests(unittest.TestCase):
         ctx.selfState = _motion(east=80.0, north=210.0, h=530.0, v_east=20.0)
         ctx.cmd = FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2)
         ctx.slotScale = RallySlotScaleS(scale=2.0, scaleRate=-0.5)
-        scaled = ScaledSlotGeometry()
-        scaled.init(ScaledSlotInitS(selfId="R02", commInit=comm_init_alt))
+        slot = SlotGeometry()
+        slot.init(SlotGeometryInitS("R02", comm_init_alt.formPat, comm_init_alt.formPos))
 
-        scaled.step(
-            ScaledSlotInputS(
+        slot.step(
+            SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 cmd=ctx.cmd,
@@ -1122,20 +1126,25 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 80.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 210.0)
 
-    def test_scaled_slot_geometry_requires_slot_scale_port(self) -> None:
-        """验证 slotScale 端口未绑定时失败。"""
+    def test_slot_geometry_without_slot_scale_uses_unscaled_slot(self) -> None:
+        """验证 slotScale 端口未绑定时按未缩放槽位工作，兼容普通 SlotGeometry 调用方式。"""
 
-        scaled = ScaledSlotGeometry()
-        scaled.init(ScaledSlotInitS(selfId="R02", commInit=_comm_init()))
-        with self.assertRaises(ValueError):
-            scaled.step(
-                ScaledSlotInputS(
-                    selfState=_motion(),
-                    leaderState=_motion(v_east=20.0),
-                    cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0),
-                ),
-                PosCalcOutputS(selfCmd=MotionProfS()),
-            )
+        comm_init = _comm_init()
+        slot = SlotGeometry()
+        out = PosCalcOutputS(selfCmd=MotionProfS())
+        slot.init(SlotGeometryInitS("R02", comm_init.formPat, comm_init.formPos))
+        slot.step(
+            SlotGeometryInputS(
+                selfState=_motion(),
+                leaderState=_motion(east=100.0, north=200.0, h=500.0, v_east=20.0),
+                cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0),
+            ),
+            out,
+        )
+
+        self.assertAlmostEqual(out.selfCmd.pos.east, 90.0)
+        self.assertAlmostEqual(out.selfCmd.pos.north, 205.0)
+        self.assertAlmostEqual(out.selfCmd.pos.h, 500.0)
 
     def test_rally_join_pos_entry_point_lies_on_loiter_circle(self) -> None:
         """验证 FLYING 阶段算出的切入点 T 落在盘旋圆上，且不再等于 init.loose_slot。"""
@@ -1453,7 +1462,7 @@ class RallyPosCalcTests(unittest.TestCase):
 class RallyEntityTests(unittest.TestCase):
     """验证集结长机和僚机实体的主链路。"""
 
-    def test_rally_follower_latches_arrival_and_switches_to_scaled_slot_after_step_one(self) -> None:
+    def test_rally_follower_latches_arrival_and_switches_to_slot_scale_after_step_one(self) -> None:
         """验证僚机到达松散点后进入 EXITED 上报，并在长机进入 LOOSE/COMPRESS 后使用缩放槽位。"""
 
         follower = RallyFollowerEntity()
@@ -1491,7 +1500,7 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         assert second.selfCmd is not None
-        # CATCHUP 阶段直接复用 ScaledSlotGeometry：R02 槽位偏置 (x=-10,z=-5)，长机航迹东向，
+        # CATCHUP 阶段直接复用 SlotGeometry 的缩放能力：R02 槽位偏置 (x=-10,z=-5)，长机航迹东向，
         # 未缩放偏置投影为 (east=-10, north=5)；scale=2.0 → 真实槽位 = leader + scale*offset
         # = (100-20, 200+10) = (80, 210)。
         self.assertAlmostEqual(second.selfCmd.pos.east, 80.0)

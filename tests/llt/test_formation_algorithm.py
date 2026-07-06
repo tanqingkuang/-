@@ -20,6 +20,7 @@ from src.algorithm.context.leaf_types import (
     NetWorkS,
     PosInEarthS,
     PosTrackDiagS,
+    RallySlotScaleS,
     RemoteCmdS,
     VdInEarthS,
     WayLineS,
@@ -40,10 +41,10 @@ from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackA
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
 from src.algorithm.units.process.formation_task.hold import Hold
-from src.algorithm.units.process.inbound.base import InboundInputS, InboundOutputS
-from src.algorithm.units.process.inbound.leader_follower import LeaderFollower
-from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
-from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
+from src.algorithm.units.process.inbound.base import InboundInputS
+from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
+from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
+from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.units.process.tra_plan.noop import Noop
@@ -1105,7 +1106,7 @@ class ProcessUnitTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0, step=2)
         ctx.selfState = _motion(east=1.0, north=2.0, h=3.0, v_east=4.0, v_north=5.0)
-        outbound = LeaderBroadcast()
+        outbound = RallyLeaderBroadcast()
         outbound.init(
             OutboundInitS(
                 selfId="A01",
@@ -1118,21 +1119,27 @@ class ProcessUnitTests(unittest.TestCase):
         )
         out = OutboundOutputS()
 
-        outbound.step(OutboundInputS(cmd=ctx.cmd, selfState=ctx.selfState), out)
+        outbound.step(RallyLeaderBroadcastInputS(cmd=ctx.cmd, selfState=ctx.selfState, slotScale=ctx.slotScale), out)
 
         self.assertEqual(len(out.outbox), 1)
         self.assertEqual(out.outbox[0].source, "A01")
         self.assertEqual(out.outbox[0].target, ["A02", "A03"])
 
         follower_ctx = FormContextS()
-        inbound = LeaderFollower()
-        inbound.step(InboundInputS(inbox=out.outbox), InboundOutputS(follower_ctx.leaderState, follower_ctx.cmd))
+        inbound = RallyLeaderFollower()
+        inbound_y = RallyLeaderFollowerOutputS(
+            leaderState=follower_ctx.leaderState, cmd=follower_ctx.cmd, slotScale=follower_ctx.slotScale
+        )
+        inbound.step(InboundInputS(inbox=out.outbox), inbound_y)
 
         self.assertEqual(follower_ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(follower_ctx.cmd.pattern, 0)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
+        # hold 长机的 ctx.slotScale 停在默认值，广播出去就是 scale=1.0/scaleRate=0.0
+        self.assertAlmostEqual(follower_ctx.slotScale.scale, 1.0)
+        self.assertAlmostEqual(follower_ctx.slotScale.scaleRate, 0.0)
 
-        inbound.step(InboundInputS(inbox=[]), InboundOutputS(follower_ctx.leaderState, follower_ctx.cmd))
+        inbound.step(InboundInputS(inbox=[]), inbound_y)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
 
     def test_inbound_skips_non_leader_follower_messages(self) -> None:
@@ -1141,7 +1148,10 @@ class ProcessUnitTests(unittest.TestCase):
         ctx = FormContextS()
         msg = MessageEnvelope("node.status", "A99", "A02", 0.0, {"health": "normal"})
 
-        LeaderFollower().step(InboundInputS(inbox=[msg]), InboundOutputS(ctx.leaderState, ctx.cmd))
+        RallyLeaderFollower().step(
+            InboundInputS(inbox=[msg]),
+            RallyLeaderFollowerOutputS(leaderState=ctx.leaderState, cmd=ctx.cmd, slotScale=RallySlotScaleS()),
+        )
 
         self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
 

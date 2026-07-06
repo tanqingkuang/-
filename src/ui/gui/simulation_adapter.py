@@ -34,9 +34,23 @@ class MockSimulation:
         self.disturbance_until = 0.0
         self.fault_node: str | None = None
         self.loss_until = 0.0
+        self.trail_seconds = TRAIL_SECONDS
         self.nodes: list[NodeState] = []
         self.links: list[LinkState] = []
         self.reset()
+
+    def set_trail_seconds(self, seconds: float) -> None:
+        """设置尾迹保留时长。注意：0 表示关闭尾迹缓存与显示。"""
+        # 负数输入按关闭处理，保证外部控件和脚本调用都落到同一边界。
+        self.trail_seconds = max(0.0, seconds)
+        if self.trail_seconds <= 0.0:
+            # Mock 节点直接持有 trail，关闭时逐节点清空即可让下一帧无尾迹。
+            for node in self.nodes:
+                node.trail.clear()
+            return
+        for node in self.nodes:
+            # 切到更短时长时立即裁剪旧点，避免下一帧前仍显示超长尾迹。
+            node.trail = [point for point in node.trail if self.time - point.time <= self.trail_seconds]
 
     def reset(self) -> Snapshot:
         """复位 MockSimulation 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -137,9 +151,13 @@ class MockSimulation:
             if node.x > WORLD_WIDTH + 60.0:
                 node.x = -30.0
                 node.trail.clear()
-            # 追加当前采样点并裁掉超过保留时长的旧点。
-            node.trail.append(TrailPoint(node.x, node.y, node_altitude(index, self.time), self.time))
-            node.trail = [point for point in node.trail if self.time - point.time <= TRAIL_SECONDS]
+            # 0 秒代表关闭尾迹：演示数据源也必须立即清空已有线段。
+            if self.trail_seconds <= 0.0:
+                node.trail.clear()
+            else:
+                # 追加当前采样点并裁掉超过保留时长的旧点。
+                node.trail.append(TrailPoint(node.x, node.y, node_altitude(index, self.time), self.time))
+                node.trail = [point for point in node.trail if self.time - point.time <= self.trail_seconds]
 
         # 扰动窗口到期后自动清除，恢复正常显示。
         if self.disturbance != "无" and self.time > self.disturbance_until:
@@ -204,6 +222,7 @@ class ControllerSimulationAdapter:
         self.disturbance = "无"
         # 控制器只给瞬时位置，尾迹需由本适配器按 node_id 自行累积缓存。
         self._trail_by_node: dict[str, list[TrailPoint]] = {}
+        self.trail_seconds = TRAIL_SECONDS
         # 记录上一帧位置与时间，用于差分估算速度（控制器速度字段不一定可靠）。
         self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
         # 已消费的事件数游标，避免重复处理历史扰动事件。
@@ -216,6 +235,20 @@ class ControllerSimulationAdapter:
     def time(self) -> float:
         """返回当前仿真时间。注意：单位为秒。"""
         return self.controller.get_snapshot().time_s
+
+    def set_trail_seconds(self, seconds: float) -> None:
+        """设置尾迹保留时长。注意：0 表示关闭尾迹缓存与显示。"""
+        # 控制器适配层同样夹到非负，避免调用端绕过 spinbox 后产生负窗口。
+        self.trail_seconds = max(0.0, seconds)
+        if self.trail_seconds <= 0.0:
+            # 缓存整体清掉，后续转换快照时不会再把旧轨迹带回 NodeState。
+            self._trail_by_node.clear()
+            return
+        # 当前时间来自控制器快照，确保裁剪基准和后续 _convert_snapshot 一致。
+        current_time = self.controller.get_snapshot().time_s
+        for trail in self._trail_by_node.values():
+            # 切到更短时长时立即裁剪缓存，避免后续快照继续携带旧点。
+            trail[:] = [point for point in trail if current_time - point.time <= self.trail_seconds]
 
     def load_config(self, path: str) -> Snapshot:
         """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
@@ -370,12 +403,17 @@ class ControllerSimulationAdapter:
                     vy = node.vy_mps
             self._last_xy_by_node[node.node_id] = (node.x_m, node.y_m, snapshot.time_s)
 
-            # 取出该节点尾迹缓存；仅当时间戳推进时追加新点，避免同一帧重复入栈。
-            trail = self._trail_by_node.setdefault(node.node_id, [])
-            if not trail or trail[-1].time != snapshot.time_s:
-                trail.append(TrailPoint(node.x_m, node.y_m, node.altitude_m, snapshot.time_s))
-            # 原地裁剪超期尾迹点（用切片赋值以保持同一列表对象）。
-            trail[:] = [point for point in trail if snapshot.time_s - point.time <= TRAIL_SECONDS]
+            # 控制器自身不保存 GUI 尾迹，关闭时需要删除本地缓存防止重新开启后残留旧线。
+            if self.trail_seconds <= 0.0:
+                self._trail_by_node.pop(node.node_id, None)
+                trail: list[TrailPoint] = []
+            else:
+                # 取出该节点尾迹缓存；仅当时间戳推进时追加新点，避免同一帧重复入栈。
+                trail = self._trail_by_node.setdefault(node.node_id, [])
+                if not trail or trail[-1].time != snapshot.time_s:
+                    trail.append(TrailPoint(node.x_m, node.y_m, node.altitude_m, snapshot.time_s))
+                # 裁剪阈值跟随工具栏输入，保留同一列表对象便于后续引用稳定。
+                trail[:] = [point for point in trail if snapshot.time_s - point.time <= self.trail_seconds]
             nodes.append(
                 NodeState(
                     node_id=node.node_id,

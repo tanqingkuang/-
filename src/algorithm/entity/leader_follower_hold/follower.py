@@ -11,8 +11,8 @@ from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
-from src.algorithm.units.process.inbound.base import InboundInputS, InboundOutputS
-from src.algorithm.units.process.inbound.leader_follower import LeaderFollower
+from src.algorithm.units.process.inbound.base import InboundInputS
+from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.noop import Noop
 
@@ -27,7 +27,7 @@ class FollowerEntity(EntityBase):
         self._inbox = []
 
         # 僚机处理链：入站解析 -> 空规划(占位) -> 槽位几何 -> 位置跟踪
-        self._inbound = LeaderFollower()
+        self._inbound = RallyLeaderFollower()
         self._tra_plan = Noop()  # 僚机不自规划航线，用空实现占位以对齐链路结构
         self._pos_calc = SlotGeometry()
         self._pos_track = PidCompose()
@@ -40,13 +40,20 @@ class FollowerEntity(EntityBase):
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
         self._inbound_u = InboundInputS(inbox=self._inbox)
-        self._inbound_y = InboundOutputS(leaderState=self.cxt.leaderState, cmd=self.cxt.cmd)
+        # slotScale 端口必须绑定（RallyLeaderFollower 强制校验非 None），hold 场景只使用默认 scale=1.0；
+        # 若接收到旧格式广播缺少 slot_scale/t_ref，则仍回退到 scale=1.0/t_ref_valid=False。
+        self._inbound_y = RallyLeaderFollowerOutputS(
+            leaderState=self.cxt.leaderState, cmd=self.cxt.cmd, slotScale=self.cxt.slotScale
+        )
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
-        # 槽位几何输入：长机状态 + 编队指令即可定出僚机目标位，前向待飞距闭环已下沉到 PidCompose，无需本机状态
+        # 槽位几何输入：长机状态 + 编队指令即可定出僚机目标位，前向待飞距闭环已下沉到 PidCompose，无需本机状态。
+        # slotScale 端口绑定到 Context：hold 场景默认 scale=1.0/scaleRate=0.0，行为等价于未缩放槽位；
+        # 集结场景复用同一 SlotGeometry 时可由 Rally 动态写入缩放因子。
         self._pos_calc_u = SlotGeometryInputS(
             leaderState=self.cxt.leaderState,
             cmd=self.cxt.cmd,
+            slotScale=self.cxt.slotScale,
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)

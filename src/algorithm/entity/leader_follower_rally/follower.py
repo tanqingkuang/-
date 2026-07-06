@@ -25,7 +25,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RallyJoinPosInitS,
     RallyJoinPosInputS,
 )
-from src.algorithm.units.algo.pos_calc.scaled_slot_geometry import ScaledSlotGeometry, ScaledSlotInitS, ScaledSlotInputS
+from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
@@ -78,7 +78,7 @@ class RallyFollowerEntity(EntityBase):
         self._inbound = RallyLeaderFollower()
         self._tra_plan = Noop()
         self._rally_join = RallyJoinPos()
-        self._pos_calc_slot = ScaledSlotGeometry()
+        self._pos_calc_slot = SlotGeometry()
         self._pos_track = PidCompose()
         self._outbound = FollowerBroadcast()
 
@@ -101,10 +101,7 @@ class RallyFollowerEntity(EntityBase):
             v_up_max_mps=v_up_max,
             control_period_s=cfg.control_period_s,
         ))
-        self._pos_calc_slot.init(ScaledSlotInitS(
-            selfId=cfg.selfInit.id,
-            commInit=cfg.commInit,
-        ))
+        self._pos_calc_slot.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
         self._pos_track.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._outbound.init(FollowerBroadcastInitS(
             selfId=cfg.selfInit.id,
@@ -122,7 +119,7 @@ class RallyFollowerEntity(EntityBase):
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
         self._rally_join_u = RallyJoinPosInputS(selfState=self.cxt.selfState)
-        self._slot_u = ScaledSlotInputS(
+        self._slot_u = SlotGeometryInputS(
             selfState=self.cxt.selfState,
             leaderState=self.cxt.leaderState,
             cmd=self.cxt.cmd,

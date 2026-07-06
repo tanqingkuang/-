@@ -261,7 +261,7 @@ def zero_acceleration(a: AccInEarthS) -> None:
 
 @dataclass
 class RallySlotScaleS:
-    """集结阶段的槽位偏置缩放因子。注意：需跨拍保留，进 Context；scaleRate 供 ScaledSlotGeometry 计算压缩速度前馈。"""
+    """集结阶段的槽位偏置缩放因子。注意：需跨拍保留，进 Context；scaleRate 供 SlotGeometry 计算压缩速度前馈。"""
 
     scale: float = 1.0  # 槽位偏置放大倍数；1.0 为最终队形，>1.0 为松散放大
     scaleRate: float = 0.0  # scale 对时间的导数（1/s）；LOOSE 为 0，COMPRESS 为负值

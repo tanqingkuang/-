@@ -36,7 +36,7 @@ from src.ui.gui.main_window import (
     default_project_root,
     run_gui,
 )
-from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX
+from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, TRAIL_SECONDS
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -373,6 +373,64 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(repeated.nodes[0].vx, 0.0)
         self.assertAlmostEqual(repeated.nodes[0].vy, 8.0)
         self.assertAlmostEqual(repeated.cpu_utilization, 0.42)
+
+    def test_trail_seconds_input_defaults_and_propagates(self) -> None:
+        self.assertAlmostEqual(self.window.trail_seconds_input.value(), TRAIL_SECONDS)
+        self.assertAlmostEqual(self.window.top_view.trail_seconds, TRAIL_SECONDS)
+        self.assertAlmostEqual(self.window.side_view.trail_seconds, TRAIL_SECONDS)
+        self.assertAlmostEqual(self.window.sim.trail_seconds, TRAIL_SECONDS)
+
+        self.window.trail_seconds_input.setValue(6.5)
+        self.app.processEvents()
+
+        self.assertAlmostEqual(self.window.top_view.trail_seconds, 6.5)
+        self.assertAlmostEqual(self.window.side_view.trail_seconds, 6.5)
+        self.assertAlmostEqual(self.window.sim.trail_seconds, 6.5)
+
+        self.window.trail_seconds_input.setValue(0.0)
+        self.app.processEvents()
+
+        self.assertAlmostEqual(self.window.top_view.trail_seconds, 0.0)
+        self.assertAlmostEqual(self.window.side_view.trail_seconds, 0.0)
+        self.assertAlmostEqual(self.window.sim.trail_seconds, 0.0)
+
+    def test_adapter_trail_seconds_zero_outputs_no_trail(self) -> None:
+        node = ControllerNodeState(
+            node_id="A01",
+            role="leader",
+            health="normal",
+            x_m=100.0,
+            y_m=200.0,
+            altitude_m=1200.0,
+            psi_v_deg=90.0,
+            theta_deg=0.0,
+            speed_mps=8.0,
+            vx_mps=0.0,
+            vy_mps=8.0,
+            vz_mps=0.0,
+            nx=0.0,
+            nz=1.0,
+            phi_deg=0.0,
+            psi_dot_deg_s=0.0,
+        )
+        snapshot = ControllerSnapshot(
+            time_s=1.0,
+            duration_s=10.0,
+            step_s=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            cpu_utilization=0.42,
+            nodes=[node],
+            links=[],
+        )
+        self.window.sim._convert_snapshot(snapshot)
+        self.window.sim._convert_snapshot(replace(snapshot, time_s=2.0, nodes=[replace(node, x_m=108.0)]))
+
+        self.window.sim.set_trail_seconds(0.0)
+        closed = self.window.sim._convert_snapshot(replace(snapshot, time_s=3.0, nodes=[replace(node, x_m=116.0)]))
+
+        self.assertEqual(closed.nodes[0].trail, [])
+        self.assertEqual(self.window.sim._trail_by_node, {})
 
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
@@ -802,6 +860,49 @@ class GuiViewInteractionTests(unittest.TestCase):
         ]
 
         self.assertGreaterEqual(len(touched), 6)
+
+    def test_top_view_trail_seconds_zero_hides_trail(self) -> None:
+        view = self.window.top_view
+        view.show_grid = False
+        view.trail_seconds = 0.0
+        view.snapshot = Snapshot(
+            time=0.2,
+            duration=10.0,
+            step=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            disturbance="无",
+            nodes=[
+                NodeState(
+                    "A01",
+                    "leader",
+                    160.0,
+                    220.0,
+                    20.0,
+                    0.0,
+                    trail=[
+                        TrailPoint(120.0, 20.0, 1200.0, 0.1),
+                        TrailPoint(160.0, 20.0, 1200.0, 0.2),
+                    ],
+                )
+            ],
+            links=[],
+        )
+        view.scale_value = 0.2
+        view.offset = QPointF(120.0, 120.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        canvas = self.window.theme.canvas.name()
+        y = round(view._world_to_viewport(QPointF(0.0, 20.0)).y())
+        touched = [
+            x
+            for x in range(image.width())
+            if image.pixelColor(x, y).name() != canvas
+        ]
+
+        self.assertEqual(touched, [])
 
     def test_multi_segment_route_is_available_to_views_after_load(self) -> None:
         route_config = {

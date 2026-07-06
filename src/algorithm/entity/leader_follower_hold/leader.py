@@ -32,8 +32,8 @@ from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackA
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
 from src.algorithm.units.process.formation_task.hold import Hold, HoldTaskInitS
-from src.algorithm.units.process.outbound.base import OutboundInputS, OutboundOutputS
-from src.algorithm.units.process.outbound.leader_broadcast import LeaderBroadcast, OutboundInitS
+from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
+from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 
@@ -66,7 +66,7 @@ class LeaderEntity(EntityBase):
         self._tra_plan = LeaderRoute()
         self._pos_calc = RouteInterp()
         self._pos_track = PidCompose()
-        self._outbound = LeaderBroadcast()
+        self._outbound = RallyLeaderBroadcast()
 
         # 各单元一次性初始化；航路规划注入预置航线，广播注入本机 id 与拓扑
         self._task.init(HoldTaskInitS(initialPattern=cfg.commInit.initialPattern))
@@ -89,7 +89,16 @@ class LeaderEntity(EntityBase):
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
         self._pos_track_diag = PosTrackDiagS()
         self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
-        self._outbound_u = OutboundInputS(cmd=self.cxt.cmd, selfState=self.cxt.selfState)
+        # slotScale/t_ref 端口必须绑定（RallyLeaderBroadcast 强制校验 slotScale 非 None）；
+        # hold 场景广播默认集结字段：scale=1.0/scaleRate=0.0/t_ref_valid=False 恒定不变，
+        # 僚机用 RallyLeaderFollower 统一解析后仍按普通保持编队执行。
+        self._outbound_u = RallyLeaderBroadcastInputS(
+            cmd=self.cxt.cmd,
+            selfState=self.cxt.selfState,
+            slotScale=self.cxt.slotScale,
+            t_ref=self.cxt.rally_t_ref,
+            t_ref_valid=self.cxt.rally_t_ref_valid,
+        )
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
     def step(self, u: EntityInputS, y: EntityOutputS) -> None:
