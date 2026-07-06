@@ -767,20 +767,21 @@ class LateralTrackAngleTests(unittest.TestCase):
     """横侧向串级 + 航迹角变限幅控制律。"""
 
     def _cfg(self, **kw: float) -> LateralTrackAngleInitS:
+        # P+PI 直接量：kpPos·kpVel=0.02(等效并联 Kp)、kpVel=0.12(等效并联 Kd)、kiVel=0。
         base = dict(
-            kp=0.02, kd=0.12, ki=0.0, dt=0.05, rollMaxRad=math.radians(40.0),
+            kpPos=0.02 / 0.12, kpVel=0.12, kiVel=0.0, dt=0.05, rollMaxRad=math.radians(40.0),
             gammaMaxRad=math.radians(30.0), floorRad=math.radians(7.0), margin=1.2,
         )
         base.update(kw)
         return LateralTrackAngleInitS(**base)
 
     def test_unsaturated_matches_parallel_pid(self) -> None:
-        """无饱和 + ki=0 时，串级输出严格等于旧并联式 kp·dZ + kd·velErr(平滑迁移的等价保证)。"""
+        """无饱和 + kiVel=0 时，串级输出 = (kpPos·kpVel)·dZ + kpVel·velErr，等效并联 PD。"""
         ctrl = LateralTrackAngle()
         ctrl.init(self._cfg())
         dz, vel_err, v = 1.0, 0.5, 20.0  # 小侧偏，不触发变限幅饱和
         got = ctrl.step(dz, vel_err, v)
-        self.assertAlmostEqual(got, 0.02 * dz + 0.12 * vel_err)
+        self.assertAlmostEqual(got, 0.02 * dz + 0.12 * vel_err)  # 0.02=kpPos·kpVel、0.12=kpVel
         self.assertAlmostEqual(got, 0.08)
 
     def test_variable_track_angle_limit(self) -> None:
@@ -800,7 +801,7 @@ class LateralTrackAngleTests(unittest.TestCase):
         v = 20.0
         a1 = ctrl.step(1_000.0, 0.0, v)
         a2 = ctrl.step(1_000_000.0, 0.0, v)
-        self.assertAlmostEqual(a1, 0.12 * v * math.sin(math.pi / 2))  # = 2.4，对应 90° 垂直切入
+        self.assertAlmostEqual(a1, 0.12 * v * math.sin(math.pi / 2))  # kpVel·V·sin90 = 2.4，对应 90° 垂直切入
         self.assertAlmostEqual(a1, a2)  # 侧偏放大 1000 倍指令不变：有界拦截，不会越滚越紧
         self.assertGreater(a1, 0.0)     # dZ>0(目标在右) → 向右(正)修正
 
@@ -812,10 +813,10 @@ class LateralTrackAngleTests(unittest.TestCase):
         out = ctrl.step(1_000.0, 100.0, 20.0)
         self.assertAlmostEqual(out, 9.80665 * math.tan(math.radians(40.0)))  # ≈8.23 m/s²
 
-    def test_rejects_zero_kd(self) -> None:
-        """kd=0 时串级 K1=-kp/kd 与内环比例都退化，应在 init 拦截。"""
-        with self.assertRaisesRegex(ValueError, "kd"):
-            LateralTrackAngle().init(self._cfg(kd=0.0))
+    def test_rejects_zero_kpvel(self) -> None:
+        """kpVel=0 时串级内环无输出，应在 init 拦截。"""
+        with self.assertRaisesRegex(ValueError, "kpVel"):
+            LateralTrackAngle().init(self._cfg(kpVel=0.0))
 
 
 class PosTrackClosedLoopTests(unittest.TestCase):

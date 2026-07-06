@@ -197,17 +197,17 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
     """按给定前向增益生成位置跟踪器配置。注意：前向/垂向走串级 P+PI(可限速)，侧向恒为位置环 Pid，长机与僚机只在前向通道有别。"""
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
-    # 侧向(侧偏)改串级(P+PI)+航迹角变限幅：小侧偏无饱和+ki=0 时等价并联式 kp·dZ+kd·velErr，
-    # 其中 Kp=kp、Kd=kd 相互独立(不同于前向/垂向 PPI 的 Kp=kpVel·kpPos 耦合)。
-    # 按含加速度滤波(w=4,zf=0.65)的四阶闭环协调配极点整定：wn≈0.15 rad/s(kp≈wn²)。
-    # 旧值 kp=0.02/kd=0.30 实测过阻尼 zeta≈1.0；本次把 kd 降到 0.22、阻尼到 zeta≈0.76。
-    # 注意：目标阻尼本为 0.65，但 kd=0.19(zeta=0.65)会让 150m 大侧偏切入过冲到对侧 ~10m、撞欠阻尼护栏
-    # (test_follower_lateral_offset...)；该大机动过冲须由后续 TD 软化指令解决，TD 到位前先妥协到 zeta≈0.76
-    # (过冲 ~3.7m 仍在护栏内)。kd=2zeta·wn。(旧注：kd 曾从自身系并联 0.12 上调到 0.30 防欠阻尼摆动。)
+    # 侧向(侧偏)串级 P+PI + 航迹角变限幅：参数为 P+PI 直接量(与前向/垂向 PPI 同构)——
+    # 外环 kpPos(横偏→指令侧向速度误差)、内环 kpVel/kiVel。小侧偏无饱和等效并联 PD：
+    # 位置增益 Kp=kpPos·kpVel、速度增益 Kd=kpVel，阻尼 zeta=0.5·√(kpVel/kpPos)。
+    # 按含加速度滤波(w=4,zf=0.65)的四阶闭环配极点整定：真实主导 wn≈0.15、zeta≈0.76
+    # (Kp=kpPos·kpVel=0.0211、Kd=kpVel=0.22)。目标阻尼本为 0.65，但更低阻尼会让 150m 大侧偏切入
+    # 过冲到对侧 ~10m、撞欠阻尼护栏(test_follower_lateral_offset...)；该大机动过冲须由 TD 软化指令解决，
+    # TD 到位前先妥协到 zeta≈0.76(过冲 ~3.7m 仍在护栏内)。
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
     # rollMax/gammaMax/floor/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
     gain_lateral = LateralTrackAngleInitS(
-        kp=0.0211, ki=0.0, kd=0.22, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
+        kpPos=0.0959, kpVel=0.22, kiVel=0.0, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
         gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD, margin=_LATERAL_R_MARGIN,
     )
     # 垂向串级 P+PI：按含加速度滤波(w=4,zf=0.65)的四阶闭环协调配极点整定——真实主导阻尼 zeta≈0.65、
