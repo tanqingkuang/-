@@ -231,13 +231,14 @@ src/algorithm/
     │   ├── pos_calc/                #   PosCalc 位置解算
     │   │   ├── base.py              #     PosCalcBase + InitS/InputS/OutputS
     │   │   ├── route_interp.py      #     航线插值（长机）
-    │   │   └── slot_geometry.py     #     槽位几何（僚机）
+    │   │   ├── slot_geometry.py     #     标准槽位几何（ScaledSlotGeometry 的父类）
+    │   │   └── scaled_slot_geometry.py #  带缩放槽位几何（普通保持 scale=1，集结压缩 scale 动态变化）
     │   ├── pos_track/               #   PosTrack 跟踪（含求偏差）→ pid_compose.py
     │   ├── ctrl/                    #   Ctrl 原子控制律 → pid.py
     │   └── formation_math/          #   FormationMath 纯工具函数（非策略族）
     └── process/                     # 流程组（碰 Mode）
-        ├── inbound/                 #   Inbound 收 → leader_follower.py
-        ├── outbound/                #   Outbound 发 → leader_broadcast.py
+        ├── inbound/                 #   Inbound 收 → rally_leader_follower.py（保持/集结共用）
+        ├── outbound/                #   Outbound 发 → rally_leader_broadcast.py（保持/集结共用）
         ├── formation_task/          #   FormationTask 编排 → hold.py（恒"保持"）
         └── tra_plan/                #   TraPlan 轨迹规划 → leader_route.py
 ```

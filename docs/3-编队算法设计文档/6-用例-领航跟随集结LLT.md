@@ -302,12 +302,12 @@ def _rally_cfg(
 
 ---
 
-## 8. TestRallyLeaderBroadcastAndInbound - 长机广播扩展与僚机解析
+## 8. TestRallyLeaderBroadcastAndInbound - 统一长机广播与僚机解析
 
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_rally_leader_broadcast_keeps_existing_payload_contract` | payload 保留 `leader_state` 与 `cmd`，topic 仍为 `formation.leader` |
-| `test_rally_leader_broadcast_adds_slot_scale` | payload 新增 `slot_scale.scale` 与 `slot_scale.scale_rate` |
+| `test_rally_leader_broadcast_adds_slot_scale` | payload 包含 `slot_scale.scale` 与 `slot_scale.scale_rate`，保持场景默认 scale=1.0 |
 | `test_rally_leader_follower_parses_cmd_leader_state_and_slot_scale` | 入站单元同时写入 `leaderState/cmd/slotScale` |
 | `test_missing_slot_scale_defaults_final_scale` | 老格式长机广播无 `slot_scale` 时，解析为 `scale=1.0`、`scaleRate=0.0` |
 | `test_malformed_slot_scale_defaults_final_scale` | `slot_scale` 非 dict 或字段不可转 float 时解析为 `scale=1.0`、`scaleRate=0.0` |
@@ -455,7 +455,7 @@ def _rally_cfg(
 | `slotScale.scale/scaleRate` 输出 | TestRallyTaskApproachLooseCompress, TestScaledSlotGeometry |
 | 僚机状态广播与锁存 arrived/rally_state/eta_s/reached_slot_once | TestFollowerBroadcast, TestRallyEntity |
 | 长机解析僚机回报 | TestFollowerStatusInbound |
-| 长机广播保持既有 payload 并追加 `slot_scale` | TestRallyLeaderBroadcastAndInbound |
+| 统一长机广播保持既有 payload 并携带默认/动态 `slot_scale` | TestRallyLeaderBroadcastAndInbound |
 | 僚机解析长机 `slot_scale`，缺字段默认 | TestRallyLeaderBroadcastAndInbound |
 | RallyJoinPos 切入盘旋圆、圆弧汇合、切出航向 | TestRallyJoinPos |
 | `rally_loose_target()` 旋转/右侧轴符号/缩放/高度 | TestRallyLooseTarget |

@@ -603,19 +603,21 @@ class FollowerStatusOutputS(InboundOutputS):
 
 **文件**：`units/process/outbound/rally_leader_broadcast.py`
 
-作用：在 `LeaderBroadcast` 基础上，额外将 `slotScale.scale` 和 `slotScale.scaleRate` 打入广播，让僚机知道当前缩放因子和压缩速率。
+作用：唯一的长机广播实现，普通保持与集结共用。它把长机 `selfState`、`cmd.stage/pattern/step`、`slotScale.scale/scaleRate`、`t_ref/t_ref_valid` 打入同一条 `formation.leader` envelope。普通保持场景也使用该类，只是 `slotScale` 恒为 `scale=1.0/scaleRate=0.0`，`t_ref_valid=False`，对保持编队无影响。
 
-> `LeaderBroadcast` 已广播 `cmd.stage/pattern/step`，本子类在同一 envelope 的 payload 中追加 `slot_scale` 字段：
+payload 结构：
 
 ```python
 payload = {
     "leader_state": _motion_payload(u.selfState),
     "cmd": {"stage": int(u.cmd.stage), "pattern": int(u.cmd.pattern), "step": int(u.cmd.step)},
     "slot_scale": {"scale": u.slotScale.scale, "scale_rate": u.slotScale.scaleRate},
+    "t_ref": u.t_ref,
+    "t_ref_valid": u.t_ref_valid,
 }
 ```
 
-InitS/OutputS 直接复用父类，无需新建：`RallyLeaderBroadcastInitS = OutboundInitS`；`RallyLeaderBroadcastOutputS = OutboundOutputS`（含 `outbox`）。
+InitS/OutputS 直接复用通用基类，无需新建：`RallyLeaderBroadcastInitS = OutboundInitS`；`RallyLeaderBroadcastOutputS = OutboundOutputS`（含 `outbox`）。
 
 ```python
 @dataclass
@@ -632,7 +634,7 @@ class RallyLeaderBroadcastInputS(OutboundInputS):
 
 **文件**：`units/process/inbound/rally_leader_follower.py`
 
-作用：在 `LeaderFollower` 基础上额外解析 `slot_scale`，写入 `Context.slotScale`。
+作用：唯一的长机广播入站解析实现，普通保持与集结共用。它在同一条 `formation.leader` 消息中解析 `leader_state/cmd/slot_scale/t_ref/t_ref_valid`，写入 `Context.leaderState/cmd/slotScale/rally_t_ref/rally_t_ref_valid`。缺少 `slot_scale` 的旧格式消息按 `scale=1.0/scaleRate=0.0` 兜底；`t_ref_valid` 缺失或非法时为 `False`，避免冷启动误切出。
 
 ```python
 @dataclass
@@ -654,9 +656,16 @@ for envelope in inbox:
     payload = _parse_envelope(envelope)
     if payload is None:
         continue
-    # 先写 leaderState + cmd（复用 LeaderFollower 父类逻辑）
-    _write_leader_state_and_cmd(payload, y)
-    # 再追加 slot_scale（同一消息，三字段一致性有保证）
+    # t_ref 先解析，非法则整条消息丢弃，避免“新阶段 + 无效 T_ref”的半截状态提交
+    try:
+        t_ref = float(payload.get("t_ref", 0.0))
+    except (TypeError, ValueError):
+        continue
+    t_ref_valid = payload.get("t_ref_valid", False)
+    t_ref_valid = t_ref_valid if isinstance(t_ref_valid, bool) else False
+    # leaderState/cmd/slotScale/t_ref 必须来自同一条消息，不能跨消息拼装
+    _write_motion_from_payload(payload["leader_state"], y.leaderState)
+    _write_cmd_from_payload(payload["cmd"], y.cmd)
     try:
         ss = payload.get("slot_scale", {})
         if not isinstance(ss, dict):
@@ -666,6 +675,8 @@ for envelope in inbox:
     except (TypeError, ValueError):
         y.slotScale.scale     = 1.0
         y.slotScale.scaleRate = 0.0
+    y.t_ref = t_ref
+    y.t_ref_valid = t_ref_valid
 ```
 
 三种需要捕获的情况：① `payload` 中无 `slot_scale` 键（旧版消息兼容）；② `slot_scale` 不是 dict；③ 字段值为非数字字符串（`float()` 抛 `ValueError`）。
@@ -825,7 +836,7 @@ CATCHUP 现在直接复用 **6.2 节的 `ScaledSlotGeometry`**：给出真实槽
 | 轨迹规划 TraPlan（仅 CATCHUP 及之后，step>=1 / HOLD） | LeaderRoute（`cfg.route`，即 mission_route） |
 | 位置解算 PosCalc（仅 CATCHUP 及之后） | RouteInterp（复用现有） |
 | 跟踪 PosTrack | PidCompose（复用现有） |
-| 发消息 Outbound | RallyLeaderBroadcast（扩展，含 slotScale） |
+| 发消息 Outbound | RallyLeaderBroadcast（统一长机广播，含 slotScale/t_ref） |
 
 #### 7.1.2 调用顺序（一拍 step）
 
@@ -836,7 +847,7 @@ CATCHUP 现在直接复用 **6.2 节的 `ScaledSlotGeometry`**：给出真实槽
     JOINING（step=0）：      汇合位置解算(RallyJoinPos)     ← 直飞切入点 T/盘旋/切出，不经 TraPlan/RouteInterp
     CATCHUP 及之后（step>=1）/HOLD：轨迹规划(LeaderRoute) → 位置解算(RouteInterp)  ← 沿 mission_route 飞行
 → 跟踪(PidCompose)                        ← 复用，两条分支共用
-→ 发消息(RallyLeaderBroadcast)            ← 广播 selfState + cmd + slotScale
+→ 发消息(RallyLeaderBroadcast)            ← 广播 selfState + cmd + slotScale + t_ref/t_ref_valid
 ```
 
 `step()` 中的分流逻辑（L1 职责，摘自 `leader.py::step`）：
@@ -929,7 +940,7 @@ mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 
 | 单元 | 子类 |
 | --- | --- |
-| 收消息 Inbound | RallyLeaderFollower（扩展，含 slotScale 解析） |
+| 收消息 Inbound | RallyLeaderFollower（统一长机广播解析，含 slotScale/t_ref） |
 | 任务编排 FormationTask | 不使用（模态来自长机广播） |
 | 轨迹规划 TraPlan | Noop（复用） |
 | 位置解算 PosCalc | RallyJoinPos（JOINING）/ ScaledSlotGeometry（CATCHUP/LOOSE/COMPRESS，同一算法） |
@@ -939,7 +950,7 @@ mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 #### 7.2.2 调用顺序（一拍 step）
 
 ```text
-收消息(RallyLeaderFollower)               ← 解析长机广播 → leaderState + cmd + slotScale
+收消息(RallyLeaderFollower)               ← 解析长机广播 → leaderState + cmd + slotScale + t_ref/t_ref_valid
 → [轨迹规划(Noop) 空策略]
 → 位置解算（按 cmd.stage + cmd.step 路由）
     cmd.stage==NONE:                        跳过 PosCalc，直接输出零速保持当前位置（不触发跟踪）
@@ -1151,12 +1162,10 @@ src/algorithm/
         ├── tra_plan/
         │   └── leader_route.py           ← 不动（两个实例在实体里管理）
         ├── outbound/
-        │   ├── leader_broadcast.py       ← 不动
-        │   ├── rally_leader_broadcast.py ← 新建
+        │   ├── rally_leader_broadcast.py ← 统一长机广播（保持/集结共用）
         │   └── follower_broadcast.py     ← 新建
         └── inbound/
-            ├── leader_follower.py        ← 不动
-            ├── rally_leader_follower.py  ← 新建
+            ├── rally_leader_follower.py  ← 统一长机广播解析（保持/集结共用）
             └── follower_status.py        ← 新建
 ```
 
