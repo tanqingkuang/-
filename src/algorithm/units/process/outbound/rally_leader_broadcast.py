@@ -1,16 +1,35 @@
-"""长机广播：唯一的出站实现，携带 slot_scale/t_ref 字段。注意：hold 场景长机不写这些字段，
-沿用 Context 默认值（scale=1.0/scaleRate=0.0/t_ref_valid=False），对 hold 无影响；
+"""长机广播：唯一的出站实现，携带 slot_scale/t_ref 字段。注意：hold 场景写入 Context 默认集结字段
+（scale=1.0/scaleRate=0.0/t_ref_valid=False），接收端按默认值解析，对 hold 无影响；
 payload 格式需与 RallyLeaderFollower 解析约定一致。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import CommDirE, RallySlotScaleS
-from src.algorithm.units.process.inbound.leader_follower import LEADER_BROADCAST_TOPIC
+from src.algorithm.context.leaf_types import CommDirE, MotionProfS, RallySlotScaleS
+from src.algorithm.units.process.inbound.rally_leader_follower import LEADER_BROADCAST_TOPIC
 from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
-from src.algorithm.units.process.outbound.leader_broadcast import _motion_payload
 from src.common.envelope import MessageEnvelope
+
+
+def _motion_payload(motion: MotionProfS) -> dict[str, dict[str, float]]:
+    """把运动状态转换为通信载荷。注意：字段名需与入站解析保持一致。"""
+    return {
+        "pos": {
+            "east": motion.pos.east,
+            "north": motion.pos.north,
+            "h": motion.pos.h,
+        },
+        "vd": {
+            "vEast": motion.v.vEast,
+            "vNorth": motion.v.vNorth,
+            "vUp": motion.v.vUp,
+            "vTheta": motion.v.vTheta,
+            "vPsi": motion.v.vPsi,
+            "vd": motion.v.vd,
+            "dVPsi": motion.v.dVPsi,
+        },
+    }
 
 
 @dataclass

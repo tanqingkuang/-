@@ -52,8 +52,11 @@ from src.algorithm.units.process.outbound.follower_broadcast import (
     FollowerBroadcastInitS,
     FollowerBroadcastInputS,
 )
-from src.algorithm.units.process.outbound.leader_broadcast import _motion_payload
-from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
+from src.algorithm.units.process.outbound.rally_leader_broadcast import (
+    RallyLeaderBroadcast,
+    RallyLeaderBroadcastInputS,
+    _motion_payload,
+)
 from src.common.envelope import MessageEnvelope
 
 

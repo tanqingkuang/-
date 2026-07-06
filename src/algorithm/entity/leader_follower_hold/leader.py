@@ -90,8 +90,8 @@ class LeaderEntity(EntityBase):
         self._pos_track_diag = PosTrackDiagS()
         self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
         # slotScale/t_ref 端口必须绑定（RallyLeaderBroadcast 强制校验 slotScale 非 None）；
-        # hold 场景不写这两个字段，Context 默认值 scale=1.0/scaleRate=0.0/t_ref_valid=False 恒定不变，
-        # 广播出去对僚机（同样统一用 RallyLeaderFollower 解析）无影响。
+        # hold 场景广播默认集结字段：scale=1.0/scaleRate=0.0/t_ref_valid=False 恒定不变，
+        # 僚机用 RallyLeaderFollower 统一解析后仍按普通保持编队执行。
         self._outbound_u = RallyLeaderBroadcastInputS(
             cmd=self.cxt.cmd,
             selfState=self.cxt.selfState,

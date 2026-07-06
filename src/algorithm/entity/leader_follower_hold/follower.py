@@ -40,8 +40,8 @@ class FollowerEntity(EntityBase):
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
         self._inbound_u = InboundInputS(inbox=self._inbox)
-        # slotScale 端口必须绑定（RallyLeaderFollower 强制校验非 None），hold 场景不消费它，
-        # 长机若不广播 slot_scale/t_ref（旧格式）则回退到 scale=1.0/t_ref_valid=False，对 hold 无影响。
+        # slotScale 端口必须绑定（RallyLeaderFollower 强制校验非 None），hold 场景只使用默认 scale=1.0；
+        # 若接收到旧格式广播缺少 slot_scale/t_ref，则仍回退到 scale=1.0/t_ref_valid=False。
         self._inbound_y = RallyLeaderFollowerOutputS(
             leaderState=self.cxt.leaderState, cmd=self.cxt.cmd, slotScale=self.cxt.slotScale
         )
