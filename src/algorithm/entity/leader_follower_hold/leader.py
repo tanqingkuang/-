@@ -189,12 +189,13 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
     if control_period_s <= 0.0:
         raise ValueError("control_period_s must be positive")
     # 侧向(侧偏)改串级(P+PI)+航迹角变限幅：结构上仍等价于并联式 kp·dZ+kd·velErr(无饱和+ki=0)。
-    # 注意 kd 已从旧自身系并联的 0.12 上调到 0.30——误差改到"目标速度系"度量后，丢了自身航迹系
-    # 随机头旋转带来的纯追踪前置阻尼，照搬旧增益会欠阻尼振荡(base.json 僚机切入持续摆动)，故需更高阻尼。
+    # 注意 kd 已从旧自身系并联的 0.12 上调到约 0.17——误差改到"目标速度系"度量后，丢了自身航迹系
+    # 随机头旋转带来的纯追踪前置阻尼；这里按当前模型(加速度二阶滤波 zeta=0.65)重整定到主导阻尼约 0.6，
+    # 比先前 0.30 的过阻尼切入更灵活，但仍保留变限幅抑制大侧偏转圈。
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
     # rollMax/gammaMax/floor/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
     gain_lateral = LateralTrackAngleInitS(
-        kp=0.02, ki=0.0, kd=0.30, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
+        kp=0.02, ki=0.0, kd=0.171, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
         gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD, margin=_LATERAL_R_MARGIN,
     )
     # 垂向改串级 P+PI：按错层队形切换探针整定为较高阻尼，压低高度阶跃越零超调；
@@ -236,10 +237,10 @@ def _follower_tracker_init(
 ) -> PidComposeInitS:
     """生成僚机默认位置跟踪器配置。注意：前向串级 P+PI 已按 change.json 队形切换整定，避免外侧僚机越零超调。"""
     vel_limit = vel_limit or VelCmdLimitS()
-    # 前向速度限幅由配置注入；提高速度内环阻尼后，90m 槽位突变不再越过目标点十几米。
+    # 前向速度限幅由配置注入；速度内环按当前模型整定到主导阻尼约 0.6，保留明显衰减同时不过分拖慢切入。
     gain_forward = PPIInitS(
         kpPos=0.12,
-        kpVel=0.32,
+        kpVel=0.176,
         kiVel=0.0,
         dt=control_period_s,
         accMin=-6.0,

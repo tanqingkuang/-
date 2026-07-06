@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import unittest
 
+import numpy as np
+
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
@@ -68,6 +70,51 @@ def _motion(
             dVPsi=d_vpsi,
         ),
     )
+
+
+def _modal_damping_ratio(root: complex) -> float:
+    """把稳定极点换算为对应二阶模态阻尼比。注意：调用方需保证不是零极点。"""
+    return -root.real / abs(root)
+
+
+def _dominant_follower_forward_damping() -> float:
+    """计算默认僚机前向闭环在线性化小扰动下的主导阻尼比。"""
+    model_cfg = ModelIterator._default_config()
+    tracker_cfg = _follower_tracker_init(0.05)
+    gain = tracker_cfg.gainForward
+    assert isinstance(gain, PPIInitS)
+    omega = model_cfg.natural_frequency_rad_s
+    roots = np.roots(
+        [
+            1.0,
+            2.0 * model_cfg.damping_ratio * omega,
+            omega * omega,
+            omega * omega * gain.kpVel,
+            omega * omega * gain.kpVel * gain.kpPos,
+        ]
+    )
+    dominant = max((root for root in roots if root.imag > 1e-9), key=lambda root: root.real)
+    return _modal_damping_ratio(dominant)
+
+
+def _dominant_follower_lateral_damping() -> float:
+    """计算默认僚机侧向闭环在线性化小扰动下的主导阻尼比。"""
+    model_cfg = ModelIterator._default_config()
+    tracker_cfg = _follower_tracker_init(0.05)
+    gain = tracker_cfg.gainLateral
+    assert isinstance(gain, LateralTrackAngleInitS)
+    omega = model_cfg.natural_frequency_rad_s
+    roots = np.roots(
+        [
+            1.0,
+            2.0 * model_cfg.damping_ratio * omega,
+            omega * omega,
+            omega * omega * gain.kd,
+            omega * omega * gain.kp,
+        ]
+    )
+    dominant = max((root for root in roots if root.imag > 1e-9), key=lambda root: root.real)
+    return _modal_damping_ratio(dominant)
 
 
 class FormationMathTests(unittest.TestCase):
@@ -816,6 +863,16 @@ class LateralTrackAngleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "kd"):
             LateralTrackAngle().init(self._cfg(kd=0.0))
 
+    def test_default_follower_forward_damping_is_near_point_six(self) -> None:
+        """验证默认僚机前向闭环按当前模型线性化后主导阻尼约为 0.6。"""
+
+        self.assertAlmostEqual(_dominant_follower_forward_damping(), 0.6, delta=0.02)
+
+    def test_default_follower_lateral_damping_is_near_point_six(self) -> None:
+        """验证默认僚机侧向闭环按当前模型线性化后主导阻尼约为 0.6。"""
+
+        self.assertAlmostEqual(_dominant_follower_lateral_damping(), 0.6, delta=0.02)
+
 
 class PosTrackClosedLoopTests(unittest.TestCase):
     """PidCompose(僚机增益) + 三自由度质点模型闭环回归：复现"目标在机头后方偏右→转圈"原始故障。"""
@@ -868,11 +925,11 @@ class PosTrackClosedLoopTests(unittest.TestCase):
         self.assertLess(final, 0.1 * d0)
 
     def test_follower_lateral_offset_converges_without_sustained_overshoot(self) -> None:
-        """僚机纯横偏(150m)切入随编队东向匀速的槽位：应收敛且不大幅过冲到对侧、末段不再持续摆动。
+        """僚机纯横偏(150m)切入随编队东向匀速的槽位：应收敛，允许一次有限过冲，但末段不再持续摆动。
 
         换到目标速度系度量误差后，丢了自身航迹系随机头旋转的纯追踪前置阻尼；若侧向阻尼(kd)照搬旧自身系
-        并联式的偏小值就会欠阻尼——过冲到对侧、持续摆动(base.json 僚机切入曾复现)。kd 整定到 0.30 后收敛。
-        本用例用真实僚机增益 `_follower_tracker_init`，是该整定的回归护栏(若把 kd 调回欠阻尼即失败)。
+        并联式的偏小值就会欠阻尼——过冲到对侧、持续摆动(base.json 僚机切入曾复现)。当前默认值把线性化
+        主导阻尼整定到约 0.6，因此允许一次可控过冲，但仍要求最终收敛且末段不持续摆动。
         """
         model = PointMass3DoFModel(ModelIterator._default_config())
         tracker = PidCompose()
@@ -909,7 +966,7 @@ class PosTrackClosedLoopTests(unittest.TestCase):
 
         overshoot = max(0.0, -min(crosses))  # 从北侧(+150)切入，冲到南侧(负)的最大幅值
         tail = crosses[-10:]
-        self.assertLess(overshoot, 5.0)               # 不大幅过冲到对侧(欠阻尼时会到 -20~-34)
+        self.assertLess(overshoot, 20.0)              # 允许一次有限过冲，但不能退化回大幅摆动
         self.assertLess(abs(crosses[-1]), 3.0)        # 收敛到槽位
         self.assertLess(max(tail) - min(tail), 3.0)   # 末段不再持续摆动
 
