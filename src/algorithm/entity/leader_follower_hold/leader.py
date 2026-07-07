@@ -42,12 +42,16 @@ _LEADER_FF_LEAD_TIME_S = 0.5 # 曲率前馈前瞻时间 σ(秒)，前瞻窗长 L
 
 # —— 横侧向限幅调参旋钮（长机僚机共用；见 lateral_track_angle.py 与 docs/横侧向点号切入问题）——
 # 分两层：外环"航迹角变限幅"(拦截角)与执行层"滚转角限幅"。
-# 变限幅半径 R = V² / (g·sin(_LATERAL_GAMMA_MAX_RAD)) · _LATERAL_R_MARGIN；据此把大侧偏拦截角限到 [地板, 90°]。
+# 变限幅半径 R = V² / (g·sin(_LATERAL_GAMMA_MAX_RAD)) · _LATERAL_R_MARGIN；据此把大侧偏拦截角限到 [地板, 天花板]。
 # 注意：以下值暂借/试定，**尚未按本项目慢速编队机整定**，是留给后续手动调参的旋钮；
 # 改动只影响切入的快慢/陡缓与转弯出力，不影响小侧偏(无饱和)时与旧并联式的等价行为。
 _LATERAL_ROLL_MAX_RAD = math.radians(40.0)   # 执行层滚转角限幅：侧向加速度上限 = g·tan(40°)≈8.2 m/s²(模型硬限 70°)
 _LATERAL_GAMMA_MAX_RAD = math.radians(25.0)  # 定 R 的最大航迹角(转弯半径尺度)：越小→R 越大→垂直切入触发越晚、切入越缓
 _LATERAL_FLOOR_RAD = math.radians(7.0)       # 航迹角限幅地板：中心线附近的最小拦截角，防近线残余大角引发震荡
+# 指令航迹角天花板：限的是**指令**角，实际角由内环动态过冲。抬内环 kpVel 后大侧偏垂直切入实际角会越过 90°→
+# 机头转过垂直→东向持续后退，完整场景(叠加航线机动)下累积发散，故把指令天花板收到 <90° 给过冲留裕度。
+# 实测(kiVel=0)：天花板 90° 即在 test.json 场景发散，75° 稳定、切入回退仅 ~0.17m、切入速度仅慢约 2%(sin75/sin90≈0.97)。
+_LATERAL_PSI_CMD_MAX_RAD = math.radians(75.0)
 _LATERAL_R_MARGIN = 1.2                       # R 余量系数(>1 更保守，向上留裕度)
 
 
@@ -199,16 +203,18 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
         raise ValueError("control_period_s must be positive")
     # 侧向(侧偏)串级 P+PI + 航迹角变限幅：参数为 P+PI 直接量(与前向/垂向 PPI 同构)——
     # 外环 kpPos(横偏→指令侧向速度误差)、内环 kpVel/kiVel。小侧偏无饱和等效并联 PD：
-    # 位置增益 Kp=kpPos·kpVel、速度增益 Kd=kpVel，阻尼 zeta=0.5·√(kpVel/kpPos)。
-    # 按含加速度滤波(w=4,zf=0.65)的四阶闭环配极点整定：真实主导 wn≈0.15、zeta≈0.76
-    # (Kp=kpPos·kpVel=0.0211、Kd=kpVel=0.22)。目标阻尼本为 0.65，但更低阻尼会让 150m 大侧偏切入
-    # 过冲到对侧 ~10m、撞欠阻尼护栏(test_follower_lateral_offset...)；该大机动过冲须由 TD 软化指令解决，
-    # TD 到位前先妥协到 zeta≈0.76(过冲 ~3.7m 仍在护栏内)。
+    # 位置增益 Kp=kpPos·kpVel、速度增益 Kd=kpVel，阻尼 zeta=0.5·√(kpVel/kpPos)、带宽 wn=√(kpVel·kpPos)。
+    # 现整定：Kp=0.06、Kd=0.4 → wn≈0.245、zeta≈0.82——较旧值(0.0211/0.22, wn≈0.15、zeta≈0.76)带宽抬约 1.7 倍，
+    # 消除小/中侧偏收敛的"平台期"(低带宽的拖尾)。kiVel 暂置 0：内环积分对**外环变限幅饱和**缺抗饱和(现有抗饱和只
+    # 回退执行层滚转饱和)，持续大侧偏时会绕死→完整场景发散，须先补外环抗饱和才能启用(留待 TD/积分阶段)。
+    # 天花板：抬 kpVel 后大侧偏垂直切入的**实际**航迹角会过冲越 90°→机头转过垂直→完整场景累积发散，
+    # 由指令天花板 psiCmdMax=75°(见 _LATERAL_PSI_CMD_MAX_RAD)给过冲留裕度化解(实测越 90° 即发散，75° 回退仅 ~0.17m)。
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
-    # rollMax/gammaMax/floor/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
+    # rollMax/gammaMax/floor/psiCmdMax/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
     gain_lateral = LateralTrackAngleInitS(
-        kpPos=0.0959, kpVel=0.22, kiVel=0.0, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
-        gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD, margin=_LATERAL_R_MARGIN,
+        kpPos=0.15, kpVel=0.4, kiVel=0.0, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
+        gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD,
+        psiCmdMaxRad=_LATERAL_PSI_CMD_MAX_RAD, margin=_LATERAL_R_MARGIN,
     )
     # 垂向串级 P+PI：按含加速度滤波(w=4,zf=0.65)的四阶闭环协调配极点整定——真实主导阻尼 zeta≈0.65、
     # 带宽较旧值抬约 1.3 倍(kpPos=wn/(2zeta), kpVel=2zeta·wn)。旧值 0.25/0.65 实测过阻尼 zeta≈0.83、收敛偏慢。

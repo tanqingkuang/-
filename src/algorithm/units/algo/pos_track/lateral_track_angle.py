@@ -46,6 +46,10 @@ class LateralTrackAngleInitS:
     rollMaxRad: float = math.radians(40.0)  # 侧向滚转角限幅(执行层)，必须在 (0, pi/2)
     gammaMaxRad: float = math.radians(25.0)  # 定变限幅半径 R=V²/(g·sinΓmax)·margin 的最大航迹角(转弯半径尺度)，调参旋钮
     floorRad: float = math.radians(7.0)  # 航迹角限幅地板，避免中心线附近仍大角震荡
+    # 指令航迹角上限(变限幅天花板)：限的是**指令**角，实际角由内环动态决定会过冲。
+    # 默认 pi/2(垂直切入，旧行为)；抬内环带宽 kpVel 后，大侧偏垂直切入的实际角会过冲越过 90°、
+    # 机头转过垂直→东向瞬间后退，故把指令天花板收到 <90°、给内环过冲留裕度(见 leader.py 整定说明)。
+    psiCmdMaxRad: float = math.pi / 2  # 必须在 (floorRad, pi/2]
     margin: float = 1.2  # R 余量(向上留裕度)
 
 
@@ -75,6 +79,9 @@ class LateralTrackAngle:
             raise ValueError("gammaMaxRad must be in (0, pi/2)")
         if not 0.0 <= cfg.floorRad < math.pi / 2:
             raise ValueError("floorRad must be in [0, pi/2)")
+        if not cfg.floorRad < cfg.psiCmdMaxRad <= math.pi / 2:
+            # 指令天花板必须高于地板、且不超过垂直切入。
+            raise ValueError("psiCmdMaxRad must be in (floorRad, pi/2]")
         if cfg.margin <= 0.0:
             raise ValueError("margin must be > 0")
         self._cfg = cfg
@@ -85,19 +92,20 @@ class LateralTrackAngle:
     def track_angle_limit_rad(self, dz_abs: float, v_ground: float) -> float:
         """按侧偏幅值给出当前允许的最大航迹角(拦截角)限幅，弧度。
 
-        R = V²/(g·sinΓmax)·margin(借鉴 L1 前视半径)；
-        |dZ|>=R → 90°(垂直切入)；R·sin(floor)<=|dZ|<R → asin(|dZ|/R)；|dZ|<R·sin(floor) → floor。
+        R = V²/(g·sinΓmax)·margin(借鉴 L1 前视半径)；天花板取 psiCmdMax(默认 90° 垂直切入)：
+        |dZ|>=R → psiCmdMax；R·sin(floor)<=|dZ|<R → min(asin(|dZ|/R), psiCmdMax)；|dZ|<R·sin(floor) → floor。
         """
         cfg = self._cfg
+        cap = cfg.psiCmdMaxRad
         radius = v_ground * v_ground / (_GRAVITY_MPS2 * math.sin(cfg.gammaMaxRad)) * cfg.margin
         if radius <= 1e-9:
-            return math.pi / 2
+            return cap
         if dz_abs >= radius:
-            return math.pi / 2
+            return cap
         floor_dz = radius * math.sin(cfg.floorRad)
         if dz_abs <= floor_dz:
             return cfg.floorRad
-        return math.asin(clamp(dz_abs / radius, 0.0, 1.0))
+        return min(math.asin(clamp(dz_abs / radius, 0.0, 1.0)), cap)
 
     def step(self, dz: float, vel_err: float, v_ground: float) -> float:
         """推进一个周期，返回目标速度系下的侧向加速度(不含向心前馈)。

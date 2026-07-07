@@ -794,6 +794,22 @@ class LateralTrackAngleTests(unittest.TestCase):
         self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.5 * radius, v), math.asin(0.5))
         self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.0, v), math.radians(7.0))
 
+    def test_cmd_angle_cap_below_ninety(self) -> None:
+        """指令航迹角天花板 psiCmdMax<90° 时，大侧偏返回 cap(而非 90°)、asin 区也被封顶——给内环过冲留裕度。"""
+        ctrl = LateralTrackAngle()
+        cap = math.radians(75.0)
+        ctrl.init(self._cfg(psiCmdMaxRad=cap))
+        v = 20.0
+        radius = v * v / (9.80665 * math.sin(math.radians(30.0))) * 1.2
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(10.0 * radius, v), cap)          # 大侧偏封顶到 cap
+        self.assertLessEqual(ctrl.track_angle_limit_rad(0.99 * radius, v), cap + 1e-12)    # 近 R 的 asin 区不越 cap
+        self.assertAlmostEqual(ctrl.track_angle_limit_rad(0.3 * radius, v), math.asin(0.3))  # cap 以下仍走 asin
+
+    def test_rejects_cap_below_floor(self) -> None:
+        """psiCmdMax 必须高于地板 floorRad(天花板不能低于地板)，否则应在 init 拦截。"""
+        with self.assertRaisesRegex(ValueError, "psiCmdMaxRad"):
+            LateralTrackAngle().init(self._cfg(floorRad=math.radians(30.0), psiCmdMaxRad=math.radians(20.0)))
+
     def test_large_cross_track_bounds_lateral_accel(self) -> None:
         """大侧偏下侧向加速度饱和到 kd·V·sin(90°)，且不随侧偏继续增大——这是防"持续滚转→转圈"的本质。"""
         ctrl = LateralTrackAngle()

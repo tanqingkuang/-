@@ -728,8 +728,13 @@ class SimulationControllerTests(unittest.TestCase):
     def test_off_route_leader_turns_without_snaking_backward(self) -> None:
         """Leader should smoothly cut toward the route instead of weaving forward/backward.
 
-        本 fixture 长机初始横偏达 260m。1.2 引入"按侧偏的航迹角变限幅"后，大侧偏下航迹角被限到
-        最多 90°(垂直切入)、不越 90°，故东向不回退、平滑切入(不再有 1.1 中间态那种越过正南的向后蛇行)。
+        本 fixture 长机初始横偏达 260m。1.2 引入"按侧偏的航迹角变限幅"后，大侧偏下**指令**航迹角被限到
+        天花板(默认 90°/整定后 75°)、不持续转过垂直，故东向不大幅回退、平滑切入(不再有 1.1 中间态那种
+        越过正南的几十米向后蛇行)。
+
+        阈值说明：抬内环带宽(kpVel)后，大侧偏垂直切入的**实际**航迹角仍有亚米级瞬态过冲(实测回退约 0.17m)；
+        该护栏的意义是"不发散/不几十米蛇行"(天花板放到 90° 会真发散到 -200m 量级)，故容忍值从 0.1 放宽到 0.3m
+        （仍远小于真蛇行/发散量级，护栏意义不变）。控制律具体阻尼/带宽不适合用 LLT 精确卡数值。
         """
         controller = SimulationController()
         controller.load_config(str(Path(__file__).resolve().parent / "fixtures" / "test.json"))
@@ -743,7 +748,7 @@ class SimulationControllerTests(unittest.TestCase):
                 east_samples.append(controller.get_snapshot().nodes[0].x_m)
 
         for before, after in zip(east_samples, east_samples[1:]):
-            self.assertGreaterEqual(after + 0.1, before)
+            self.assertGreaterEqual(after + 0.3, before)  # 容忍抬带宽后大侧偏切入的亚米级瞬态；真蛇行/发散是几十米量级
         controller.close()
 
     def test_change_config_formation_switch_forward_overshoot_is_damped(self) -> None:
