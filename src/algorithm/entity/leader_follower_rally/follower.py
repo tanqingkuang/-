@@ -7,6 +7,7 @@ import math
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
     FormStageE,
+    MotionProfS,
     PosTrackDiagS,
     RallyPhaseE,
     copy_motion,
@@ -69,6 +70,7 @@ class RallyFollowerEntity(EntityBase):
         self.cxt = FormContextS()
         self._inbox: list = []
         self._outbox: list = []
+        self._leader_cmd = MotionProfS()
 
         loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
 
@@ -113,6 +115,7 @@ class RallyFollowerEntity(EntityBase):
         self._inbound_u = InboundInputS(inbox=self._inbox)
         self._inbound_y = RallyLeaderFollowerOutputS(
             leaderState=self.cxt.leaderState,
+            leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
             slotScale=self.cxt.slotScale,
         )
@@ -122,6 +125,7 @@ class RallyFollowerEntity(EntityBase):
         self._slot_u = SlotGeometryInputS(
             selfState=self.cxt.selfState,
             leaderState=self.cxt.leaderState,
+            leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
             slotScale=self.cxt.slotScale,
         )
@@ -183,6 +187,7 @@ class RallyFollowerEntity(EntityBase):
     def reset(self) -> None:
         """复位 RallyFollowerEntity 的动态状态。"""
         reset_context(self.cxt)
+        copy_motion(MotionProfS(), self._leader_cmd)
         self._inbound.reset()
         self._tra_plan.reset()
         self._rally_join.reset()

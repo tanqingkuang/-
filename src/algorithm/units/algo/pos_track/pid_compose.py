@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from src.algorithm.units.algo.ctrl.base import CtrlBase, CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
 from src.algorithm.units.algo.ctrl.ppi import PPI, PPIInitS
+from src.algorithm.context.leaf_types import MotionProfS, copy_motion
 from src.algorithm.units.algo.formation_math import enu_to_track, track_to_enu
 from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS, PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
@@ -106,6 +107,8 @@ class PidCompose(PosTrackBase):
             raise ValueError("PidCompose ports must be bound")
         if u.selfState.v.vd < self._v_min:
             raise ValueError(f"ground speed below vMin: {u.selfState.v.vd} < {self._v_min}")
+        if y.effectiveCmd is not None:
+            copy_motion(u.selfCmd, y.effectiveCmd)
 
         pos_err_enu = (
             u.selfCmd.pos.east - u.selfState.pos.east,
@@ -168,6 +171,14 @@ class PidCompose(PosTrackBase):
         #        无该配置时退回并联/串级 Pid(旧行为)。两路均叠加向心前馈 lateral_ff。
         if self._lateral_cascade is not None:
             lateral_acc = self._lateral_cascade.step(pos_err[2], vel_err[2], u.selfState.v.vd) + lateral_ff
+            if self._lateral_cascade.last_saturated and y.effectiveCmd is not None:
+                _write_limited_effective_velocity(
+                    u.selfCmd,
+                    frame,
+                    trim_vel[1],
+                    self._lateral_cascade.last_vel_err_cmd,
+                    y.effectiveCmd,
+                )
         else:
             lateral_acc = self._lateral.step(pos_err[2], vel_ff[2], vel_actual[2]) + lateral_ff
         acc_track = (
@@ -187,3 +198,25 @@ class PidCompose(PosTrackBase):
         if self._lateral_cascade is not None:
             self._lateral_cascade.reset()
         self._vertical.reset()
+
+
+def _write_limited_effective_velocity(
+    self_cmd: MotionProfS,
+    frame: MotionProfS,
+    normal_cmd: float,
+    vel_err_cmd: float,
+    effective_cmd: MotionProfS,
+) -> None:
+    """把横侧向限幅后的拦截角写成有效速度指令。注意：只改速度字段，位置仍沿用原 selfCmd。"""
+
+    lateral_cmd = -vel_err_cmd
+    horizontal_speed = max(0.0, self_cmd.v.vd)
+    forward_cmd = math.sqrt(max(0.0, horizontal_speed * horizontal_speed - lateral_cmd * lateral_cmd))
+    v_east, v_north, v_up = track_to_enu((forward_cmd, normal_cmd, lateral_cmd), frame)
+    horizontal = math.hypot(v_east, v_north)
+    effective_cmd.v.vEast = v_east
+    effective_cmd.v.vNorth = v_north
+    effective_cmd.v.vUp = v_up
+    effective_cmd.v.vd = horizontal
+    effective_cmd.v.vPsi = math.atan2(v_north, v_east)
+    effective_cmd.v.vTheta = math.atan2(v_up, horizontal)

@@ -37,6 +37,7 @@ class RallyLeaderBroadcastInputS(OutboundInputS):
     """集结长机广播输入端口。"""
 
     # 继承 cmd: FormSnapshotS, selfState: MotionProfS
+    leaderCmd: MotionProfS | None = None  # 长机跟踪指令，供僚机建立槽位坐标系。
     slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale
     t_ref: float = 0.0  # 集结基准时刻（Rally 任务计算，每帧注入）
     t_ref_valid: bool = False  # 是否允许接收方使用 t_ref 执行切出判定
@@ -59,6 +60,7 @@ class RallyLeaderBroadcast(OutboundBase):
         """推进 RallyLeaderBroadcast 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.cmd is None or u.selfState is None or u.slotScale is None:
             raise ValueError("RallyLeaderBroadcast input ports must be bound")
+        leader_cmd = u.leaderCmd or u.selfState
         targets = self._targets()  # 据拓扑解析需要接收广播的跟随机
         y.outbox.clear()  # 先清空，保证每帧只产出本帧消息
         if not targets:
@@ -75,6 +77,7 @@ class RallyLeaderBroadcast(OutboundBase):
                         "stage": int(u.cmd.stage),
                         "pattern": int(u.cmd.pattern),
                         "step": int(u.cmd.step),
+                        "leader": _motion_payload(leader_cmd),
                     },
                     "slot_scale": {
                         "scale": u.slotScale.scale,

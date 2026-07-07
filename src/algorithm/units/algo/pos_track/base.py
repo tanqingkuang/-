@@ -28,6 +28,7 @@ class PosTrackOutputS:
 
     accCmd: AccInEarthS | None = None
     diag: PosTrackDiagS | None = None
+    effectiveCmd: MotionProfS | None = None  # 位置跟踪后的有效运动指令，供编队坐标系广播使用。
 
 
 class PosTrackBase:
