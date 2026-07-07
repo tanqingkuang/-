@@ -48,11 +48,11 @@ _LEADER_FF_LEAD_TIME_S = 0.5 # 曲率前馈前瞻时间 σ(秒)，前瞻窗长 L
 _LATERAL_ROLL_MAX_RAD = math.radians(40.0)   # 执行层滚转角限幅：侧向加速度上限 = g·tan(40°)≈8.2 m/s²(模型硬限 70°)
 _LATERAL_GAMMA_MAX_RAD = math.radians(25.0)  # 定 R 的最大航迹角(转弯半径尺度)：越小→R 越大→垂直切入触发越晚、切入越缓
 _LATERAL_FLOOR_RAD = math.radians(7.0)       # 航迹角限幅地板：中心线附近的最小拦截角，防近线残余大角引发震荡
-# 指令航迹角天花板：限的是**指令**角，实际角由内环动态过冲。抬内环 kpVel 后大侧偏垂直切入实际角会越过 90°→
-# 机头转过垂直→东向持续后退，完整场景(叠加航线机动)下累积发散，故把指令天花板收到 <90° 给过冲留裕度。
-# 实测(kiVel=0)：天花板 90° 即在 test.json 场景发散，75° 稳定、切入回退仅 ~0.17m、切入速度仅慢约 2%(sin75/sin90≈0.97)。
-_LATERAL_PSI_CMD_MAX_RAD = math.radians(75.0)
-_LATERAL_R_MARGIN = 1.2                       # R 余量系数(>1 更保守，向上留裕度)
+# 指令航迹角天花板：限的是**指令**角，实际角由内环动态+积分过冲。大侧偏垂直切入若允许实际角越过 90° 奇点
+# (vel_err=V·sinχ 在 90° 反号→越峰即正反馈发散)，故把指令天花板收到 <90° 给过冲留裕度，与大 margin 配合把
+# 实际角压在 90° 内。80° 为端到端整定值(配 kpVel=0.3 低带宽 + margin=1.8 缓切入，过冲小，留 10° 裕度即够)。
+_LATERAL_PSI_CMD_MAX_RAD = math.radians(80.0)
+_LATERAL_R_MARGIN = 1.8                       # R 余量系数(>1 更保守，向上留裕度)
 
 
 class LeaderEntity(EntityBase):
@@ -204,15 +204,15 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
     # 侧向(侧偏)串级 P+PI + 航迹角变限幅：参数为 P+PI 直接量(与前向/垂向 PPI 同构)——
     # 外环 kpPos(横偏→指令侧向速度误差)、内环 kpVel/kiVel。小侧偏无饱和等效并联 PD：
     # 位置增益 Kp=kpPos·kpVel、速度增益 Kd=kpVel，阻尼 zeta=0.5·√(kpVel/kpPos)、带宽 wn=√(kpVel·kpPos)。
-    # 现整定：Kp=0.06、Kd=0.4 → wn≈0.245、zeta≈0.82——较旧值(0.0211/0.22, wn≈0.15、zeta≈0.76)带宽抬约 1.7 倍，
-    # 消除小/中侧偏收敛的"平台期"(低带宽的拖尾)。kiVel 暂置 0：内环积分对**外环变限幅饱和**缺抗饱和(现有抗饱和只
-    # 回退执行层滚转饱和)，持续大侧偏时会绕死→完整场景发散，须先补外环抗饱和才能启用(留待 TD/积分阶段)。
-    # 天花板：抬 kpVel 后大侧偏垂直切入的**实际**航迹角会过冲越 90°→机头转过垂直→完整场景累积发散，
-    # 由指令天花板 psiCmdMax=75°(见 _LATERAL_PSI_CMD_MAX_RAD)给过冲留裕度化解(实测越 90° 即发散，75° 回退仅 ~0.17m)。
+    # 现整定：Kp=0.03、Kd=0.3 → wn≈0.173、zeta≈0.87、内环积分时间常数 Ti=kpVel/kiVel≈30s（端到端手动整定）。
+    # 加内环积分 kiVel=0.01 清小侧偏稳态余量；发散风险由两处裕度化解：① 天花板 psiCmdMax=80° 让大侧偏切入的
+    # **实际**航迹角不越 90° 奇点（vel_err=V·sinχ 在 90° 反号→越峰即正反馈发散）；② margin 抬到 1.8 使 R 增大、
+    # 切入大幅缓和、过冲变小，实际角离奇点更远——两者共同把积分（持续偏置）压在不会把工作点推过奇点的范围内。
+    # 注：积分对**外环变限幅饱和**本身仍缺抗饱和，故靠低带宽+大 margin+留裕度回避而非根治，彻底解需补外环抗饱和/TD。
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
     # rollMax/gammaMax/floor/psiCmdMax/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
     gain_lateral = LateralTrackAngleInitS(
-        kpPos=0.15, kpVel=0.4, kiVel=0.0, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
+        kpPos=0.1, kpVel=0.3, kiVel=0.01, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
         gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD,
         psiCmdMaxRad=_LATERAL_PSI_CMD_MAX_RAD, margin=_LATERAL_R_MARGIN,
     )
