@@ -24,6 +24,9 @@ class ControlMonitorFeature(Protocol):
     def follow_if_open(self, window: MainWindow) -> None:
         """在控制器可用时绑定已打开监控窗口。裁剪版保持空操作。"""
 
+    def reset_if_open(self, window: MainWindow) -> None:
+        """在仿真重置后重置已打开监控窗口的数据流。裁剪版保持空操作。"""
+
     def unfollow(self) -> None:
         """解除实时监控窗口与控制器的绑定。裁剪版保持空操作。"""
 

@@ -1628,6 +1628,28 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsNotNone(self.window.features.control_monitor.live_monitor._ctrl)
         self.assertIs(self.window.features.control_monitor.live_monitor._ctrl, self.window.sim.controller)
 
+    def test_reset_keeps_live_monitor_nodes_visible(self) -> None:
+        """Regression: 主窗口重置不应让实时监控节点列表消失。"""
+        try:
+            from src.ui.gui.live_monitor import LiveMonitorWindow  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("PySide6.QtCharts not available")
+
+        self._load_ui_config()
+        self.window._open_live_monitor()
+        self.assertIsNotNone(self.window.features.control_monitor.live_monitor)
+        monitor = self.window.features.control_monitor.live_monitor
+        monitor._poll()
+        self.app.processEvents()
+
+        self.assertEqual(sorted(monitor._nodes.keys()), ["A01", "A02", "A03"])
+
+        self.window._reset()
+        self.app.processEvents()
+
+        self.assertIs(monitor._ctrl, self.window.sim.controller)
+        self.assertEqual(sorted(monitor._nodes.keys()), ["A01", "A02", "A03"])
+
     def _load_ui_config(
         self,
         *,
