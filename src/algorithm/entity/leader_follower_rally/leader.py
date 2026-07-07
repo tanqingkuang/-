@@ -10,6 +10,7 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     PosTrackDiagS,
     RallyPhaseE,
+    MotionProfS,
     RemoteCmdS,
     copy_motion,
     copy_pos_track_diag,
@@ -64,6 +65,7 @@ class RallyLeaderEntity(EntityBase):
         self.cxt = FormContextS()
         self._remote = RemoteCmdS()
         self._outbox: list = []
+        self._effective_cmd = MotionProfS()
         self._rally_completed = False
         self._expected_follower_ids: list[str] = list(rally_cfg.expectedFollowerIds)
         self._tight_radius_m: float = rally_cfg.tightRadius_m
@@ -119,8 +121,17 @@ class RallyLeaderEntity(EntityBase):
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
         self._pos_track_diag = PosTrackDiagS()
-        self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
-        self._outbound_u = RallyLeaderBroadcastInputS(cmd=self.cxt.cmd, selfState=self.cxt.selfState, slotScale=self.cxt.slotScale)
+        self._pos_track_y = PosTrackOutputS(
+            accCmd=self.cxt.selfAccCmd,
+            diag=self._pos_track_diag,
+            effectiveCmd=self._effective_cmd,
+        )
+        self._outbound_u = RallyLeaderBroadcastInputS(
+            cmd=self.cxt.cmd,
+            selfState=self.cxt.selfState,
+            leaderCmd=self._effective_cmd,
+            slotScale=self.cxt.slotScale,
+        )
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
         self._inbox: list = []
@@ -165,6 +176,7 @@ class RallyLeaderEntity(EntityBase):
                 self.cxt.followerStates.clear()
             copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)
             zero_velocity(self.cxt.selfCmd.v)
+            copy_motion(self.cxt.selfCmd, self._effective_cmd)
             zero_acceleration(self.cxt.selfAccCmd)
             self._outbound.step(self._outbound_u, self._outbound_y)
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
@@ -203,6 +215,7 @@ class RallyLeaderEntity(EntityBase):
     def reset(self) -> None:
         """复位 RallyLeaderEntity 的动态状态。"""
         reset_context(self.cxt)
+        copy_motion(MotionProfS(), self._effective_cmd)
         self._remote.stage = RemoteCmdS().stage
         self._rally_completed = False
         self._task.reset()

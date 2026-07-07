@@ -12,6 +12,7 @@ from src.algorithm.context.leaf_types import (
     WayLineS,
     WayPointInputS,
     WayPointS,
+    MotionProfS,
     copy_motion,
     copy_pos_track_diag,
 )
@@ -52,7 +53,7 @@ _LATERAL_FLOOR_RAD = math.radians(7.0)       # 航迹角限幅地板：中心线
 # (vel_err=V·sinχ 在 90° 反号→越峰即正反馈发散)，故把指令天花板收到 <90° 给过冲留裕度，与大 margin 配合把
 # 实际角压在 90° 内。80° 为端到端整定值(配 kpVel=0.3 低带宽 + margin=1.8 缓切入，过冲小，留 10° 裕度即够)。
 _LATERAL_PSI_CMD_MAX_RAD = math.radians(80.0)
-_LATERAL_R_MARGIN = 1.8                       # R 余量系数(>1 更保守，向上留裕度)
+_LATERAL_R_MARGIN = 1.1                       # R 余量系数(>1 更保守，向上留裕度)
 
 
 class LeaderEntity(EntityBase):
@@ -64,6 +65,7 @@ class LeaderEntity(EntityBase):
         self.cxt = FormContextS()
         self._remote = RemoteCmdS()  # 缓存外部遥控指令，跨帧保留
         self._outbox = []  # 复用同一列表对象，避免每帧重新分配
+        self._effective_cmd = MotionProfS()
 
         # 长机处理链：任务编排 -> 航路规划 -> 位置解算 -> 位置跟踪 -> 出站广播
         self._task = Hold()
@@ -92,13 +94,18 @@ class LeaderEntity(EntityBase):
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
         self._pos_track_diag = PosTrackDiagS()
-        self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
+        self._pos_track_y = PosTrackOutputS(
+            accCmd=self.cxt.selfAccCmd,
+            diag=self._pos_track_diag,
+            effectiveCmd=self._effective_cmd,
+        )
         # slotScale/t_ref 端口必须绑定（RallyLeaderBroadcast 强制校验 slotScale 非 None）；
         # hold 场景广播默认集结字段：scale=1.0/scaleRate=0.0/t_ref_valid=False 恒定不变，
         # 僚机用 RallyLeaderFollower 统一解析后仍按普通保持编队执行。
         self._outbound_u = RallyLeaderBroadcastInputS(
             cmd=self.cxt.cmd,
             selfState=self.cxt.selfState,
+            leaderCmd=self._effective_cmd,
             slotScale=self.cxt.slotScale,
             t_ref=self.cxt.rally_t_ref,
             t_ref_valid=self.cxt.rally_t_ref_valid,
@@ -141,6 +148,7 @@ class LeaderEntity(EntityBase):
         """复位 LeaderEntity 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         # 原地清空黑板与各单元运行期状态，保留构造期注入的依赖
         reset_context(self.cxt)
+        copy_motion(MotionProfS(), self._effective_cmd)
         self._remote.stage = RemoteCmdS().stage  # 遥控阶段回到默认
         self._task.reset()
         self._tra_plan.reset()
@@ -212,7 +220,7 @@ def _tracker_init(control_period_s: float, gain_forward: PPIInitS, vel_limit: Ve
     # 变限幅解决大侧偏"持续滚转→转圈"(见 lateral_track_angle 与 docs/横侧向点号切入问题)。两实体共用。
     # rollMax/gammaMax/floor/psiCmdMax/margin 为待整定旋钮，见文件顶部 _LATERAL_* 常量。执行层限滚转角而非侧向加速度。
     gain_lateral = LateralTrackAngleInitS(
-        kpPos=0.1, kpVel=0.3, kiVel=0.01, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
+        kpPos=0.2, kpVel=1.0, kiVel=0.2, dt=control_period_s, rollMaxRad=_LATERAL_ROLL_MAX_RAD,
         gammaMaxRad=_LATERAL_GAMMA_MAX_RAD, floorRad=_LATERAL_FLOOR_RAD,
         psiCmdMaxRad=_LATERAL_PSI_CMD_MAX_RAD, margin=_LATERAL_R_MARGIN,
     )

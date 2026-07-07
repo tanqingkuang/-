@@ -50,6 +50,7 @@ class SlotGeometryInputS(PosCalcInputS):
     """槽位几何输入端口。注意：slotScale 为可选端口，未绑定时按 scale=1.0/scaleRate=0.0 处理。"""
 
     leaderState: MotionProfS | None = None
+    leaderCmd: MotionProfS | None = None  # 长机跟踪指令；槽位坐标系方向优先使用它，位置原点仍取 leaderState。
     cmd: FormSnapshotS | None = None
     slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale；保持场景默认 scale=1，集结压缩动态变化
     # selfState 继承自 PosCalcInputS：仅在启用 TD 时用于(重)挂载首拍播种，稳态几何目标解算不依赖本机状态。
@@ -97,7 +98,7 @@ class SlotGeometry(PosCalcBase):
         if slot is None:
             raise ValueError(f"missing slot for selfId: {self._self_id}")
 
-        track = _horizontal_track_or_none(u.leaderState)
+        frame, track = _select_frame_and_track(u.leaderCmd, u.leaderState)
         track_defined = track is not None
 
         # 相对槽位 TD 软化：只对长机航迹系下的 (x 前向, y 上, z 右) 三路做——绝对(长机)位置连续、不过 TD。
@@ -113,9 +114,9 @@ class SlotGeometry(PosCalcBase):
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + sy
-        copy_velocity(u.leaderState.v, y.selfCmd.v)
-        # 槽位随长机刚性旋转，僚机航迹偏航角速率即长机的(刚体绕同一瞬心，各点航向角速率相同)。
-        y.selfCmd.v.dVPsi = u.leaderState.v.dVPsi
+        copy_velocity(frame.v, y.selfCmd.v)
+        # 槽位随长机指令航迹刚性旋转，避免长机实际速度受扰时把僚机坐标系带乱。
+        y.selfCmd.v.dVPsi = frame.v.dVPsi
         # 相对槽位垂向速度前馈叠加(TD 的 x2)；巡航无重构时 vfy=0，等价旧行为。
         y.selfCmd.v.vUp = u.leaderState.v.vUp + vfy
         if track_defined:
@@ -123,8 +124,8 @@ class SlotGeometry(PosCalcBase):
             # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V + b·ω)·t̂ + (a·ω)·n̂，
             # 其中 a=slot.x(前向)、b=slot.z(右向)、ω=长机偏航角速率、n̂=左单位向量。用平滑后的 sx/sz。
             # 沿航迹分量按 b·ω 增减(对某一转向，外侧半径大加速、内侧减速)；a·ω 补后方槽位转弯时的横扫。
-            omega = u.leaderState.v.dVPsi
-            v_along = u.leaderState.v.vd + sz * omega
+            omega = frame.v.dVPsi
+            v_along = frame.v.vd + sz * omega
             v_swing = sx * omega
             left_x, left_y = -track_y, track_x
             # 刚体旋转速度前馈 + 相对槽位切换速度前馈(TD x2 由航迹系转 ENU 叠加)。
@@ -135,7 +136,7 @@ class SlotGeometry(PosCalcBase):
             y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
             y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
         if u.slotScale is not None:
-            self._apply_slot_scale(u, y)
+            self._apply_slot_scale(u, y, frame)
         return None
 
     def reset(self) -> None:
@@ -187,7 +188,7 @@ class SlotGeometry(PosCalcBase):
         self._td_y.seed(seed_up, 0.0)
         self._td_z.seed(seed_right, 0.0)
 
-    def _apply_slot_scale(self, u: SlotGeometryInputS, y: PosCalcOutputS) -> None:
+    def _apply_slot_scale(self, u: SlotGeometryInputS, y: PosCalcOutputS, frame: MotionProfS) -> None:
         """按 slotScale 后处理槽位位置和速度。注意：高度偏置不缩放，垂向速度不加 scaleRate 项。"""
         assert u.leaderState is not None and u.slotScale is not None and y.selfCmd is not None
         scale = u.slotScale.scale
@@ -200,10 +201,10 @@ class SlotGeometry(PosCalcBase):
         y.selfCmd.pos.north = u.leaderState.pos.north + scale * offset_n
         # 速度后处理：d/dt(scale·R·slot) = scale·dR/dt·slot + scaleRate·R·slot。
         # 先提取标准槽位相对长机的旋转前馈，再乘 scale 并叠加压缩速度前馈。
-        ff_e = y.selfCmd.v.vEast - u.leaderState.v.vEast
-        ff_n = y.selfCmd.v.vNorth - u.leaderState.v.vNorth
-        y.selfCmd.v.vEast = u.leaderState.v.vEast + scale * ff_e + scale_rate * offset_e
-        y.selfCmd.v.vNorth = u.leaderState.v.vNorth + scale * ff_n + scale_rate * offset_n
+        ff_e = y.selfCmd.v.vEast - frame.v.vEast
+        ff_n = y.selfCmd.v.vNorth - frame.v.vNorth
+        y.selfCmd.v.vEast = frame.v.vEast + scale * ff_e + scale_rate * offset_e
+        y.selfCmd.v.vNorth = frame.v.vNorth + scale * ff_n + scale_rate * offset_n
         y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
         y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
 
@@ -214,3 +215,14 @@ def _horizontal_track_or_none(state: MotionProfS) -> tuple[float, float] | None:
         return horizontal_track_basis(state)
     except ValueError:
         return None
+
+
+def _select_frame_and_track(
+    leader_cmd: MotionProfS | None, leader_state: MotionProfS
+) -> tuple[MotionProfS, tuple[float, float] | None]:
+    """选择槽位航迹系参考帧。注意：默认零值 leaderCmd 不能覆盖仍有效的 leaderState。"""
+    if leader_cmd is not None:
+        track = _horizontal_track_or_none(leader_cmd)
+        if track is not None:
+            return leader_cmd, track
+    return leader_state, _horizontal_track_or_none(leader_state)

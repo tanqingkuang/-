@@ -449,6 +449,80 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 146.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 1000.0)
 
+    def test_slot_geometry_uses_leader_command_frame_not_disturbed_velocity(self) -> None:
+        """验证槽位原点取长机实际位置，坐标系方向取长机跟踪指令而非受扰速度方向。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=100.0, north=200.0, h=1000.0, v_east=0.0, v_north=35.0)
+        leader_cmd = _motion(east=100.0, north=200.0, h=1000.0, v_east=20.0, v_north=0.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPat=[0],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 0.0, -58.0)]],
+            )
+        )
+
+        slot.step(
+            SlotGeometryInputS(leaderState=ctx.leaderState, leaderCmd=leader_cmd, cmd=ctx.cmd),
+            PosCalcOutputS(selfCmd=ctx.selfCmd),
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 258.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vEast, 20.0)
+        self.assertAlmostEqual(ctx.selfCmd.v.vNorth, 0.0)
+
+    def test_slot_geometry_ignores_uninitialized_leader_command_for_td_seed(self) -> None:
+        """验证 leaderCmd 仍为默认零值时，槽位 TD 用有效 leaderState 播种，避免首条广播后从旧槽位慢慢拖动。"""
+
+        ctx = FormContextS()
+        ctx.leaderState = _motion(east=0.0, north=0.0, h=1000.0, v_east=18.0)
+        ctx.selfState = _motion(east=-54.0, north=58.0, h=1000.0, v_east=18.0)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0)
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPat=[0],
+                formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -54.0, 0.0, -58.0)]],
+                control_period_s=0.05,
+            )
+        )
+        out = PosCalcOutputS(selfCmd=ctx.selfCmd)
+
+        slot.step(
+            SlotGeometryInputS(
+                selfState=ctx.selfState,
+                leaderState=ctx.leaderState,
+                leaderCmd=MotionProfS(),
+                cmd=ctx.cmd,
+            ),
+            out,
+        )
+        leader_cmd = _motion(
+            east=0.0,
+            north=0.0,
+            h=1000.0,
+            v_east=18.0 * math.cos(math.radians(-60.0)),
+            v_north=18.0 * math.sin(math.radians(-60.0)),
+        )
+
+        slot.step(
+            SlotGeometryInputS(
+                selfState=ctx.selfState,
+                leaderState=ctx.leaderState,
+                leaderCmd=leader_cmd,
+                cmd=ctx.cmd,
+            ),
+            out,
+        )
+
+        self.assertAlmostEqual(ctx.selfCmd.pos.east, 23.229473419497438, delta=0.2)
+        self.assertAlmostEqual(ctx.selfCmd.pos.north, 75.76537180435969, delta=0.2)
+
     def test_slot_geometry_falls_back_to_enu_offset_when_leader_track_is_undefined(self) -> None:
         """验证长机水平速度为 0 时槽位回退固定 ENU 偏移，不因航迹未定义而崩溃。"""
 
@@ -761,6 +835,76 @@ class PosTrackTests(unittest.TestCase):
             )
 
         self.assertEqual((out.accEast, out.accNorth, out.accUp), (1.0, 2.0, 3.0))
+
+    def test_pid_compose_exports_limited_effective_command_when_lateral_saturates(self) -> None:
+        """大侧偏触发航迹角限幅时，输出给编队坐标系的有效指令方向应包含限幅拦截角。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainLateral=LateralTrackAngleInitS(
+                    kpPos=1.0,
+                    kpVel=0.3,
+                    dt=0.05,
+                    rollMaxRad=math.radians(40.0),
+                    gammaMaxRad=math.radians(25.0),
+                    floorRad=math.radians(7.0),
+                    psiCmdMaxRad=math.radians(30.0),
+                    margin=1.0,
+                ),
+            )
+        )
+        self_cmd = _motion(east=0.0, north=-1000.0, h=1000.0, v_east=20.0)
+        self_state = _motion(east=0.0, north=0.0, h=1000.0, v_east=20.0)
+        acc = AccInEarthS()
+        effective = MotionProfS()
+
+        tracker.step(
+            PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
+            PosTrackOutputS(accCmd=acc, effectiveCmd=effective),
+        )
+
+        self.assertAlmostEqual(effective.v.vd, 20.0, places=6)
+        self.assertAlmostEqual(effective.v.vPsi, -math.radians(30.0), places=6)
+        self.assertAlmostEqual(effective.v.vEast, 20.0 * math.cos(math.radians(30.0)), places=6)
+        self.assertAlmostEqual(effective.v.vNorth, -20.0 * math.sin(math.radians(30.0)), places=6)
+
+    def test_pid_compose_exports_variable_angle_command_above_lateral_floor(self) -> None:
+        """侧偏超过 7°地板阈值时，即使外环 raw 未被 clamp，也应输出变限幅航迹角指令。"""
+
+        tracker = PidCompose()
+        tracker.init(
+            PidComposeInitS(
+                vMin=3.0,
+                gainLateral=LateralTrackAngleInitS(
+                    kpPos=0.1,
+                    kpVel=0.3,
+                    dt=0.05,
+                    rollMaxRad=math.radians(40.0),
+                    gammaMaxRad=math.radians(25.0),
+                    floorRad=math.radians(7.0),
+                    psiCmdMaxRad=math.radians(80.0),
+                    margin=1.8,
+                ),
+            )
+        )
+        speed = 22.0
+        dz = 206.0
+        radius = speed * speed / (9.80665 * math.sin(math.radians(25.0))) * 1.8
+        expected_angle = math.asin(dz / radius)
+        self_cmd = _motion(east=0.0, north=-dz, h=1000.0, v_east=speed)
+        self_state = _motion(east=0.0, north=0.0, h=1000.0, v_east=speed)
+        effective = MotionProfS()
+
+        tracker.step(
+            PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
+            PosTrackOutputS(accCmd=AccInEarthS(), effectiveCmd=effective),
+        )
+
+        self.assertAlmostEqual(effective.v.vPsi, -expected_angle, places=6)
+        self.assertAlmostEqual(effective.v.vEast, speed * math.cos(expected_angle), places=6)
+        self.assertAlmostEqual(effective.v.vNorth, -speed * math.sin(expected_angle), places=6)
 
 
 class LateralTrackAngleTests(unittest.TestCase):
@@ -1079,7 +1223,16 @@ class ProcessUnitTests(unittest.TestCase):
         )
         out = OutboundOutputS()
 
-        outbound.step(RallyLeaderBroadcastInputS(cmd=ctx.cmd, selfState=ctx.selfState, slotScale=ctx.slotScale), out)
+        leader_cmd = _motion(east=10.0, north=20.0, h=30.0, v_east=12.0, v_north=0.0)
+        outbound.step(
+            RallyLeaderBroadcastInputS(
+                cmd=ctx.cmd,
+                selfState=ctx.selfState,
+                leaderCmd=leader_cmd,
+                slotScale=ctx.slotScale,
+            ),
+            out,
+        )
 
         self.assertEqual(len(out.outbox), 1)
         self.assertEqual(out.outbox[0].source, "A01")
@@ -1087,14 +1240,21 @@ class ProcessUnitTests(unittest.TestCase):
 
         follower_ctx = FormContextS()
         inbound = RallyLeaderFollower()
+        leader_cmd_out = MotionProfS()
         inbound_y = RallyLeaderFollowerOutputS(
-            leaderState=follower_ctx.leaderState, cmd=follower_ctx.cmd, slotScale=follower_ctx.slotScale
+            leaderState=follower_ctx.leaderState,
+            leaderCmd=leader_cmd_out,
+            cmd=follower_ctx.cmd,
+            slotScale=follower_ctx.slotScale,
         )
         inbound.step(InboundInputS(inbox=out.outbox), inbound_y)
 
         self.assertEqual(follower_ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(follower_ctx.cmd.pattern, 0)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
+        self.assertIn("leader", out.outbox[0].payload["cmd"])
+        self.assertAlmostEqual(leader_cmd_out.pos.east, 10.0)
+        self.assertAlmostEqual(leader_cmd_out.v.vEast, 12.0)
         # hold 长机的 ctx.slotScale 停在默认值，广播出去就是 scale=1.0/scaleRate=0.0
         self.assertAlmostEqual(follower_ctx.slotScale.scale, 1.0)
         self.assertAlmostEqual(follower_ctx.slotScale.scaleRate, 0.0)

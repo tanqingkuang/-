@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import FormSnapshotS, FormStageE, RallySlotScaleS
+from src.algorithm.context.leaf_types import FormSnapshotS, FormStageE, MotionProfS, RallySlotScaleS
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
 
 LEADER_BROADCAST_TOPIC = "formation.leader"
@@ -42,6 +42,7 @@ class RallyLeaderFollowerOutputS(InboundOutputS):
     """集结僚机入站输出端口。"""
 
     # 继承 leaderState: MotionProfS, cmd: FormSnapshotS
+    leaderCmd: MotionProfS | None = None  # 长机跟踪指令；None 时接收端可沿用 leaderState。
     slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale
     t_ref: float = 0.0  # 长机广播的集结基准时刻（秒）；由实体每帧复制到 cxt.rally_t_ref
     t_ref_valid: bool = False  # 旧格式或非法 t_ref 默认 False，禁止冷启动误切出
@@ -89,6 +90,12 @@ class RallyLeaderFollower(InboundBase):
             # 全部字段解析成功后，一次性写入输出端口，保证多字段一致性。
             _write_motion_from_payload(state, y.leaderState)
             _write_cmd_from_payload(cmd, y.cmd)
+            leader_cmd_payload = cmd.get("leader")
+            if y.leaderCmd is not None:
+                if isinstance(leader_cmd_payload, dict):
+                    _write_motion_from_payload(leader_cmd_payload, y.leaderCmd)
+                else:
+                    _write_motion_from_payload(state, y.leaderCmd)
             y.slotScale.scale = scale_parsed
             y.slotScale.scaleRate = scale_rate_parsed
             y.t_ref = t_ref_parsed

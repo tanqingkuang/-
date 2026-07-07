@@ -65,6 +65,8 @@ class LateralTrackAngle:
         """初始化 LateralTrackAngle 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._cfg = LateralTrackAngleInitS()
         self._integral = 0.0  # 内环速度误差积分(以加速度贡献量存储，kiVel 已折入)
+        self.last_vel_err_cmd = 0.0  # 最近一拍三段航迹角约束对应的侧向速度误差指令，供上层生成有效航迹指令。
+        self.last_saturated = False  # 最近一拍是否处于 7° 地板以外的航迹角约束区间。
 
     def init(self, cfg: LateralTrackAngleInitS) -> None:
         """按配置初始化 LateralTrackAngle。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -122,6 +124,11 @@ class LateralTrackAngle:
         psi_max = self.track_angle_limit_rad(abs(dz), v)
         sat = v * math.sin(psi_max)
         vel_err_cmd = clamp(vel_err_cmd, -sat, sat)
+        radius = v * v / (_GRAVITY_MPS2 * math.sin(cfg.gammaMaxRad)) * cfg.margin
+        floor_dz = radius * math.sin(cfg.floorRad) if radius > 1e-9 else 0.0
+        self.last_saturated = abs(dz) > floor_dz
+        # 上层广播的是三段几何约束航迹角，不是外环 P 指令是否刚好被 clamp 后的结果。
+        self.last_vel_err_cmd = -math.copysign(sat, dz) if self.last_saturated and dz != 0.0 else vel_err_cmd
 
         # 内环 PI：对(实际−指令)做 P(+可选 I)。kiVel=0 时退化纯 P，无饱和时等效并联 PD。
         err = vel_err - vel_err_cmd
@@ -142,3 +149,5 @@ class LateralTrackAngle:
     def reset(self) -> None:
         """复位 LateralTrackAngle 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._integral = 0.0
+        self.last_vel_err_cmd = 0.0
+        self.last_saturated = False

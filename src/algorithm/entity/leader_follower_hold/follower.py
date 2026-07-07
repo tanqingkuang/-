@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 from src.algorithm.context.context import FormContextS, reset_context
-from src.algorithm.context.leaf_types import PosTrackDiagS, copy_motion, copy_pos_track_diag
+from src.algorithm.context.leaf_types import MotionProfS, PosTrackDiagS, copy_motion, copy_pos_track_diag
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
@@ -27,6 +27,7 @@ class FollowerEntity(EntityBase):
         # 共享黑板与复用的收件箱列表，避免每帧重新分配
         self.cxt = FormContextS()
         self._inbox = []
+        self._leader_cmd = MotionProfS()
 
         # 僚机处理链：入站解析 -> 空规划(占位) -> 槽位几何 -> 位置跟踪
         self._inbound = RallyLeaderFollower()
@@ -52,7 +53,10 @@ class FollowerEntity(EntityBase):
         # slotScale 端口必须绑定（RallyLeaderFollower 强制校验非 None），hold 场景只使用默认 scale=1.0；
         # 若接收到旧格式广播缺少 slot_scale/t_ref，则仍回退到 scale=1.0/t_ref_valid=False。
         self._inbound_y = RallyLeaderFollowerOutputS(
-            leaderState=self.cxt.leaderState, cmd=self.cxt.cmd, slotScale=self.cxt.slotScale
+            leaderState=self.cxt.leaderState,
+            leaderCmd=self._leader_cmd,
+            cmd=self.cxt.cmd,
+            slotScale=self.cxt.slotScale,
         )
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
@@ -61,6 +65,7 @@ class FollowerEntity(EntityBase):
         # 集结场景复用同一 SlotGeometry 时可由 Rally 动态写入缩放因子。
         self._pos_calc_u = SlotGeometryInputS(
             leaderState=self.cxt.leaderState,
+            leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
             slotScale=self.cxt.slotScale,
             selfState=self.cxt.selfState,  # 仅供 TD (重)挂载首拍按当前位置播种，稳态几何目标不依赖本机状态
@@ -104,6 +109,7 @@ class FollowerEntity(EntityBase):
         """复位 FollowerEntity 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         # 原地清空黑板与各单元运行期状态，保留构造期依赖
         reset_context(self.cxt)
+        copy_motion(MotionProfS(), self._leader_cmd)
         self._inbound.reset()
         self._tra_plan.reset()
         self._pos_calc.reset()

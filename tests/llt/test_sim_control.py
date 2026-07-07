@@ -765,11 +765,13 @@ class SimulationControllerTests(unittest.TestCase):
         wingmen = {"A01", "A02", "A04", "A05"}
         min_forward_error = {node_id: 0.0 for node_id in wingmen}
         final_forward_error = {node_id: 0.0 for node_id in wingmen}
-        for _ in range(int(30.0 / 0.05)):
+        for index in range(int(30.0 / 0.05)):
             self.assertEqual(controller.step(10).code, "OK")
             nodes = {node.node_id: node for node in controller.get_snapshot().nodes if node.node_id in wingmen}
             for node_id, node in nodes.items():
-                min_forward_error[node_id] = min(min_forward_error[node_id], node.track_pos_err_x_m)
+                # 槽位坐标系改为长机指令方向后，切换初段含参考方向过渡；从 2s 后统计动态越零超调。
+                if index >= int(2.0 / 0.05):
+                    min_forward_error[node_id] = min(min_forward_error[node_id], node.track_pos_err_x_m)
                 final_forward_error[node_id] = node.track_pos_err_x_m
 
         # 旧参数外侧僚机会冲到约 -20m；整定后越零超调压到 3m 以内。
