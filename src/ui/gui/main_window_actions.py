@@ -65,7 +65,7 @@ class MainWindowActionMixin:
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
-        # 节点表：逐机显示航迹系三轴位置误差，整体航线指标拆到单独表格。
+        # 节点表：前向保留待飞距(目标-本机)，高飘/右偏按飞行诊断习惯显示本机相对目标偏差。
         self.node_table.setRowCount(len(snapshot.nodes))
         for row, node in enumerate(snapshot.nodes):
             # 健康枚举翻译成中文；未知值原样显示。
@@ -74,8 +74,8 @@ class MainWindowActionMixin:
             values = [
                 node.node_id,
                 f"{node.track_pos_err_x:.1f}",
-                f"{node.track_pos_err_y:.1f}",
-                f"{node.track_pos_err_z:.1f}",
+                f"{-node.track_pos_err_y:.1f}",
+                f"{-node.track_pos_err_z:.1f}",
                 status,
             ]
             for column, value in enumerate(values):

@@ -89,7 +89,7 @@
           <mxGeometry height="690" width="346" x="1096" y="118" as="geometry" />
         </mxCell>
         <mxCell id="rp_t1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="整体跟踪表（侧偏/待飞距/高度/地速/天向）" vertex="1"><mxGeometry height="70" width="322" x="1108" y="148" as="geometry" /></mxCell>
-        <mxCell id="rp_t2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="节点跟踪误差表（前向/垂向/侧向/状态）" vertex="1"><mxGeometry height="120" width="322" x="1108" y="228" as="geometry" /></mxCell>
+        <mxCell id="rp_t2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="节点相对槽位偏差表（待飞距/高飘/右偏/状态）" vertex="1"><mxGeometry height="120" width="322" x="1108" y="228" as="geometry" /></mxCell>
         <mxCell id="rp_t3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B0BEC5;align=left;verticalAlign=top;fontSize=11;spacingLeft=6;spacingTop=4;" value="链路状态表（延迟/丢包/状态）" vertex="1"><mxGeometry height="120" width="322" x="1108" y="358" as="geometry" /></mxCell>
 
         <!-- ===================== CALLOUTS ===================== -->

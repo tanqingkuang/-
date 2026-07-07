@@ -1365,7 +1365,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreater(self.window.node_table.height(), 180)
         self.assertGreater(self.window.link_table.height(), 180)
 
-    def test_node_table_shows_track_errors_and_overall_table_uses_leader_route_metrics(self) -> None:
+    def test_node_table_shows_slot_deviation_and_overall_table_uses_leader_route_metrics(self) -> None:
         snapshot = Snapshot(
             time=0.0,
             duration=10.0,
@@ -1408,16 +1408,19 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window._update_snapshot(snapshot)
 
         self.assertEqual(self.window.node_table.columnCount(), 5)
-        self.assertEqual(self.window.node_table.horizontalHeaderItem(1).text(), "前向(m)")
-        self.assertEqual(self.window.node_table.horizontalHeaderItem(2).text(), "垂向(m)")
-        self.assertEqual(self.window.node_table.horizontalHeaderItem(3).text(), "侧向(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(1).text(), "待飞距(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(2).text(), "高飘(m)")
+        self.assertEqual(self.window.node_table.horizontalHeaderItem(3).text(), "右偏(m)")
+        self.assertIn("目标-本机", self.window.node_table.horizontalHeaderItem(1).toolTip())
+        self.assertIn("本机-目标", self.window.node_table.horizontalHeaderItem(2).toolTip())
+        self.assertIn("本机-目标", self.window.node_table.horizontalHeaderItem(3).toolTip())
         self.assertEqual(self.window.node_table.item(0, 1).text(), "1.2")
         self.assertEqual(self.window.node_table.item(0, 1).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
-        self.assertEqual(self.window.node_table.item(0, 2).text(), "-3.4")
-        self.assertEqual(self.window.node_table.item(0, 3).text(), "5.6")
+        self.assertEqual(self.window.node_table.item(0, 2).text(), "3.4")
+        self.assertEqual(self.window.node_table.item(0, 3).text(), "-5.6")
         self.assertEqual(self.window.node_table.item(1, 1).text(), "-7.8")
-        self.assertEqual(self.window.node_table.item(1, 2).text(), "9.1")
-        self.assertEqual(self.window.node_table.item(1, 3).text(), "-2.3")
+        self.assertEqual(self.window.node_table.item(1, 2).text(), "-9.1")
+        self.assertEqual(self.window.node_table.item(1, 3).text(), "2.3")
         self.assertEqual(self.window.overall_table.rowCount(), 1)
         self.assertEqual(self.window.overall_table.columnCount(), 5)
         self.assertEqual(self.window.overall_table.horizontalHeaderItem(3).text(), "地速(m/s)")

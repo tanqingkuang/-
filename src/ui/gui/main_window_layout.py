@@ -366,9 +366,18 @@ class MainWindowLayoutMixin:
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(10, 12, 10, 10)
         layout.setSpacing(8)
-        # 节点误差表、整体跟踪表和链路表分开显示，避免把全局航线指标误认为单机误差。
+        # 节点偏差表、整体跟踪表和链路表分开显示，避免把全局航线指标误认为单机偏差。
         self.node_table = QTableWidget(0, 5)
-        self.node_table.setHorizontalHeaderLabels(["ID", "前向(m)", "垂向(m)", "侧向(m)", "状态"])
+        self.node_table.setHorizontalHeaderLabels(["ID", "待飞距(m)", "高飘(m)", "右偏(m)", "状态"])
+        header_tips = {
+            1: "待飞距=目标-本机；正值表示目标在本机前方。",
+            2: "高飘=本机-目标；正值表示本机高于目标。",
+            3: "右偏=本机-目标；正值表示本机位于目标右侧。",
+        }
+        for column, tip in header_tips.items():
+            item = self.node_table.horizontalHeaderItem(column)
+            if item is not None:
+                item.setToolTip(tip)
         self.overall_table = QTableWidget(0, 5)
         self.overall_table.setHorizontalHeaderLabels(["侧偏(m)", "待飞距(m)", "高度(m)", "地速(m/s)", "天向速度(m/s)"])
         self.link_table = QTableWidget(0, 5)
@@ -376,7 +385,7 @@ class MainWindowLayoutMixin:
         self._configure_table(self.node_table, [48, 88, 88, 88, 50], expandable=True)
         self._configure_table(self.overall_table, [60, 72, 62, 70, 92], height=64)
         self._configure_table(self.link_table, [86, 52, 58, 50, 54], expandable=True)
-        node_title = QLabel("节点跟踪误差")
+        node_title = QLabel("节点相对槽位偏差")
         node_title.setObjectName("sectionTitle")
         overall_title = QLabel("整体跟踪情况")
         overall_title.setObjectName("sectionTitle")
