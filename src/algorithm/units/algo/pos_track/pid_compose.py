@@ -19,8 +19,8 @@ def _uses_position_error(cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | No
         # PPI 的位置误差只进外环 kpPos；kpVel/kiVel 属于速度内环，不能让位置诊断误报有效。
         return cfg.kpPos != 0.0
     if isinstance(cfg, LateralTrackAngleInitS):
-        # 串级横侧向的外环消费横偏 dZ(K1=-kp/kd)，kp/ki 任一非零即启用位置通道。
-        return cfg.kp != 0.0 or cfg.ki != 0.0
+        # 串级横侧向的外环消费横偏 dZ(vel_err_cmd=-kpPos·dZ)，kpPos 非零即启用位置通道。
+        return cfg.kpPos != 0.0
     if isinstance(cfg, CtrlInitS):
         # 并联式 PID 中 kp/ki 是位置通道，kd/kiv 只说明速度误差通道启用。
         return cfg.kp != 0.0 or cfg.ki != 0.0
@@ -33,8 +33,8 @@ def _uses_velocity_error(cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | No
         # PPI 的内环跟踪 vel_cmd-velActual，因此 kpVel/kiVel 任一非零都表示速度误差被使用。
         return cfg.kpVel != 0.0 or cfg.kiVel != 0.0
     if isinstance(cfg, LateralTrackAngleInitS):
-        # 串级横侧向内环跟踪侧向速度误差(velErr-velErrCmd)，kd 非零即启用速度通道。
-        return cfg.kd != 0.0
+        # 串级横侧向内环跟踪侧向速度误差(velErr-velErrCmd)，kpVel/kiVel 任一非零即启用速度通道。
+        return cfg.kpVel != 0.0 or cfg.kiVel != 0.0
     if isinstance(cfg, CtrlInitS):
         # 并联式 PID 的速度误差只走 kd/kiv；位置环开启不代表速度诊断有效。
         return cfg.kd != 0.0 or cfg.kiv != 0.0

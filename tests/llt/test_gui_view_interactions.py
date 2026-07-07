@@ -466,8 +466,9 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(small.width(), large.width(), delta=4)
         self.assertAlmostEqual(small.height(), large.height(), delta=4)
-        self.assertLessEqual(large.width(), 14)
-        self.assertLessEqual(large.height(), 10)
+        # 绝对上限对应改进后的俯视图机型图标(实测 31×22，旧小三角为 14×10)；核心是上面两条"尺寸不随缩放变"。
+        self.assertLessEqual(large.width(), 40)
+        self.assertLessEqual(large.height(), 30)
 
     def test_top_view_marks_role_leader_when_leader_is_not_first_node(self) -> None:
         view = self.window.top_view

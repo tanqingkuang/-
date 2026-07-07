@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
+
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import PosTrackDiagS, copy_motion, copy_pos_track_diag
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
+from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
@@ -35,7 +37,14 @@ class FollowerEntity(EntityBase):
         # 槽位几何需注入本机 id 及队形配置，据此从长机状态推算自身目标位
         self._inbound.init(None)
         self._tra_plan.init(None)
-        self._pos_calc.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
+        # control_period_s 启用相对槽位 TD：软化队形重构的槽位阶跃，并由 TD 的 x2 补出相对切换速度前馈。
+        # TD 参考速度上界取各通道速度权限，防大阶跃参考跑飞：前向按速度指令区间半宽、垂向按爬升限、侧向给保守缺省。
+        v_fwd, v_up, v_lat = _slot_td_vmax(cfg.velCmdLimit)
+        self._pos_calc.init(SlotGeometryInitS(
+            cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos,
+            control_period_s=cfg.control_period_s,
+            vMaxForward=v_fwd, vMaxVertical=v_up, vMaxLateral=v_lat,
+        ))
         self._pos_track.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
@@ -54,6 +63,7 @@ class FollowerEntity(EntityBase):
             leaderState=self.cxt.leaderState,
             cmd=self.cxt.cmd,
             slotScale=self.cxt.slotScale,
+            selfState=self.cxt.selfState,  # 仅供 TD (重)挂载首拍按当前位置播种，稳态几何目标不依赖本机状态
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
@@ -104,3 +114,28 @@ class FollowerEntity(EntityBase):
     def close(self) -> None:
         """释放 FollowerEntity 持有的资源。注意：关闭后不应继续调用运行接口。"""
         return None
+
+
+# 侧向无 config 速度限幅，按 g·tan(40°) 量级给保守缺省(下游还有航迹角变限幅兜底)。
+_SLOT_TD_VMAX_LATERAL_DEFAULT = 6.0
+# 速度限幅为 ±inf(未配置)时的兜底：前向相对速度半宽、垂向爬升限。
+_SLOT_TD_VMAX_FORWARD_FALLBACK = 5.0
+_SLOT_TD_VMAX_VERTICAL_FALLBACK = 3.0
+
+
+def _slot_td_vmax(vel_limit: VelCmdLimitS | None) -> tuple[float, float, float]:
+    """由速度指令限幅推出相对槽位 TD 的三轴参考速度上界 (前向, 垂向, 侧向)，单位 m/s。
+
+    前向取速度指令区间半宽(相对巡航速度的可用增减速)，垂向取爬升/下降限的较小者，侧向给保守缺省。
+    限幅缺省为 ±inf 时回退到兜底常量。
+    """
+    vel_limit = vel_limit or VelCmdLimitS()
+    if math.isfinite(vel_limit.forwardMin) and math.isfinite(vel_limit.forwardMax):
+        v_fwd = 0.5 * (vel_limit.forwardMax - vel_limit.forwardMin)
+    else:
+        v_fwd = _SLOT_TD_VMAX_FORWARD_FALLBACK
+    v_up = min(abs(vel_limit.verticalMin), abs(vel_limit.verticalMax))
+    if not math.isfinite(v_up):
+        v_up = _SLOT_TD_VMAX_VERTICAL_FALLBACK
+    # 参考速度取 0.8×通道速度权限：留 20% 余量给反馈纠偏，避免参考速度顶到硬限后回路没余量→过冲。
+    return 0.8 * v_fwd, 0.8 * v_up, 0.8 * _SLOT_TD_VMAX_LATERAL_DEFAULT
