@@ -160,25 +160,23 @@ PY
 
 Windows x64 exe 需要在 Windows x64 环境构建，不要在 macOS 上直接用本机 PyInstaller 伪造产物。原因是 PySide6/Qt 需要目标平台的 Python wheel、Qt DLL 和 platform plugin。
 
-本地 Windows 机器开发期快速打包：
+本地 Windows 机器开发调试（不打包，直接跑源码，秒级迭代）：
 
 ```powershell
-.\scripts\build_windows_full_dev.ps1
-.\scripts\build_windows_lite_dev.ps1
+.\scripts\run_windows_full_dev.ps1
+.\scripts\run_windows_lite_dev.ps1
 ```
 
-首次打包或依赖变化后可加 `-InstallDependencies`。
+`run_full_dev`/`run_lite_dev` 设 `SIMU_GUI_FEATURE_PROFILE` 后跑 `src/ui/gui/main_window.py`，改代码重跑即可。首次或依赖变化后可加 `-InstallDependencies`。调参/改代码不要去跑打包（PyInstaller 全量收集 Qt，与改动量无关，几十秒）。
 
-全量版开发期产物入口为 `dist\编队仿真.exe`，运行依赖在同级 `dist\编队仿真\` 目录。裁剪版开发期产物入口为 `dist\编队仿真-裁剪版.exe`，运行依赖在同级 `dist\编队仿真-裁剪版\` 目录。
-
-发布期打包：
+发布期打包 exe：
 
 ```powershell
 .\scripts\build_windows_full_release.ps1
 .\scripts\build_windows_lite_release.ps1
 ```
 
-4 个编译入口的差异见 `docs/10-Windows编译入口说明.md`。
+4 个入口（2 个 `run_*_dev` 跑源码调试 + 2 个 `build_*_release` 打包 exe）的差异见 `docs/10-Windows编译入口说明.md`。
 
 GitHub Actions 打包：
 
