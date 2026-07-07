@@ -1,6 +1,8 @@
-# Windows 编译入口说明
+# Windows 运行与编译入口说明
 
 本项目 Windows x64 exe 统一在 Windows x64 环境构建。PySide6/Qt 依赖目标平台的 Python wheel、Qt DLL 和 platform plugin，不建议在 macOS 或其他平台伪造 Windows 产物。
+
+入口分两类：**`run_*_dev` 用于本地调试**（直接跑源码、秒级迭代、不打包）；**`build_*_release` 用于对外发布 exe**（PyInstaller 打包，耗时以 Qt 收集为主，与改动量无关）。调参/改代码请走 `run_*_dev`，不要为了看效果去跑打包。
 
 ## 功能档位
 
@@ -15,14 +17,16 @@
 - `数据分析(&D)`，包括 `控制效果分析(&A)`。
 - `3D态势(&3)`。
 
-## 四个编译入口
+## 四个入口
 
-| 脚本 | 档位 | 打包形态 | 默认产物 | 主要用途 |
+| 脚本 | 档位 | 形态 | 产物/行为 | 主要用途 |
 | --- | --- | --- | --- | --- |
-| `scripts/build_windows_full_dev.ps1` | 全量版 | `--onedir`，exe 与依赖目录并列 | `dist\编队仿真.exe` 和 `dist\编队仿真\` | 本地快速调试，启动快，便于检查依赖文件 |
-| `scripts/build_windows_full_release.ps1` | 全量版 | `--onefile` | `dist\编队仿真.exe` | 对外发布完整功能 exe |
-| `scripts/build_windows_lite_dev.ps1` | 裁剪版 | `--onedir`，exe 与依赖目录并列 | `dist\编队仿真-裁剪版.exe` 和 `dist\编队仿真-裁剪版\` | 本地快速验证裁剪版菜单和依赖 |
-| `scripts/build_windows_lite_release.ps1` | 裁剪版 | `--onefile` | `dist\编队仿真-裁剪版.exe` | 对外发布裁剪功能 exe |
+| `scripts/run_windows_full_dev.ps1` | 全量版 | 跑源码(不打包) | 设 `SIMU_GUI_FEATURE_PROFILE=full` 后 `python src/ui/gui/main_window.py`，秒级启动 | 本地调试，改代码重跑即可 |
+| `scripts/run_windows_lite_dev.ps1` | 裁剪版 | 跑源码(不打包) | 同上，档位 `lite`（菜单/功能门控按裁剪版） | 本地调试裁剪版 |
+| `scripts/build_windows_full_release.ps1` | 全量版 | `--onefile` 打包 | `dist\编队仿真.exe` | 对外发布完整功能 exe |
+| `scripts/build_windows_lite_release.ps1` | 裁剪版 | `--onefile` 打包 | `dist\编队仿真-裁剪版.exe` | 对外发布裁剪功能 exe |
+
+> 说明：`run_*_dev` 支持 `-InstallDependencies` 首次安装 `requirements-gui.txt`，其余参数透传给主程序。裁剪版打包才会 `--exclude-module` 真正剔除重功能；源码调试下裁剪只体现在 `lite` 档的菜单/功能门控，模块仍在源码树里。
 
 ## 裁剪边界
 
