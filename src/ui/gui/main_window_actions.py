@@ -28,6 +28,7 @@ from src.ui.gui.view_models import (
     WORLD_WIDTH,
     default_project_root,
     leader_node_from,
+    trail_seconds_for_duration,
 )
 
 
@@ -473,6 +474,20 @@ class MainWindowActionMixin:
             return
         self.duration_input.setText(self._format_duration_text(snapshot.duration))
         self.duration_input.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
+        self._sync_trail_seconds_for_duration(snapshot.duration)
+
+    def _sync_trail_seconds_for_duration(self, duration_s: float) -> None:
+        """按飞行时长同步默认尾迹长度。注意：同一时长不覆盖用户临时手动值。"""
+        if getattr(self, "_trail_duration_basis", None) == duration_s:
+            return
+        seconds = trail_seconds_for_duration(duration_s)
+        # 长时长配置的一半可能超过旧 600s 上限，先放宽范围再写入值，避免被控件截断。
+        with QSignalBlocker(self.trail_seconds_input):
+            self.trail_seconds_input.setRange(0.0, max(600.0, seconds))
+            self.trail_seconds_input.setValue(seconds)
+        # 记录本次同步的飞行时长；用户随后手动调尾迹时，不会被每帧刷新覆盖。
+        self._trail_duration_basis = duration_s
+        self._apply_trail_seconds(seconds)
 
     @staticmethod
     def _format_duration_text(duration_s: float) -> str:
@@ -519,7 +534,10 @@ class MainWindowActionMixin:
 
     def _on_trail_seconds_changed(self) -> None:
         """处理尾迹长度输入。注意：0 表示关闭尾迹显示与缓存。"""
-        seconds = self.trail_seconds_input.value()
+        self._apply_trail_seconds(self.trail_seconds_input.value())
+
+    def _apply_trail_seconds(self, seconds: float) -> None:
+        """把尾迹时长下发给数据源和视图。注意：输入框同步时也复用该路径。"""
         # 数据源负责缓存裁剪，视图负责按当前秒数即时隐藏或淡出已有快照。
         self.sim.set_trail_seconds(seconds)
         self.top_view.trail_seconds = seconds

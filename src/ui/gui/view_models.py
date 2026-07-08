@@ -12,8 +12,8 @@ from src.data.geo import GeoOrigin
 # 世界坐标范围（米）：用于 mock 数据居中、待飞距/侧偏兜底估算等。
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
-# 尾迹保留时长（秒）：超过该时间的轨迹采样点会被丢弃，控制内存与视觉长度。
-TRAIL_SECONDS = 18.0
+# 尾迹默认取飞行总时长的一半，超过该窗口的轨迹采样点会被丢弃。
+TRAIL_DURATION_RATIO = 0.5
 # 俯视图初始平移留白，避免场景紧贴左上角边缘。
 TOP_VIEW_ORIGIN_MARGIN = 40.0
 # 视图缩放上下限，防止缩到看不见或放大到失真；下限需覆盖 100km 级地图自适应。
@@ -56,6 +56,14 @@ def playback_rate_to_slider_value(rate: float) -> int:
         key=lambda index: abs(PLAYBACK_RATE_VALUES[index] - safe_rate),
     )
     return PLAYBACK_RATE_SLIDER_MIN + nearest_index
+
+
+def trail_seconds_for_duration(duration_s: float) -> float:
+    """按飞行总时长计算默认尾迹保留时长。注意：非法或负时长按 0 处理。"""
+
+    if not math.isfinite(duration_s):
+        return 0.0
+    return max(0.0, duration_s * TRAIL_DURATION_RATIO)
 
 
 def adaptive_world_grid_spacing(scale_value: float) -> int:
@@ -101,7 +109,7 @@ class TrailPoint:
     x: float  # 采样时刻的世界 east 坐标
     y: float  # 采样时刻的世界 north 坐标
     altitude: float  # 采样时刻高度
-    time: float  # 采样仿真时刻，用于按 TRAIL_SECONDS 老化淡出
+    time: float  # 采样仿真时刻，用于按当前尾迹窗口老化淡出
 
 
 @dataclass

@@ -13,7 +13,6 @@ from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.view_models import (
     FIT_VIEWPORT_RATIO,
     TOP_VIEW_ORIGIN_MARGIN,
-    TRAIL_SECONDS,
     VIEW_MAX_SCALE,
     VIEW_MIN_SCALE,
     ObstacleView,
@@ -53,7 +52,7 @@ class TopView(QGraphicsView):
         self.show_grid = True
         # 通信链路默认显示，可由主窗口工具条复选框关闭。
         self.show_links = True
-        self.trail_seconds = TRAIL_SECONDS
+        self.trail_seconds = 0.0
         # _manual_view 为真表示用户手动调过视角，此后禁止自动铺满抢镜。
         self._manual_view = False
         # 中键拖拽起点；左键框选起止点（None 表示当前无对应操作进行中）。

@@ -8,7 +8,6 @@ from src.algorithm.context.leaf_types import WayPointInputS
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 from src.ui.gui.view_models import (
-    TRAIL_SECONDS,
     WORLD_HEIGHT,
     WORLD_WIDTH,
     LinkState,
@@ -17,6 +16,7 @@ from src.ui.gui.view_models import (
     ReferenceRoute,
     Snapshot,
     TrailPoint,
+    trail_seconds_for_duration,
 )
 
 class MockSimulation:
@@ -34,7 +34,7 @@ class MockSimulation:
         self.disturbance_until = 0.0
         self.fault_node: str | None = None
         self.loss_until = 0.0
-        self.trail_seconds = TRAIL_SECONDS
+        self.trail_seconds = trail_seconds_for_duration(self.duration)
         self.nodes: list[NodeState] = []
         self.links: list[LinkState] = []
         self.reset()
@@ -222,7 +222,7 @@ class ControllerSimulationAdapter:
         self.disturbance = "无"
         # 控制器只给瞬时位置，尾迹需由本适配器按 node_id 自行累积缓存。
         self._trail_by_node: dict[str, list[TrailPoint]] = {}
-        self.trail_seconds = TRAIL_SECONDS
+        self.trail_seconds = trail_seconds_for_duration(0.0)
         # 记录上一帧位置与时间，用于差分估算速度（控制器速度字段不一定可靠）。
         self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
         # 已消费的事件数游标，避免重复处理历史扰动事件。
@@ -260,6 +260,8 @@ class ControllerSimulationAdapter:
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
             self.speed = self.controller.playback_rate
+            # 数据源自身也同步半程尾迹，保证非 MainWindow 调用 load_config 时行为一致。
+            self.set_trail_seconds(trail_seconds_for_duration(self.controller.get_snapshot().duration_s))
             # 把事件游标推到当前末尾，避免把加载前的旧事件当成新扰动消费。
             self._processed_event_count = len(self.controller.get_recent_events(limit=1000))
             self.disturbance = "无"
@@ -374,6 +376,9 @@ class ControllerSimulationAdapter:
         result = self.controller.set_duration(duration_s)
         self.last_result_code = result.code
         self.last_result_message = result.message
+        if result.code == "OK":
+            # 修改仿真总时长等价于重新定义默认尾迹窗口，立即裁剪缓存。
+            self.set_trail_seconds(trail_seconds_for_duration(duration_s))
         return self.snapshot()
 
     def close(self) -> None:
