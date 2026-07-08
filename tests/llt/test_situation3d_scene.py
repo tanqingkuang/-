@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import struct
 import unittest
 
 from src.ui.gui.situation3d.scene_data import DEFAULT_TERRAIN_SPAN_M, build_scene_payload, enu_to_quick3d
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
+from src.ui.gui.situation3d.trail_ribbon_geometry import TrailRibbonGeometry
 from src.ui.gui.view_models import (
     LinkState,
     NodeState,
@@ -65,17 +67,15 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLess(aircraft[0]["yawDeg"], 0.0)
 
         self.assertEqual(payload["counts"]["aircraft"], 2)
-        self.assertEqual(payload["counts"]["trailSegments"], 1)
+        self.assertEqual(payload["counts"]["trailRibbons"], 1)
         self.assertGreaterEqual(payload["counts"]["routePoints"], 2)
         self.assertEqual(payload["counts"]["obstacles"], 1)
         self.assertNotIn("trailPoints", payload)
-        trail_segment = payload["trailSegments"][0]
-        self.assertEqual(trail_segment["nodeId"], "A01")
-        self.assertEqual(trail_segment["x"], 2.5)
-        self.assertEqual(trail_segment["y"], 4.5)
-        self.assertEqual(trail_segment["z"], -3.5)
-        self.assertGreater(trail_segment["length"], 5.0)
-        self.assertLess(trail_segment["thickness"], 20.0)
+        self.assertNotIn("trailSegments", payload)
+        trail_ribbon = payload["trailRibbons"][0]
+        self.assertEqual(trail_ribbon["nodeId"], "A01")
+        self.assertEqual(trail_ribbon["width"], 220.0)
+        self.assertEqual(json.loads(trail_ribbon["pathValue"]), [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]])
         self.assertEqual(payload["terrain"]["ground"]["width"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["ground"]["depth"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["surface"]["width"], DEFAULT_TERRAIN_SPAN_M)
@@ -107,6 +107,22 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreater(geometry.boundsMax().y(), 760.0)
         self.assertGreater(max(y_values) - min(y_values), 450.0)
 
+    def test_trail_ribbon_geometry_builds_single_continuous_mesh(self) -> None:
+        """验证尾迹 ribbon 使用一张连续三角带，而不是离散点或分段圆柱。"""
+
+        geometry = TrailRibbonGeometry()
+        geometry.pathValue = json.dumps([[0.0, 100.0, 0.0], [60.0, 105.0, -20.0], [120.0, 108.0, -42.0]])
+        geometry.widthValue = 32.0
+
+        vertex_data = geometry.vertexData()
+        index_data = geometry.indexData()
+
+        self.assertEqual(geometry.stride(), 48)
+        self.assertEqual(vertex_data.size(), 6 * geometry.stride())
+        self.assertEqual(index_data.size(), 12 * 4)
+        self.assertLessEqual(geometry.boundsMin().x(), -32.0)
+        self.assertGreaterEqual(geometry.boundsMax().x(), 120.0)
+
     def test_disabled_obstacle_is_not_exported_to_scene(self) -> None:
         obstacle = ObstacleView("OFF", "circle", enabled=False, center_x=1.0, center_y=2.0, radius=3.0)
 
@@ -126,9 +142,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("PrincipledMaterial.NoLighting", qml)
         self.assertNotIn("hillModel", qml)
         self.assertIn("Math.min(50000", qml)
-        self.assertIn("data.trailSegments", qml)
-        self.assertIn('source: "#Cylinder"', qml)
-        self.assertIn("rotation: Qt.quaternion(model.qw, model.qx, model.qy, model.qz)", qml)
+        self.assertIn("data.trailRibbons", qml)
+        self.assertIn("TrailRibbonGeometry", qml)
+        self.assertIn("pathValue: model.pathValue", qml)
         self.assertNotIn("data.trailPoints", qml)
 
     def test_aircraft_marker_stays_small_but_distance_visible(self) -> None:

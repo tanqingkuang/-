@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Iterable
 
@@ -28,10 +29,10 @@ def build_scene_payload(
     """把 UI 快照转换为 QML 场景数据。注意：输入仍采用 x/y/z=东/北/天。"""
 
     aircraft = [_aircraft_payload(node) for node in snapshot.nodes]
-    trail_segments = [
-        segment
+    trail_ribbons = [
+        ribbon
         for node in snapshot.nodes
-        for segment in _trail_segment_payload(node.node_id, node.trail, _node_color(node.role, node.health))
+        for ribbon in _trail_ribbon_payload(node.node_id, node.trail, _node_color(node.role, node.health))
     ]
     route_points = [
         point
@@ -46,14 +47,14 @@ def build_scene_payload(
         "runState": snapshot.run_state,
         "controlReport": snapshot.control_report,
         "aircraft": aircraft,
-        "trailSegments": trail_segments,
+        "trailRibbons": trail_ribbons,
         "routePoints": route_points,
         "obstacles": obstacle_items,
         "terrain": terrain,
         "camera": _camera_payload(bounds, aircraft),
         "counts": {
             "aircraft": len(aircraft),
-            "trailSegments": len(trail_segments),
+            "trailRibbons": len(trail_ribbons),
             "routePoints": len(route_points),
             "obstacles": len(obstacle_items),
         },
@@ -86,58 +87,25 @@ def _aircraft_payload(node) -> dict[str, object]:  # noqa: ANN001
     }
 
 
-def _trail_segment_payload(node_id: str, trail: list, color: str) -> list[dict[str, object]]:
-    """生成连续尾迹线段显示数据。注意：按固定上限抽样，避免 QML Repeater 过重。"""
+def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[str, object]]:
+    """生成连续尾迹拖尾带数据。注意：每架飞机一条 ribbon，避免段间接缝。"""
 
     if len(trail) < 2:
         return []
     sampled = _evenly_sample(trail, MAX_TRAIL_POINTS_PER_NODE)
-    segment_count = max(1, len(sampled) - 1)
-    segments: list[dict[str, object]] = []
-    for index, (start, end) in enumerate(zip(sampled, sampled[1:])):
-        start_coord = enu_to_quick3d(start.x, start.y, start.altitude)
-        end_coord = enu_to_quick3d(end.x, end.y, end.altitude)
-        dx = end_coord["x"] - start_coord["x"]
-        dy = end_coord["y"] - start_coord["y"]
-        dz = end_coord["z"] - start_coord["z"]
-        length = math.sqrt(dx * dx + dy * dy + dz * dz)
-        if length <= 1e-6:
-            continue
-        qw, qx, qy, qz = _quaternion_from_y_axis(dx, dy, dz, length)
-        mix = (index + 1) / segment_count
-        segments.append(
-            {
-                "nodeId": node_id,
-                "color": color,
-                "opacity": 0.18 + 0.58 * mix,
-                "thickness": 8.0,
-                "length": length,
-                "qw": qw,
-                "qx": qx,
-                "qy": qy,
-                "qz": qz,
-                "x": (start_coord["x"] + end_coord["x"]) / 2.0,
-                "y": (start_coord["y"] + end_coord["y"]) / 2.0,
-                "z": (start_coord["z"] + end_coord["z"]) / 2.0,
-            }
-        )
-    return segments
-
-
-def _quaternion_from_y_axis(dx: float, dy: float, dz: float, length: float) -> tuple[float, float, float, float]:
-    """生成把 QML 圆柱本地 Y 轴转到线段方向的四元数。"""
-
-    bx = dx / length
-    by = dy / length
-    bz = dz / length
-    dot = by
-    if dot < -0.999999:
-        return 0.0, 1.0, 0.0, 0.0
-    if dot > 0.999999:
-        return 1.0, 0.0, 0.0, 0.0
-    scale = math.sqrt((1.0 + dot) * 2.0)
-    inv_scale = 1.0 / scale
-    return scale * 0.5, bz * inv_scale, 0.0, -bx * inv_scale
+    path = [
+        [coord["x"], coord["y"], coord["z"]]
+        for point in sampled
+        for coord in [enu_to_quick3d(point.x, point.y, point.altitude)]
+    ]
+    return [
+        {
+            "nodeId": node_id,
+            "color": color,
+            "width": 220.0,
+            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
+        }
+    ]
 
 
 def _route_payload(route: ReferenceRoute) -> list[dict[str, object]]:
