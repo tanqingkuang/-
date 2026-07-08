@@ -371,19 +371,6 @@ Item {
                     eulerRotation: Qt.vector3d(0, -90, 0)
                     scale: Qt.vector3d(visualScale, visualScale, visualScale)
                 }
-
-                // 角色/健康态颜色不再染机身,改用脚下光盘标记,远距离下也可辨。
-                Model {
-                    source: "#Cylinder"
-                    position: Qt.vector3d(0, -0.30 * visualScale, 0)
-                    scale: Qt.vector3d(0.025 * visualScale, 0.001 * visualScale, 0.025 * visualScale)
-                    materials: PrincipledMaterial {
-                        baseColor: model.color
-                        emissiveFactor: Qt.vector3d(0.10, 0.10, 0.10)
-                        alphaMode: PrincipledMaterial.Blend
-                        opacity: 0.38
-                    }
-                }
             }
         }
     }

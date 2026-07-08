@@ -261,11 +261,15 @@ def _node_color(role: str, health: str) -> str:
 
 
 def _heading_yaw_deg(vx_mps: float, vy_mps: float) -> float:
-    """把 ENU 水平速度转换为 Quick3D 绕 Y 轴偏航角。注意：显示模型机头默认朝 +X。"""
+    """把 ENU 水平速度转换为 Quick3D 绕 Y 轴偏航角。注意：显示模型机头默认朝 +X。
+
+    Quick3D 的 z 轴在坐标映射时已相对 ENU north 取反(见 enu_to_quick3d)，
+    Y 轴偏航角的正方向与该取反抵消，此处不能再对 vy 取负，否则斜向航向会被镜像。
+    """
 
     if math.hypot(vx_mps, vy_mps) < 1e-6:
         return 0.0
-    return math.degrees(math.atan2(-vy_mps, vx_mps))
+    return math.degrees(math.atan2(vy_mps, vx_mps))
 
 
 def _evenly_sample(items: list, limit: int) -> list:

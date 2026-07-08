@@ -64,7 +64,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(aircraft[0]["x"], 10.0)
         self.assertEqual(aircraft[0]["y"], 30.0)
         self.assertEqual(aircraft[0]["z"], -20.0)
-        self.assertLess(aircraft[0]["yawDeg"], 0.0)
+        # vx=3, vy=4(东偏北航向)，机头应偏向 Quick3D 的 +z 象限，yawDeg 应为正。
+        self.assertGreater(aircraft[0]["yawDeg"], 0.0)
 
         self.assertEqual(payload["counts"]["aircraft"], 2)
         self.assertEqual(payload["counts"]["trailRibbons"], 1)
@@ -122,6 +123,20 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(index_data.size(), 12 * 4)
         self.assertLessEqual(geometry.boundsMin().x(), -32.0)
         self.assertGreaterEqual(geometry.boundsMax().x(), 120.0)
+
+    def test_diagonal_heading_yaw_matches_travel_direction_not_mirrored(self) -> None:
+        """东北向斜航向的机头朝向应与航迹前方一致，不能被镜像到东南向。"""
+
+        node = NodeState("A03", "leader", x=0.0, y=0.0, vx=60.0, vy=40.0, altitude=100.0)
+        snapshot = self._snapshot()
+        snapshot.nodes = [node]
+
+        payload = build_scene_payload(snapshot)
+        yaw_deg = payload["aircraft"][0]["yawDeg"]
+
+        # Quick3D 里 z=-north，机头方向向量应为 (vx, -vy)，对应 yaw=atan2(vy, vx)。
+        # 镜像 bug 会把符号反过来，产生 atan2(-vy, vx) 的相反象限结果。
+        self.assertAlmostEqual(yaw_deg, 33.690067525979785, places=6)
 
     def test_disabled_obstacle_is_not_exported_to_scene(self) -> None:
         obstacle = ObstacleView("OFF", "circle", enabled=False, center_x=1.0, center_y=2.0, radius=3.0)
