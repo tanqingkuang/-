@@ -16,6 +16,7 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
+    property real aircraftPointScale: Math.max(0.10, Math.min(0.55, distance / 36000.0))
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -49,14 +50,20 @@ Item {
         cameraInitialized = false
     }
 
-    function updateScene(payload, forceCamera) {
-        if (!payload || payload.length === 0) {
-            return false
+    function findAircraftIndex(nodeId) {
+        for (let index = 0; index < aircraftModel.count; index += 1) {
+            if (aircraftModel.get(index).nodeId === nodeId) {
+                return index
+            }
         }
-        const data = JSON.parse(payload)
-        aircraftModel.clear()
-        for (const item of data.aircraft || []) {
-            aircraftModel.append({
+        return -1
+    }
+
+    function syncAircraftModel(items) {
+        const seen = {}
+        for (const item of items || []) {
+            const index = findAircraftIndex(item.nodeId)
+            const entry = {
                 nodeId: item.nodeId,
                 role: item.role,
                 health: item.health,
@@ -66,19 +73,61 @@ Item {
                 sz: item.z,
                 yawDeg: item.yawDeg,
                 speed: item.speed
-            })
+            }
+            if (index >= 0) {
+                aircraftModel.set(index, entry)
+            } else {
+                aircraftModel.append(entry)
+            }
+            seen[item.nodeId] = true
         }
-        trailModel.clear()
-        for (const item of data.trailPoints || []) {
-            trailModel.append({
+        for (let index = aircraftModel.count - 1; index >= 0; index -= 1) {
+            if (!seen[aircraftModel.get(index).nodeId]) {
+                aircraftModel.remove(index)
+            }
+        }
+    }
+
+    function findTrailIndex(nodeId) {
+        for (let index = 0; index < trailModel.count; index += 1) {
+            if (trailModel.get(index).nodeId === nodeId) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    function syncTrailModel(items) {
+        const seen = {}
+        for (const item of items || []) {
+            const index = findTrailIndex(item.nodeId)
+            const entry = {
+                nodeId: item.nodeId,
                 color: item.color,
-                sx: item.x,
-                sy: item.y,
-                sz: item.z,
-                size: item.size,
-                opacity: item.opacity
-            })
+                widthValue: item.width,
+                pathValue: item.pathValue
+            }
+            if (index >= 0) {
+                trailModel.set(index, entry)
+            } else {
+                trailModel.append(entry)
+            }
+            seen[item.nodeId] = true
         }
+        for (let index = trailModel.count - 1; index >= 0; index -= 1) {
+            if (!seen[trailModel.get(index).nodeId]) {
+                trailModel.remove(index)
+            }
+        }
+    }
+
+    function updateScene(payload, forceCamera) {
+        if (!payload || payload.length === 0) {
+            return false
+        }
+        const data = JSON.parse(payload)
+        syncAircraftModel(data.aircraft || [])
+        syncTrailModel(data.trailRibbons || [])
         routeModel.clear()
         for (const item of data.routePoints || []) {
             routeModel.append({
@@ -245,14 +294,19 @@ Item {
         Repeater3D {
             model: trailModel
             delegate: Model {
-                source: "#Sphere"
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(model.size / 100.0, model.size / 100.0, model.size / 100.0)
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue
+                }
+                castsShadows: false
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: model.opacity
-                    emissiveFactor: Qt.vector3d(0.12, 0.10, 0.18)
+                    opacity: 0.76
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.9
+                    emissiveFactor: Qt.vector3d(0.11, 0.11, 0.18)
                 }
             }
         }
@@ -275,13 +329,18 @@ Item {
 
         Repeater3D {
             model: aircraftModel
-            // 飞机退化为发光球点：任何视角都是干净圆点，避免低模拉远时的锯齿穿帮。
+            // 飞机退化为小发光点；缩远时轻微放大，保证不同缩放下仍可辨。
             delegate: Model {
                 source: "#Sphere"
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
-                // 20km 全图下点必须够大才可见，取约 200m 直径。
-                scale: Qt.vector3d(2.0, 2.0, 2.0)
+                scale: Qt.vector3d(root.aircraftPointScale, root.aircraftPointScale, root.aircraftPointScale)
                 castsShadows: false
+                Behavior on position {
+                    Vector3dAnimation {
+                        duration: 90
+                        easing.type: Easing.Linear
+                    }
+                }
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     // 低发光保证背光面也不至于沉入地形色，颜色始终可辨。

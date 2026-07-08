@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Iterable
 
@@ -28,10 +29,10 @@ def build_scene_payload(
     """把 UI 快照转换为 QML 场景数据。注意：输入仍采用 x/y/z=东/北/天。"""
 
     aircraft = [_aircraft_payload(node) for node in snapshot.nodes]
-    trail_points = [
-        point
+    trail_ribbons = [
+        ribbon
         for node in snapshot.nodes
-        for point in _trail_payload(node.node_id, node.trail, _node_color(node.role, node.health))
+        for ribbon in _trail_ribbon_payload(node.node_id, node.trail, _node_color(node.role, node.health))
     ]
     route_points = [
         point
@@ -46,14 +47,14 @@ def build_scene_payload(
         "runState": snapshot.run_state,
         "controlReport": snapshot.control_report,
         "aircraft": aircraft,
-        "trailPoints": trail_points,
+        "trailRibbons": trail_ribbons,
         "routePoints": route_points,
         "obstacles": obstacle_items,
         "terrain": terrain,
         "camera": _camera_payload(bounds, aircraft),
         "counts": {
             "aircraft": len(aircraft),
-            "trailPoints": len(trail_points),
+            "trailRibbons": len(trail_ribbons),
             "routePoints": len(route_points),
             "obstacles": len(obstacle_items),
         },
@@ -86,26 +87,25 @@ def _aircraft_payload(node) -> dict[str, object]:  # noqa: ANN001
     }
 
 
-def _trail_payload(node_id: str, trail: list, color: str) -> list[dict[str, object]]:
-    """生成尾迹点显示数据。注意：按固定上限抽样，避免 QML Repeater 过重。"""
+def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[str, object]]:
+    """生成连续尾迹拖尾带数据。注意：每架飞机一条 ribbon，避免段间接缝。"""
 
-    if not trail:
+    if len(trail) < 2:
         return []
     sampled = _evenly_sample(trail, MAX_TRAIL_POINTS_PER_NODE)
-    count = max(1, len(sampled) - 1)
-    points: list[dict[str, object]] = []
-    for index, point in enumerate(sampled):
+    path: list[list[float]] = []
+    for point in sampled:
         coord = enu_to_quick3d(point.x, point.y, point.altitude)
-        points.append(
-            {
-                "nodeId": node_id,
-                "color": color,
-                "opacity": 0.28 + 0.62 * (index / count),
-                "size": 7.0 + 4.0 * (index / count),
-                **coord,
-            }
-        )
-    return points
+        # pathValue 契约是 Quick3D 坐标 [x, y, z] 三元组数组，供 TrailRibbonGeometry 直接解析。
+        path.append([coord["x"], coord["y"], coord["z"]])
+    return [
+        {
+            "nodeId": node_id,
+            "color": color,
+            "width": 44.0,
+            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
+        }
+    ]
 
 
 def _route_payload(route: ReferenceRoute) -> list[dict[str, object]]:
