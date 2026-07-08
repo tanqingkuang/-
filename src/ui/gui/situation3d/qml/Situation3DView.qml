@@ -367,8 +367,8 @@ Item {
 
                 RuntimeLoader {
                     source: Qt.resolvedUrl("assets/PredatorUAV.glb")
-                    // 该资产机头朝 -Z(与 glTF 惯例相反),转到本场景机头朝 +X 的约定。
-                    eulerRotation: Qt.vector3d(0, -90, 0)
+                    // 该资产机头(卫通天线鼓包端)朝 +Z,转到本场景机头朝 +X 的约定。
+                    eulerRotation: Qt.vector3d(0, 90, 0)
                     scale: Qt.vector3d(visualScale, visualScale, visualScale)
                 }
             }
