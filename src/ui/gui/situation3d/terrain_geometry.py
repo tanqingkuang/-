@@ -9,22 +9,34 @@ from PySide6.QtCore import QByteArray, Property, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 
-# 顶点布局使用 32 字节：position(3) + normal(3) + uv(2)。
+# 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
 _FLOAT_SIZE = 4
-_SURFACE_COMPONENTS = 8
+_SURFACE_COMPONENTS = 12
 _SURFACE_STRIDE = _SURFACE_COMPONENTS * _FLOAT_SIZE
-# 曲面分辨率要覆盖 0.8km 小丘陵，20km 地图下约 210m 一个采样点。
-_SURFACE_COLUMNS = 96
-_SURFACE_ROWS = 96
-# 丘陵按米定义半径，适配 20km x 20km 态势地图。
+# 192 格在 20km 地图下约 104m 一个采样点，最小丘陵也有 20 个以上采样跨度。
+_SURFACE_COLUMNS = 192
+_SURFACE_ROWS = 192
+# 山体按 20km x 20km 基准地图定义，地图变大时按比例整体拉伸布局。
+_HILL_LAYOUT_SPAN_M = 20000.0
 # 元组字段依次为局部 x、局部 z、长半轴、短半轴、旋转角、相对高度。
-# 半轴都控制在 0.8km 到 3km 附近，避免做成整张地图的大山包。
+# 高斯核无限支撑，山脚互相叠加成山脉群，避免孤立馒头。
 _HILL_PROFILES = (
-    (-5200.0, -3600.0, 3000.0, 1900.0, -18.0, 0.58),
-    (3600.0, -2200.0, 2400.0, 1500.0, 24.0, 0.74),
-    (-1800.0, 4300.0, 1500.0, 950.0, 37.0, 0.46),
-    (6100.0, 4400.0, 950.0, 680.0, -32.0, 0.32),
+    (-5200.0, -3600.0, 3200.0, 2000.0, -18.0, 1.18),
+    (4600.0, -3400.0, 2600.0, 1700.0, 24.0, 0.95),
+    (-6800.0, 1800.0, 2200.0, 1400.0, 8.0, 0.72),
+    (-2600.0, 5200.0, 1900.0, 1200.0, 37.0, 0.62),
+    (1400.0, -6600.0, 1800.0, 1100.0, -52.0, 0.58),
+    (6100.0, 4400.0, 1500.0, 1000.0, -32.0, 0.55),
 )
+# 中心保护区：飞机巡航高度只有几十米，航迹区必须保持接近平地。
+_CLEAR_RADIUS_RATIO = 0.13
+_CLEAR_BLEND_RATIO = 0.30
+# 高度渐变颜色：深谷绿、丘陵草绿、山顶土黄，单调平滑避免碎斑。
+_COLOR_LOW = (0.129, 0.271, 0.227)
+_COLOR_MID = (0.463, 0.620, 0.408)
+_COLOR_HIGH = (0.816, 0.780, 0.631)
+# 颜色分段阈值取归一化高度，低段绿色占比更大符合俯视观感。
+_COLOR_SPLIT = 0.35
 
 
 class _TerrainGeometryBase(QQuick3DGeometry):
@@ -125,21 +137,28 @@ class TerrainGeometry(_TerrainGeometryBase):
     """连续高度场地表。注意：QML 通过 Model.geometry 直接渲染这张 mesh。"""
 
     def _rebuild(self) -> None:
-        """重建地表顶点、法线、纹理坐标和索引数据。"""
+        """重建地表顶点、法线、纹理坐标、顶点色和索引数据。"""
 
         width = self._width_value
         depth = self._depth_value
+        step_x = width / (_SURFACE_COLUMNS - 1)
+        step_z = depth / (_SURFACE_ROWS - 1)
+
+        # 高度先整表采样（含一圈影子点），法线直接用相邻格点差分，
+        # 避免每个顶点重复调用 4 次高度函数拖慢重建。
+        heights = self._sample_height_grid(step_x, step_z)
+        min_height = min(min(row[1:-1]) for row in heights[1:-1])
+        max_height = max(max(row[1:-1]) for row in heights[1:-1])
+
         vertices = bytearray()
         indices = bytearray()
-
-        # 先生成完整顶点表，再生成索引，便于法线按相邻采样点统一计算。
         for row in range(_SURFACE_ROWS):
-            z = -depth / 2.0 + depth * row / (_SURFACE_ROWS - 1)
+            z = -depth / 2.0 + step_z * row
             v_coord = row / (_SURFACE_ROWS - 1)
             for column in range(_SURFACE_COLUMNS):
-                x = -width / 2.0 + width * column / (_SURFACE_COLUMNS - 1)
+                x = -width / 2.0 + step_x * column
                 u_coord = column / (_SURFACE_COLUMNS - 1)
-                self._append_vertex(vertices, x, z, u_coord, v_coord)
+                self._append_vertex(vertices, heights, row, column, x, z, step_x, step_z, u_coord, v_coord)
 
         # 每个网格单元拆成两个三角面，保持地表是一张连续 mesh。
         for row in range(_SURFACE_ROWS - 1):
@@ -167,6 +186,12 @@ class TerrainGeometry(_TerrainGeometryBase):
             6 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
+        # 顶点色按高度渐变，配合材质 vertexColorsEnabled 表达海拔层次。
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
+            8 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
         # 索引属性指向独立 indexData，减少重复顶点上传。
         self.addAttribute(
             QQuick3DGeometry.Attribute.Semantic.IndexSemantic,
@@ -174,28 +199,63 @@ class TerrainGeometry(_TerrainGeometryBase):
             QQuick3DGeometry.Attribute.ComponentType.U32Type,
         )
         # 先设置包围盒再提交数据，保证首帧视锥裁剪拿到最新范围。
-        self._apply_bounds()
+        self._apply_bounds(min_height, max_height)
         self.setVertexData(QByteArray(bytes(vertices)))
         self.setIndexData(QByteArray(bytes(indices)))
         self.update()
 
-    def _append_vertex(self, vertices: bytearray, x: float, z: float, u_coord: float, v_coord: float) -> None:
-        """追加单个地表顶点。注意：每个顶点包含位置、法线和纹理坐标。"""
+    def _sample_height_grid(self, step_x: float, step_z: float) -> list[list[float]]:
+        """整表采样高度场。注意：四周多采一圈影子点供边缘法线差分。"""
 
-        y = self._height_at(x, z)
-        # 法线使用同一高度函数，保证光照方向和实际顶点高度一致。
-        normal = self._normal_at(x, z)
+        width = self._width_value
+        depth = self._depth_value
+        heights: list[list[float]] = []
+        for row in range(-1, _SURFACE_ROWS + 1):
+            z = -depth / 2.0 + step_z * row
+            line = [self._height_at(-width / 2.0 + step_x * column, z) for column in range(-1, _SURFACE_COLUMNS + 1)]
+            heights.append(line)
+        return heights
+
+    def _append_vertex(
+        self,
+        vertices: bytearray,
+        heights: list[list[float]],
+        row: int,
+        column: int,
+        x: float,
+        z: float,
+        step_x: float,
+        step_z: float,
+        u_coord: float,
+        v_coord: float,
+    ) -> None:
+        """追加单个地表顶点。注意：法线和颜色都来自同一张高度表。"""
+
+        # 影子圈占一格，网格下标整体偏移 1。
+        grid_row = row + 1
+        grid_column = column + 1
+        y = heights[grid_row][grid_column]
+        # 中央差分梯度和顶点高度共用采样表，保证光照与几何一致。
+        gradient_x = (heights[grid_row][grid_column + 1] - heights[grid_row][grid_column - 1]) / (2.0 * step_x)
+        gradient_z = (heights[grid_row + 1][grid_column] - heights[grid_row - 1][grid_column]) / (2.0 * step_z)
+        # 高度场 y=f(x,z) 的上法线是 (-df/dx, 1, -df/dz)。
+        length = math.sqrt(gradient_x * gradient_x + 1.0 + gradient_z * gradient_z)
+        red, green, blue = _height_color(y, self._amplitude_value)
         vertices.extend(
             struct.pack(
-                "<ffffffff",
+                "<ffffffffffff",
                 x,
                 y,
                 z,
-                normal.x(),
-                normal.y(),
-                normal.z(),
+                -gradient_x / length,
+                1.0 / length,
+                -gradient_z / length,
                 u_coord,
                 v_coord,
+                red,
+                green,
+                blue,
+                1.0,
             )
         )
 
@@ -219,46 +279,48 @@ class TerrainGeometry(_TerrainGeometryBase):
             )
         )
 
-    def _normal_at(self, x: float, z: float) -> QVector3D:
-        """计算地形法线。注意：用有限差分获得平滑光照方向。"""
-
-        # 差分步长等于网格间距，避免边缘局部坡度被过度放大。
-        step_x = self._width_value / (_SURFACE_COLUMNS - 1)
-        step_z = self._depth_value / (_SURFACE_ROWS - 1)
-        gradient_x = (self._height_at(x + step_x, z) - self._height_at(x - step_x, z)) / (2.0 * step_x)
-        gradient_z = (self._height_at(x, z + step_z) - self._height_at(x, z - step_z)) / (2.0 * step_z)
-        # 高度场 y=f(x,z) 的上法线是 (-df/dx, 1, -df/dz)。
-        normal = QVector3D(-gradient_x, 1.0, -gradient_z)
-        normal.normalize()
-        return normal
-
-    def _apply_bounds(self) -> None:
-        """设置地形包围盒。注意：包围盒影响 Qt Quick 3D 视锥裁剪。"""
+    def _apply_bounds(self, min_height: float, max_height: float) -> None:
+        """按实测高度设置包围盒。注意：包围盒影响 Qt Quick 3D 视锥裁剪。"""
 
         self.setBounds(
-            QVector3D(-self._width_value / 2.0, 0.0, -self._depth_value / 2.0),
-            QVector3D(self._width_value / 2.0, self._amplitude_value * 1.35 + 16.0, self._depth_value / 2.0),
+            QVector3D(-self._width_value / 2.0, min(0.0, min_height - 4.0), -self._depth_value / 2.0),
+            QVector3D(self._width_value / 2.0, max_height + 16.0, self._depth_value / 2.0),
         )
 
 
 def _height_value(x: float, z: float, width: float, depth: float, amplitude: float) -> float:
-    """计算连续地形高度。注意：多个宽高斯峰叠加，避免独立石块感。"""
+    """计算连续地形高度。注意：高斯山脉 + 中频起伏，中心航迹区保持平坦。"""
 
     nx = x / width
     nz = z / depth
-    # 低频起伏只提供地表微弯，不再做可见纹理。
-    rolling = 0.012 * (
-        math.sin(nx * math.tau * 3.0 + 0.4)
-        + math.cos(nz * math.tau * 2.4 - 0.2)
-        + 0.5 * math.sin((nx + nz) * math.tau * 2.2)
+    # 中频起伏填满山体之间的空地，幅度约占 amplitude 的两成。
+    rolling = (
+        0.07 * math.sin(nx * math.tau * 2.6 + 0.4)
+        + 0.07 * math.cos(nz * math.tau * 2.2 - 0.7)
+        + 0.05 * math.sin((nx + nz) * math.tau * 3.4 + 1.3)
+        + 0.03 * math.sin(nx * math.tau * 6.8) * math.cos(nz * math.tau * 5.9)
     )
-    height_mix = rolling
+    # 山体布局跟随地图尺寸整体缩放，保持基准构图不变。
+    scale_x = width / _HILL_LAYOUT_SPAN_M
+    scale_z = depth / _HILL_LAYOUT_SPAN_M
+    hill_sum = 0.0
     for center_x, center_z, radius_x, radius_z, angle_deg, weight in _HILL_PROFILES:
-        # 旋转椭圆丘陵避免俯视时出现机械圆斑。
-        height_mix += weight * _elliptic_hill(x, z, center_x, center_z, radius_x, radius_z, angle_deg)
-    # 这里只输出几何高度，颜色和材质交给 QML，避免伪纹理再次变成碎斑。
-    # 边缘衰减让地形接近地面，避免可见边界处像被切开的实体。
-    return 4.0 + amplitude * _edge_falloff(nx, nz) * max(0.0, height_mix)
+        hill_sum += weight * _elliptic_hill(
+            x,
+            z,
+            center_x * scale_x,
+            center_z * scale_z,
+            radius_x * scale_x,
+            radius_z * scale_z,
+            angle_deg,
+        )
+    # 高频细节按山体质量调制：平原保持干净，山坡出现沟脊棱线。
+    ridge = math.sin(nx * math.tau * 11.0 + 2.0) * math.cos(nz * math.tau * 9.0 - 1.0)
+    height_mix = rolling + hill_sum * (1.0 + 0.15 * ridge)
+    # 谷地允许低于基准面形成沟壑，但限制深度避免出现深坑。
+    height_mix = max(height_mix, -0.06)
+    # 这里只输出几何高度，颜色由顶点色按高度渐变承担。
+    return 4.0 + amplitude * _edge_falloff(nx, nz) * _center_clearance(x, z, width, depth) * height_mix
 
 
 def _elliptic_hill(
@@ -270,21 +332,35 @@ def _elliptic_hill(
     radius_z: float,
     angle_deg: float,
 ) -> float:
-    """返回米制旋转椭圆丘陵权重。注意：半轴是丘陵的主要可见范围。"""
+    """返回米制旋转椭圆高斯山体权重。注意：高斯裙边互相叠加形成连续山脉。"""
 
     angle_rad = math.radians(angle_deg)
     cos_a = math.cos(angle_rad)
     sin_a = math.sin(angle_rad)
     dx = x - center_x
     dz = z - center_z
-    # 先旋转到丘陵局部坐标，再按长短半轴归一化距离。
+    # 先旋转到山体局部坐标，再按长短半轴归一化距离。
     local_x = (dx * cos_a + dz * sin_a) / radius_x
     local_z = (-dx * sin_a + dz * cos_a) / radius_z
-    distance_ratio = math.hypot(local_x, local_z)
-    if distance_ratio >= 1.0:
+    distance_sq = local_x * local_x + local_z * local_z
+    # 高斯核在半轴处衰减到约四分之一，山脚自然融入起伏。
+    return math.exp(-1.4 * distance_sq)
+
+
+def _center_clearance(x: float, z: float, width: float, depth: float) -> float:
+    """返回中心保护区系数。注意：航迹集中在场景中心，山体必须让出净空。"""
+
+    span = min(width, depth)
+    clear_radius = span * _CLEAR_RADIUS_RATIO
+    blend_radius = span * _CLEAR_BLEND_RATIO
+    distance = math.hypot(x, z)
+    if distance <= clear_radius:
         return 0.0
-    # 余弦缓坡没有平顶，边界处也没有硬折线。
-    return 0.5 + 0.5 * math.cos(math.pi * distance_ratio)
+    if distance >= blend_radius:
+        return 1.0
+    ratio = (distance - clear_radius) / (blend_radius - clear_radius)
+    # smoothstep 让保护区边缘的坡度连续，不出现环形折痕。
+    return ratio * ratio * (3.0 - 2.0 * ratio)
 
 
 def _edge_falloff(nx: float, nz: float) -> float:
@@ -297,3 +373,37 @@ def _edge_falloff(nx: float, nz: float) -> float:
     edge = min(edge_x, edge_z)
     # smoothstep 保证边缘高度和一阶变化都更平滑。
     return edge * edge * (3.0 - 2.0 * edge)
+
+
+def _height_color(height: float, amplitude: float) -> tuple[float, float, float]:
+    """按海拔返回顶点色。注意：单调渐变不含噪声，避免历史上的碎斑问题。"""
+
+    normalized = max(0.0, min(1.0, height / max(amplitude, 1.0)))
+    if normalized < _COLOR_SPLIT:
+        mixed = _lerp_color(_COLOR_LOW, _COLOR_MID, normalized / _COLOR_SPLIT)
+    else:
+        mixed = _lerp_color(_COLOR_MID, _COLOR_HIGH, min(1.0, (normalized - _COLOR_SPLIT) / (1.0 - _COLOR_SPLIT)))
+    # Quick3D 光照在线性空间进行,sRGB 调色板必须先转线性,否则整体被洗白。
+    return (_srgb_to_linear(mixed[0]), _srgb_to_linear(mixed[1]), _srgb_to_linear(mixed[2]))
+
+
+def _srgb_to_linear(component: float) -> float:
+    """把 sRGB 分量转换为线性空间。注意：输入输出都在 0 到 1 区间。"""
+
+    if component <= 0.04045:
+        return component / 12.92
+    return ((component + 0.055) / 1.055) ** 2.4
+
+
+def _lerp_color(
+    start: tuple[float, float, float],
+    end: tuple[float, float, float],
+    mix: float,
+) -> tuple[float, float, float]:
+    """线性插值颜色。注意：输入输出都是 0 到 1 的 RGB 分量。"""
+
+    return (
+        start[0] + (end[0] - start[0]) * mix,
+        start[1] + (end[1] - start[1]) * mix,
+        start[2] + (end[2] - start[2]) * mix,
+    )

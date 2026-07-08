@@ -6,7 +6,7 @@ from pathlib import Path
 
 # 显式导入 QtQuick3D，保证 PyInstaller 收集 QML 侧 QtQuick3D 运行插件。
 from PySide6 import QtQuick3D  # noqa: F401
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickView
 from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
@@ -36,6 +36,12 @@ class Situation3DWindow(QDialog):
         """初始化 Situation3DWindow 实例，创建 Qt Quick 3D 场景容器。"""
         super().__init__(parent)
         self.setModal(False)
+        # QDialog 默认只给关闭按钮，显式补上最小化/最大化，方便全屏观察 3D 场景。
+        self.setWindowFlags(
+            self.windowFlags()
+            | Qt.WindowMinimizeButtonHint
+            | Qt.WindowMaximizeButtonHint
+        )
         self.setWindowTitle("3D态势")
         self.resize(1120, 760)
         self.setMinimumSize(900, 620)

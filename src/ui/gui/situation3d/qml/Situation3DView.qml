@@ -195,19 +195,20 @@ Item {
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-38, -52, 0)
-            brightness: 4.2
+            // 顶点色是真实反照率,亮度回到 1 量级避免过曝成白色。
+            brightness: 1.35
             castsShadow: false
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 138, 0)
-            brightness: 0.28
+            brightness: 0.3
             castsShadow: false
         }
 
         PointLight {
             position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
-            brightness: 5.6
+            brightness: 1.4
         }
 
         Model {
@@ -219,11 +220,12 @@ Item {
             receivesShadows: false
             castsShadows: false
             materials: PrincipledMaterial {
-                baseColor: Qt.rgba(0.30, 0.45, 0.32, 1.0)
+                // 顶点色承担海拔渐变，基色保持白色避免二次染色。
+                baseColor: "#ffffff"
                 cullMode: Material.NoCulling
-                emissiveFactor: Qt.vector3d(0.010, 0.018, 0.012)
-                roughness: 0.96
-                specularAmount: 0.02
+                vertexColorsEnabled: true
+                roughness: 0.94
+                specularAmount: 0.03
             }
         }
 
