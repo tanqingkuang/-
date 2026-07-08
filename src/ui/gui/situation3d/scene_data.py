@@ -93,11 +93,11 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
     if len(trail) < 2:
         return []
     sampled = _evenly_sample(trail, MAX_TRAIL_POINTS_PER_NODE)
-    path = [
-        [coord["x"], coord["y"], coord["z"]]
-        for point in sampled
-        for coord in [enu_to_quick3d(point.x, point.y, point.altitude)]
-    ]
+    path: list[list[float]] = []
+    for point in sampled:
+        coord = enu_to_quick3d(point.x, point.y, point.altitude)
+        # pathValue 契约是 Quick3D 坐标 [x, y, z] 三元组数组，供 TrailRibbonGeometry 直接解析。
+        path.append([coord["x"], coord["y"], coord["z"]])
     return [
         {
             "nodeId": node_id,

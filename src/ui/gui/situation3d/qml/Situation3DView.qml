@@ -88,21 +88,46 @@ Item {
         }
     }
 
+    function findTrailIndex(nodeId) {
+        for (let index = 0; index < trailModel.count; index += 1) {
+            if (trailModel.get(index).nodeId === nodeId) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    function syncTrailModel(items) {
+        const seen = {}
+        for (const item of items || []) {
+            const index = findTrailIndex(item.nodeId)
+            const entry = {
+                nodeId: item.nodeId,
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            }
+            if (index >= 0) {
+                trailModel.set(index, entry)
+            } else {
+                trailModel.append(entry)
+            }
+            seen[item.nodeId] = true
+        }
+        for (let index = trailModel.count - 1; index >= 0; index -= 1) {
+            if (!seen[trailModel.get(index).nodeId]) {
+                trailModel.remove(index)
+            }
+        }
+    }
+
     function updateScene(payload, forceCamera) {
         if (!payload || payload.length === 0) {
             return false
         }
         const data = JSON.parse(payload)
         syncAircraftModel(data.aircraft || [])
-        trailModel.clear()
-        for (const item of data.trailRibbons || []) {
-            trailModel.append({
-                nodeId: item.nodeId,
-                color: item.color,
-                widthValue: item.width,
-                pathValue: item.pathValue
-            })
-        }
+        syncTrailModel(data.trailRibbons || [])
         routeModel.clear()
         for (const item of data.routePoints || []) {
             routeModel.append({

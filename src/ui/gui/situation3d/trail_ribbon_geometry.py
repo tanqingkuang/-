@@ -105,6 +105,7 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         if not isinstance(raw_points, list):
             return points
         for item in raw_points:
+            # 与 scene_data.pathValue 保持同一契约：每个点都是 Quick3D 坐标 [x, y, z] 三元组。
             if not isinstance(item, list | tuple) or len(item) != 3:
                 continue
             try:

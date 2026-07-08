@@ -145,6 +145,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("data.trailRibbons", qml)
         self.assertIn("TrailRibbonGeometry", qml)
         self.assertIn("pathValue: model.pathValue", qml)
+        self.assertIn("function syncTrailModel", qml)
+        self.assertNotIn("trailModel.clear()", qml)
         self.assertNotIn("data.trailPoints", qml)
 
     def test_aircraft_marker_stays_small_but_distance_visible(self) -> None:
