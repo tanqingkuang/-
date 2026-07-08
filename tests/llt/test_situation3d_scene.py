@@ -136,6 +136,17 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         self.assertIn("Qt.MiddleButton", qml)
         self.assertIn("mouse.buttons & Qt.MiddleButton", qml)
+        self.assertIn("function applyGroundPan(dx, dy)", qml)
+        self.assertIn("function applyCameraDrag(dx, dy, pointerY)", qml)
+        self.assertIn("const yawRadians = yaw * Math.PI / 180.0", qml)
+        self.assertIn("focusX += (-dx * cosYaw - dy * sinYaw) * scale", qml)
+        self.assertIn("focusZ += (dx * sinYaw - dy * cosYaw) * scale", qml)
+        self.assertIn("const yawSign = pointerY < height / 2.0 ? 1.0 : -1.0", qml)
+        self.assertIn("yaw += dx * 0.25 * yawSign", qml)
+        self.assertIn("pitch = clampPitch(pitch - dy * 0.18)", qml)
+        self.assertNotIn("root.focusX -= dx * root.distance / 1800.0", qml)
+        self.assertNotIn("root.focusZ += dy * root.distance / 1800.0", qml)
+        self.assertNotIn("root.yaw += dx * 0.25", qml)
         self.assertIn("TerrainGeometry", qml)
         # 顶点色只做按高度的平滑渐变，必须保留光照；历史碎斑来自噪声色 + NoLighting。
         self.assertIn("vertexColorsEnabled: true", qml)
