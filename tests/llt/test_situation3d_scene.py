@@ -119,6 +119,19 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("hillModel", qml)
         self.assertIn("Math.min(50000", qml)
 
+    def test_aircraft_marker_stays_small_but_distance_visible(self) -> None:
+        """飞机点应保持小尺寸，并随相机距离略微放大以免缩远后消失。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("property real aircraftPointScale", qml)
+        self.assertIn("Math.max(0.10, Math.min(0.55, distance / 36000.0))", qml)
+        self.assertIn(
+            "scale: Qt.vector3d(root.aircraftPointScale, root.aircraftPointScale, root.aircraftPointScale)",
+            qml,
+        )
+        self.assertNotIn("scale: Qt.vector3d(2.0, 2.0, 2.0)", qml)
+
 
 if __name__ == "__main__":
     unittest.main()
