@@ -36,6 +36,10 @@ class DisabledControlMonitorFeature:
         """忽略控制器绑定请求。注意：裁剪版不会持有控制器。"""
         # 裁剪版不持有窗口对象，因此也不应持有控制器引用。
 
+    def reset_if_open(self, window: MainWindow) -> None:
+        """忽略监控数据流重置请求。注意：裁剪版没有实时监控窗口。"""
+        # reset 后仍不创建任何窗口，保持裁剪 profile 的轻依赖边界。
+
     def unfollow(self) -> None:
         """忽略控制器解绑请求。注意：裁剪版不会持有控制器。"""
         # 保持与 full provider 相同生命周期接口，调用层无需分支。

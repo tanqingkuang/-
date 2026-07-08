@@ -69,8 +69,15 @@ class FullControlMonitorFeature:
         if self.live_monitor is not None:
             self.live_monitor.follow(window.sim.controller)
 
+    def reset_if_open(self, window: MainWindow) -> None:
+        """在仿真重置后重置实时监控数据流。注意：保留当前配置节点列表。"""
+
+        # reset 后控制器仍可用，只清曲线数据，不解绑实时窗口。
+        if self.live_monitor is not None:
+            self.live_monitor.reset_stream(window.sim.controller)
+
     def unfollow(self) -> None:
-        """解除实时监控窗口绑定。注意：配置切换和重置时调用。"""
+        """解除实时监控窗口绑定。注意：配置切换或控制器不可用时调用。"""
 
         # 只处理已打开窗口，裁剪版和未打开状态都不需要额外分支。
         if self.live_monitor is not None:

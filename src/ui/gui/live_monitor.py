@@ -153,7 +153,7 @@ class LiveMonitorWindow(QDialog):
         self._timer.start()
 
     def unfollow(self) -> None:
-        """停止轮询并清空所有缓冲区和节点列表。仿真重置时由 MainWindow 调用。"""
+        """停止轮询并清空所有缓冲区和节点列表。注意：用于切换或关闭数据源。"""
         self._timer.stop()
         self._ctrl = None
         self._last_t = -1.0
@@ -162,6 +162,27 @@ class LiveMonitorWindow(QDialog):
         self._bufs.clear()
         self._refresh_node_panel()
         self._rebuild_charts()
+
+    def reset_stream(self, ctrl: SimulationController) -> None:
+        """重置监控曲线并保持控制器绑定。注意：仿真 reset 后节点面板仍应显示当前配置节点。"""
+        self._timer.stop()
+        self._ctrl = ctrl
+        self._last_t = -1.0
+        self._bufs.clear()
+
+        snap = ctrl.get_snapshot()
+        self._last_report = snap.control_report
+        old_nodes = self._nodes
+        self._nodes = {}
+        for node in snap.nodes:
+            old = old_nodes.get(node.node_id, {})
+            color = old.get("color", _PALETTE[len(self._nodes) % len(_PALETTE)])
+            visible = old.get("visible", True)
+            self._nodes[node.node_id] = {"color": color, "visible": visible, "cb": None}
+        self._refresh_node_panel()
+        self._rebuild_charts()
+        self._poll()
+        self._timer.start()
 
     # ── UI 构建 ───────────────────────────────────────────────────────────────
 
