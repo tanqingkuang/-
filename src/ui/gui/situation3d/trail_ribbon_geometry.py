@@ -20,6 +20,7 @@ class TrailRibbonGeometry(QQuick3DGeometry):
 
     pathValueChanged = Signal()
     widthValueChanged = Signal()
+    alphaModeChanged = Signal()
 
     def __init__(self, parent: object | None = None) -> None:
         """初始化空拖尾带。注意：收到路径数据前保持空几何。"""
@@ -27,6 +28,7 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         super().__init__(parent)
         self._path_value = "[]"
         self._width_value = 44.0
+        self._alpha_mode = "trail"
         self._rebuild()
 
     @Property(str, notify=pathValueChanged)
@@ -68,6 +70,24 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         self._width_value = normalized
         self._rebuild()
         self.widthValueChanged.emit()
+
+    @Property(str, notify=alphaModeChanged)
+    def alphaMode(self) -> str:
+        """返回顶点透明度模式。注意：trail 渐隐，solid 等透明度。"""
+
+        return self._alpha_mode
+
+    @alphaMode.setter
+    def alphaMode(self, value: str) -> None:
+        """更新透明度模式。注意：非法值退回 trail，兼容尾迹默认行为。"""
+
+        # 这个几何体同时服务尾迹和航线：尾迹需要渐隐，航线需要整段同色。
+        normalized = value if value in {"trail", "solid"} else "trail"
+        if normalized == self._alpha_mode:
+            return
+        self._alpha_mode = normalized
+        self._rebuild()
+        self.alphaModeChanged.emit()
 
     def _rebuild(self) -> None:
         """按当前路径重建 ribbon 顶点和索引。"""
@@ -125,8 +145,7 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         last_index = len(points) - 1
         for index, point in enumerate(points):
             side = self._side_vector(points, index)
-            # alpha 沿尾迹时间方向递增，越靠近当前飞机越清晰。
-            alpha = 0.08 + 0.64 * (index / max(1, last_index))
+            alpha = self._vertex_alpha(index, last_index)
             u_coord = index / max(1, last_index)
             # 每个采样点展开成左右两点，所有采样点连起来就是一条三角带。
             left = (point[0] - side[0] * half_width, point[1], point[2] - side[2] * half_width)
@@ -140,6 +159,15 @@ class TrailRibbonGeometry(QQuick3DGeometry):
             right_b = left_a + 3
             indices.extend(struct.pack("<IIIIII", left_a, left_b, right_a, right_a, left_b, right_b))
         return vertices, indices
+
+    def _vertex_alpha(self, index: int, last_index: int) -> float:
+        """返回当前顶点透明度。注意：航线虚线使用 solid，避免每段内部颜色渐变。"""
+
+        if self._alpha_mode == "solid":
+            # 航线 dash 不是时间轨迹，固定 alpha 避免同一小段两端颜色不一致。
+            return 1.0
+        # alpha 沿尾迹时间方向递增，越靠近当前飞机越清晰。
+        return 0.08 + 0.64 * (index / max(1, last_index))
 
     def _side_vector(self, points: list[tuple[float, float, float]], index: int) -> tuple[float, float, float]:
         """返回当前点处的水平侧向单位向量。注意：退化段使用默认横向。"""

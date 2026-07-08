@@ -15,6 +15,11 @@ from src.ui.gui.view_models import (
 
 MAX_TRAIL_POINTS_PER_NODE = 28
 MAX_ROUTE_POINTS_PER_SEGMENT = 32
+ROUTE_DASH_LENGTH_M = 140.0
+ROUTE_DASH_GAP_M = 90.0
+MAX_ROUTE_DASHES_PER_SEGMENT = 96
+ROUTE_DASH_WIDTH_M = 16.0
+ROUTE_DASH_COLOR = "#22d3ee"
 DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
 DEFAULT_TERRAIN_RELIEF_M = 2200.0
@@ -34,10 +39,18 @@ def build_scene_payload(
         for node in snapshot.nodes
         for ribbon in _trail_ribbon_payload(node.node_id, node.trail, _node_color(node.role, node.health))
     ]
+    route_segments = _route_segments(snapshot)
+    route_polylines = [_route_polyline(segment) for segment in route_segments]
+    # 航点球和虚线共用同一组采样折线，避免同一航段被重复展开。
     route_points = [
         point
-        for segment in snapshot.route_segments
-        for point in _route_payload(segment)
+        for polyline in route_polylines
+        for point in _route_payload(polyline)
+    ]
+    route_dashes = [
+        dash
+        for polyline in route_polylines
+        for dash in _route_dash_payload(polyline)
     ]
     obstacle_items = [_obstacle_payload(obstacle, clearance_m) for obstacle in obstacles if obstacle.enabled]
     bounds = _scene_bounds(aircraft, route_points, obstacle_items)
@@ -49,6 +62,7 @@ def build_scene_payload(
         "aircraft": aircraft,
         "trailRibbons": trail_ribbons,
         "routePoints": route_points,
+        "routeDashes": route_dashes,
         "obstacles": obstacle_items,
         "terrain": terrain,
         "camera": _camera_payload(bounds, aircraft),
@@ -56,6 +70,7 @@ def build_scene_payload(
             "aircraft": len(aircraft),
             "trailRibbons": len(trail_ribbons),
             "routePoints": len(route_points),
+            "routeDashes": len(route_dashes),
             "obstacles": len(obstacle_items),
         },
     }
@@ -108,19 +123,133 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
     ]
 
 
-def _route_payload(route: ReferenceRoute) -> list[dict[str, object]]:
+def _route_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:
     """生成航线采样点显示数据。注意：圆弧按现有二维视图采样口径展开。"""
+
+    return [{"color": ROUTE_DASH_COLOR, "size": 9.0, "x": x, "y": y, "z": z} for x, y, z in polyline]
+
+
+def _route_dash_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:
+    """生成 3D 航线虚线段。注意：每段 dash 复用 ribbon 几何，宽度比尾迹更细。"""
+
+    if len(polyline) < 2:
+        return []
+    # 先把折线转成累计里程，再按 dash/gap 周期切片；圆弧采样点会自然落入切片中。
+    cumulative = _polyline_distances(polyline)
+    total_length = cumulative[-1]
+    if total_length <= 1e-6:
+        return []
+
+    dashes: list[dict[str, object]] = []
+    dash_length, period = _route_dash_layout(total_length)
+    dash_start = 0.0
+    while dash_start < total_length and len(dashes) < MAX_ROUTE_DASHES_PER_SEGMENT:
+        dash_end = min(dash_start + dash_length, total_length)
+        dash_path = _polyline_slice(polyline, cumulative, dash_start, dash_end)
+        if len(dash_path) >= 2:
+            # 每段 dash 独立成一个 ribbon，材质层保持连续线宽，段间空隙由模型缺失形成。
+            dashes.append(
+                {
+                    "color": ROUTE_DASH_COLOR,
+                    "width": ROUTE_DASH_WIDTH_M,
+                    "pathValue": json.dumps(dash_path, ensure_ascii=False, separators=(",", ":")),
+                }
+            )
+        # 无论当前 dash 是否因退化被跳过，都按完整周期推进，保持虚线节奏稳定。
+        dash_start += period
+    return dashes
+
+
+def _route_dash_layout(total_length: float) -> tuple[float, float]:
+    """返回 dash 长度和周期。注意：超长航段会放大周期，限制 QML delegate 数量。"""
+
+    base_period = ROUTE_DASH_LENGTH_M + ROUTE_DASH_GAP_M
+    estimated_count = math.ceil(total_length / base_period)
+    if estimated_count <= MAX_ROUTE_DASHES_PER_SEGMENT:
+        return ROUTE_DASH_LENGTH_M, base_period
+    # 保留原 dash/gap 比例，把同样的虚线节奏均匀铺满整条长航段。
+    period = total_length / MAX_ROUTE_DASHES_PER_SEGMENT
+    dash_ratio = ROUTE_DASH_LENGTH_M / base_period
+    return period * dash_ratio, period
+
+
+def _route_segments(snapshot: Snapshot) -> list[ReferenceRoute]:
+    """返回 3D 需要绘制的参考航段。注意：对齐俯视图的多航段优先、当前航段兜底规则。"""
+
+    if snapshot.route_segments:
+        return snapshot.route_segments
+    # 单航段或控制器只暴露当前航段时，仍然要显示目标航段虚线。
+    if snapshot.route is not None:
+        return [snapshot.route]
+    return []
+
+
+def _route_polyline(route: ReferenceRoute) -> list[tuple[float, float, float]]:
+    """把单条参考航段采样为 Quick3D 折线点。注意：高度随采样序号线性插值。"""
 
     xy_points = reference_route_points(route)
     sampled_xy = _evenly_sample(xy_points, MAX_ROUTE_POINTS_PER_SEGMENT)
     count = max(1, len(sampled_xy) - 1)
-    points: list[dict[str, object]] = []
+    points: list[tuple[float, float, float]] = []
     for index, (east_m, north_m) in enumerate(sampled_xy):
+        # reference_route_points 只给水平位置，高度按采样序号沿航段端点线性插值。
         mix = index / count
         altitude_m = route.start_altitude + (route.end_altitude - route.start_altitude) * mix
         coord = enu_to_quick3d(east_m, north_m, altitude_m)
-        points.append({"color": "#22d3ee", "size": 9.0, **coord})
+        points.append((coord["x"], coord["y"], coord["z"]))
     return points
+
+
+def _polyline_distances(points: list[tuple[float, float, float]]) -> list[float]:
+    """返回折线各点累计距离。注意：3D 虚线按空间距离分段，爬升航段间距也稳定。"""
+
+    distances = [0.0]
+    for previous, current in zip(points, points[1:]):
+        # 用三维距离切 dash，爬升/下降段不会因为水平距离短而虚线过密。
+        distances.append(distances[-1] + math.dist(previous, current))
+    return distances
+
+
+def _polyline_slice(
+    points: list[tuple[float, float, float]],
+    distances: list[float],
+    start_m: float,
+    end_m: float,
+) -> list[list[float]]:
+    """截取折线上的一段路径。注意：保留中间采样点，使圆弧 dash 仍贴合曲线。"""
+
+    sliced: list[list[float]] = [_interpolate_polyline(points, distances, start_m)]
+    for point, distance in zip(points[1:-1], distances[1:-1]):
+        # 中间点只有落在当前 dash 里才保留，保证每个 dash 自身仍是一条小折线。
+        if start_m < distance < end_m:
+            sliced.append([point[0], point[1], point[2]])
+    sliced.append(_interpolate_polyline(points, distances, end_m))
+    return sliced
+
+
+def _interpolate_polyline(
+    points: list[tuple[float, float, float]],
+    distances: list[float],
+    target_m: float,
+) -> list[float]:
+    """按累计距离在线性折线上插值。注意：返回 QML 可直接 JSON 化的三元组。"""
+
+    clamped = max(0.0, min(target_m, distances[-1]))
+    for index in range(1, len(distances)):
+        if clamped <= distances[index]:
+            previous_distance = distances[index - 1]
+            span = distances[index] - previous_distance
+            # 退化子段直接取前点，避免零长航段造成除零。
+            mix = 0.0 if span <= 1e-9 else (clamped - previous_distance) / span
+            previous = points[index - 1]
+            current = points[index]
+            return [
+                previous[0] + (current[0] - previous[0]) * mix,
+                previous[1] + (current[1] - previous[1]) * mix,
+                previous[2] + (current[2] - previous[2]) * mix,
+            ]
+    last = points[-1]
+    return [last[0], last[1], last[2]]
 
 
 def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, object]:
