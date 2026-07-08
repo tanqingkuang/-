@@ -26,6 +26,27 @@ Item {
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
 
+    function clampPitch(value) {
+        return Math.max(-88, Math.min(-6, value))
+    }
+
+    function applyCameraDrag(dx, dy, pointerY) {
+        const yawSign = pointerY < height / 2.0 ? 1.0 : -1.0
+        yaw += dx * 0.25 * yawSign
+        pitch = clampPitch(pitch - dy * 0.18)
+        cameraMode = "自由"
+    }
+
+    function applyGroundPan(dx, dy) {
+        const scale = distance / 1800.0
+        const yawRadians = yaw * Math.PI / 180.0
+        const cosYaw = Math.cos(yawRadians)
+        const sinYaw = Math.sin(yawRadians)
+        focusX += (-dx * cosYaw - dy * sinYaw) * scale
+        focusZ += (dx * sinYaw - dy * cosYaw) * scale
+        cameraMode = "自由"
+    }
+
     function applyPayloadCamera(camera) {
         if (!camera) {
             return false
@@ -363,13 +384,9 @@ Item {
             const dx = mouse.x - root.lastMouseX
             const dy = mouse.y - root.lastMouseY
             if (mouse.buttons & Qt.LeftButton) {
-                root.yaw += dx * 0.25
-                root.pitch = Math.max(-88, Math.min(-6, root.pitch + dy * 0.18))
-                root.cameraMode = "自由"
+                root.applyCameraDrag(dx, dy, mouse.y)
             } else if ((mouse.buttons & Qt.RightButton) || (mouse.buttons & Qt.MiddleButton)) {
-                root.focusX -= dx * root.distance / 1800.0
-                root.focusZ += dy * root.distance / 1800.0
-                root.cameraMode = "自由"
+                root.applyGroundPan(dx, dy)
             }
             root.lastMouseX = mouse.x
             root.lastMouseY = mouse.y

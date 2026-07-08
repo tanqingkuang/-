@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import tempfile
@@ -230,6 +231,61 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreater(advanced_snapshot.time_s, initial_scene_data["time"])
         self.assertNotEqual(moved_aircraft["A01"]["x"], initial_aircraft["A01"]["x"])
         self.assertNotEqual(moved_aircraft["A01"]["z"], initial_aircraft["A01"]["z"])
+
+    def test_situation3d_drag_helpers_use_grabbed_scene_direction(self) -> None:
+        """验证 3D 旋转和平移按抓住场景拖动的方向更新。"""
+
+        self.window.situation3d_action.trigger()
+        self.app.processEvents()
+        situation_window = self.window.features.situation3d.window
+        self.assertIsNotNone(situation_window)
+        root_object = situation_window.quick_view.rootObject()
+        self.assertIsNotNone(root_object)
+
+        root_object.setProperty("distance", 1800.0)
+        root_object.setProperty("focusX", 0.0)
+        root_object.setProperty("focusZ", 0.0)
+        root_object.setProperty("yaw", 0.0)
+        root_object.applyGroundPan(120.0, 0.0)
+        self.assertAlmostEqual(float(root_object.property("focusX")), -120.0, delta=1e-6)
+        self.assertAlmostEqual(float(root_object.property("focusZ")), 0.0, delta=1e-6)
+
+        root_object.setProperty("focusX", 0.0)
+        root_object.setProperty("focusZ", 0.0)
+        root_object.applyGroundPan(0.0, 120.0)
+        self.assertAlmostEqual(float(root_object.property("focusX")), 0.0, delta=1e-6)
+        self.assertAlmostEqual(float(root_object.property("focusZ")), -120.0, delta=1e-6)
+
+        root_object.setProperty("focusX", 0.0)
+        root_object.setProperty("focusZ", 0.0)
+        root_object.setProperty("yaw", -90.0)
+        root_object.applyGroundPan(120.0, 0.0)
+        self.assertAlmostEqual(float(root_object.property("focusX")), 0.0, delta=1e-6)
+        self.assertAlmostEqual(float(root_object.property("focusZ")), -120.0, delta=1e-6)
+
+        root_object.setProperty("focusX", 0.0)
+        root_object.setProperty("focusZ", 0.0)
+        root_object.setProperty("yaw", -38.0)
+        root_object.applyGroundPan(100.0, 0.0)
+        self.assertAlmostEqual(float(root_object.property("focusX")), -100.0 * math.cos(math.radians(-38.0)), delta=1e-6)
+        self.assertAlmostEqual(float(root_object.property("focusZ")), 100.0 * math.sin(math.radians(-38.0)), delta=1e-6)
+
+        root_object.setProperty("yaw", -38.0)
+        root_object.setProperty("pitch", -34.0)
+        root_object.applyCameraDrag(40.0, 10.0, 500.0)
+        self.assertAlmostEqual(float(root_object.property("yaw")), -48.0, delta=1e-6)
+        self.assertAlmostEqual(float(root_object.property("pitch")), -35.8, delta=1e-6)
+
+        root_object.setProperty("yaw", -38.0)
+        root_object.setProperty("pitch", -34.0)
+        root_object.applyCameraDrag(40.0, 10.0, 120.0)
+        self.assertAlmostEqual(float(root_object.property("yaw")), -28.0, delta=1e-6)
+        self.assertAlmostEqual(float(root_object.property("pitch")), -35.8, delta=1e-6)
+
+        root_object.applyCameraDrag(0.0, 1000.0, 500.0)
+        self.assertAlmostEqual(float(root_object.property("pitch")), -88.0, delta=1e-6)
+        root_object.applyCameraDrag(0.0, -1000.0, 500.0)
+        self.assertAlmostEqual(float(root_object.property("pitch")), -6.0, delta=1e-6)
 
     def test_data_analysis_menu_opens_independent_window(self) -> None:
         self.window._open_data_analysis_window()
