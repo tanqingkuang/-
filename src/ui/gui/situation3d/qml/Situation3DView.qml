@@ -17,8 +17,10 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
-    // 1800m 是默认自由视角量级；近距离保留 25% 线宽，避免放大后航线虚线变成粗色带。
-    property real routeDashWidthScale: Math.max(0.25, Math.min(1.0, distance / 1800.0))
+    // 1800m 是默认自由视角量级；近距离保留 25% 线宽，避免放大后轨迹和航线变成粗色带。
+    property real nearViewWidthScale: Math.max(0.25, Math.min(1.0, distance / 1800.0))
+    property real routeDashWidthScale: nearViewWidthScale
+    property real trailWidthScale: nearViewWidthScale
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -349,7 +351,7 @@ Item {
             delegate: Model {
                 geometry: TrailRibbonGeometry {
                     pathValue: model.pathValue
-                    widthValue: model.widthValue
+                    widthValue: model.widthValue * root.trailWidthScale
                 }
                 castsShadows: false
                 materials: PrincipledMaterial {

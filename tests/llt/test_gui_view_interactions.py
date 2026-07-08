@@ -37,7 +37,7 @@ from src.ui.gui.main_window import (
     default_project_root,
     run_gui,
 )
-from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, TRAIL_SECONDS
+from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, trail_seconds_for_duration
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -478,11 +478,15 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(repeated.nodes[0].vy, 8.0)
         self.assertAlmostEqual(repeated.cpu_utilization, 0.42)
 
-    def test_trail_seconds_input_defaults_and_propagates(self) -> None:
-        self.assertAlmostEqual(self.window.trail_seconds_input.value(), TRAIL_SECONDS)
-        self.assertAlmostEqual(self.window.top_view.trail_seconds, TRAIL_SECONDS)
-        self.assertAlmostEqual(self.window.side_view.trail_seconds, TRAIL_SECONDS)
-        self.assertAlmostEqual(self.window.sim.trail_seconds, TRAIL_SECONDS)
+    def test_trail_seconds_input_uses_half_loaded_duration_and_propagates(self) -> None:
+        self._load_ui_config(duration_s=2400.0)
+        expected_seconds = trail_seconds_for_duration(2400.0)
+
+        self.assertAlmostEqual(self.window.trail_seconds_input.value(), expected_seconds)
+        self.assertGreaterEqual(self.window.trail_seconds_input.maximum(), expected_seconds)
+        self.assertAlmostEqual(self.window.top_view.trail_seconds, expected_seconds)
+        self.assertAlmostEqual(self.window.side_view.trail_seconds, expected_seconds)
+        self.assertAlmostEqual(self.window.sim.trail_seconds, expected_seconds)
 
         self.window.trail_seconds_input.setValue(6.5)
         self.app.processEvents()
@@ -497,6 +501,47 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(self.window.top_view.trail_seconds, 0.0)
         self.assertAlmostEqual(self.window.side_view.trail_seconds, 0.0)
         self.assertAlmostEqual(self.window.sim.trail_seconds, 0.0)
+
+    def test_loading_same_duration_config_resets_manual_trail_seconds(self) -> None:
+        self._load_ui_config(duration_s=120.0)
+        self.window.trail_seconds_input.setValue(6.5)
+        self.app.processEvents()
+
+        self._load_ui_config(duration_s=120.0)
+        expected_seconds = trail_seconds_for_duration(120.0)
+
+        self.assertAlmostEqual(self.window.trail_seconds_input.value(), expected_seconds)
+        self.assertAlmostEqual(self.window.top_view.trail_seconds, expected_seconds)
+        self.assertAlmostEqual(self.window.side_view.trail_seconds, expected_seconds)
+        self.assertAlmostEqual(self.window.sim.trail_seconds, expected_seconds)
+
+    def test_manual_trail_seconds_change_refreshes_situation3d_snapshot(self) -> None:
+        class SpyFeatures:
+            """记录快照刷新调用。注意：只替代本用例需要的 feature 接口。"""
+
+            def __init__(self) -> None:
+                """初始化 SpyFeatures 实例，建立后续断言所需状态。"""
+
+                self.snapshots: list[Snapshot] = []
+
+            def on_snapshot_updated(self, window: MainWindow, snapshot: Snapshot) -> None:
+                """记录 3D 态势快照刷新。注意：window 参数保留接口一致性。"""
+
+                self.snapshots.append(snapshot)
+
+            def close(self) -> None:
+                """兼容主窗口关闭流程。注意：测试替身没有真实资源需要释放。"""
+
+        self._load_ui_config(duration_s=120.0)
+        spy = SpyFeatures()
+        self.window.features = spy
+
+        self.window.trail_seconds_input.setValue(6.5)
+        self.app.processEvents()
+
+        self.assertEqual(len(spy.snapshots), 1)
+        self.assertAlmostEqual(self.window.sim.trail_seconds, 6.5)
+        self.assertAlmostEqual(spy.snapshots[0].duration, 120.0)
 
     def test_adapter_trail_seconds_zero_outputs_no_trail(self) -> None:
         node = ControllerNodeState(
@@ -927,6 +972,7 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         view = self.window.top_view
         view.show_grid = False
+        view.trail_seconds = 5.0
         view.snapshot = Snapshot(
             time=0.2,
             duration=10.0,
@@ -1650,6 +1696,8 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(self.window.duration_input.text(), "2400")
         self.assertEqual(self.window.timeline_label.text(), "0.0 / 2400s")
+        self.assertAlmostEqual(self.window.trail_seconds_input.value(), trail_seconds_for_duration(2400.0))
+        self.assertAlmostEqual(self.window.sim.trail_seconds, trail_seconds_for_duration(2400.0))
 
     def test_duration_input_updates_controller_duration_on_edit_finished(self) -> None:
         self._load_ui_config(duration_s=2400.0)
@@ -1661,6 +1709,10 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(snapshot.duration_s, 120.0)
         self.assertEqual(self.window.timeline_label.text(), "0.0 / 120s")
+        self.assertAlmostEqual(self.window.trail_seconds_input.value(), trail_seconds_for_duration(120.0))
+        self.assertAlmostEqual(self.window.top_view.trail_seconds, trail_seconds_for_duration(120.0))
+        self.assertAlmostEqual(self.window.side_view.trail_seconds, trail_seconds_for_duration(120.0))
+        self.assertAlmostEqual(self.window.sim.trail_seconds, trail_seconds_for_duration(120.0))
 
     def test_duration_input_persists_json_config_duration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

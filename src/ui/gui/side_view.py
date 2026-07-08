@@ -12,7 +12,6 @@ from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.top_view import TopView
 from src.ui.gui.view_models import (
     FIT_VIEWPORT_RATIO,
-    TRAIL_SECONDS,
     VIEW_MAX_SCALE,
     VIEW_MIN_SCALE,
     ReferenceRoute,
@@ -44,7 +43,7 @@ class SideView(QWidget):
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
         self.show_grid = True
-        self.trail_seconds = TRAIL_SECONDS
+        self.trail_seconds = 0.0
         self.segment_locked = True
         self.auto_center = False
         self.view_angle_deg = 0.0
