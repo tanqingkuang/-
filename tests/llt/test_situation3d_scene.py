@@ -92,7 +92,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
             for offset in range(0, len(vertex_data), geometry.stride())
         ]
 
-        self.assertEqual(geometry.stride(), 32)
+        self.assertEqual(geometry.stride(), 48)
         self.assertGreater(geometry.vertexData().size(), 0)
         self.assertGreater(geometry.indexData().size(), 0)
         self.assertLessEqual(geometry.boundsMin().y(), 0.0)
@@ -113,7 +113,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("Qt.MiddleButton", qml)
         self.assertIn("mouse.buttons & Qt.MiddleButton", qml)
         self.assertIn("TerrainGeometry", qml)
-        self.assertNotIn("vertexColorsEnabled", qml)
+        # 顶点色只做按高度的平滑渐变，必须保留光照；历史碎斑来自噪声色 + NoLighting。
+        self.assertIn("vertexColorsEnabled: true", qml)
         self.assertNotIn("PrincipledMaterial.NoLighting", qml)
         self.assertNotIn("hillModel", qml)
         self.assertIn("Math.min(50000", qml)

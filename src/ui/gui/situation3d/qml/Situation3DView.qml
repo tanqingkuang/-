@@ -195,19 +195,20 @@ Item {
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-38, -52, 0)
-            brightness: 4.2
+            // 顶点色是真实反照率,亮度回到 1 量级避免过曝成白色。
+            brightness: 1.35
             castsShadow: false
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 138, 0)
-            brightness: 0.28
+            brightness: 0.3
             castsShadow: false
         }
 
         PointLight {
             position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
-            brightness: 5.6
+            brightness: 1.4
         }
 
         Model {
@@ -219,11 +220,12 @@ Item {
             receivesShadows: false
             castsShadows: false
             materials: PrincipledMaterial {
-                baseColor: Qt.rgba(0.30, 0.45, 0.32, 1.0)
+                // 顶点色承担海拔渐变，基色保持白色避免二次染色。
+                baseColor: "#ffffff"
                 cullMode: Material.NoCulling
-                emissiveFactor: Qt.vector3d(0.010, 0.018, 0.012)
-                roughness: 0.96
-                specularAmount: 0.02
+                vertexColorsEnabled: true
+                roughness: 0.94
+                specularAmount: 0.03
             }
         }
 
@@ -273,79 +275,19 @@ Item {
 
         Repeater3D {
             model: aircraftModel
-            delegate: Node {
+            // 飞机退化为发光球点：任何视角都是干净圆点，避免低模拉远时的锯齿穿帮。
+            delegate: Model {
+                source: "#Sphere"
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
-                eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
-
-                Model {
-                    source: "#Cylinder"
-                    eulerRotation: Qt.vector3d(0, 0, 90)
-                    scale: Qt.vector3d(0.10, 0.68, 0.10)
-                    castsShadows: true
-                    materials: PrincipledMaterial {
-                        baseColor: model.color
-                        emissiveFactor: Qt.vector3d(0.05, 0.06, 0.09)
-                        roughness: 0.32
-                        metalness: 0.18
-                    }
-                }
-
-                Model {
-                    source: "#Cone"
-                    position: Qt.vector3d(72, 0, 0)
-                    eulerRotation: Qt.vector3d(0, 0, -90)
-                    scale: Qt.vector3d(0.10, 0.24, 0.10)
-                    castsShadows: true
-                    materials: PrincipledMaterial {
-                        baseColor: "#e7edf4"
-                        roughness: 0.30
-                        metalness: 0.10
-                    }
-                }
-
-                Model {
-                    source: "#Cube"
-                    position: Qt.vector3d(-8, -2, 0)
-                    scale: Qt.vector3d(0.30, 0.020, 1.36)
-                    castsShadows: true
-                    materials: PrincipledMaterial {
-                        baseColor: model.color
-                        emissiveFactor: Qt.vector3d(0.03, 0.04, 0.08)
-                        roughness: 0.36
-                    }
-                }
-
-                Model {
-                    source: "#Cube"
-                    position: Qt.vector3d(-66, 7, 0)
-                    scale: Qt.vector3d(0.18, 0.020, 0.58)
-                    castsShadows: true
-                    materials: PrincipledMaterial {
-                        baseColor: "#334155"
-                        roughness: 0.52
-                    }
-                }
-
-                Model {
-                    source: "#Cube"
-                    position: Qt.vector3d(-72, 26, 0)
-                    scale: Qt.vector3d(0.12, 0.34, 0.036)
-                    castsShadows: true
-                    materials: PrincipledMaterial {
-                        baseColor: "#334155"
-                        roughness: 0.52
-                    }
-                }
-
-                Model {
-                    source: "#Sphere"
-                    position: Qt.vector3d(22, 14, 0)
-                    scale: Qt.vector3d(0.20, 0.072, 0.12)
-                    materials: PrincipledMaterial {
-                        baseColor: Qt.rgba(0.75, 0.90, 1.0, 0.68)
-                        alphaMode: PrincipledMaterial.Blend
-                        roughness: 0.18
-                    }
+                // 20km 全图下点必须够大才可见，取约 200m 直径。
+                scale: Qt.vector3d(2.0, 2.0, 2.0)
+                castsShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    // 低发光保证背光面也不至于沉入地形色，颜色始终可辨。
+                    emissiveFactor: Qt.vector3d(0.14, 0.16, 0.20)
+                    roughness: 0.34
+                    metalness: 0.10
                 }
             }
         }
