@@ -240,6 +240,8 @@ class MainWindowActionMixin:
         self.timer.stop()
         snapshot = self.sim.load_config(path)
         if self.sim.last_result_code == "OK":
+            # 切换配置必须重新应用半程尾迹；即使新旧配置时长相同，也不能沿用用户上次手动值。
+            self._trail_duration_basis = None
             self._sync_speed_controls(self.sim.speed)
             # 按新配置刷新队形下拉框选项。
             self._refresh_formation_options()
@@ -487,7 +489,7 @@ class MainWindowActionMixin:
             self.trail_seconds_input.setValue(seconds)
         # 记录本次同步的飞行时长；用户随后手动调尾迹时，不会被每帧刷新覆盖。
         self._trail_duration_basis = duration_s
-        self._apply_trail_seconds(seconds)
+        self._apply_trail_seconds(seconds, refresh_features=False)
 
     @staticmethod
     def _format_duration_text(duration_s: float) -> str:
@@ -536,7 +538,7 @@ class MainWindowActionMixin:
         """处理尾迹长度输入。注意：0 表示关闭尾迹显示与缓存。"""
         self._apply_trail_seconds(self.trail_seconds_input.value())
 
-    def _apply_trail_seconds(self, seconds: float) -> None:
+    def _apply_trail_seconds(self, seconds: float, *, refresh_features: bool = True) -> None:
         """把尾迹时长下发给数据源和视图。注意：输入框同步时也复用该路径。"""
         # 数据源负责缓存裁剪，视图负责按当前秒数即时隐藏或淡出已有快照。
         self.sim.set_trail_seconds(seconds)
@@ -544,6 +546,9 @@ class MainWindowActionMixin:
         self.side_view.trail_seconds = seconds
         self.top_view.viewport().update()
         self.side_view.update()
+        if refresh_features:
+            # 手动修改尾迹时没有完整 _update_snapshot 流程，需要主动推送裁剪后的 3D payload。
+            self.features.on_snapshot_updated(self, self.sim.snapshot())
 
     def _disable_auto_center(self) -> None:
         """关闭自动居中选项。注意：用户手动平移或缩放后应避免自动抢回视图。"""
