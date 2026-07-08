@@ -355,11 +355,18 @@ Item {
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.76
+                    // 淡出完全交给几何体顶点 alpha(0.08~0.72)控制,这里不再叠加全局系数,
+                    // 避免和顶点 alpha 相乘后整体过淡。
+                    opacity: 1.0
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.9
-                    emissiveFactor: Qt.vector3d(0.11, 0.11, 0.18)
+                    // 发光色跟随角色颜色本身,而不是固定色,否则整体偏淡时会盖过长机/僚机的颜色区分。
+                    emissiveFactor: Qt.vector3d(
+                        Qt.color(model.color).r * 0.35,
+                        Qt.color(model.color).g * 0.35,
+                        Qt.color(model.color).b * 0.35
+                    )
                 }
             }
         }
@@ -399,22 +406,9 @@ Item {
 
                 RuntimeLoader {
                     source: Qt.resolvedUrl("assets/PredatorUAV.glb")
-                    // 该资产机头朝 -Z(与 glTF 惯例相反),转到本场景机头朝 +X 的约定。
-                    eulerRotation: Qt.vector3d(0, -90, 0)
+                    // 该资产机头(卫通天线鼓包端)朝 +Z,转到本场景机头朝 +X 的约定。
+                    eulerRotation: Qt.vector3d(0, 90, 0)
                     scale: Qt.vector3d(visualScale, visualScale, visualScale)
-                }
-
-                // 角色/健康态颜色不再染机身,改用脚下光盘标记,远距离下也可辨。
-                Model {
-                    source: "#Cylinder"
-                    position: Qt.vector3d(0, -0.30 * visualScale, 0)
-                    scale: Qt.vector3d(0.025 * visualScale, 0.001 * visualScale, 0.025 * visualScale)
-                    materials: PrincipledMaterial {
-                        baseColor: model.color
-                        emissiveFactor: Qt.vector3d(0.10, 0.10, 0.10)
-                        alphaMode: PrincipledMaterial.Blend
-                        opacity: 0.38
-                    }
                 }
             }
         }
