@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick3D
+import QtQuick3D.AssetUtils
 import Simu3D 1.0
 
 Item {
@@ -16,7 +17,6 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
-    property real aircraftPointScale: Math.max(0.10, Math.min(0.55, distance / 36000.0))
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -329,24 +329,39 @@ Item {
 
         Repeater3D {
             model: aircraftModel
-            // 飞机退化为小发光点；缩远时轻微放大，保证不同缩放下仍可辨。
-            delegate: Model {
-                source: "#Sphere"
+            delegate: Node {
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(root.aircraftPointScale, root.aircraftPointScale, root.aircraftPointScale)
-                castsShadows: false
+                eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
                 Behavior on position {
                     Vector3dAnimation {
                         duration: 90
                         easing.type: Easing.Linear
                     }
                 }
-                materials: PrincipledMaterial {
-                    baseColor: model.color
-                    // 低发光保证背光面也不至于沉入地形色，颜色始终可辨。
-                    emissiveFactor: Qt.vector3d(0.14, 0.16, 0.20)
-                    roughness: 0.34
-                    metalness: 0.10
+
+                // 视觉放大随相机距离自适应:拉远时飞机保持可辨认,拉近时回到基准比例。
+                // 8.5 倍=捕食者真实尺寸(模型翼展1.76单位×8.5≈15m),近观按 1:1 显示;
+                // 相机拉远后改为恒定视角大小(翼展约占视野2%),避免退化成小点。
+                property real visualScale: Math.max(8.5, root.distance / 85.0)
+
+                RuntimeLoader {
+                    source: Qt.resolvedUrl("assets/PredatorUAV.glb")
+                    // 该资产机头朝 -Z(与 glTF 惯例相反),转到本场景机头朝 +X 的约定。
+                    eulerRotation: Qt.vector3d(0, -90, 0)
+                    scale: Qt.vector3d(visualScale, visualScale, visualScale)
+                }
+
+                // 角色/健康态颜色不再染机身,改用脚下光盘标记,远距离下也可辨。
+                Model {
+                    source: "#Cylinder"
+                    position: Qt.vector3d(0, -0.30 * visualScale, 0)
+                    scale: Qt.vector3d(0.025 * visualScale, 0.001 * visualScale, 0.025 * visualScale)
+                    materials: PrincipledMaterial {
+                        baseColor: model.color
+                        emissiveFactor: Qt.vector3d(0.10, 0.10, 0.10)
+                        alphaMode: PrincipledMaterial.Blend
+                        opacity: 0.38
+                    }
                 }
             }
         }
