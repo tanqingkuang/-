@@ -17,12 +17,15 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
+    // 1800m 是默认自由视角量级；近距离保留 25% 线宽，避免放大后航线虚线变成粗色带。
+    property real routeDashWidthScale: Math.max(0.25, Math.min(1.0, distance / 1800.0))
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
 
     ListModel { id: aircraftModel }
     ListModel { id: trailModel }
+    ListModel { id: routeDashModel }
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
 
@@ -149,6 +152,14 @@ Item {
         const data = JSON.parse(payload)
         syncAircraftModel(data.aircraft || [])
         syncTrailModel(data.trailRibbons || [])
+        routeDashModel.clear()
+        for (const item of data.routeDashes || []) {
+            routeDashModel.append({
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            })
+        }
         routeModel.clear()
         for (const item of data.routePoints || []) {
             routeModel.append({
@@ -296,6 +307,27 @@ Item {
                 vertexColorsEnabled: true
                 roughness: 0.94
                 specularAmount: 0.03
+            }
+        }
+
+        Repeater3D {
+            model: routeDashModel
+            delegate: Model {
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue * root.routeDashWidthScale
+                    alphaMode: "solid"
+                }
+                castsShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.82
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.88
+                    emissiveFactor: Qt.vector3d(0.10, 0.30, 0.34)
+                }
             }
         }
 

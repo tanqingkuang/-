@@ -7,7 +7,12 @@ import json
 import struct
 import unittest
 
-from src.ui.gui.situation3d.scene_data import DEFAULT_TERRAIN_SPAN_M, build_scene_payload, enu_to_quick3d
+from src.ui.gui.situation3d.scene_data import (
+    DEFAULT_TERRAIN_SPAN_M,
+    MAX_ROUTE_DASHES_PER_SEGMENT,
+    build_scene_payload,
+    enu_to_quick3d,
+)
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
 from src.ui.gui.situation3d.trail_ribbon_geometry import TrailRibbonGeometry
 from src.ui.gui.view_models import (
@@ -69,6 +74,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(payload["counts"]["aircraft"], 2)
         self.assertEqual(payload["counts"]["trailRibbons"], 1)
         self.assertGreaterEqual(payload["counts"]["routePoints"], 2)
+        self.assertGreaterEqual(payload["counts"]["routeDashes"], 1)
         self.assertEqual(payload["counts"]["obstacles"], 1)
         self.assertNotIn("trailPoints", payload)
         self.assertNotIn("trailSegments", payload)
@@ -76,6 +82,12 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(trail_ribbon["nodeId"], "A01")
         self.assertEqual(trail_ribbon["width"], 44.0)
         self.assertEqual(json.loads(trail_ribbon["pathValue"]), [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]])
+        route_dash = payload["routeDashes"][0]
+        self.assertEqual(route_dash["color"], "#22d3ee")
+        self.assertEqual(route_dash["width"], 16.0)
+        route_dash_path = json.loads(route_dash["pathValue"])
+        self.assertGreaterEqual(len(route_dash_path), 2)
+        self.assertEqual(route_dash_path[0], [0.0, 100.0, -0.0])
         self.assertEqual(payload["terrain"]["ground"]["width"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["ground"]["depth"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["surface"]["width"], DEFAULT_TERRAIN_SPAN_M)
@@ -123,6 +135,24 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLessEqual(geometry.boundsMin().x(), -32.0)
         self.assertGreaterEqual(geometry.boundsMax().x(), 120.0)
 
+    def test_route_ribbon_can_disable_trail_alpha_gradient(self) -> None:
+        """验证航线虚线可关闭尾迹渐隐，避免单段 dash 内部颜色不一致。"""
+
+        geometry = TrailRibbonGeometry()
+        geometry.pathValue = json.dumps([[0.0, 100.0, 0.0], [120.0, 100.0, 0.0], [240.0, 100.0, 0.0]])
+
+        trail_vertex_data = bytes(geometry.vertexData())
+        first_trail_alpha = struct.unpack_from("<f", trail_vertex_data, 11 * 4)[0]
+        last_trail_alpha = struct.unpack_from("<f", trail_vertex_data, 5 * geometry.stride() + 11 * 4)[0]
+        self.assertLess(first_trail_alpha, last_trail_alpha)
+
+        geometry.alphaMode = "solid"
+        solid_vertex_data = bytes(geometry.vertexData())
+        first_solid_alpha = struct.unpack_from("<f", solid_vertex_data, 11 * 4)[0]
+        last_solid_alpha = struct.unpack_from("<f", solid_vertex_data, 5 * geometry.stride() + 11 * 4)[0]
+        self.assertEqual(first_solid_alpha, 1.0)
+        self.assertEqual(last_solid_alpha, 1.0)
+
     def test_disabled_obstacle_is_not_exported_to_scene(self) -> None:
         obstacle = ObstacleView("OFF", "circle", enabled=False, center_x=1.0, center_y=2.0, radius=3.0)
 
@@ -130,6 +160,31 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         self.assertEqual(payload["counts"]["obstacles"], 0)
         self.assertEqual(payload["obstacles"], [])
+
+    def test_current_route_falls_back_to_3d_route_dash_when_segments_are_absent(self) -> None:
+        """验证 3D 航线与俯视图一致：无多航段时仍绘制当前目标航段虚线。"""
+
+        snapshot = self._snapshot()
+        snapshot.route = ReferenceRoute(0.0, 0.0, 100.0, 360.0, 0.0, 100.0)
+        snapshot.route_segments = []
+
+        payload = build_scene_payload(snapshot)
+
+        self.assertEqual(payload["counts"]["routePoints"], 2)
+        self.assertGreaterEqual(payload["counts"]["routeDashes"], 2)
+        first_dash = json.loads(payload["routeDashes"][0]["pathValue"])
+        self.assertEqual(first_dash[0], [0.0, 100.0, -0.0])
+
+    def test_long_route_dash_count_is_capped(self) -> None:
+        """验证超长航段不会生成无限增长的 QML dash delegate。"""
+
+        snapshot = self._snapshot()
+        snapshot.route_segments = [ReferenceRoute(0.0, 0.0, 100.0, 100000.0, 0.0, 100.0)]
+
+        payload = build_scene_payload(snapshot)
+
+        self.assertEqual(payload["counts"]["routeDashes"], MAX_ROUTE_DASHES_PER_SEGMENT)
+        self.assertEqual(len(payload["routeDashes"]), MAX_ROUTE_DASHES_PER_SEGMENT)
 
     def test_qml_accepts_middle_button_for_focus_pan(self) -> None:
         qml = QML_VIEW_PATH.read_text(encoding="utf-8")
@@ -154,8 +209,16 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("hillModel", qml)
         self.assertIn("Math.min(50000", qml)
         self.assertIn("data.trailRibbons", qml)
+        self.assertIn("property real routeDashWidthScale", qml)
+        self.assertIn("1800m 是默认自由视角量级", qml)
+        self.assertIn("Math.max(0.25, Math.min(1.0, distance / 1800.0))", qml)
+        self.assertIn("ListModel { id: routeDashModel }", qml)
+        self.assertIn("data.routeDashes", qml)
+        self.assertIn("model: routeDashModel", qml)
         self.assertIn("TrailRibbonGeometry", qml)
         self.assertIn("pathValue: model.pathValue", qml)
+        self.assertIn("widthValue: model.widthValue * root.routeDashWidthScale", qml)
+        self.assertIn('alphaMode: "solid"', qml)
         self.assertIn("function syncTrailModel", qml)
         self.assertNotIn("trailModel.clear()", qml)
         self.assertNotIn("data.trailPoints", qml)
