@@ -152,7 +152,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
         scene_data = json.loads(first_window.bridge.sceneData())
         self.assertEqual(scene_data["counts"]["aircraft"], 3)
-        self.assertGreaterEqual(scene_data["counts"]["trailPoints"], 2)
+        self.assertGreaterEqual(scene_data["counts"]["trailSegments"], 1)
         self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
         self.assertEqual(scene_data["counts"]["obstacles"], 1)
         self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)

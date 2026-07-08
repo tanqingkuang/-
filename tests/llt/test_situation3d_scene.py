@@ -65,9 +65,17 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLess(aircraft[0]["yawDeg"], 0.0)
 
         self.assertEqual(payload["counts"]["aircraft"], 2)
-        self.assertGreaterEqual(payload["counts"]["trailPoints"], 2)
+        self.assertEqual(payload["counts"]["trailSegments"], 1)
         self.assertGreaterEqual(payload["counts"]["routePoints"], 2)
         self.assertEqual(payload["counts"]["obstacles"], 1)
+        self.assertNotIn("trailPoints", payload)
+        trail_segment = payload["trailSegments"][0]
+        self.assertEqual(trail_segment["nodeId"], "A01")
+        self.assertEqual(trail_segment["x"], 2.5)
+        self.assertEqual(trail_segment["y"], 4.5)
+        self.assertEqual(trail_segment["z"], -3.5)
+        self.assertGreater(trail_segment["length"], 5.0)
+        self.assertLess(trail_segment["thickness"], 20.0)
         self.assertEqual(payload["terrain"]["ground"]["width"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["ground"]["depth"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["surface"]["width"], DEFAULT_TERRAIN_SPAN_M)
@@ -118,6 +126,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("PrincipledMaterial.NoLighting", qml)
         self.assertNotIn("hillModel", qml)
         self.assertIn("Math.min(50000", qml)
+        self.assertIn("data.trailSegments", qml)
+        self.assertIn('source: "#Cylinder"', qml)
+        self.assertIn("rotation: Qt.quaternion(model.qw, model.qx, model.qy, model.qz)", qml)
+        self.assertNotIn("data.trailPoints", qml)
 
     def test_aircraft_marker_stays_small_but_distance_visible(self) -> None:
         """飞机点应保持小尺寸，并随相机距离略微放大以免缩远后消失。"""

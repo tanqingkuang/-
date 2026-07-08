@@ -95,13 +95,19 @@ Item {
         const data = JSON.parse(payload)
         syncAircraftModel(data.aircraft || [])
         trailModel.clear()
-        for (const item of data.trailPoints || []) {
+        for (const item of data.trailSegments || []) {
             trailModel.append({
+                nodeId: item.nodeId,
                 color: item.color,
                 sx: item.x,
                 sy: item.y,
                 sz: item.z,
-                size: item.size,
+                lengthValue: item.length,
+                thicknessValue: item.thickness,
+                qw: item.qw,
+                qx: item.qx,
+                qy: item.qy,
+                qz: item.qz,
                 opacity: item.opacity
             })
         }
@@ -271,14 +277,17 @@ Item {
         Repeater3D {
             model: trailModel
             delegate: Model {
-                source: "#Sphere"
+                source: "#Cylinder"
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(model.size / 100.0, model.size / 100.0, model.size / 100.0)
+                rotation: Qt.quaternion(model.qw, model.qx, model.qy, model.qz)
+                scale: Qt.vector3d(model.thicknessValue / 100.0, model.lengthValue / 100.0, model.thicknessValue / 100.0)
+                castsShadows: false
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
                     opacity: model.opacity
-                    emissiveFactor: Qt.vector3d(0.12, 0.10, 0.18)
+                    roughness: 0.82
+                    emissiveFactor: Qt.vector3d(0.09, 0.08, 0.14)
                 }
             }
         }
