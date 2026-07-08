@@ -323,11 +323,18 @@ Item {
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.76
+                    // 淡出完全交给几何体顶点 alpha(0.08~0.72)控制,这里不再叠加全局系数,
+                    // 避免和顶点 alpha 相乘后整体过淡。
+                    opacity: 1.0
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.9
-                    emissiveFactor: Qt.vector3d(0.11, 0.11, 0.18)
+                    // 发光色跟随角色颜色本身,而不是固定色,否则整体偏淡时会盖过长机/僚机的颜色区分。
+                    emissiveFactor: Qt.vector3d(
+                        Qt.color(model.color).r * 0.35,
+                        Qt.color(model.color).g * 0.35,
+                        Qt.color(model.color).b * 0.35
+                    )
                 }
             }
         }
