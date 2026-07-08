@@ -56,7 +56,7 @@
       "x_m": 2000.0,
       "y_m": -1000.0,
       "altitude_m": 500.0,
-      "psi_v_deg": 0.0,
+      "psi_v_deg": 153.43,
       "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
       "distance_to_go_m": 0.0
@@ -67,7 +67,7 @@
       "x_m": -1500.0,
       "y_m": -1000.0,
       "altitude_m": 500.0,
-      "psi_v_deg": 0.0,
+      "psi_v_deg": 33.69,
       "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
       "distance_to_go_m": 0.0
@@ -78,7 +78,7 @@
       "x_m": 2500.0,
       "y_m": 1000.0,
       "altitude_m": 500.0,
-      "psi_v_deg": 0.0,
+      "psi_v_deg": -158.20,
       "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
       "distance_to_go_m": 0.0

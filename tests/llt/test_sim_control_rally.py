@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -319,6 +320,23 @@ class SimControlRallyTests(unittest.TestCase):
 
         self.assertEqual(result.code, "OK")
         self.assertEqual([node.role for node in controller.get_snapshot().nodes], ["rally_leader", "rally_follower", "rally_follower"])
+
+    def test_repository_rally_demo_initial_heading_points_toward_rally_origin(self) -> None:
+        """验证仓库内 rally_demo.json 三机初始航向大致对齐集结航线起点，避免起始瞬间大转向。
+
+        回归背景：三机 psi_v_deg 曾固定为 0，与各自实际需要飞向的方向偏差很大，
+        导致运行开始的几秒内速度矢量方向剧烈摆动，观感上像是一开始就在打转。
+        """
+        with open("configs/rally_demo.json", encoding="utf-8") as f:
+            config = json.load(f)
+
+        expected_psi_deg = {"A01": 153.43, "A02": 33.69, "A03": -158.20}
+        for node in config["nodes"]:
+            node_id = node["node_id"]
+            bearing_to_origin_deg = math.degrees(math.atan2(-node["y_m"], -node["x_m"]))
+            # 航向应对齐指向集结航线起点(0,0)的方位角，容差覆盖编队槽位偏移带来的小角度误差。
+            self.assertAlmostEqual(node["psi_v_deg"], bearing_to_origin_deg, delta=1.0)
+            self.assertAlmostEqual(node["psi_v_deg"], expected_psi_deg[node_id], places=2)
 
 
 if __name__ == "__main__":
