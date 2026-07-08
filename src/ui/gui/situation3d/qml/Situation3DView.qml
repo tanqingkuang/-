@@ -358,7 +358,7 @@ Item {
                     scale: Qt.vector3d(0.025 * visualScale, 0.001 * visualScale, 0.025 * visualScale)
                     materials: PrincipledMaterial {
                         baseColor: model.color
-                        lighting: PrincipledMaterial.NoLighting
+                        emissiveFactor: Qt.vector3d(0.10, 0.10, 0.10)
                         alphaMode: PrincipledMaterial.Blend
                         opacity: 0.38
                     }

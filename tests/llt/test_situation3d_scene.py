@@ -149,18 +149,15 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("trailModel.clear()", qml)
         self.assertNotIn("data.trailPoints", qml)
 
-    def test_aircraft_marker_stays_small_but_distance_visible(self) -> None:
-        """飞机点应保持小尺寸，并随相机距离略微放大以免缩远后消失。"""
+    def test_aircraft_model_stays_recognizable_but_distance_visible(self) -> None:
+        """飞机应按真实尺寸渲染无人机模型，并随相机距离自适应缩放以免缩远后消失。"""
 
         qml = QML_VIEW_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("property real aircraftPointScale", qml)
-        self.assertIn("Math.max(0.10, Math.min(0.55, distance / 36000.0))", qml)
-        self.assertIn(
-            "scale: Qt.vector3d(root.aircraftPointScale, root.aircraftPointScale, root.aircraftPointScale)",
-            qml,
-        )
-        self.assertNotIn("scale: Qt.vector3d(2.0, 2.0, 2.0)", qml)
+        self.assertIn("RuntimeLoader", qml)
+        self.assertIn("assets/PredatorUAV.glb", qml)
+        self.assertIn("property real visualScale", qml)
+        self.assertIn("Math.max(8.5, root.distance / 85.0)", qml)
 
 
 if __name__ == "__main__":
