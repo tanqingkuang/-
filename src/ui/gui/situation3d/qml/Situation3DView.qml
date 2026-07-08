@@ -278,20 +278,20 @@ Item {
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
                 eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
                 // 视觉放大随相机距离自适应:拉远时飞机保持可辨认,拉近时回到基准比例。
-                property real visualScale: 60.0 * Math.max(1.0, root.distance / 9000.0)
+                property real visualScale: 150.0 * Math.max(1.0, root.distance / 9000.0)
 
                 RuntimeLoader {
-                    source: Qt.resolvedUrl("assets/CesiumDrone.glb")
-                    // glTF 资产机头朝 +Z,转到本场景机头朝 +X 的约定。
-                    eulerRotation: Qt.vector3d(0, 90, 0)
+                    source: Qt.resolvedUrl("assets/PredatorUAV.glb")
+                    // 该资产机头朝 -Z(与 glTF 惯例相反),转到本场景机头朝 +X 的约定。
+                    eulerRotation: Qt.vector3d(0, -90, 0)
                     scale: Qt.vector3d(visualScale, visualScale, visualScale)
                 }
 
                 // 角色/健康态颜色不再染机身,改用脚下光盘标记,远距离下也可辨。
                 Model {
                     source: "#Cylinder"
-                    position: Qt.vector3d(0, -0.36 * visualScale, 0)
-                    scale: Qt.vector3d(0.053 * visualScale, 0.001 * visualScale, 0.053 * visualScale)
+                    position: Qt.vector3d(0, -0.30 * visualScale, 0)
+                    scale: Qt.vector3d(0.025 * visualScale, 0.001 * visualScale, 0.025 * visualScale)
                     materials: PrincipledMaterial {
                         baseColor: model.color
                         lighting: PrincipledMaterial.NoLighting
