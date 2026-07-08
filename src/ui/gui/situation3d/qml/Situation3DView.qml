@@ -50,14 +50,20 @@ Item {
         cameraInitialized = false
     }
 
-    function updateScene(payload, forceCamera) {
-        if (!payload || payload.length === 0) {
-            return false
+    function findAircraftIndex(nodeId) {
+        for (let index = 0; index < aircraftModel.count; index += 1) {
+            if (aircraftModel.get(index).nodeId === nodeId) {
+                return index
+            }
         }
-        const data = JSON.parse(payload)
-        aircraftModel.clear()
-        for (const item of data.aircraft || []) {
-            aircraftModel.append({
+        return -1
+    }
+
+    function syncAircraftModel(items) {
+        const seen = {}
+        for (const item of items || []) {
+            const index = findAircraftIndex(item.nodeId)
+            const entry = {
                 nodeId: item.nodeId,
                 role: item.role,
                 health: item.health,
@@ -67,19 +73,61 @@ Item {
                 sz: item.z,
                 yawDeg: item.yawDeg,
                 speed: item.speed
-            })
+            }
+            if (index >= 0) {
+                aircraftModel.set(index, entry)
+            } else {
+                aircraftModel.append(entry)
+            }
+            seen[item.nodeId] = true
         }
-        trailModel.clear()
-        for (const item of data.trailPoints || []) {
-            trailModel.append({
+        for (let index = aircraftModel.count - 1; index >= 0; index -= 1) {
+            if (!seen[aircraftModel.get(index).nodeId]) {
+                aircraftModel.remove(index)
+            }
+        }
+    }
+
+    function findTrailIndex(nodeId) {
+        for (let index = 0; index < trailModel.count; index += 1) {
+            if (trailModel.get(index).nodeId === nodeId) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    function syncTrailModel(items) {
+        const seen = {}
+        for (const item of items || []) {
+            const index = findTrailIndex(item.nodeId)
+            const entry = {
+                nodeId: item.nodeId,
                 color: item.color,
-                sx: item.x,
-                sy: item.y,
-                sz: item.z,
-                size: item.size,
-                opacity: item.opacity
-            })
+                widthValue: item.width,
+                pathValue: item.pathValue
+            }
+            if (index >= 0) {
+                trailModel.set(index, entry)
+            } else {
+                trailModel.append(entry)
+            }
+            seen[item.nodeId] = true
         }
+        for (let index = trailModel.count - 1; index >= 0; index -= 1) {
+            if (!seen[trailModel.get(index).nodeId]) {
+                trailModel.remove(index)
+            }
+        }
+    }
+
+    function updateScene(payload, forceCamera) {
+        if (!payload || payload.length === 0) {
+            return false
+        }
+        const data = JSON.parse(payload)
+        syncAircraftModel(data.aircraft || [])
+        syncTrailModel(data.trailRibbons || [])
         routeModel.clear()
         for (const item of data.routePoints || []) {
             routeModel.append({
@@ -196,19 +244,20 @@ Item {
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-38, -52, 0)
-            brightness: 4.2
+            // 顶点色是真实反照率,亮度回到 1 量级避免过曝成白色。
+            brightness: 1.35
             castsShadow: false
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 138, 0)
-            brightness: 0.28
+            brightness: 0.3
             castsShadow: false
         }
 
         PointLight {
             position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
-            brightness: 5.6
+            brightness: 1.4
         }
 
         Model {
@@ -220,11 +269,12 @@ Item {
             receivesShadows: false
             castsShadows: false
             materials: PrincipledMaterial {
-                baseColor: Qt.rgba(0.30, 0.45, 0.32, 1.0)
+                // 顶点色承担海拔渐变，基色保持白色避免二次染色。
+                baseColor: "#ffffff"
                 cullMode: Material.NoCulling
-                emissiveFactor: Qt.vector3d(0.010, 0.018, 0.012)
-                roughness: 0.96
-                specularAmount: 0.02
+                vertexColorsEnabled: true
+                roughness: 0.94
+                specularAmount: 0.03
             }
         }
 
@@ -244,14 +294,19 @@ Item {
         Repeater3D {
             model: trailModel
             delegate: Model {
-                source: "#Sphere"
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(model.size / 100.0, model.size / 100.0, model.size / 100.0)
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue
+                }
+                castsShadows: false
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: model.opacity
-                    emissiveFactor: Qt.vector3d(0.12, 0.10, 0.18)
+                    opacity: 0.76
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.9
+                    emissiveFactor: Qt.vector3d(0.11, 0.11, 0.18)
                 }
             }
         }
@@ -277,6 +332,13 @@ Item {
             delegate: Node {
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
                 eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
+                Behavior on position {
+                    Vector3dAnimation {
+                        duration: 90
+                        easing.type: Easing.Linear
+                    }
+                }
+
                 // 视觉放大随相机距离自适应:拉远时飞机保持可辨认,拉近时回到基准比例。
                 // 8.5 倍=捕食者真实尺寸(模型翼展1.76单位×8.5≈15m),近观按 1:1 显示;
                 // 相机拉远后改为恒定视角大小(翼展约占视野2%),避免退化成小点。

@@ -152,10 +152,35 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.app.processEvents()
         scene_data = json.loads(first_window.bridge.sceneData())
         self.assertEqual(scene_data["counts"]["aircraft"], 3)
-        self.assertGreaterEqual(scene_data["counts"]["trailPoints"], 2)
+        self.assertGreaterEqual(scene_data["counts"]["trailRibbons"], 1)
         self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
         self.assertEqual(scene_data["counts"]["obstacles"], 1)
         self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)
+
+        self.window._update_snapshot(
+            Snapshot(
+                time=1.1,
+                duration=10.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[
+                    NodeState("A01", "leader", 18.0, 27.0, 3.0, 4.0, altitude=36.0),
+                    NodeState("A02", "wing", -24.0, 16.0, 2.0, 1.0, altitude=44.0),
+                    NodeState("A03", "wing", -28.0, 31.0, 2.0, -1.0, altitude=45.0),
+                ],
+                links=[],
+                route_segments=[ReferenceRoute(0.0, 0.0, 100.0, 100.0, 50.0, 120.0)],
+            )
+        )
+        self.app.processEvents()
+        moved_scene_data = json.loads(first_window.bridge.sceneData())
+        moved_aircraft = {item["nodeId"]: item for item in moved_scene_data["aircraft"]}
+        self.assertEqual(moved_scene_data["time"], 1.1)
+        self.assertEqual(moved_aircraft["A01"]["x"], 18.0)
+        self.assertEqual(moved_aircraft["A01"]["y"], 36.0)
+        self.assertEqual(moved_aircraft["A01"]["z"], -27.0)
 
         root_object = first_window.quick_view.rootObject()
         self.assertIsNotNone(root_object)
@@ -182,6 +207,29 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(first_window.isVisible())
         self.assertTrue(first_window.isMaximized())
         self.assertFalse(first_window.isFullScreen())
+
+    def test_situation3d_aircraft_follows_real_controller_snapshot(self) -> None:
+        """3D 态势应消费真实控制器快照，而不是停留在打开窗口时的初始点。"""
+
+        self._load_ui_config(duration_s=0.2, step_s=0.005, playback_rate=10.0)
+        self.window.situation3d_action.trigger()
+        self.app.processEvents()
+
+        situation_window = self.window.features.situation3d.window
+        self.assertIsNotNone(situation_window)
+        initial_scene_data = json.loads(situation_window.bridge.sceneData())
+        initial_aircraft = {item["nodeId"]: item for item in initial_scene_data["aircraft"]}
+
+        self.window._start()
+        advanced_snapshot = self._wait_for_controller_time(timeout_s=1.0)
+        self.window._on_tick()
+        self.app.processEvents()
+
+        moved_scene_data = json.loads(situation_window.bridge.sceneData())
+        moved_aircraft = {item["nodeId"]: item for item in moved_scene_data["aircraft"]}
+        self.assertGreater(advanced_snapshot.time_s, initial_scene_data["time"])
+        self.assertNotEqual(moved_aircraft["A01"]["x"], initial_aircraft["A01"]["x"])
+        self.assertNotEqual(moved_aircraft["A01"]["z"], initial_aircraft["A01"]["z"])
 
     def test_data_analysis_menu_opens_independent_window(self) -> None:
         self.window._open_data_analysis_window()
@@ -1627,6 +1675,28 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertIsNotNone(self.window.features.control_monitor.live_monitor._ctrl)
         self.assertIs(self.window.features.control_monitor.live_monitor._ctrl, self.window.sim.controller)
+
+    def test_reset_keeps_live_monitor_nodes_visible(self) -> None:
+        """Regression: 主窗口重置不应让实时监控节点列表消失。"""
+        try:
+            from src.ui.gui.live_monitor import LiveMonitorWindow  # noqa: F401
+        except ModuleNotFoundError:
+            self.skipTest("PySide6.QtCharts not available")
+
+        self._load_ui_config()
+        self.window._open_live_monitor()
+        self.assertIsNotNone(self.window.features.control_monitor.live_monitor)
+        monitor = self.window.features.control_monitor.live_monitor
+        monitor._poll()
+        self.app.processEvents()
+
+        self.assertEqual(sorted(monitor._nodes.keys()), ["A01", "A02", "A03"])
+
+        self.window._reset()
+        self.app.processEvents()
+
+        self.assertIs(monitor._ctrl, self.window.sim.controller)
+        self.assertEqual(sorted(monitor._nodes.keys()), ["A01", "A02", "A03"])
 
     def _load_ui_config(
         self,

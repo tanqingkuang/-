@@ -162,7 +162,10 @@ class MainWindowActionMixin:
         snapshot = self.sim.reset()
         # 重置后队形回到初值，请求俯视图与侧视图重新自适应铺满。
         self._update_snapshot(snapshot, fit_top_view=True, fit_side_view=True)
-        self.features.on_controller_unavailable()
+        if self.sim.last_result_code == "OK":
+            self.features.control_monitor.reset_if_open(self)
+        else:
+            self.features.on_controller_unavailable()
         self._log("SimControl", f"reset -> {self.sim.last_result_code}, state={snapshot.run_state}")
 
     def _on_tick(self) -> None:
