@@ -74,7 +74,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("trailSegments", payload)
         trail_ribbon = payload["trailRibbons"][0]
         self.assertEqual(trail_ribbon["nodeId"], "A01")
-        self.assertEqual(trail_ribbon["width"], 220.0)
+        self.assertEqual(trail_ribbon["width"], 44.0)
         self.assertEqual(json.loads(trail_ribbon["pathValue"]), [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]])
         self.assertEqual(payload["terrain"]["ground"]["width"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["ground"]["depth"], DEFAULT_TERRAIN_SPAN_M)

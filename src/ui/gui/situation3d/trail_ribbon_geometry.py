@@ -26,7 +26,7 @@ class TrailRibbonGeometry(QQuick3DGeometry):
 
         super().__init__(parent)
         self._path_value = "[]"
-        self._width_value = 220.0
+        self._width_value = 44.0
         self._rebuild()
 
     @Property(str, notify=pathValueChanged)

@@ -102,7 +102,7 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
         {
             "nodeId": node_id,
             "color": color,
-            "width": 220.0,
+            "width": 44.0,
             "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
         }
     ]
