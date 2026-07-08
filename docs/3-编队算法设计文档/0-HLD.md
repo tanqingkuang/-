@@ -167,7 +167,7 @@ class Entity:
 3.2 说明了数据如何在单元间流动，本节规定哪些数据放入 `Context`，哪些不放：
 
 * **进入 Context 的条件**：只有需要**跨拍保留**或**被多个单元读写**的工作状态才放入 `Context`，例如 `cmd/state`、`wayLine`、各 `MotionProfS`、`selfAccCmd`。两个条件满足其一即可。
-* **边界 I/O 不放入 Context**：只被单个单元使用的外部输入（`inbox` 收到的 `list[MessageEnvelope]`、`remote` 遥控指令）和外部输出（`outbox` 待发的 `list[MessageEnvelope]`），由对象组在边界持有。收到的 envelope 解析后，只将其中的数据写入 `Context`（长机运动状态写入 `leaderState`，模态与队形写入 `cmd`），envelope 本身不保留。（`MessageEnvelope` 由通信模块定义，见《5-1-通信功能LLD.md》§4.1）
+* **边界 I/O 不放入 Context**：只被单个单元使用的外部输入（`inbox` 收到的 `list[MessageEnvelope]`、`remote` 遥控指令）和外部输出（`outbox` 待发的 `list[MessageEnvelope]`），由对象组在边界持有。收到的 envelope 解析后，只将跨单元共享的数据写入 `Context`（长机实际运动状态写入 `leaderState`，模态与队形写入 `cmd`）；用于槽位坐标系建系的有效长机指令 `leaderCmd` 由对象组边界持有，不进入 `Context`。envelope 本身不保留。（`MessageEnvelope` 由通信模块定义，见《5-1-通信功能LLD.md》§4.1）
 * **配置不放入 Context**：初始化配置（`FormCommInitS` 网络拓扑与队形几何、`FormSelfInitS` 机 ID、`RouteS` 航线）由对象组在 `init` 时持有，并注入各单元的 `self`。
 * **单枚举/标量作端口需包装**：见 3.2 注，端口只能绑定可变的叶类型对象。因此 `remote` 这类单个枚举需包成结构体（`RemoteCmdS{ FormStageE stage; }`）由对象组持有；实体每拍更新其字段，而非重新赋值整个对象。
 
