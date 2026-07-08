@@ -278,7 +278,9 @@ Item {
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
                 eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
                 // 视觉放大随相机距离自适应:拉远时飞机保持可辨认,拉近时回到基准比例。
-                property real visualScale: 150.0 * Math.max(1.0, root.distance / 9000.0)
+                // 8.5 倍=捕食者真实尺寸(模型翼展1.76单位×8.5≈15m),近观按 1:1 显示;
+                // 相机拉远后改为恒定视角大小(翼展约占视野2%),避免退化成小点。
+                property real visualScale: Math.max(8.5, root.distance / 85.0)
 
                 RuntimeLoader {
                     source: Qt.resolvedUrl("assets/PredatorUAV.glb")
