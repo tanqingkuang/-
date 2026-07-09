@@ -65,6 +65,18 @@ python -X utf8 scripts/comment_coverage.py \
 - 若本次修改不涉及 `src/` 下 Python 代码，可以跳过，但最终回复中必须说明“未运行 comment-coverage，因为未修改 src Python 代码”。
 - 最终交付回复必须列出该检查的通过 / 跳过 / 失败状态。
 
+### 自动化 ST 检查
+
+每次 AI 修改 `src/` 下仿真、算法或 runner 代码后，必须按 `.claude/skills/st-check` 执行 ST 检查并处置结果（失败分层语义、刷基线流程、禁改阈值等规则以该 skill 为准）：
+
+```bash
+python scripts/run_st.py
+```
+
+- 输出 `ST OK`（退出码 `0`）才能交付。
+- 若本次修改只涉及 GUI/文档等与仿真结果无关的内容，可以跳过，但最终回复中必须说明"未运行 ST，因为未修改仿真相关代码"。
+- 最终交付回复必须列出该检查的通过 / 跳过 / 失败（及处置）状态。
+
 ### PySide6 GUI 自测试
 
 PySide6 窗体至少要做 offscreen 构造测试：
