@@ -1,0 +1,4 @@
+[
+  {"id": "C1", "type": "circle", "enabled": true, "radius_m": 420.0, "center": {"latitude_deg": 38.9999899, "longitude_deg": 116.0484841}},
+  {"id": "C2", "type": "circle", "enabled": true, "radius_m": 420.0, "center": {"latitude_deg": 38.9999653, "longitude_deg": 116.0900418}}
+]

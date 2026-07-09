@@ -1,0 +1,7 @@
+{
+  "speed_mps": 45.0,
+  "waypoints": [
+    {"altitude_m": 1200.0, "R": 0.0, "latitude_deg": 39.0, "longitude_deg": 116.0},
+    {"altitude_m": 1200.0, "R": 0.0, "latitude_deg": 38.9999178, "longitude_deg": 116.1385259}
+  ]
+}

@@ -1,0 +1,3529 @@
+{
+  "metrics": {
+    "completion_time_s": 265.6,
+    "min_inter_aircraft_distance_m": null,
+    "min_obstacle_margin_m": 0.004836779667471092
+  },
+  "trajectory": {
+    "sample_period_s": 1.0,
+    "fields": [
+      "x_m",
+      "y_m",
+      "altitude_m",
+      "psi_v_deg",
+      "speed_mps"
+    ],
+    "samples": [
+      {
+        "time_s": 1.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 44.79,
+            "y_m": -1.51,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -5.67,
+            "speed_mps": 44.62
+          }
+        ]
+      },
+      {
+        "time_s": 2.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 88.99,
+            "y_m": -8.49,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -10.97,
+            "speed_mps": 44.98
+          }
+        ]
+      },
+      {
+        "time_s": 3.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 133.21,
+            "y_m": -17.19,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -10.89,
+            "speed_mps": 45.09
+          }
+        ]
+      },
+      {
+        "time_s": 4.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 177.52,
+            "y_m": -25.34,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -9.94,
+            "speed_mps": 45.04
+          }
+        ]
+      },
+      {
+        "time_s": 5.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 221.94,
+            "y_m": -32.79,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -9.16,
+            "speed_mps": 45.04
+          }
+        ]
+      },
+      {
+        "time_s": 6.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 266.44,
+            "y_m": -39.74,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.63,
+            "speed_mps": 45.04
+          }
+        ]
+      },
+      {
+        "time_s": 7.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 310.99,
+            "y_m": -46.37,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.33,
+            "speed_mps": 45.04
+          }
+        ]
+      },
+      {
+        "time_s": 8.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 355.56,
+            "y_m": -52.82,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.16,
+            "speed_mps": 45.03
+          }
+        ]
+      },
+      {
+        "time_s": 9.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 400.13,
+            "y_m": -59.18,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.09,
+            "speed_mps": 45.02
+          }
+        ]
+      },
+      {
+        "time_s": 10.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 444.71,
+            "y_m": -65.51,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.06,
+            "speed_mps": 45.02
+          }
+        ]
+      },
+      {
+        "time_s": 11.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 489.28,
+            "y_m": -71.82,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.06,
+            "speed_mps": 45.01
+          }
+        ]
+      },
+      {
+        "time_s": 12.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 533.85,
+            "y_m": -78.13,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.07,
+            "speed_mps": 45.01
+          }
+        ]
+      },
+      {
+        "time_s": 13.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 578.41,
+            "y_m": -84.45,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.08,
+            "speed_mps": 45.01
+          }
+        ]
+      },
+      {
+        "time_s": 14.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 622.97,
+            "y_m": -90.79,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.1,
+            "speed_mps": 45.01
+          }
+        ]
+      },
+      {
+        "time_s": 15.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 667.53,
+            "y_m": -97.14,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.11,
+            "speed_mps": 45.01
+          }
+        ]
+      },
+      {
+        "time_s": 16.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 712.08,
+            "y_m": -103.49,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.13,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 17.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 756.63,
+            "y_m": -109.86,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.14,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 18.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 801.18,
+            "y_m": -116.24,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.15,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 19.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 845.73,
+            "y_m": -122.63,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.16,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 20.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 890.27,
+            "y_m": -129.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.17,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 21.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 934.82,
+            "y_m": -135.42,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.18,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 22.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 979.36,
+            "y_m": -141.82,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.19,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 23.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1023.9,
+            "y_m": -148.23,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.19,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 24.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1068.44,
+            "y_m": -154.65,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.2,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 25.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1112.98,
+            "y_m": -161.06,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.2,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 26.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1157.52,
+            "y_m": -167.48,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.2,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 27.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1202.06,
+            "y_m": -173.9,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.21,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 28.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1246.6,
+            "y_m": -180.33,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.21,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 29.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1291.14,
+            "y_m": -186.75,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.21,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 30.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1335.68,
+            "y_m": -193.18,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.21,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 31.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1380.22,
+            "y_m": -199.61,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 32.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1424.76,
+            "y_m": -206.04,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 33.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1469.3,
+            "y_m": -212.48,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 34.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1513.83,
+            "y_m": -218.91,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 35.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1558.37,
+            "y_m": -225.34,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 36.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1602.91,
+            "y_m": -231.78,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 37.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1647.45,
+            "y_m": -238.21,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 38.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1691.98,
+            "y_m": -244.65,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 39.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1736.52,
+            "y_m": -251.08,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 40.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1781.06,
+            "y_m": -257.52,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 41.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1825.6,
+            "y_m": -263.96,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 42.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1870.13,
+            "y_m": -270.39,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 43.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1914.67,
+            "y_m": -276.83,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 44.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 1959.21,
+            "y_m": -283.27,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 45.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2003.74,
+            "y_m": -289.71,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 46.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2048.28,
+            "y_m": -296.15,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 47.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2092.82,
+            "y_m": -302.58,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 48.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2137.36,
+            "y_m": -309.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 49.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2181.89,
+            "y_m": -315.46,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 50.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2226.43,
+            "y_m": -321.9,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 51.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2270.97,
+            "y_m": -328.34,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 52.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2315.5,
+            "y_m": -334.78,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 53.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2360.04,
+            "y_m": -341.21,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 54.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2404.58,
+            "y_m": -347.65,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 55.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2449.11,
+            "y_m": -354.09,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 56.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2493.65,
+            "y_m": -360.53,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 57.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2538.19,
+            "y_m": -366.97,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 58.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2582.73,
+            "y_m": -373.41,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 59.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2627.26,
+            "y_m": -379.85,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 60.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2671.8,
+            "y_m": -386.29,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 61.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2716.34,
+            "y_m": -392.73,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 62.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2760.87,
+            "y_m": -399.16,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 63.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2805.41,
+            "y_m": -405.6,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 64.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2849.95,
+            "y_m": -412.04,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 65.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2894.48,
+            "y_m": -418.48,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 66.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2939.02,
+            "y_m": -424.92,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 67.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 2983.56,
+            "y_m": -431.36,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 68.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3028.09,
+            "y_m": -437.8,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 69.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3072.63,
+            "y_m": -444.24,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 70.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3117.17,
+            "y_m": -450.68,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 71.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3161.71,
+            "y_m": -457.12,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 72.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3206.24,
+            "y_m": -463.56,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 73.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3250.78,
+            "y_m": -469.99,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 74.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3295.32,
+            "y_m": -476.43,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 75.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3339.85,
+            "y_m": -482.87,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 76.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3384.39,
+            "y_m": -489.31,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 77.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3428.93,
+            "y_m": -495.75,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 78.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3473.46,
+            "y_m": -502.19,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 79.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3518.0,
+            "y_m": -508.63,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 80.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3562.54,
+            "y_m": -515.07,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 81.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3607.07,
+            "y_m": -521.51,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 82.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3651.61,
+            "y_m": -527.95,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 83.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3696.15,
+            "y_m": -534.39,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 84.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3740.69,
+            "y_m": -540.82,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 85.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3785.22,
+            "y_m": -547.26,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 86.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3829.76,
+            "y_m": -553.7,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 87.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3874.3,
+            "y_m": -560.14,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 88.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3918.83,
+            "y_m": -566.58,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 89.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 3963.37,
+            "y_m": -573.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 90.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4007.91,
+            "y_m": -579.46,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 91.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4052.44,
+            "y_m": -585.9,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.23,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 92.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4096.98,
+            "y_m": -592.34,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -8.22,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 93.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4141.61,
+            "y_m": -598.14,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -5.66,
+            "speed_mps": 45.03
+          }
+        ]
+      },
+      {
+        "time_s": 94.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4186.6,
+            "y_m": -600.51,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.47,
+            "speed_mps": 45.11
+          }
+        ]
+      },
+      {
+        "time_s": 95.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4231.68,
+            "y_m": -599.91,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.97,
+            "speed_mps": 45.03
+          }
+        ]
+      },
+      {
+        "time_s": 96.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4276.66,
+            "y_m": -599.58,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.02,
+            "speed_mps": 44.96
+          }
+        ]
+      },
+      {
+        "time_s": 97.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4321.63,
+            "y_m": -599.7,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.18,
+            "speed_mps": 44.97
+          }
+        ]
+      },
+      {
+        "time_s": 98.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4366.6,
+            "y_m": -599.82,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.14,
+            "speed_mps": 44.98
+          }
+        ]
+      },
+      {
+        "time_s": 99.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4411.58,
+            "y_m": -599.91,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.09,
+            "speed_mps": 44.98
+          }
+        ]
+      },
+      {
+        "time_s": 100.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4456.57,
+            "y_m": -599.97,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.05,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 101.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4501.56,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.03,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 102.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4546.55,
+            "y_m": -600.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.01,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 103.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4591.54,
+            "y_m": -600.03,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.0,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 104.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4636.53,
+            "y_m": -600.03,
+            "altitude_m": 1200.0,
+            "psi_v_deg": -0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 105.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4681.53,
+            "y_m": -600.03,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 106.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4726.53,
+            "y_m": -600.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 107.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4771.52,
+            "y_m": -600.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 108.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4816.52,
+            "y_m": -600.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 109.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4861.52,
+            "y_m": -600.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 110.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4906.52,
+            "y_m": -600.02,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 111.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4951.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 112.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 4996.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 113.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5041.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 114.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5086.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 115.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5131.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 116.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5176.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 117.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5221.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 118.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5266.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 119.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5311.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 120.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5356.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 121.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5401.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 122.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5446.52,
+            "y_m": -600.01,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 123.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5491.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 124.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5536.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 125.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5581.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 126.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5626.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 127.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5671.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 128.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5716.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 129.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5761.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 130.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5806.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 131.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5851.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 132.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5896.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 133.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5941.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 134.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 5986.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 135.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6031.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 136.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6076.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 137.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6121.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 138.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6166.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 139.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6211.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 140.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6256.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 141.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6301.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 142.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6346.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 143.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6391.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 144.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6436.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 145.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6481.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 146.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6526.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 147.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6571.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 148.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6616.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 149.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6661.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 150.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6706.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 151.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6751.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 152.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6796.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 153.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6841.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 154.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6886.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 155.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6931.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 156.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 6976.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 157.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7021.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 158.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7066.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 159.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7111.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 160.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7156.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 161.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7201.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 162.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7246.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 163.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7291.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 164.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7336.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 165.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7381.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 166.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7426.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 167.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7471.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 168.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7516.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 169.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7561.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 170.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7606.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 171.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7651.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 172.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7696.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 173.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7741.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 174.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7786.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 175.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7831.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 176.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7876.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 177.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7921.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 178.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 7966.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 179.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8011.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 180.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8056.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 181.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8101.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 182.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8146.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 183.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8191.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 184.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8236.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 185.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8281.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 186.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8326.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 187.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8371.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 188.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8416.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 189.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8461.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 190.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8506.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 191.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8551.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 192.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8596.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 193.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8641.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 194.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8686.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 195.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8731.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 196.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8776.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 197.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8821.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 198.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8866.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 199.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8911.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 200.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 8956.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 201.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9001.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 202.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9046.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 203.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9091.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 204.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9136.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 205.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9181.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 206.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9226.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 207.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9271.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 208.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9316.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 209.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9361.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 210.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9406.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 211.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9451.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 212.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9496.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 213.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9541.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 214.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9586.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 215.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9631.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 216.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9676.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 217.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9721.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 218.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9766.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 219.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9811.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 220.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9856.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 221.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9901.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 222.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9946.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 223.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 9991.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 224.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10036.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 225.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10081.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 226.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10126.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 227.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10171.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 228.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10216.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 229.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10261.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 230.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10306.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 231.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10351.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 232.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10396.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 233.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10441.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 234.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10486.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 235.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10531.52,
+            "y_m": -600.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.0,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 236.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10576.52,
+            "y_m": -599.96,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 0.37,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 237.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10621.49,
+            "y_m": -598.15,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 4.79,
+            "speed_mps": 45.07
+          }
+        ]
+      },
+      {
+        "time_s": 238.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10666.21,
+            "y_m": -592.41,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 9.69,
+            "speed_mps": 45.12
+          }
+        ]
+      },
+      {
+        "time_s": 239.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10710.35,
+            "y_m": -583.15,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 13.96,
+            "speed_mps": 45.1
+          }
+        ]
+      },
+      {
+        "time_s": 240.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10753.66,
+            "y_m": -570.67,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 18.17,
+            "speed_mps": 45.07
+          }
+        ]
+      },
+      {
+        "time_s": 241.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10795.92,
+            "y_m": -555.06,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 22.4,
+            "speed_mps": 45.05
+          }
+        ]
+      },
+      {
+        "time_s": 242.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10836.96,
+            "y_m": -536.53,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 25.59,
+            "speed_mps": 45.01
+          }
+        ]
+      },
+      {
+        "time_s": 243.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10877.59,
+            "y_m": -517.29,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.84,
+            "speed_mps": 44.92
+          }
+        ]
+      },
+      {
+        "time_s": 244.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10918.44,
+            "y_m": -498.62,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.45,
+            "speed_mps": 44.93
+          }
+        ]
+      },
+      {
+        "time_s": 245.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 10959.34,
+            "y_m": -480.0,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.53,
+            "speed_mps": 44.94
+          }
+        ]
+      },
+      {
+        "time_s": 246.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11000.22,
+            "y_m": -461.31,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.62,
+            "speed_mps": 44.96
+          }
+        ]
+      },
+      {
+        "time_s": 247.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11041.08,
+            "y_m": -442.55,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.69,
+            "speed_mps": 44.97
+          }
+        ]
+      },
+      {
+        "time_s": 248.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11081.93,
+            "y_m": -423.75,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.73,
+            "speed_mps": 44.97
+          }
+        ]
+      },
+      {
+        "time_s": 249.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11122.78,
+            "y_m": -404.93,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.76,
+            "speed_mps": 44.98
+          }
+        ]
+      },
+      {
+        "time_s": 250.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11163.63,
+            "y_m": -386.08,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.77,
+            "speed_mps": 44.98
+          }
+        ]
+      },
+      {
+        "time_s": 251.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11204.47,
+            "y_m": -367.23,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 252.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11245.32,
+            "y_m": -348.38,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 253.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11286.17,
+            "y_m": -329.52,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 254.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11327.02,
+            "y_m": -310.66,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 44.99
+          }
+        ]
+      },
+      {
+        "time_s": 255.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11367.87,
+            "y_m": -291.8,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 256.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11408.72,
+            "y_m": -272.94,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 257.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11449.57,
+            "y_m": -254.08,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 258.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11490.43,
+            "y_m": -235.22,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 259.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11531.28,
+            "y_m": -216.36,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 260.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11572.14,
+            "y_m": -197.5,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 261.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11612.99,
+            "y_m": -178.64,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 262.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11653.85,
+            "y_m": -159.78,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 263.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11694.71,
+            "y_m": -140.92,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 264.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11735.56,
+            "y_m": -122.06,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 265.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11776.42,
+            "y_m": -103.2,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 266.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11817.28,
+            "y_m": -84.34,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 267.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11858.14,
+            "y_m": -65.48,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 268.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11898.99,
+            "y_m": -46.62,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 269.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11939.85,
+            "y_m": -27.76,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      },
+      {
+        "time_s": 270.0,
+        "nodes": [
+          {
+            "node_id": "S01",
+            "x_m": 11980.71,
+            "y_m": -8.91,
+            "altitude_m": 1200.0,
+            "psi_v_deg": 24.78,
+            "speed_mps": 45.0
+          }
+        ]
+      }
+    ]
+  }
+}
