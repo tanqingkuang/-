@@ -6,7 +6,9 @@ from pathlib import Path
 import json
 import struct
 import unittest
+from unittest.mock import patch
 
+from src.ui.gui.situation3d import scene_data
 from src.ui.gui.situation3d.scene_data import (
     DEFAULT_TERRAIN_SPAN_M,
     MAX_ROUTE_DASHES_PER_SEGMENT,
@@ -99,6 +101,63 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(obstacle_payload["kind"], "circle")
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
+
+    def test_trail_smoothing_is_default_on_and_only_affects_trails(self) -> None:
+        """尾迹默认平滑，但航线虚线仍使用原始采样结果。"""
+
+        snapshot = self._snapshot()
+        snapshot.nodes[0].trail = [
+            TrailPoint(0.0, 0.0, 100.0, 0.0),
+            TrailPoint(100.0, 0.0, 100.0, 1.0),
+            TrailPoint(100.0, 100.0, 100.0, 2.0),
+            TrailPoint(200.0, 100.0, 100.0, 3.0),
+        ]
+
+        with patch.object(scene_data, "ENABLE_TRAIL_SMOOTHING", False):
+            raw_payload = build_scene_payload(snapshot)
+        smooth_payload = build_scene_payload(snapshot)
+
+        raw_path = json.loads(raw_payload["trailRibbons"][0]["pathValue"])
+        smooth_path = json.loads(smooth_payload["trailRibbons"][0]["pathValue"])
+
+        self.assertEqual(
+            raw_path,
+            [
+                [0.0, 100.0, -0.0],
+                [100.0, 100.0, -0.0],
+                [100.0, 100.0, -100.0],
+                [200.0, 100.0, -100.0],
+            ],
+        )
+        self.assertGreater(len(smooth_path), len(raw_path))
+        self.assertEqual(smooth_path[0], raw_path[0])
+        self.assertEqual(smooth_path[-1], raw_path[-1])
+        self.assertNotEqual(smooth_path, raw_path)
+        self.assertEqual(smooth_payload["routeDashes"], raw_payload["routeDashes"])
+
+    def test_trail_smoothing_can_be_disabled_by_code_flag(self) -> None:
+        """代码级开关关闭后，尾迹 pathValue 回到原始折线点。"""
+
+        snapshot = self._snapshot()
+        snapshot.nodes[0].trail = [
+            TrailPoint(0.0, 0.0, 100.0, 0.0),
+            TrailPoint(100.0, 0.0, 100.0, 1.0),
+            TrailPoint(100.0, 100.0, 100.0, 2.0),
+        ]
+
+        with patch.object(scene_data, "ENABLE_TRAIL_SMOOTHING", False):
+            payload = build_scene_payload(snapshot)
+
+        path = json.loads(payload["trailRibbons"][0]["pathValue"])
+
+        self.assertEqual(
+            path,
+            [
+                [0.0, 100.0, -0.0],
+                [100.0, 100.0, -0.0],
+                [100.0, 100.0, -100.0],
+            ],
+        )
 
     def test_terrain_geometry_builds_connected_heightfield(self) -> None:
         """验证 3D 地形使用一张连续 mesh，而不是多个独立山体模型。"""
@@ -225,8 +284,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("Math.min(50000", qml)
         self.assertIn("data.trailRibbons", qml)
         self.assertIn("property real nearViewWidthScale", qml)
+        self.assertIn("property real aircraftVisualScale", qml)
         self.assertIn("property real routeDashWidthScale: nearViewWidthScale", qml)
-        self.assertIn("property real trailWidthScale: nearViewWidthScale", qml)
+        self.assertIn("property real trailWidthScale: Math.min(0.17, aircraftVisualScale * 1.76 / 5.0 / 44.0)", qml)
         self.assertIn("1800m 是默认自由视角量级", qml)
         self.assertIn("Math.max(0.25, Math.min(1.0, distance / 1800.0))", qml)
         self.assertIn("ListModel { id: routeDashModel }", qml)
@@ -248,8 +308,19 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         self.assertIn("RuntimeLoader", qml)
         self.assertIn("assets/PredatorUAV.glb", qml)
-        self.assertIn("property real visualScale", qml)
-        self.assertIn("Math.max(8.5, root.distance / 85.0)", qml)
+        self.assertIn("property real aircraftVisualScale", qml)
+        self.assertIn("Math.max(8.5, distance / 85.0)", qml)
+        self.assertIn("scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)", qml)
+
+    def test_trail_width_is_one_fifth_of_near_view_aircraft_span(self) -> None:
+        """近景尾迹宽度应约为飞机翼展 1/5，远景不应继续变粗。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("property real trailWidthScale: Math.min(0.17, aircraftVisualScale * 1.76 / 5.0 / 44.0)", qml)
+        self.assertIn("飞机视觉缩放单独保持远景可辨识；尾迹近景按翼展 1/5 显示，远景不继续加粗。", qml)
+        self.assertNotIn("property real trailWidthScale: nearViewWidthScale", qml)
+        self.assertNotIn("property real trailWidthScale: aircraftVisualScale / (1800.0 / 85.0)", qml)
 
 
 if __name__ == "__main__":
