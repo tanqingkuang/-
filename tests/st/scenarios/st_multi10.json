@@ -1,0 +1,52 @@
+{
+  "duration_s": 155.0,
+  "step_s": 0.02,
+  "playback_rate": 1.0,
+  "seed": 104,
+  "route": {
+    "speed_mps": 20.0,
+    "waypoints": [
+      {"altitude_m": 1000.0, "R": 0.0, "latitude_deg": 39.0, "longitude_deg": 116.0},
+      {"altitude_m": 1000.0, "R": 350.0, "latitude_deg": 38.9999981, "longitude_deg": 116.0207789},
+      {"altitude_m": 1050.0, "R": 0.0, "latitude_deg": 39.0108074, "longitude_deg": 116.0207820}
+    ]
+  },
+  "formation": {
+    "coordinate_system": "x_forward_y_up_z_right",
+    "row_spacing_m": 40.0,
+    "lateral_spacing_m": 46.19,
+    "reference_node_id": "A05",
+    "formation_files": ["element/formations/triangle_10_aircraft_a01_a10.json"]
+  },
+  "model": {
+    "gravity_mps2": 9.80665,
+    "min_speed_mps": 1.0,
+    "acceleration_filter": {"natural_frequency_rad_s": 4.0, "damping_ratio": 0.65},
+    "limits": {"acceleration_command_mps2": 20.0, "max_climb_rate_mps": 4.0, "max_descent_rate_mps": 4.0, "nx_min": -1.0, "nx_max": 1.0, "nz_min": 0.0, "nz_max": 4.0, "phi_min_deg": -70.0, "phi_max_deg": 70.0}
+  },
+  "control": {"velocity_command_limits": {"forward_min_mps": 14.0, "forward_max_mps": 26.0, "vertical_min_mps": -4.0, "vertical_max_mps": 4.0}},
+  "nodes": [
+    {"node_id": "A01", "role": "wingman", "x_m": -360.0, "y_m": 6.0, "altitude_m": 1004.0, "psi_v_deg": 1.0, "theta_deg": 0.3, "speed_mps": 19.6},
+    {"node_id": "A02", "role": "wingman", "x_m": -402.0, "y_m": 31.0, "altitude_m": 998.0, "psi_v_deg": -0.8, "theta_deg": -0.2, "speed_mps": 20.3},
+    {"node_id": "A03", "role": "wingman", "x_m": -398.0, "y_m": -19.0, "altitude_m": 1007.0, "psi_v_deg": 0.6, "theta_deg": 0.1, "speed_mps": 19.8},
+    {"node_id": "A04", "role": "wingman", "x_m": -444.0, "y_m": 55.0, "altitude_m": 1001.0, "psi_v_deg": 1.4, "theta_deg": -0.1, "speed_mps": 20.5},
+    {"node_id": "A05", "role": "leader", "x_m": -438.0, "y_m": -4.0, "altitude_m": 996.0, "psi_v_deg": -1.1, "theta_deg": 0.2, "speed_mps": 19.7},
+    {"node_id": "A06", "role": "wingman", "x_m": -442.0, "y_m": -43.0, "altitude_m": 1009.0, "psi_v_deg": 0.4, "theta_deg": 0.0, "speed_mps": 20.2},
+    {"node_id": "A07", "role": "wingman", "x_m": -482.0, "y_m": 78.0, "altitude_m": 995.0, "psi_v_deg": -0.5, "theta_deg": 0.1, "speed_mps": 20.4},
+    {"node_id": "A08", "role": "wingman", "x_m": -476.0, "y_m": 18.0, "altitude_m": 1006.0, "psi_v_deg": 0.9, "theta_deg": -0.3, "speed_mps": 19.5},
+    {"node_id": "A09", "role": "wingman", "x_m": -484.0, "y_m": -27.0, "altitude_m": 1002.0, "psi_v_deg": -1.3, "theta_deg": 0.2, "speed_mps": 20.6},
+    {"node_id": "A10", "role": "wingman", "x_m": -478.0, "y_m": -66.0, "altitude_m": 993.0, "psi_v_deg": 0.7, "theta_deg": -0.1, "speed_mps": 19.9}
+  ],
+  "links": [
+    {"link_id": "A05-A01", "direction": "duplex", "latency_ms": 18.0, "loss_rate": 0.01, "status": "normal"},
+    {"link_id": "A05-A02", "direction": "duplex", "latency_ms": 19.0, "loss_rate": 0.01, "status": "normal"},
+    {"link_id": "A05-A03", "direction": "duplex", "latency_ms": 20.0, "loss_rate": 0.01, "status": "normal"},
+    {"link_id": "A05-A04", "direction": "duplex", "latency_ms": 21.0, "loss_rate": 0.01, "status": "normal"},
+    {"link_id": "A05-A06", "direction": "duplex", "latency_ms": 22.0, "loss_rate": 0.01, "status": "normal"},
+    {"link_id": "A05-A07", "direction": "duplex", "latency_ms": 23.0, "loss_rate": 0.015, "status": "normal"},
+    {"link_id": "A05-A08", "direction": "duplex", "latency_ms": 24.0, "loss_rate": 0.015, "status": "normal"},
+    {"link_id": "A05-A09", "direction": "duplex", "latency_ms": 25.0, "loss_rate": 0.015, "status": "normal"},
+    {"link_id": "A05-A10", "direction": "duplex", "latency_ms": 26.0, "loss_rate": 0.015, "status": "normal"}
+  ]
+}
+

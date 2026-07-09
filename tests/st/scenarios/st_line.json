@@ -1,0 +1,26 @@
+{
+  "duration_s": 133.3,
+  "step_s": 0.02,
+  "playback_rate": 1.0,
+  "seed": 101,
+  "route": {
+    "speed_mps": 45.0,
+    "waypoints": [
+      {"altitude_m": 1000.0, "R": 0.0, "latitude_deg": 39.0, "longitude_deg": 116.0},
+      {"altitude_m": 1000.0, "R": 0.0, "latitude_deg": 38.9999794, "longitude_deg": 116.0692629}
+    ]
+  },
+  "model": {
+    "gravity_mps2": 9.80665,
+    "min_speed_mps": 1.0,
+    "acceleration_filter": {"natural_frequency_rad_s": 4.0, "damping_ratio": 0.65},
+    "limits": {"acceleration_command_mps2": 20.0, "max_climb_rate_mps": 4.0, "max_descent_rate_mps": 4.0, "nx_min": -1.0, "nx_max": 1.0, "nz_min": 0.0, "nz_max": 4.0, "phi_min_deg": -70.0, "phi_max_deg": 70.0}
+  },
+  "control": {"velocity_command_limits": {"forward_min_mps": 20.0, "forward_max_mps": 65.0, "vertical_min_mps": -4.0, "vertical_max_mps": 4.0}},
+  "nodes": [
+    {"node_id": "S01", "role": "leader", "x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "psi_v_deg": 0.0, "theta_deg": 0.0, "speed_mps": 45.0}
+  ],
+  "links": []
+}
+
+
