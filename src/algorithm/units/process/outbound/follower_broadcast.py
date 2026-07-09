@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import MotionProfS, NetWorkS, dist3d
+from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
 from src.common.envelope import MessageEnvelope
 
@@ -27,7 +28,7 @@ class FollowerBroadcastInputS(OutboundInputS):
     # 继承 cmd: FormSnapshotS, selfState: MotionProfS
     selfCmd: MotionProfS | None = None  # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
     selfArrived: int = 0  # 兼容旧协议；新协议使用 rally_state
-    rally_state: str = "FLYING"  # 集结汇合状态：FLYING / LOITERING / EXITED
+    rally_state: str = RALLY_STATE_STANDBY  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
     eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）
     reached_slot_once: bool = False  # 是否已至少一次路过 M_i；LOITERING 但尚未路过时仍应计入长机 T_ref 聚合
 

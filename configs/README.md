@@ -17,13 +17,13 @@
 - 对外使用经纬高：`latitude_deg`、`longitude_deg`、`altitude_m`。加载时以第一个航点为 ENU origin，转换后的高度仍取 `altitude_m` 原值。
 - `route_file` 的解析和生成由 `src/data/linefile/` 下的策略工厂负责，设计说明见 `src/data/linefile/航线文件设计.md`。
 
-## `rally_demo.json`
+## `rally_demo_5_aircraft.json`
 
-- 三机分散后执行集结并进入任务航线的演示场景。
-- 任务航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `route_file` 相对路径。
+- 五机分散后执行集结并进入任务航线的默认演示场景。
+- 任务航线从 `element/rally_demo_mission_route.json` 引用，主配置只保留 `route_file` 相对路径。
 - 集结长机航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `rally_route_file` 相对路径。
 - 两个外部航线文件加载后分别展开为控制器和算法消费的 `route` 与 `rally_route`。
-- 集结目标队形复用 `element/formations/triangle_3_aircraft_a01_a03.json`。
+- 集结目标队形复用 `element/formations/wedge_5_aircraft_a01_a05.json`、`line_abreast_5_aircraft_a01_a05.json`、`double_column_5_aircraft_a01_a05.json`，A03 为集结长机。
 
 ## `element/obstacles.json`
 

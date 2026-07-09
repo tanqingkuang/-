@@ -924,7 +924,7 @@ mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 
 任一条不满足都会在 `load_config()`/`validate()` 阶段直接报错，不再是"只在文档里约定、代码不检查"。
 设计 `rally_route_file` 和 `route_file` 时最简单的做法仍是让两者直接复用同一份航线文件（`route[0]`
-和 `rally_route[0]` 自然是同一个航点，方向也自然一致；当前 `configs/rally_demo.json` 即采用此做法）。
+和 `rally_route[0]` 自然是同一个航点，方向也自然一致；当前 `configs/rally_demo_5_aircraft.json` 即采用此做法）。
 
 ---
 
@@ -1127,7 +1127,7 @@ class EntityInitS:
 >
 > `approach_speed_mps` 省略时默认 20 m/s（`EntityInitS.rally_approach_speed_mps` 默认值）。天向速度限幅
 > 不再来自 `rally_cfg`（旧版 `k_alt`/`v_up_max_mps` 字段已随 `RallyApproach` 一起移除），而是与其余实体
-> 共用顶层 `control.velocity_command_limits.vertical_min_mps`/`vertical_max_mps`（见 `configs/rally_demo.json`
+> 共用顶层 `control.velocity_command_limits.vertical_min_mps`/`vertical_max_mps`（见 `configs/rally_demo_5_aircraft.json`
 > 实际配置），未配置时退回 `RallyJoinPosInitS` 的默认值 ±3 m/s。
 
 ---
@@ -1197,7 +1197,7 @@ class EntityOutputS:
 
 ## 十一、打桩与集成接入
 
-本节汇总 `sim_control.py`、`main_window.py` 以及 `configs/` 目录所需的改动。`sim_control.py` 和 `main_window.py` 的接入应一次性完成，实体就绪后无需再改；当前 `configs/rally_demo.json` 是临时桩配置，实体就绪后需替换为正式集结配置（见 11.6 节）。
+本节汇总 `sim_control.py`、`main_window.py` 以及 `configs/` 目录所需的改动。`sim_control.py` 和 `main_window.py` 的接入应一次性完成，实体就绪后无需再改；当前默认集结演示配置为 `configs/rally_demo_5_aircraft.json`。
 
 ### 11.1 sim_control — 角色映射与实体选择
 
@@ -1406,7 +1406,7 @@ def _load_demo(self, kind: str) -> None:
     root = default_project_root()
     config_files = {
         "hold":  root / "configs" / "base.json",
-        "rally": root / "configs" / "rally_demo.json",
+        "rally": root / "configs" / "rally_demo_5_aircraft.json",
     }
     path = config_files.get(kind)
     if path is None or not path.exists():
@@ -1415,11 +1415,11 @@ def _load_demo(self, kind: str) -> None:
     self._apply_config_path(str(path))
 ```
 
-### 11.6 桩配置 `configs/rally_demo.json`
+### 11.6 默认集结演示配置 `configs/rally_demo_5_aircraft.json`
 
-**此文件已作为本 LLD 的交付物新增到仓库**（`configs/rally_demo.json`，与 LLD 同步提交）。
+**此文件已作为当前默认集结演示配置保留在仓库**（`configs/rally_demo_5_aircraft.json`）。
 
-`rally_demo.json` 角色使用 `"rally_leader"` / `"rally_follower"`，节点 ID 为 `A01/A02/A03`，初始坐标分散放置以模拟集结前离散态。文件复用三机三角队形文件，可正常加载并运行集结流程。
+`rally_demo_5_aircraft.json` 角色使用 `"rally_leader"` / `"rally_follower"`，节点 ID 为 `A01/A02/A03/A04/A05`，A03 为集结长机，初始坐标分散放置以模拟集结前离散态。文件复用五机队形文件，可正常加载、运行集结流程并切换队形。
 
 实体就绪后需完整替换为正式配置：
 
@@ -1429,4 +1429,4 @@ def _load_demo(self, kind: str) -> None:
 
 届时 `_remote_stage` 会自动切为 RALLY，无需修改 GUI 代码。
 
-LLT 对此文件的验证范围：文件存在且能被 `sim_control.load_config()` 解析，路径为 `configs/rally_demo.json`。
+LLT 对此文件的验证范围：文件存在且能被 `sim_control.load_config()` 解析，路径为 `configs/rally_demo_5_aircraft.json`；旧三机 `configs/rally_demo.json` 不再作为仓库演示配置保留。

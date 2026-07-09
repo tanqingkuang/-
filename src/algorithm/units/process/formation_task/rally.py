@@ -43,6 +43,7 @@ class RallyTaskInitS(FormationTaskInitS):
     catchup_radius_m: float = 200.0  # CATCHUP→LOOSE 位置误差阈值（dist3d to slot），米
     catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
     catchup_stable_s: float = 3.0  # CATCHUP→LOOSE 需连续满足的时长，秒
+    altitude_separation_m: float = 60.0  # 待命/JOINING/CATCHUP 各机高度层间隔，米
 
 
 @dataclass
@@ -135,6 +136,15 @@ class Rally(FormationTaskBase):
             y.slotScale.scale = 1.0
             y.slotScale.scaleRate = 0.0
             return
+        if remote_stage == FormStageE.STANDBY:
+            # STANDBY 是实体内本地盘旋阶段，任务单元只保持状态，不推进 Rally 子流程。
+            self._reset_timers()
+            y.cmd.stage = FormStageE.STANDBY
+            y.cmd.step = RallyPhaseE.JOINING
+            y.cmd.pattern = self._target_pattern
+            y.slotScale.scale = 1.0
+            y.slotScale.scaleRate = 0.0
+            return
 
         # remote == RALLY
         if y.cmd.stage == FormStageE.HOLD:
@@ -145,12 +155,12 @@ class Rally(FormationTaskBase):
             y.slotScale.scale = 1.0
             y.slotScale.scaleRate = 0.0
             return
-        if y.cmd.stage == FormStageE.NONE:
+        if y.cmd.stage in (FormStageE.NONE, FormStageE.STANDBY):
             # 首次进入集结
             self._reset_timers()
             y.cmd.step = RallyPhaseE.JOINING
 
-        # cmd.stage == RALLY（或从 NONE 首次进入）— 按 cmd.step 路由
+        # cmd.stage == RALLY（或从 NONE/STANDBY 首次进入）— 按 cmd.step 路由
         y.cmd.stage = FormStageE.RALLY
         step = RallyPhaseE(y.cmd.step) if y.cmd.step in RallyPhaseE._value2member_map_ else RallyPhaseE.JOINING
         # state_map 在整个 step() 内共用，避免各门控 helper 重复构建。

@@ -21,7 +21,11 @@ class SimulationControllerSnapshotMixin:
         route = self._make_route_snapshot()
         route_segments = self._make_route_segment_snapshots()
         nodes: list[NodeState] = []
-        rally_phases = {nid: alg.current_rally_phase_str() for nid, alg in self._node_algorithms.items()}
+        rally_phases = (
+            {}
+            if self._run_state == "READY"
+            else {nid: alg.current_rally_phase_str() for nid, alg in self._node_algorithms.items()}
+        )
         for state in self._model.read_states().values():
             diag = self._control_diagnostics.get(state.node_id, PosTrackDiagS())
             cmd_pos_e = diag.cmd_pos_east_m
@@ -211,19 +215,20 @@ class SimulationControllerSnapshotMixin:
         # 任一节点非健康即优先判为"重构"——故障会触发队形重构。
         if any(h != "normal" for h in self._disturbance.read_health().values()):
             return "重构"
-        stages = [
-            algorithm.current_stage()
-            for algorithm in self._node_algorithms.values()
-        ]
-        # 按优先级聚合各节点编队阶段：重构 > 集结 > 保持。
+        algorithms = list(self._node_algorithms.values())
+        stages = [algorithm.current_stage() for algorithm in algorithms]
+        rally_phases = [algorithm.current_rally_phase_str() for algorithm in algorithms]
+        active_rally_phases = {"RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
+        # 按优先级聚合各节点编队阶段：重构 > 集结 > 保持 > 待命。
         if any(stage == FormStageE.RECONFIG for stage in stages):
             return "重构"
-        if any(stage == FormStageE.RALLY for stage in stages):
+        if any(phase in active_rally_phases for phase in rally_phases) or any(stage == FormStageE.RALLY for stage in stages):
             return "集结"
-        if any(stage == FormStageE.HOLD for stage in stages):
+        if any(phase == "HOLD" for phase in rally_phases) or any(stage == FormStageE.HOLD for stage in stages):
             return "保持"
-        # 有节点但无明确阶段则"保持"，完全无算法时为"待命"。
-        return "保持" if self._node_algorithms else "待命"
+        if any(phase == "LOCAL_LOITER" for phase in rally_phases):
+            return "待命"
+        return "待命" if self._node_algorithms else "待命"
 
     def _should_refresh_display_unlocked(self) -> bool:
         """判断本 tick 是否需要刷新显示。注意：用于降低 GUI 刷新频率。"""

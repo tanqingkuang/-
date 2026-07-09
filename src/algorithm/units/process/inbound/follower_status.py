@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import FollowerStateS
+from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_FLYING
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 
@@ -65,7 +66,7 @@ class FollowerStatus(InboundBase):
                 heading_err_rad = float(payload.get("heading_err_rad", 0.0))
                 arrived = int(payload.get("arrived", 0))
                 eta_s = float(payload.get("eta_s", 0.0))
-                rally_state = str(payload.get("rally_state", "FLYING"))
+                rally_state = str(payload.get("rally_state", RALLY_STATE_FLYING))
                 reached_slot_once = bool(payload.get("reached_slot_once", False))
             except (TypeError, ValueError):
                 continue

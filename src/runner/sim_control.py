@@ -54,6 +54,7 @@ from src.runner.sim_control_types import (
     EventLevel,
     LinkState,
     NodeState,
+    RallyPlanGeometryState,
     ResultCode,
     RouteState,
     RunState,

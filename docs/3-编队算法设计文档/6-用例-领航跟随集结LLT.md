@@ -409,7 +409,7 @@ def _rally_cfg(
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_rally_demo_config_exists_and_loads` | `configs/rally_demo.json` 存在且能被 `sim_control.load_config()` 正常解析（文件须作为交付物提交） |
+| `test_repository_rally_demo_5_aircraft_config_loads` | `configs/rally_demo_5_aircraft.json` 存在且能被 `sim_control.load_config()` 正常解析，旧三机 `configs/rally_demo.json` 不再保留 |
 | `test_config_loader_accepts_rally_route_waypoints` | 配置中的 `rally_route.waypoints` 被解析为 `list[WayPointInputS]`，并注入所有集结节点（长机与僚机共用同一份）的 `EntityInitS.rally_route` |
 | `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `RallyLeaderEntity`，`role="rally_follower"` 创建 `RallyFollowerEntity` |
 | `test_legacy_roles_still_select_hold_entities` | `leader/wingman` 角色仍创建现有 hold 实体，保持既有场景兼容 |

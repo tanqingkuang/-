@@ -229,7 +229,7 @@ class LineFileTests(unittest.TestCase):
 
             resolved = resolve_config_references(
                 {"route_file": "element/mission.json", "rally_route_file": "element/rally.json"},
-                root / "rally_demo.json",
+                root / "scenario.json",
             )
 
         self.assertEqual(resolved["route"]["speed_mps"], 20.0)

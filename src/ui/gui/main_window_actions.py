@@ -48,6 +48,7 @@ class MainWindowActionMixin:
         # 依据运行态启停各按钮：未加载配置(UNLOADED)时全部相关操作不可用。
         config_loaded = snapshot.run_state != "UNLOADED"
         self.play_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
+        self.rally_button.setEnabled(self._rally_button_enabled(snapshot))
         self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
         self.reset_button.setEnabled(config_loaded)
         # 仿真结束后禁止再注入扰动。
@@ -63,6 +64,29 @@ class MainWindowActionMixin:
         self._sync_side_view_controls()
         self._update_tables(snapshot)
         self.features.on_snapshot_updated(self, snapshot)
+
+    @staticmethod
+    def _rally_button_enabled(snapshot: Snapshot) -> bool:
+        """判断集结按钮是否可用。注意：集结中保持可点，用于返回明确提示。"""
+        # READY 阶段只显示几何预览，算法还没开始本地盘旋，因此不能发开始集结。
+        if snapshot.run_state in {"UNLOADED", "READY", "FINISHED"}:
+            return False
+        # 普通保持/避障等非集结配置不显示可执行入口，避免按钮语义混淆。
+        rally_nodes = [
+            node
+            for node in snapshot.nodes
+            if node.role.strip().lower() in {"rally_leader", "rally_follower"}
+        ]
+        if not rally_nodes:
+            return False
+        phases = {node.rally_phase for node in rally_nodes}
+        # 空 phase 只会出现在 READY 预览或异常冷启动场景，不能据此开放按钮。
+        # 多机 phase 不完全一致时取并集判断，只要仍有集结活动阶段就允许重复点击提示。
+        # HOLD 是集结的单向终态，本轮方案不支持回退到本地待命或重新集结。
+        if "HOLD" in phases:
+            return False
+        # LOCAL_LOITER 触发真正开始；ACTIVE 阶段保留可点状态，让控制器返回“已在集结中”。
+        return bool(phases & {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"})
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
@@ -135,6 +159,14 @@ class MainWindowActionMixin:
             self.timer.start()
             self.features.on_controller_ready(self)
         self._log("UI", f"start -> {self.sim.last_result_code}, state={snapshot.run_state}")
+
+    def _start_rally(self) -> None:
+        """响应集结按钮。注意：集结中重复点击应保留当前状态并给出控制器提示。"""
+        # start_rally 不启停播放线程；RUNNING 下继续自动推进，PAUSED 下只切换内部阶段。
+        snapshot = self.sim.start_rally()
+        self._update_snapshot(snapshot)
+        # 失败也记录控制器 message，用户能区分“未开始运行”和“已在集结中”。
+        self._log("Rally", f"start_rally -> {self.sim.last_result_code}, {self.sim.last_result_message}")
 
     def _pause(self) -> None:
         """响应暂停按钮并切换暂停状态。注意：暂停不清空当前快照。"""

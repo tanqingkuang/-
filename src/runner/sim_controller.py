@@ -85,7 +85,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
         self._formation_names: list[str] = []  # 各队形名字（供界面下拉框显示，索引=队形序号）
         self._formation_index: int = 0  # 当前/初始队形索引，供界面下拉框预选
-        self._rally_geometry: dict[str, object] = {}  # RallyJoinGeometryState 按 node_id 索引，供 GUI 展示盘旋圆/关键点
+        self._rally_geometry: dict[str, object] = {}  # RallyPlanGeometryState 按 node_id 索引，供 GUI 展示盘旋圆/关键点
         # 控制输出缓存按节点 ID 存放，模型 tick 前后都能生成一致快照。
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
@@ -212,6 +212,37 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._notify_subscribers(snapshot)
         return CommandResult("OK", "started")
 
+    def start_rally(self) -> CommandResult:
+        """开始集结流程。注意：只把待命集结节点切到 RALLY，不改变运行/暂停状态。"""
+        with self._lock:
+            if self._closed:
+                return CommandResult("ERR_INVALID_STATE", "controller is closed")
+            if self._config is None:
+                return CommandResult("ERR_NO_CONFIG", "load config before rally")
+            if self._run_state == "READY":
+                return CommandResult("ERR_INVALID_STATE", "请先开始运行")
+            if self._run_state == "FINISHED":
+                return CommandResult("ERR_INVALID_STATE", "集结已结束，请重置后重试")
+            if self._run_state not in {"RUNNING", "PAUSED"}:
+                return CommandResult("ERR_INVALID_STATE", "当前状态不能开始集结")
+            rally_algorithms = [
+                algorithm
+                for algorithm in self._node_algorithms.values()
+                if algorithm.is_rally_role()
+            ]
+            if not rally_algorithms:
+                return CommandResult("ERR_INVALID_STATE", "当前配置没有集结节点")
+            results = [algorithm.start_rally() for algorithm in rally_algorithms]
+            if not any(ok for ok, _message in results):
+                message = next((message for _ok, message in results if message), "当前状态不能开始集结")
+                return CommandResult("ERR_INVALID_STATE", message)
+            self._control_report = self._derive_control_report_unlocked()
+            self._append_event_unlocked("INFO", "SimControl", "开始集结")
+            self._latest_snapshot = self._make_snapshot_unlocked()
+            snapshot = self._latest_snapshot
+        self._notify_subscribers(snapshot)
+        return CommandResult("OK", "开始集结")
+
     def pause(self) -> CommandResult:
         """暂停 SimulationController 的运行流程。注意：只暂停调度，不清空当前状态。"""
 
@@ -219,7 +250,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             # 运行->暂停：仅改状态与回报，不动模型数据，便于随后 step 或继续。
             if self._run_state == "RUNNING":
                 self._run_state = "PAUSED"
-                self._control_report = "保持"
+                self._control_report = self._derive_control_report_unlocked()
                 self._cpu_utilization = 0.0
                 self._latest_snapshot = self._make_snapshot_unlocked()
                 snapshot = self._latest_snapshot
@@ -407,7 +438,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._time_s >= self._duration_s:
                 self._time_s = self._duration_s
                 self._run_state = "FINISHED"
-                self._control_report = "保持"
+                self._control_report = self._derive_control_report_unlocked()
             self._latest_snapshot = self._make_snapshot_unlocked()
         return CommandResult("OK", "duration updated")
 
@@ -552,6 +583,16 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before run")
             self._run_state = "RUNNING"
+            if any(algorithm.is_rally_role() for algorithm in self._node_algorithms.values()):
+                # 批处理没有 GUI 按钮可点，集结配置进入 RUNNING 后自动触发一次开始集结。
+                results = [
+                    algorithm.start_rally()
+                    for algorithm in self._node_algorithms.values()
+                    if algorithm.is_rally_role()
+                ]
+                if any(ok for ok, _message in results):
+                    # 与 GUI start_rally() 保持同类事件，方便日志侧统一检索。
+                    self._append_event_unlocked("INFO", "SimControl", "开始集结")
             self._control_report = self._derive_control_report_unlocked()
             while self._run_state == "RUNNING":
                 try:
@@ -638,6 +679,9 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         )
         self._formation_completed_analysis = None
         rally_leader_id = _leader_id_from_nodes(list(nodes))
+        rally_layer_altitudes = self._build_rally_layer_altitudes(
+            list(nodes), rally_route, formation_comm_init, rally_task_init, rally_leader_id
+        )
         # 为每个节点创建算法适配器（角色决定实体类型）。
         self._node_algorithms = {
             node_id: _NodeAlgorithm(
@@ -652,6 +696,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 rally_cfg=rally_task_init,
                 rally_leader_id=rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed,
+                rally_layer_altitude_m=rally_layer_altitudes.get(node_id),
             )
             for node_id in states
         }
@@ -666,6 +711,59 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         }
         # 仅重置内存日志；文件目录延迟到首次实际 tick 时创建，避免空 run 目录。
         self._logger.reset()
+
+    def _build_rally_layer_altitudes(
+        self,
+        nodes: list[object],
+        rally_route: list[WayPointInputS] | None,
+        formation_comm_init: object,
+        rally_task_init: object | None,
+        rally_leader_id: str,
+    ) -> dict[str, float]:
+        """计算集结 JOINING 前的分层高度。注意：长机在基准层，僚机按槽位顺序上下交替。"""
+        if rally_route is None or not rally_route or rally_task_init is None:
+            return {}
+        # separation=0 表示显式关闭高度分层，此时保持原始集结槽位高度。
+        separation = max(0.0, float(getattr(rally_task_init, "altitude_separation_m", 60.0)))
+        if separation <= 0.0:
+            return {}
+        # 先建立 node_id -> role，后续按角色过滤，避免把普通保持节点纳入高度层。
+        roles = {
+            node_id_from_config(node, index): str(node.get("role") or "")
+            for index, node in enumerate(nodes)
+            if isinstance(node, dict)
+        }
+        rally_ids: list[str] = []
+        # 长机固定放在第 0 层，后续僚机围绕它上下交替分层。
+        if rally_leader_id and roles.get(rally_leader_id) == "rally_leader":
+            rally_ids.append(rally_leader_id)
+        target_pattern = int(getattr(rally_task_init, "targetPattern", 0))
+        form_pos = getattr(formation_comm_init, "formPos", [])
+        # 僚机顺序优先采用队形槽位顺序；这比配置节点顺序更贴近编队语义。
+        slot_ids = [
+            slot.id
+            for slot in (form_pos[target_pattern] if 0 <= target_pattern < len(form_pos) else [])
+            if roles.get(slot.id) == "rally_follower"
+        ]
+        for node_id in slot_ids:
+            if node_id not in rally_ids:
+                rally_ids.append(node_id)
+        # 防御性兜底：槽位表缺失或角色节点未出现在队形中时，仍给它一个确定高度层。
+        for node_id, role in roles.items():
+            if role in {"rally_leader", "rally_follower"} and node_id not in rally_ids:
+                rally_ids.append(node_id)
+        base_h = rally_route[0].pos.h
+        multipliers = [0]
+        layer = 1
+        # 分层序列：0, +1, -1, +2, -2 ...，使相邻飞机尽量不在同一高度。
+        while len(multipliers) < len(rally_ids):
+            multipliers.extend([layer, -layer])
+            layer += 1
+        # 返回绝对高度，实体不再需要知道全队顺序或基准高度来源。
+        return {
+            node_id: base_h + multipliers[index] * separation
+            for index, node_id in enumerate(rally_ids)
+        }
 
     def _tick_unlocked(self, *, force_snapshot: bool = False) -> SimulationSnapshot | None:
         """在已持锁状态下推进一个仿真 tick。注意：调用方负责锁和阶段检查。"""
@@ -698,8 +796,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # 状态机收尾：到达总时长则置 FINISHED 并锁定回报；否则在运行态刷新回报文本。
         if self._time_s >= self._duration_s:
             self._run_state = "FINISHED"
-            self._control_report = "保持"
-        elif self._run_state == "RUNNING":
+            self._control_report = self._derive_control_report_unlocked()
+        elif self._run_state in {"RUNNING", "PAUSED"}:
             self._control_report = self._derive_control_report_unlocked()
 
         should_refresh_display = self._should_refresh_display_unlocked() or self._run_state == "FINISHED"

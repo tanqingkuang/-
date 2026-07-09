@@ -1,9 +1,10 @@
-"""集结汇合位置解算：平等飞行 → 切入盘旋圆 → 圆弧盘旋 → 切出。
+"""集结汇合位置解算：待命盘旋 → 平等飞行 → 切入盘旋圆 → 圆弧盘旋 → 切出。
 
 每架飞机独立运行此模块，无长机/僚机之分。
-三个阶段：
+四个阶段：
+  STANDBY   — 在本机当前位置按当前航向反推本地待命圆，沿圆盘旋等待外部开始集结指令
   FLYING    — 直飞盘旋圆的 CCW 切入点 T（由当前位置对盘旋圆作切线求得，FLYING 第一拍算一次后固定），
-              到达 T 附近后顺势转入圆弧飞行，广播 ETA
+               到达 T 附近后顺势转入圆弧飞行，广播 ETA
   LOITERING — 沿盘旋圆做 CCW 圆弧飞行；每次路过松散点 M_i（圆上固定的切出点）时评估是否切出
   EXITED    — 从松散点沿任务航向直飞，交由编队控制接管
 
@@ -37,6 +38,7 @@ _TWO_PI = 2.0 * math.pi
 RALLY_STATE_FLYING = "FLYING"
 RALLY_STATE_LOITERING = "LOITERING"
 RALLY_STATE_EXITED = "EXITED"
+RALLY_STATE_STANDBY = "STANDBY"
 
 _EPSILON_HORIZ = 0.5  # 水平近零距离阈值，米
 _SLOT_ANG_NEAR = 0.35  # ≈20°：判定"经过 M_i"的角度窗口（不依赖轨道半径）
@@ -125,6 +127,7 @@ class RallyJoinPosInitS(PosCalcInitS):
     v_up_min_mps: float = -3.0  # 天向速度下限（来自 velCmdLimit.verticalMin，兜底 −3 m/s）
     v_up_max_mps: float = 3.0   # 天向速度上限（来自 velCmdLimit.verticalMax，兜底 +3 m/s）
     control_period_s: float = 0.05  # 控制周期，用于校验 loiter_radius_m 下限（避免离散步进跨过捕获窗口）
+    standby_altitude_m: float | None = None  # 本地待命目标高度；None 表示保持进入待命首帧高度
 
 
 @dataclass
@@ -135,6 +138,7 @@ class RallyJoinPosInputS(PosCalcInputS):
     t_ref: float = 0.0  # 集结基准时刻（长机广播的最晚 ETA）
     t_ref_valid: bool = False  # False 时只允许进入/保持盘旋，不允许切出
     t_now: float = 0.0  # 当前仿真时间
+    standby: bool = False  # True 表示本拍保持本地待命盘旋，不进入集结圆汇合
 
 
 class RallyJoinPos(PosCalcBase):
@@ -165,6 +169,7 @@ class RallyJoinPos(PosCalcBase):
         self._mission_speed = cfg.mission_speed_mps
         self._v_up_min = cfg.v_up_min_mps
         self._v_up_max = cfg.v_up_max_mps
+        self._standby_altitude_m = cfg.standby_altitude_m
         # 切入圆弧触发半径按 loiter_radius_m 反解，保证 FLYING→LOITERING 航向跳变角恒定在
         # _MAX_ARC_CAPTURE_HEADING_JUMP_RAD 附近，不随 loiter_radius_m 大小变化（见模块常量注释）；
         # 上面的下限校验已保证这里恒被 R·tan(ψ_max) 一项主导，max() 只是防御性兜底。
@@ -185,6 +190,10 @@ class RallyJoinPos(PosCalcBase):
         self._state: str = RALLY_STATE_FLYING
         self._eta_s: float = 0.0
         self._loiter_speed: float = cfg.approach_speed_mps
+        self._standby_speed: float = cfg.approach_speed_mps
+        self._standby_center_e: float | None = None
+        self._standby_center_n: float | None = None
+        self._standby_target_h: float | None = None
         self._away_from_slot: bool = False  # 盘旋后是否已远离松散点（防止立即切出）
         self._entry_point: PosInEarthS | None = None  # 切入点 T；FLYING 第一拍按当前位置算一次后固定
         self._theta_entry: float = 0.0  # 切入点在盘旋圆上的角度，供 ETA 弧长估算
@@ -215,6 +224,13 @@ class RallyJoinPos(PosCalcBase):
         """推进 RallyJoinPos 一个处理周期。"""
         if u.selfState is None or y.selfCmd is None:
             raise ValueError("RallyJoinPos ports must be bound")
+        if u.standby:
+            if self._state != RALLY_STATE_STANDBY:
+                self._enter_standby(u)
+            self._step_standby(u, y)
+            return
+        if self._state == RALLY_STATE_STANDBY:
+            self._leave_standby()
         if self._state == RALLY_STATE_FLYING:
             self._step_flying(u, y)
         elif self._state == RALLY_STATE_LOITERING:
@@ -227,6 +243,10 @@ class RallyJoinPos(PosCalcBase):
         self._state = RALLY_STATE_FLYING
         self._eta_s = 0.0
         self._loiter_speed = self._approach_speed
+        self._standby_speed = self._approach_speed
+        self._standby_center_e = None
+        self._standby_center_n = None
+        self._standby_target_h = None
         self._away_from_slot = False
         self._entry_point = None
         self._theta_entry = 0.0
@@ -235,6 +255,63 @@ class RallyJoinPos(PosCalcBase):
     # ------------------------------------------------------------------ #
     # 内部阶段实现
     # ------------------------------------------------------------------ #
+
+    def _enter_standby(self, u: RallyJoinPosInputS) -> None:
+        """进入本地待命盘旋。注意：待命圆按进入待命这一拍的本机位置和航向反推。"""
+        assert u.selfState is not None
+        heading = u.selfState.v.vPsi
+        self._standby_center_e = u.selfState.pos.east - self._loiter_radius * math.sin(heading)
+        self._standby_center_n = u.selfState.pos.north + self._loiter_radius * math.cos(heading)
+        self._standby_target_h = (
+            self._standby_altitude_m
+            if self._standby_altitude_m is not None
+            else u.selfState.pos.h
+        )
+        if math.isfinite(u.selfState.v.vd) and u.selfState.v.vd > 1.0:
+            standby_speed = u.selfState.v.vd
+        else:
+            standby_speed = self._approach_speed
+        self._standby_speed = clamp(standby_speed, self._speed_min, self._speed_max)
+        self._eta_s = 0.0
+        self._away_from_slot = False
+        self._entry_point = None
+        self._theta_entry = 0.0
+        self._reached_slot_once = False
+        self._state = RALLY_STATE_STANDBY
+
+    def _leave_standby(self) -> None:
+        """离开本地待命进入飞向集结圆阶段。注意：切入点必须按离开待命时的当前位置重新计算。"""
+        self._state = RALLY_STATE_FLYING
+        self._eta_s = 0.0
+        self._loiter_speed = self._approach_speed
+        self._away_from_slot = False
+        self._entry_point = None
+        self._theta_entry = 0.0
+        self._reached_slot_once = False
+
+    def _step_standby(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+        """在本地待命阶段输出沿本机待命圆的 CCW 盘旋指令。"""
+        assert u.selfState is not None
+        assert self._standby_center_e is not None and self._standby_center_n is not None
+        target_h = self._standby_target_h if self._standby_target_h is not None else u.selfState.pos.h
+        theta = math.atan2(
+            u.selfState.pos.north - self._standby_center_n,
+            u.selfState.pos.east - self._standby_center_e,
+        )
+        y.selfCmd.pos.east = self._standby_center_e + self._loiter_radius * math.cos(theta)
+        y.selfCmd.pos.north = self._standby_center_n + self._loiter_radius * math.sin(theta)
+        y.selfCmd.pos.h = target_h
+        v_e = -self._standby_speed * math.sin(theta)
+        v_n = self._standby_speed * math.cos(theta)
+        y.selfCmd.v.vEast = v_e
+        y.selfCmd.v.vNorth = v_n
+        y.selfCmd.v.vPsi = math.atan2(v_n, v_e)
+        y.selfCmd.v.vd = self._standby_speed
+        d_h = target_h - u.selfState.pos.h
+        y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
+        y.selfCmd.v.dVPsi = self._standby_speed / self._loiter_radius
+        y.selfCmd.v.vTheta = 0.0
+        self._eta_s = 0.0
 
     def _step_flying(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
         """在直飞阶段生成指向盘旋圆切入点 T 的指令，到达 T 附近后转入圆弧飞行。"""

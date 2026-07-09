@@ -31,7 +31,7 @@ from src.runner.sim_control_constants import (
     _DEFAULT_TRIANGLE_WING_SLOTS,
     _FORMATION_COORDINATE_SYSTEM,
 )
-from src.runner.sim_control_types import RallyJoinGeometryState, RouteState
+from src.runner.sim_control_types import RallyPlanGeometryState, RouteState
 
 def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
     """把环境模型状态转换为算法运动状态。注意：单位和坐标系必须保持一致。"""
@@ -543,6 +543,7 @@ def _build_rally_task_init(
         loiter_radius_m=float(rally_cfg_raw.get("loiter_radius_m", 200.0)),
         arrival_radius_m=float(rally_cfg_raw.get("arrival_radius_m", 100.0)),
         catchup_radius_m=float(rally_cfg_raw.get("catchup_radius_m", 200.0)),
+        altitude_separation_m=float(rally_cfg_raw.get("altitude_separation_m", 60.0)),
     )
 
 
@@ -552,7 +553,7 @@ def _build_rally_join_geometry(
     formation_comm_init: FormCommInitS,
     rally_task_init: RallyTaskInitS | None,
     initial_states: dict[str, AircraftState],
-) -> dict[str, RallyJoinGeometryState]:
+) -> dict[str, RallyPlanGeometryState]:
     """按静态配置预计算各集结节点的盘旋圆、切入点 T、切出点 M_i，仅供 GUI 辅助展示。
 
     注意：只依赖配置和模型已解析的初始状态（不依赖仿真推进后的运行时状态），几何公式复用
@@ -568,7 +569,7 @@ def _build_rally_join_geometry(
     a = rally_route[0].pos
     radius = rally_task_init.loiter_radius_m
 
-    geometry: dict[str, RallyJoinGeometryState] = {}
+    geometry: dict[str, RallyPlanGeometryState] = {}
     for index, node in enumerate(nodes):
         if not isinstance(node, dict):
             continue
@@ -576,6 +577,7 @@ def _build_rally_join_geometry(
         if role not in ("rally_leader", "rally_follower"):
             continue
         node_id = node_id_from_config(node, index)
+        # 集结长机的松散目标就是 A 点；僚机按目标队形槽位投影到 A 附近的松散点。
         if role == "rally_leader":
             slot_pos = a
         else:
@@ -583,21 +585,37 @@ def _build_rally_join_geometry(
             if slot is None:
                 continue
             slot_pos = rally_loose_target(a, heading, rally_task_init.looseScale, slot)
+        # 集结圆沿任务航向左侧偏 R，保证 M_i 处的 CCW 切线与任务航向一致。
         center_e = slot_pos.east - radius * math.sin(heading)
         center_n = slot_pos.north + radius * math.cos(heading)
         initial_state = initial_states.get(node_id)
+        # 静态预览必须用模型解析后的初始状态，不能直接读原始 JSON 缺省值。
         start_e = initial_state.x_m if initial_state is not None else slot_pos.east
         start_n = initial_state.y_m if initial_state is not None else slot_pos.north
+        start_heading = initial_state.psi_rad if initial_state is not None else heading
+        # 本地待命圆同样放在当前航向左侧 R 处，使初始点处切线延续飞机当前航向。
+        local_center_e = start_e - radius * math.sin(start_heading)
+        local_center_n = start_n + radius * math.cos(start_heading)
+        # 当前版本的运行控制由 RallyJoinPos 从当前位置再求切入点；预览提前给出同口径切点。
         tangent = _ccw_entry_tangent(start_e, start_n, center_e, center_n, radius)
+        fallback_used = tangent is None
+        # 起点落在目标圆内/圆上时没有切线，沿用旧直飞 M_i 的可视化兜底。
         entry_e, entry_n = (tangent[0], tangent[1]) if tangent is not None else (slot_pos.east, slot_pos.north)
-        geometry[node_id] = RallyJoinGeometryState(
+        geometry[node_id] = RallyPlanGeometryState(
+            node_id=node_id,
+            local_center_east_m=local_center_e,
+            local_center_north_m=local_center_n,
+            local_radius_m=radius,
+            rally_center_east_m=center_e,
+            rally_center_north_m=center_n,
+            rally_radius_m=radius,
+            local_tangent_east_m=start_e,
+            local_tangent_north_m=start_n,
+            rally_tangent_east_m=entry_e,
+            rally_tangent_north_m=entry_n,
             slot_east_m=slot_pos.east,
             slot_north_m=slot_pos.north,
-            loiter_center_east_m=center_e,
-            loiter_center_north_m=center_n,
-            loiter_radius_m=radius,
-            entry_east_m=entry_e,
-            entry_north_m=entry_n,
+            fallback_used=fallback_used,
         )
     return geometry
 

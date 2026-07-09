@@ -17,12 +17,13 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QMetaObject, QPointF, QRect, Qt
-from PySide6.QtWidgets import QApplication, QFrame, QSplitter, QTableWidget
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QSplitter, QTableWidget
 
 from src.data.geo import GeoOrigin
 from tests.llt._geo_route import geodetic_config
 from src.runner.sim_control import (
     NodeState as ControllerNodeState,
+    RallyPlanGeometryState,
     SimulationSnapshot as ControllerSnapshot,
 )
 from src.ui.gui.main_window import (
@@ -1178,9 +1179,52 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.overall_table.rowCount(), 0)
         self.assertEqual(self.window.link_table.rowCount(), 0)
         self.assertFalse(self.window.play_button.isEnabled())
+        self.assertFalse(self.window.rally_button.isEnabled())
         self.assertFalse(self.window.step_button.isEnabled())
         self.assertFalse(self.window.reset_button.isEnabled())
         self.assertTrue(all(not button.isEnabled() for button in self.window.disturbance_buttons))
+
+    def test_adapter_preserves_rally_plan_geometry_fields(self) -> None:
+        """验证 GUI 适配层完整保留本地圆和集结圆几何字段。"""
+
+        adapter = ControllerSimulationAdapter()
+        self.addCleanup(adapter.close)
+        snapshot = ControllerSnapshot(
+            time_s=0.0,
+            duration_s=1.0,
+            step_s=0.1,
+            run_state="READY",
+            control_report="待命",
+            nodes=[],
+            links=[],
+            rally_geometry={
+                "R01": RallyPlanGeometryState(
+                    node_id="R01",
+                    local_center_east_m=1.0,
+                    local_center_north_m=2.0,
+                    local_radius_m=3.0,
+                    rally_center_east_m=4.0,
+                    rally_center_north_m=5.0,
+                    rally_radius_m=6.0,
+                    local_tangent_east_m=7.0,
+                    local_tangent_north_m=8.0,
+                    rally_tangent_east_m=9.0,
+                    rally_tangent_north_m=10.0,
+                    slot_east_m=11.0,
+                    slot_north_m=12.0,
+                    fallback_used=True,
+                )
+            },
+        )
+
+        converted = adapter._convert_snapshot(snapshot)
+        geometry = converted.rally_geometry[0]
+
+        self.assertEqual(geometry.local_center_x, 1.0)
+        self.assertEqual(geometry.local_tangent_y, 8.0)
+        self.assertEqual(geometry.entry_x, 9.0)
+        self.assertEqual(geometry.slot_y, 12.0)
+        self.assertTrue(geometry.fallback_used)
 
     def test_run_gui_opens_main_window_maximized(self) -> None:
         """验证正式启动入口默认以最大化方式显示主窗口。"""
@@ -1245,6 +1289,59 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(resumed_snapshot.run_state, "RUNNING")
         self.assertEqual(self.window.play_button.text(), "暂停")
+
+    def test_rally_button_starts_rally_from_local_loiter(self) -> None:
+        """验证集结按钮只在本地待命盘旋阶段可用，点击后切入集结流程。"""
+
+        config_path = Path("configs/rally_demo_5_aircraft.json").resolve()
+        self.window._apply_config_path(str(config_path))
+        self.app.processEvents()
+
+        self.assertEqual(self.window.rally_button.text(), "集结")
+        self.assertFalse(self.window.rally_button.isEnabled())
+
+        self.window._step()
+        self.app.processEvents()
+        standby_snapshot = self.window.sim.snapshot()
+
+        self.assertEqual(standby_snapshot.run_state, "PAUSED")
+        self.assertEqual(standby_snapshot.control_report, "待命")
+        self.assertTrue(self.window.rally_button.isEnabled())
+
+        self.window.rally_button.click()
+        self.app.processEvents()
+        rally_snapshot = self.window.sim.snapshot()
+
+        self.assertEqual(self.window.sim.last_result_code, "OK")
+        self.assertEqual(rally_snapshot.control_report, "集结")
+        self.assertTrue(self.window.rally_button.isEnabled())
+
+        self.window.rally_button.click()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.sim.last_result_code, "ERR_INVALID_STATE")
+        self.assertIn("已在集结中", self.window.sim.last_result_message)
+
+    def test_rally_demo_button_loads_five_aircraft_config(self) -> None:
+        """验证演示场景里的“集结演示”默认加载五机集结配置。"""
+
+        rally_demo_buttons = [
+            button
+            for button in self.window.findChildren(QPushButton)
+            if button.text() == "集结演示"
+        ]
+        self.assertEqual(len(rally_demo_buttons), 1)
+
+        rally_demo_buttons[0].click()
+        self.app.processEvents()
+        snapshot = self.window.sim.snapshot()
+
+        self.assertEqual(self.window.sim.last_result_code, "OK")
+        self.assertEqual(len(snapshot.nodes), 5)
+        self.assertEqual(
+            [node.role for node in snapshot.nodes],
+            ["rally_follower", "rally_follower", "rally_leader", "rally_follower", "rally_follower"],
+        )
 
     def test_disturbance_label_clears_after_duration(self) -> None:
         self._load_ui_config()
@@ -1604,7 +1701,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                     120.0,
                     20.0,
                     0.0,
-                    rally_phase="JN·FLY",
+                    rally_phase="RALLY_TRANSIT",
                 ),
             ],
             links=[],

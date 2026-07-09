@@ -1674,7 +1674,7 @@ class NodeAlgorithmResetTests(unittest.TestCase):
         self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
 
     def test_reset_clears_rally_completed_flag(self) -> None:
-        """reset() 后 _rally_completed 应归 False，允许重新触发集结完成流程。"""
+        """reset() 后 _rally_completed 应归 False，并回到待命而不是直接重进 RALLY。"""
         from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
         from src.algorithm.context.leaf_types import PosInEarthS as P
 
@@ -1709,6 +1709,9 @@ class NodeAlgorithmResetTests(unittest.TestCase):
         node.reset()
 
         self.assertFalse(node._rally_completed)
+        self.assertEqual(node._remote_stage, FormStageE.NONE)
+        self.assertEqual(node.current_rally_phase_str(), "LOCAL_LOITER")
+        self.assertTrue(node.start_rally()[0])
         self.assertEqual(node._remote_stage, FormStageE.RALLY)
 
 
