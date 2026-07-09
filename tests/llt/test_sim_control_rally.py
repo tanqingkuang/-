@@ -177,6 +177,33 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=3)
             self.assertAlmostEqual(snapshot.route.end_x_m, 200.0, places=3)
 
+    def test_rally_scenario_supports_runtime_formation_switch_entry(self) -> None:
+        """验证集结场景复用现有队形重构入口，运行期切换 rally_leader 的目标队形索引。"""
+
+        config = _rally_config()
+        config["formation"]["formations"].append(  # type: ignore[index]
+            {
+                "name": "LINE",
+                "slots": [
+                    {"node_id": "R01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                    {"node_id": "R02", "x_m": -20.0, "y_m": 0.0, "z_m": 0.0},
+                    {"node_id": "R03", "x_m": -40.0, "y_m": 0.0, "z_m": 0.0},
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            load_result = controller.load_config(str(_write_json(Path(tmp), config)))
+
+            switch_result = controller.switch_formation(1)
+            task = controller._node_algorithms["R01"]._entity._task
+
+            self.assertEqual(load_result.code, "OK")
+            self.assertEqual(switch_result.code, "OK")
+            self.assertEqual(controller.get_formation_index(), 1)
+            self.assertEqual(task._target_pattern, 1)
+
     def test_rally_cfg_approach_speed_is_injected_into_followers(self) -> None:
         """验证 rally_cfg.approach_speed_mps 会注入僚机 RallyJoinPos。"""
 
@@ -319,7 +346,28 @@ class SimControlRallyTests(unittest.TestCase):
         result = controller.load_config("configs/rally_demo.json")
 
         self.assertEqual(result.code, "OK")
-        self.assertEqual([node.role for node in controller.get_snapshot().nodes], ["rally_leader", "rally_follower", "rally_follower"])
+        snapshot = controller.get_snapshot()
+        self.assertEqual([node.role for node in snapshot.nodes], ["rally_leader", "rally_follower", "rally_follower"])
+        self.assertEqual(controller.get_formation_names(), ["三机三角"])
+        self.assertEqual(len(snapshot.route_segments), 1)
+
+    def test_repository_rally_demo_5_aircraft_config_loads(self) -> None:
+        """验证仓库内 5 机集结配置复用五机多队形，并以 A03 作为集结长机。"""
+
+        controller = SimulationController()
+        self.addCleanup(controller.close)
+        result = controller.load_config("configs/rally_demo_5_aircraft.json")
+
+        self.assertEqual(result.code, "OK")
+        snapshot = controller.get_snapshot()
+        self.assertEqual(
+            [node.role for node in snapshot.nodes],
+            ["rally_follower", "rally_follower", "rally_leader", "rally_follower", "rally_follower"],
+        )
+        self.assertEqual(controller.get_formation_names(), ["五机楔形", "五机横队", "五机双纵队"])
+        self.assertEqual(len(snapshot.route_segments), 4)
+        self.assertEqual(controller.switch_formation(1).code, "OK")
+        self.assertEqual(controller.switch_formation(2).code, "OK")
 
     def test_repository_rally_demo_initial_heading_points_toward_rally_origin(self) -> None:
         """验证仓库内 rally_demo.json 三机初始航向大致对齐集结航线起点，避免起始瞬间大转向。

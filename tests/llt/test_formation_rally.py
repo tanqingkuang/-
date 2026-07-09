@@ -437,6 +437,19 @@ class RallyTaskTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
         self.assertFalse(output.rallyCompleted)
 
+    def test_set_pattern_index_changes_hold_output(self) -> None:
+        """验证 Rally 完成集结进入 HOLD 后，也能按运行期索引切换目标队形。"""
+
+        task = _rally_task(expected=())
+        ctx = FormContextS()
+
+        task.set_pattern_index(1)
+        _task_step(task, ctx, remote=FormStageE.HOLD)
+
+        self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
+        self.assertEqual(ctx.cmd.pattern, 1)
+        self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
+
     def test_approach_requires_all_expected_arrived_and_fresh(self) -> None:
         """验证 JOINING→LOOSE 由全部期望僚机 EXITED 且长机 EXITED 立即推进（无计时器）。"""
 

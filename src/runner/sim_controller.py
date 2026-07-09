@@ -458,8 +458,11 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "no formation configured")
             if index < 0 or index >= len(self._formation_names):
                 return CommandResult("ERR_INVALID_ARGUMENT", f"formation index out of range: {index}")
-            # 定位长机保持任务；只有 HOLD 场景的长机实体持有可切换的 Hold 任务。
-            leader_id = next((nid for nid, role in self._node_roles.items() if role == "leader"), None)
+            # 定位掌机任务；普通保持长机和集结长机都通过 set_pattern_index 切换队形。
+            leader_id = next(
+                (nid for nid, role in self._node_roles.items() if role in {"leader", "rally_leader"}),
+                None,
+            )
             algorithm = self._node_algorithms.get(leader_id) if leader_id is not None else None
             task = getattr(getattr(algorithm, "_entity", None), "_task", None)
             setter = getattr(task, "set_pattern_index", None)

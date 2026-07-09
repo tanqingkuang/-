@@ -92,13 +92,18 @@ class Rally(FormationTaskBase):
         self._catchup_stable_s = cfg.catchup_stable_s
         self._expected_ids: list[str] = list(cfg.expectedFollowerIds)
         self._stale_timeout_s = cfg.staleTimeout_s
-        self._target_pattern = cfg.targetPattern
+        self._initial_pattern = int(cfg.targetPattern)
+        self._target_pattern = self._initial_pattern
         self._dt_s = cfg.dt_s
         # 运行期计时器
         self._catchup_stable_timer: float = 0.0
         self._stable_timer: float = 0.0
         self._compress_elapsed: float = 0.0
         self._t_ref: float = 0.0  # 最近一次有效 T_ref（有 FLYING 参与者时更新，之后锁存）
+
+    def set_pattern_index(self, index: int) -> None:
+        """运行时切换目标队形索引。注意：集结完成进入 HOLD 后，下一拍广播生效。"""
+        self._target_pattern = int(index)
 
     def step(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
@@ -254,6 +259,7 @@ class Rally(FormationTaskBase):
     def reset(self) -> None:
         """复位 Rally 的动态状态。注意：保留配置参数，只清理运行期计时器与指令状态。"""
         self._reset_timers()
+        self._target_pattern = self._initial_pattern
 
     def _reset_timers(self) -> None:
         """清零所有内部计时器。注意：不清配置，仅清运行期状态。"""
