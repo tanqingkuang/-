@@ -312,4 +312,3 @@ def _terminal_heading_error(config: dict[str, Any], node: dict[str, Any]) -> flo
         return None
     cos_value = max(-1.0, min(1.0, (dx * vx + dy * vy) / (route_norm * vel_norm)))
     return math.degrees(math.acos(cos_value))
-

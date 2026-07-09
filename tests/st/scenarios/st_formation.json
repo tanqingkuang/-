@@ -43,5 +43,3 @@
     {"link_id": "A03-A05", "direction": "duplex", "latency_ms": 15.0, "loss_rate": 0.0, "status": "normal"}
   ]
 }
-
-
