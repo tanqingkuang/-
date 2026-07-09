@@ -6,6 +6,12 @@ import json
 import math
 from typing import Iterable
 
+from src.ui.gui.situation3d.aircraft_model_style import (
+    DEFAULT_AIRCRAFT_MODEL_TYPE,
+    AircraftModelType,
+    available_model_options,
+    create_aircraft_model_style,
+)
 from src.ui.gui.view_models import (
     ObstacleView,
     ReferenceRoute,
@@ -33,10 +39,12 @@ def build_scene_payload(
     obstacles: Iterable[ObstacleView] = (),
     *,
     clearance_m: float = 0.0,
+    model_type: AircraftModelType = DEFAULT_AIRCRAFT_MODEL_TYPE,
 ) -> dict[str, object]:
     """把 UI 快照转换为 QML 场景数据。注意：输入仍采用 x/y/z=东/北/天。"""
 
     aircraft = [_aircraft_payload(node) for node in snapshot.nodes]
+    aircraft_style = create_aircraft_model_style(model_type).style_payload()
     trail_ribbons = [
         ribbon
         for node in snapshot.nodes
@@ -64,6 +72,8 @@ def build_scene_payload(
         "controlReport": snapshot.control_report,
         "aircraft": aircraft,
         "trailRibbons": trail_ribbons,
+        "aircraftStyle": aircraft_style,
+        "modelOptions": available_model_options(),
         "routePoints": route_points,
         "routeDashes": route_dashes,
         "obstacles": obstacle_items,

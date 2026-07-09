@@ -11,6 +11,7 @@ class Situation3DBridge(QObject):
     """把 Python 场景数据推送给 QML。注意：payload 使用 JSON 字符串降低绑定复杂度。"""
 
     sceneDataChanged = Signal(str)
+    modelSelected = Signal(str)
 
     def __init__(self) -> None:
         """初始化 Situation3DBridge 实例，准备持有最近一次场景数据。"""
@@ -22,6 +23,12 @@ class Situation3DBridge(QObject):
 
         self._scene_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         self.sceneDataChanged.emit(self._scene_data)
+
+    @Slot(str)
+    def selectModel(self, value: str) -> None:
+        """通知 Python 侧切换显示机型。注意：只传显示设置，不触发仿真控制。"""
+
+        self.modelSelected.emit(value)
 
     @Slot(result=str)
     def sceneData(self) -> str:

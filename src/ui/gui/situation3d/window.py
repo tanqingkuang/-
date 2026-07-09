@@ -9,8 +9,13 @@ from PySide6 import QtQuick3D  # noqa: F401
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickView
+from PySide6.QtQuickControls2 import QQuickStyle
 from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
 
+from src.ui.gui.situation3d.aircraft_model_style import (
+    DEFAULT_AIRCRAFT_MODEL_TYPE,
+    AircraftModelType,
+)
 from src.ui.gui.situation3d.bridge import Situation3DBridge
 from src.ui.gui.situation3d.scene_data import build_scene_payload
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
@@ -26,6 +31,8 @@ def _register_qml_types() -> None:
     global _QML_TYPES_REGISTERED
     if _QML_TYPES_REGISTERED:
         return
+    # 机型下拉自定义了 background/contentItem，Windows 原生样式不支持自定义，须显式用 Basic。
+    QQuickStyle.setStyle("Basic")
     qmlRegisterType(TerrainGeometry, "Simu3D", 1, 0, "TerrainGeometry")
     qmlRegisterType(TrailRibbonGeometry, "Simu3D", 1, 0, "TrailRibbonGeometry")
     _QML_TYPES_REGISTERED = True
@@ -51,6 +58,9 @@ class Situation3DWindow(QDialog):
         self.root_layout.setContentsMargins(0, 0, 0, 0)
         self.root_layout.setSpacing(0)
         self.bridge = Situation3DBridge()
+        self._current_model_type = DEFAULT_AIRCRAFT_MODEL_TYPE
+        self._cached_scene: tuple[Snapshot, list[ObstacleView], float] | None = None
+        self.bridge.modelSelected.connect(self._on_model_selected)
         _register_qml_types()
         self.quick_view = QQuickView()
         self.quick_view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
@@ -74,7 +84,36 @@ class Situation3DWindow(QDialog):
     ) -> None:
         """刷新 3D 场景数据。注意：输入快照仍使用项目 ENU 坐标约定。"""
 
-        payload = build_scene_payload(snapshot, obstacles or [], clearance_m=clearance_m)
+        obstacle_items = list(obstacles or [])
+        self._cached_scene = (snapshot, obstacle_items, clearance_m)
+        self._push_scene_payload(snapshot, obstacle_items, clearance_m)
+
+    def _on_model_selected(self, value: str) -> None:
+        """处理 QML 机型选择。注意：只重建显示 payload，不修改仿真快照。"""
+
+        try:
+            self._current_model_type = AircraftModelType(value)
+        except ValueError:
+            return
+        if self._cached_scene is None:
+            return
+        snapshot, obstacles, clearance_m = self._cached_scene
+        self._push_scene_payload(snapshot, obstacles, clearance_m)
+
+    def _push_scene_payload(
+        self,
+        snapshot: Snapshot,
+        obstacles: list[ObstacleView],
+        clearance_m: float,
+    ) -> None:
+        """推送当前机型对应的场景 payload。注意：机型只影响 QML 渲染样式。"""
+
+        payload = build_scene_payload(
+            snapshot,
+            obstacles,
+            clearance_m=clearance_m,
+            model_type=self._current_model_type,
+        )
         self.bridge.set_scene_payload(payload)
 
     def _show_fallback(self) -> None:

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick3D
 import QtQuick3D.AssetUtils
 import Simu3D 1.0
@@ -17,17 +18,25 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
+    property string aircraftModelValue: "tb2"
+    property string aircraftModelSource: "assets/BayraktarTB2.glb"
+    property real aircraftYawOffsetDeg: 90
+    property real aircraftBaseScale: 1.0035
+    property real aircraftUnitWingspan: 11.957
+    property real aircraftRealWingspanM: 12.0
+    property string modelOptionsSignature: ""
     // 1800m 是默认自由视角量级；航线近距离保留 25% 线宽，避免放大后变成粗色带。
     property real nearViewWidthScale: Math.max(0.25, Math.min(1.0, distance / 1800.0))
     // 飞机视觉缩放单独保持远景可辨识；尾迹近景按翼展 1/5 显示，远景不继续加粗。
-    property real aircraftVisualScale: Math.max(8.5, distance / 85.0)
+    property real aircraftVisualScale: aircraftBaseScale * Math.max(1.0, distance * 0.0207 / aircraftRealWingspanM)
     property real routeDashWidthScale: nearViewWidthScale
-    property real trailWidthScale: Math.min(0.17, aircraftVisualScale * 1.76 / 5.0 / 44.0)
+    property real trailWidthScale: Math.min(0.17, aircraftVisualScale * aircraftUnitWingspan / 5.0 / 44.0)
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
 
     ListModel { id: aircraftModel }
+    ListModel { id: modelOptions }
     ListModel { id: trailModel }
     ListModel { id: routeDashModel }
     ListModel { id: routeModel }
@@ -66,6 +75,69 @@ Item {
         pitch = camera.pitch
         cameraInitialized = true
         return true
+    }
+
+    function syncAircraftStyle(style) {
+        if (!style) {
+            return
+        }
+        if (style.value !== undefined) {
+            aircraftModelValue = String(style.value)
+        }
+        if (style.modelSource !== undefined) {
+            aircraftModelSource = String(style.modelSource)
+        }
+        if (style.yawOffsetDeg !== undefined) {
+            aircraftYawOffsetDeg = Number(style.yawOffsetDeg)
+        }
+        if (style.baseScale !== undefined) {
+            aircraftBaseScale = Number(style.baseScale)
+        }
+        if (style.unitWingspan !== undefined) {
+            aircraftUnitWingspan = Number(style.unitWingspan)
+        }
+        if (style.realWingspanM !== undefined) {
+            aircraftRealWingspanM = Number(style.realWingspanM)
+        }
+        syncModelComboIndex()
+    }
+
+    function modelOptionIndex(value) {
+        for (let index = 0; index < modelOptions.count; index += 1) {
+            if (modelOptions.get(index).value === value) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    function syncModelComboIndex() {
+        if (typeof aircraftCombo === "undefined") {
+            return
+        }
+        const index = modelOptionIndex(aircraftModelValue)
+        aircraftCombo.currentIndex = index >= 0 ? index : 0
+    }
+
+    function syncModelOptions(items) {
+        const signatures = []
+        for (const item of items || []) {
+            signatures.push(String(item.value) + "|" + String(item.label))
+        }
+        const signature = signatures.join(";")
+        if (signature === modelOptionsSignature) {
+            syncModelComboIndex()
+            return
+        }
+        modelOptionsSignature = signature
+        modelOptions.clear()
+        for (const item of items || []) {
+            modelOptions.append({
+                value: String(item.value),
+                label: String(item.label)
+            })
+        }
+        syncModelComboIndex()
     }
 
     function applyFallbackCamera() {
@@ -154,6 +226,8 @@ Item {
             return false
         }
         const data = JSON.parse(payload)
+        syncAircraftStyle(data.aircraftStyle)
+        syncModelOptions(data.modelOptions || [])
         syncAircraftModel(data.aircraft || [])
         syncTrailModel(data.trailRibbons || [])
         routeDashModel.clear()
@@ -404,11 +478,10 @@ Item {
                 }
 
                 RuntimeLoader {
-                    source: Qt.resolvedUrl("assets/PredatorUAV.glb")
-                    // 该资产机头(卫通天线鼓包端)朝 +Z,转到本场景机头朝 +X 的约定。
-                    eulerRotation: Qt.vector3d(0, 90, 0)
-                    // 8.5 倍=捕食者真实尺寸(模型翼展1.76单位×8.5≈15m),近观按 1:1 显示;
-                    // 相机拉远后改为恒定视角大小(翼展约占视野2%),避免退化成小点。
+                    source: Qt.resolvedUrl(root.aircraftModelSource)
+                    // 资产机头朝向由 Python 策略给出偏航校正，统一转到本场景机头朝 +X 的约定。
+                    eulerRotation: Qt.vector3d(0, root.aircraftYawOffsetDeg, 0)
+                    // 近观按真实翼展 1:1 显示；相机拉远后改为恒定视角大小(翼展约占视距 2%)，避免退化成小点。
                     scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)
                 }
             }
@@ -447,8 +520,8 @@ Item {
         anchors.left: parent.left
         anchors.top: parent.top
         anchors.margins: 12
-        width: 240
-        height: 136
+        width: 260
+        height: 178
         radius: 8
         color: "#dd151d26"
         border.color: "#2a3644"
@@ -469,6 +542,69 @@ Item {
                 text: root.sceneSummary + " / 视角 " + root.cameraMode
                 color: "#94a3b8"
                 font.pixelSize: 12
+            }
+
+            Row {
+                spacing: 8
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 34
+                    text: "机型"
+                    color: "#94a3b8"
+                    font.pixelSize: 12
+                }
+                ComboBox {
+                    id: aircraftCombo
+                    width: 186
+                    height: 30
+                    model: modelOptions
+                    textRole: "label"
+                    background: Rectangle {
+                        color: "#0f1720"
+                        radius: 6
+                        border.color: aircraftCombo.hovered ? "#14b8a6" : "#2a3644"
+                    }
+                    contentItem: Text {
+                        leftPadding: 10
+                        rightPadding: 24
+                        text: aircraftCombo.displayText
+                        color: "#e7edf4"
+                        font.pixelSize: 12
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+                    indicator: Text {
+                        x: aircraftCombo.width - width - 10
+                        y: (aircraftCombo.height - height) / 2
+                        text: "v"
+                        color: "#94a3b8"
+                        font.pixelSize: 11
+                    }
+                    delegate: ItemDelegate {
+                        width: aircraftCombo.width
+                        height: 30
+                        contentItem: Text {
+                            text: label
+                            color: "#e7edf4"
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            elide: Text.ElideRight
+                        }
+                        background: Rectangle {
+                            color: highlighted ? "#14b8a6" : "#151d26"
+                        }
+                    }
+                    popup.background: Rectangle {
+                        color: "#151d26"
+                        border.color: "#2a3644"
+                    }
+                    onActivated: function(index) {
+                        if (index < 0 || index >= modelOptions.count || typeof sceneBridge === "undefined") {
+                            return
+                        }
+                        sceneBridge.selectModel(modelOptions.get(index).value)
+                    }
+                }
             }
 
             Row {
