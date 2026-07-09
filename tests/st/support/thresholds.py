@@ -58,5 +58,3 @@ T3_COMPARE_EPS = 0.005
 
 # WARN 白名单：当前首期要求无 WARN；后续若有可接受告警，在这里按消息片段加入。
 ALLOWED_WARN_MESSAGE_PARTS: tuple[str, ...] = ()
-
-
