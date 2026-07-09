@@ -14,6 +14,9 @@ from src.ui.gui.view_models import (
 )
 
 MAX_TRAIL_POINTS_PER_NODE = 28
+ENABLE_TRAIL_SMOOTHING = True
+TRAIL_SMOOTHING_PASSES = 2
+TRAIL_SMOOTHING_MAX_POINTS = 96
 MAX_ROUTE_POINTS_PER_SEGMENT = 32
 ROUTE_DASH_LENGTH_M = 140.0
 ROUTE_DASH_GAP_M = 90.0
@@ -113,6 +116,7 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
         coord = enu_to_quick3d(point.x, point.y, point.altitude)
         # pathValue 契约是 Quick3D 坐标 [x, y, z] 三元组数组，供 TrailRibbonGeometry 直接解析。
         path.append([coord["x"], coord["y"], coord["z"]])
+    path = _smooth_trail_path(path)
     return [
         {
             "nodeId": node_id,
@@ -121,6 +125,33 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
             "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
         }
     ]
+
+
+def _smooth_trail_path(path: list[list[float]]) -> list[list[float]]:
+    """返回平滑后的尾迹路径。注意：只供尾迹使用，不处理航线或其他 ribbon。"""
+
+    # 手动调试需要原始折线时，把 ENABLE_TRAIL_SMOOTHING 改为 False 即可关闭。
+    if not ENABLE_TRAIL_SMOOTHING or len(path) < 3:
+        return path
+    smoothed = [list(point) for point in path]
+    for _ in range(TRAIL_SMOOTHING_PASSES):
+        if len(smoothed) >= TRAIL_SMOOTHING_MAX_POINTS:
+            break
+        smoothed = _chaikin_smooth_once(smoothed)
+    return _evenly_sample(smoothed, TRAIL_SMOOTHING_MAX_POINTS)
+
+
+def _chaikin_smooth_once(points: list[list[float]]) -> list[list[float]]:
+    """对折线路径执行一次 Chaikin 平滑。注意：保留首尾点，避免尾迹端点漂移。"""
+
+    smoothed = [points[0]]
+    for previous, current in zip(points, points[1:]):
+        # Q/R 点分别靠近当前线段的两端，连续迭代后尖角会被圆滑过渡替代。
+        q_point = [previous[index] * 0.75 + current[index] * 0.25 for index in range(3)]
+        r_point = [previous[index] * 0.25 + current[index] * 0.75 for index in range(3)]
+        smoothed.extend([q_point, r_point])
+    smoothed.append(points[-1])
+    return smoothed
 
 
 def _route_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:
