@@ -225,8 +225,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("Math.min(50000", qml)
         self.assertIn("data.trailRibbons", qml)
         self.assertIn("property real nearViewWidthScale", qml)
+        self.assertIn("property real aircraftVisualScale", qml)
         self.assertIn("property real routeDashWidthScale: nearViewWidthScale", qml)
-        self.assertIn("property real trailWidthScale: nearViewWidthScale", qml)
+        self.assertIn("property real trailWidthScale: Math.min(0.17, aircraftVisualScale * 1.76 / 5.0 / 44.0)", qml)
         self.assertIn("1800m 是默认自由视角量级", qml)
         self.assertIn("Math.max(0.25, Math.min(1.0, distance / 1800.0))", qml)
         self.assertIn("ListModel { id: routeDashModel }", qml)
@@ -248,8 +249,19 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         self.assertIn("RuntimeLoader", qml)
         self.assertIn("assets/PredatorUAV.glb", qml)
-        self.assertIn("property real visualScale", qml)
-        self.assertIn("Math.max(8.5, root.distance / 85.0)", qml)
+        self.assertIn("property real aircraftVisualScale", qml)
+        self.assertIn("Math.max(8.5, distance / 85.0)", qml)
+        self.assertIn("scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)", qml)
+
+    def test_trail_width_is_one_fifth_of_near_view_aircraft_span(self) -> None:
+        """近景尾迹宽度应约为飞机翼展 1/5，远景不应继续变粗。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("property real trailWidthScale: Math.min(0.17, aircraftVisualScale * 1.76 / 5.0 / 44.0)", qml)
+        self.assertIn("飞机视觉缩放单独保持远景可辨识；尾迹近景按翼展 1/5 显示，远景不继续加粗。", qml)
+        self.assertNotIn("property real trailWidthScale: nearViewWidthScale", qml)
+        self.assertNotIn("property real trailWidthScale: aircraftVisualScale / (1800.0 / 85.0)", qml)
 
 
 if __name__ == "__main__":

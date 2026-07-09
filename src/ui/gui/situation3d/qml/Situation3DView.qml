@@ -17,10 +17,12 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
-    // 1800m 是默认自由视角量级；近距离保留 25% 线宽，避免放大后轨迹和航线变成粗色带。
+    // 1800m 是默认自由视角量级；航线近距离保留 25% 线宽，避免放大后变成粗色带。
     property real nearViewWidthScale: Math.max(0.25, Math.min(1.0, distance / 1800.0))
+    // 飞机视觉缩放单独保持远景可辨识；尾迹近景按翼展 1/5 显示，远景不继续加粗。
+    property real aircraftVisualScale: Math.max(8.5, distance / 85.0)
     property real routeDashWidthScale: nearViewWidthScale
-    property real trailWidthScale: nearViewWidthScale
+    property real trailWidthScale: Math.min(0.17, aircraftVisualScale * 1.76 / 5.0 / 44.0)
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -401,16 +403,13 @@ Item {
                     }
                 }
 
-                // 视觉放大随相机距离自适应:拉远时飞机保持可辨认,拉近时回到基准比例。
-                // 8.5 倍=捕食者真实尺寸(模型翼展1.76单位×8.5≈15m),近观按 1:1 显示;
-                // 相机拉远后改为恒定视角大小(翼展约占视野2%),避免退化成小点。
-                property real visualScale: Math.max(8.5, root.distance / 85.0)
-
                 RuntimeLoader {
                     source: Qt.resolvedUrl("assets/PredatorUAV.glb")
                     // 该资产机头(卫通天线鼓包端)朝 +Z,转到本场景机头朝 +X 的约定。
                     eulerRotation: Qt.vector3d(0, 90, 0)
-                    scale: Qt.vector3d(visualScale, visualScale, visualScale)
+                    // 8.5 倍=捕食者真实尺寸(模型翼展1.76单位×8.5≈15m),近观按 1:1 显示;
+                    // 相机拉远后改为恒定视角大小(翼展约占视野2%),避免退化成小点。
+                    scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)
                 }
             }
         }
