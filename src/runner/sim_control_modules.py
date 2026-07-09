@@ -29,7 +29,12 @@ from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds, rall
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
-from src.algorithm.units.algo.pos_calc.rally_join_pos import validate_capture_geometry
+from src.algorithm.units.algo.pos_calc.rally_join_pos import (
+    RALLY_STATE_EXITED,
+    RALLY_STATE_FLYING,
+    RALLY_STATE_LOITERING,
+    validate_capture_geometry,
+)
 from src.common.envelope import MessageEnvelope
 from src.data.config_loader import resolve_config_references
 from src.environment.comm import CommunicationChannel
@@ -55,6 +60,9 @@ from src.runner.sim_control_types import (
     SimulationSnapshot,
     _NodeAlgorithmOutput,
 )
+
+_RALLY_RUN_STANDBY = "STANDBY"
+_RALLY_RUN_ACTIVE = "ACTIVE"
 
 class _ConfigLoader:
     """控制器首版使用的轻量 JSON/YAML 加载器。注意：YAML 依赖缺失时只支持 JSON。"""
@@ -194,16 +202,21 @@ class _NodeAlgorithm:
         rally_cfg: object | None = None,
         rally_leader_id: str = "",
         rally_approach_speed_mps: float = 20.0,
+        rally_layer_altitude_m: float | None = None,
     ) -> None:
         """初始化 _NodeAlgorithm 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._node_id = node_id
         self._role = role
+        self._rally_leader_id = rally_leader_id
         # 初始队形索引：僚机冷启动预置 cmd.pattern 用它，避免冷启动无参考。
         self._initial_pattern = int(comm_init.initialPattern)
         # 标记长机是否已执行过算法步：未跑前 current_route 回退到航线首段。
         self._has_route_step = False
-        # 集结角色从 RALLY 开始；其余角色（leader/wingman）默认 HOLD。
-        self._remote_stage = FormStageE.RALLY if role in {"rally_leader", "rally_follower"} else FormStageE.HOLD
+        self._is_rally_role = role in {"rally_leader", "rally_follower"}
+        # 集结角色先进入本地待命盘旋；收到 start_rally 后才把远控阶段切到 RALLY。
+        self._rally_run_mode = _RALLY_RUN_STANDBY if self._is_rally_role else _RALLY_RUN_ACTIVE
+        self._initial_rally_run_mode = self._rally_run_mode
+        self._remote_stage = FormStageE.NONE if self._is_rally_role else FormStageE.HOLD
         self._initial_remote_stage = self._remote_stage
         self._rally_completed: bool = False
         # 按角色选择编队实体。
@@ -227,6 +240,7 @@ class _NodeAlgorithm:
                 rally_cfg=rally_cfg,
                 rally_leader_id=rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed_mps,
+                rally_layer_altitude_m=rally_layer_altitude_m,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。
@@ -262,19 +276,25 @@ class _NodeAlgorithm:
     ) -> _NodeAlgorithmOutput:
         """推进 _NodeAlgorithm 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         entity_output = EntityOutputS()
+        # runner 只决定远控阶段；待命盘旋的具体飞法由 Rally 实体内部处理。
+        remote_stage = (
+            FormStageE.STANDBY
+            if self._is_rally_role and self._rally_run_mode == _RALLY_RUN_STANDBY
+            else self._remote_stage
+        )
         # 算法实体只接收当前模型状态、通信收件箱、远控阶段和时间戳。
         # 健康状态不直接传给算法，而是在输出适配时用于控制器回报。
         self._entity.step(
             EntityInputS(
                 selfState=_motion_from_aircraft_state(state),
                 inbox=inbox,
-                remote=RemoteCmdS(self._remote_stage),
+                remote=RemoteCmdS(remote_stage),
                 now_s=time_s,
             ),
             entity_output,
         )
         # 长机（包含集结长机）一旦跑过即标记，使 current_route() 从上下文取实时值。
-        if self._role in {"leader", "rally_leader"}:
+        if self._role in {"leader", "rally_leader"} and remote_stage != FormStageE.STANDBY:
             self._has_route_step = True
         # 集结完成时自动切换为 HOLD，防止重复触发完成流程。
         # 用专用标志位锁存，与诊断载荷解耦（诊断仅一帧有效，标志持久到 reset）。
@@ -304,10 +324,28 @@ class _NodeAlgorithm:
         """复位 _NodeAlgorithm 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         self._has_route_step = False
         self._remote_stage = self._initial_remote_stage
+        self._rally_run_mode = self._initial_rally_run_mode
         self._rally_completed = False
         self._entity.reset()
         self._apply_cold_start_preset()
         return None
+
+    def is_rally_role(self) -> bool:
+        """返回当前节点是否参与集结流程。注意：只看配置角色，不看运行阶段。"""
+        return self._is_rally_role
+
+    def start_rally(self) -> tuple[bool, str]:
+        """把集结节点从本地待命切到集结执行。注意：调用方负责控制器状态校验。"""
+        if not self._is_rally_role:
+            return False, "当前节点不是集结节点"
+        if self._rally_completed or self.current_stage() == FormStageE.HOLD:
+            return False, "已进入编队保持"
+        if self._rally_run_mode == _RALLY_RUN_ACTIVE:
+            return False, "已在集结中"
+        # 开始集结只切 run mode 和远控阶段，实体装配不在运行期替换。
+        self._rally_run_mode = _RALLY_RUN_ACTIVE
+        self._remote_stage = FormStageE.RALLY
+        return True, "开始集结"
 
     def close(self) -> None:
         """释放 _NodeAlgorithm 持有的资源。注意：关闭后不应继续调用运行接口。"""
@@ -322,24 +360,35 @@ class _NodeAlgorithm:
         return FormStageE(cxt.cmd.stage)
 
     def current_rally_phase_str(self) -> str:
-        """返回人类可读的集结阶段字符串，JOINING 阶段含本机汇合状态。"""
+        """返回规范化集结阶段字符串。注意：替代旧的 JN·{FLY/LOIT/EXIT} 标签。"""
+        if not self._is_rally_role:
+            return ""
+        if self._rally_run_mode == _RALLY_RUN_STANDBY:
+            # STANDBY 对 UI 暴露为 LOCAL_LOITER，避免和任务阶段 HOLD/RALLY 混淆。
+            return "LOCAL_LOITER"
         cxt = getattr(self._entity, "cxt", None)
         if cxt is None:
             return ""
         stage = cxt.cmd.stage
         step = cxt.cmd.step
+        if stage in {FormStageE.NONE, FormStageE.STANDBY} and self._remote_stage == FormStageE.RALLY:
+            # 点击开始后的首拍可能还没进入 Rally.step()，先按转场显示。
+            return "RALLY_TRANSIT"
         if stage == FormStageE.RALLY:
             try:
                 phase_e = RallyPhaseE(step)
                 phase = phase_e.name
             except ValueError:
-                phase = f"STEP{step}"
+                return f"STEP{step}"
             if step == RallyPhaseE.JOINING:
                 rally_join = getattr(self._entity, "_rally_join", None)
                 join_state = getattr(rally_join, "state", "") if rally_join is not None else ""
-                _join_abbr = {"FLYING": "FLY", "LOITERING": "LOIT", "EXITED": "EXIT"}
-                if join_state:
-                    phase = f"JN·{_join_abbr.get(join_state, join_state)}"
+                if join_state == RALLY_STATE_LOITERING:
+                    return "RALLY_LOITER"
+                if join_state == RALLY_STATE_EXITED:
+                    return "RALLY_EXITED"
+                if join_state in {"", RALLY_STATE_FLYING}:
+                    return "RALLY_TRANSIT"
             return phase
         if stage == FormStageE.HOLD:
             return "HOLD"

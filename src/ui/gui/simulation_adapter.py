@@ -274,6 +274,13 @@ class ControllerSimulationAdapter:
         self.last_result_message = result.message
         return self.snapshot()
 
+    def start_rally(self) -> Snapshot:
+        """开始集结流程。注意：只触发集结命令，不改变播放/暂停状态。"""
+        result = self.controller.start_rally()
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+        return self.snapshot()
+
     def pause(self) -> Snapshot:
         """暂停 ControllerSimulationAdapter 的运行流程。注意：只暂停调度，不清空当前状态。"""
         result = self.controller.pause()
@@ -476,6 +483,12 @@ class ControllerSimulationAdapter:
                 radius=geometry.loiter_radius_m,
                 entry_x=geometry.entry_east_m,
                 entry_y=geometry.entry_north_m,
+                local_center_x=geometry.local_center_east_m,
+                local_center_y=geometry.local_center_north_m,
+                local_radius=geometry.local_radius_m,
+                local_tangent_x=geometry.local_tangent_east_m,
+                local_tangent_y=geometry.local_tangent_north_m,
+                fallback_used=geometry.fallback_used,
             )
             for node_id, geometry in snapshot.rally_geometry.items()
         ]

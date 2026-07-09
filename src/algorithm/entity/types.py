@@ -44,6 +44,7 @@ class EntityInitS:
     rally_cfg: object | None = None  # RallyTaskInitS；长机使用完整参数，僚机只取 convergenceRadius_m
     rally_approach_speed_mps: float = 20.0  # 僚机飞向 M_i 的速度
     rally_leader_id: str = ""  # 僚机回报消息的发送目标（来自节点配置 leader_id）
+    rally_layer_altitude_m: float | None = None  # 待命/JOINING/CATCHUP 分层目标高度；None 表示沿用集结槽位高度
 
 
 @dataclass

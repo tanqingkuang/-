@@ -211,8 +211,8 @@ class MainWindowLayoutMixin:
         btn_hold.setToolTip("加载 configs/base.json — 三机楔形保持队形演示")
         btn_hold.clicked.connect(lambda: self._load_demo_config("base.json"))
         btn_rally = QPushButton("集结演示")
-        btn_rally.setToolTip("加载 configs/rally_demo.json — 三机分散后集结演示")
-        btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo.json"))
+        btn_rally.setToolTip("加载 configs/rally_demo_5_aircraft.json — 五机分散后集结演示")
+        btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo_5_aircraft.json"))
         demo_layout.addWidget(btn_hold)
         demo_layout.addWidget(btn_rally)
         layout.addWidget(demo_group)
@@ -339,6 +339,7 @@ class MainWindowLayoutMixin:
         timeline.setContentsMargins(12, 6, 12, 6)
         self.timeline_label = QLabel("0.0 / 120s")
         self.play_button = QPushButton("开始")
+        self.rally_button = QPushButton("集结")
         self.step_button = QPushButton("单步")
         self.reset_button = QPushButton("重置")
         # 进度条用 0..1000 的千分刻度承载 time/duration 比例，便于平滑显示。
@@ -348,9 +349,10 @@ class MainWindowLayoutMixin:
         self.progress.setTextVisible(False)
         # 播放/暂停合并为一个按钮，文案随运行态切换为当前可执行动作。
         self.play_button.clicked.connect(self._toggle_play_pause)
+        self.rally_button.clicked.connect(self._start_rally)
         self.step_button.clicked.connect(self._step)
         self.reset_button.clicked.connect(self._reset)
-        for widget in [self.timeline_label, self.play_button, self.step_button, self.reset_button, self.progress]:
+        for widget in [self.timeline_label, self.play_button, self.rally_button, self.step_button, self.reset_button, self.progress]:
             timeline.addWidget(widget)
         # 让进度条吃掉剩余横向空间。
         timeline.setStretchFactor(self.progress, 1)

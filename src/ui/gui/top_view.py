@@ -543,8 +543,8 @@ class TopView(QGraphicsView):
     def _draw_rally_geometry(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制集结盘旋圆、切入点 T（三角）与松散目标点 M_i（实心圆）。
 
-        注意：只在飞机仍处于 JOINING 阶段时显示——集结完成后这些参考点已经不代表飞机当前目标，
-        常驻显示只会长期遮挡后续航段/僚机目标标记，用 rally_phase（"JN·..."）过滤及时隐藏。
+        注意：只在待命盘旋和集结执行阶段显示——集结完成后这些参考点已经不代表飞机当前目标，
+        常驻显示只会长期遮挡后续航段/僚机目标标记，用规范化 rally_phase 过滤及时隐藏。
         长机/僚机分色，避免多机场景下分不清哪个圆属于哪架机；圆在屏幕上太小（缩得很远）时只画
         圆和标记点、不画文字标签，避免多机标签互相重叠看不清。
         """
@@ -552,17 +552,30 @@ class TopView(QGraphicsView):
             return
         node_by_id = {node.node_id: node for node in snapshot.nodes}
         marker_r = 6.0 / self.scale_value
+        # HOLD 后不再显示集结辅助几何，避免遮挡正常任务航线和队形目标。
+        visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
 
         for geometry in snapshot.rally_geometry:
             node = node_by_id.get(geometry.node_id)
-            if node is None or not node.rally_phase.startswith("JN"):
+            if node is None or node.rally_phase not in visible_phases:
                 continue
             color = QColor(self.theme.leader if is_leader_node(node) else self.theme.wingman)
 
+            # 集结圆使用节点主色，本地待命圆降低透明度，视觉上区分“当前等待区”和“目标集结区”。
             circle_pen = QPen(color, 1.4 / self.scale_value)
             circle_pen.setDashPattern([5, 4])
             painter.setPen(circle_pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
+            if geometry.local_radius > 0.0:
+                local_color = QColor(color)
+                local_color.setAlphaF(0.45)
+                local_pen = QPen(local_color, 1.1 / self.scale_value)
+                local_pen.setDashPattern([3, 5])
+                painter.setPen(local_pen)
+                painter.drawEllipse(QPointF(geometry.local_center_x, geometry.local_center_y), geometry.local_radius, geometry.local_radius)
+                # 这条线是规划切线的可视化提示；真实控制仍由算法层输出指令。
+                painter.drawLine(QPointF(geometry.local_tangent_x, geometry.local_tangent_y), QPointF(geometry.entry_x, geometry.entry_y))
+                painter.setPen(circle_pen)
             painter.drawEllipse(QPointF(geometry.center_x, geometry.center_y), geometry.radius, geometry.radius)
 
             show_labels = geometry.radius * self.scale_value > 40.0
@@ -590,6 +603,19 @@ class TopView(QGraphicsView):
         if show_labels:
             painter.setPen(QPen(color, 1))
             self._draw_screen_text(painter, geometry.entry_x, geometry.entry_y, 8.0, -6.0, f"{geometry.node_id} T")
+
+        if geometry.local_radius > 0.0:
+            # 本地切出点用方形，集结切入点用三角，避免两个 T 点在多机场景中混淆。
+            painter.setBrush(color)
+            painter.setPen(QPen(color, 1.2 / self.scale_value))
+            painter.drawRect(
+                QRectF(
+                    geometry.local_tangent_x - marker_r,
+                    geometry.local_tangent_y - marker_r,
+                    marker_r * 2.0,
+                    marker_r * 2.0,
+                )
+            )
 
     def _draw_route_markers(self, painter: QPainter, markers: list[tuple[float, float]]) -> None:
         """绘制航点黑点。注意：仅画端点标记，不包含圆弧折线采样点。"""
@@ -672,9 +698,10 @@ class TopView(QGraphicsView):
         """绘制各机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态；长机/僚机都画，
         长机在 JOINING 阶段目标是盘旋圆切入点/圆上投影点，跟僚机的槽位目标是同一套 cmd_pos 机制。
         """
+        visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
         for node in snapshot.nodes:
             # 仅集结场景绘制目标槽位（HOLD 等其他阶段不需要此标记）
-            if not node.rally_phase:
+            if node.rally_phase not in visible_phases:
                 continue
             # 目标点为原点时跳过（初始化默认值，尚未收到有效指令）
             if node.cmd_pos_x == 0.0 and node.cmd_pos_y == 0.0:

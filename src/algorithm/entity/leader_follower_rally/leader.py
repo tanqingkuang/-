@@ -8,6 +8,7 @@ from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
     FormationAnalysisS,
     FormStageE,
+    PosInEarthS,
     PosTrackDiagS,
     RallyPhaseE,
     MotionProfS,
@@ -19,7 +20,7 @@ from src.algorithm.context.leaf_types import (
     copy_position,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, _follower_tracker_init, waypoint_inputs_to_waylines
+from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, waypoint_inputs_to_waylines
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
@@ -59,7 +60,10 @@ class RallyLeaderEntity(EntityBase):
             raise ValueError("RallyLeaderEntity: rally_cfg must be RallyTaskInitS")
 
         # A = 集结区起点（掌机松散目标）；heading 取第一航段方向，支持多航点集结航线
-        rally_start = cfg.rally_route[0].pos
+        route_start = cfg.rally_route[0].pos
+        rally_start = PosInEarthS(route_start.east, route_start.north, route_start.h)
+        if cfg.rally_layer_altitude_m is not None:
+            rally_start.h = cfg.rally_layer_altitude_m
         _heading = rally_route_heading_rad(cfg.rally_route)
 
         self.cxt = FormContextS()
@@ -102,6 +106,7 @@ class RallyLeaderEntity(EntityBase):
             v_up_min_mps=v_up_min,
             v_up_max_mps=v_up_max,
             control_period_s=cfg.control_period_s,
+            standby_altitude_m=cfg.rally_layer_altitude_m,
         ))
         mission_lines = waypoint_inputs_to_waylines(cfg.route)
         self._tra_plan_mission.init(LeaderRouteInitS(mission_lines))
@@ -150,7 +155,7 @@ class RallyLeaderEntity(EntityBase):
         self._inbound_u.now_s = u.now_s
         self._task_u.now_s = u.now_s
 
-        # 入站解析（从僚机广播更新 followerStates）
+        # 通信槽位不区分 STANDBY/RALLY/HOLD，阶段推进只交给任务槽位判断。
         self._inbound.step(self._inbound_u, self._inbound_y)
 
         # 将长机自身 RallyJoinPos 状态注入 Rally 任务
@@ -170,6 +175,7 @@ class RallyLeaderEntity(EntityBase):
         step = self.cxt.cmd.step
 
         if stage == FormStageE.NONE:
+            # NONE 是停控空策略，仍保持原有早退语义，和 STANDBY 待命盘旋无关。
             if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
                 self._rally_join.reset()
                 self._rally_completed = False
@@ -182,13 +188,18 @@ class RallyLeaderEntity(EntityBase):
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
-        if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
-            # JOINING 阶段：长机平等参与，也飞向自己的松散点（队形中心）
-            self._rally_join_u.t_ref = self.cxt.rally_t_ref
-            self._rally_join_u.t_ref_valid = self.cxt.rally_t_ref_valid
+        if stage == FormStageE.STANDBY or (stage == FormStageE.RALLY and step == RallyPhaseE.JOINING):
+            # STANDBY/JOINING 都属于 RallyJoinPos 位置解算策略，只由 standby 输入切换内部状态。
+            # 待命没有全队 T_ref，显式压成无效，避免复用上一轮集结锁存值。
+            self._rally_join_u.standby = stage == FormStageE.STANDBY
+            self._rally_join_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
+            self._rally_join_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
             self._rally_join_u.t_now = u.now_s
             self._rally_join.step(self._rally_join_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
+            if stage == FormStageE.STANDBY:
+                # effective_cmd 跟随本地盘旋目标，保证输出诊断和跟踪目标一致。
+                copy_motion(self.cxt.selfCmd, self._effective_cmd)
         else:
             # RALLY step>=1（LOOSE/COMPRESS）或 HOLD：长机沿任务航线飞行
             self._tra_plan_mission.step(self._tra_plan_u, self._tra_plan_y)
@@ -273,5 +284,3 @@ def _compute_formation_analysis(
         inPositionCount=in_position,
         totalCount=total,
     )
-
-

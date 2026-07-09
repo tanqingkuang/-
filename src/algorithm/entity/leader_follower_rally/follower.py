@@ -22,6 +22,7 @@ from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
+    RALLY_STATE_STANDBY,
     RallyJoinPos,
     RallyJoinPosInitS,
     RallyJoinPosInputS,
@@ -66,6 +67,8 @@ class RallyFollowerEntity(EntityBase):
                 "的槽位表中未找到对应条目（目标队形不在 formPat 中，或 formPos 缺少该队形/该节点）"
             )
         _rally_target = rally_loose_target(_A, _heading, rally_cfg.looseScale, _slot)
+        if cfg.rally_layer_altitude_m is not None:
+            _rally_target.h = cfg.rally_layer_altitude_m
 
         self.cxt = FormContextS()
         self._inbox: list = []
@@ -83,6 +86,7 @@ class RallyFollowerEntity(EntityBase):
         self._pos_calc_slot = SlotGeometry()
         self._pos_track = PidCompose()
         self._outbound = FollowerBroadcast()
+        self._rally_layer_altitude_m = cfg.rally_layer_altitude_m
 
         # 单元初始化
         self._inbound.init(None)
@@ -102,6 +106,7 @@ class RallyFollowerEntity(EntityBase):
             v_up_min_mps=v_up_min,
             v_up_max_mps=v_up_max,
             control_period_s=cfg.control_period_s,
+            standby_altitude_m=cfg.rally_layer_altitude_m,
         ))
         self._pos_calc_slot.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
         self._pos_track.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
@@ -144,19 +149,26 @@ class RallyFollowerEntity(EntityBase):
         """推进 RallyFollowerEntity 一个处理周期。"""
         if u.selfState is not None:
             copy_motion(u.selfState, self.cxt.selfState)
+        remote_stage = u.remote.stage if u.remote is not None else None
         previous_stage = self.cxt.cmd.stage
         self._inbox.clear()
         self._inbox.extend(u.inbox)
+        standby_requested = remote_stage == FormStageE.STANDBY
 
-        # 入站解析（更新 leaderState / cmd / slotScale / t_ref）
+        # 通信槽位先正常解析长机广播，待命只在后续阶段选择覆盖本机位置解算。
         self._inbound.step(self._inbound_u, self._inbound_y)
         self.cxt.rally_t_ref = self._inbound_y.t_ref
         self.cxt.rally_t_ref_valid = self._inbound_y.t_ref_valid
+        if standby_requested:
+            # 本地远控阶段只决定本机 pos_calc 策略，不阻断长机广播解析。
+            self.cxt.cmd.stage = FormStageE.STANDBY
+            self.cxt.cmd.step = RallyPhaseE.JOINING
         self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)
 
         stage = self.cxt.cmd.stage
 
         if stage == FormStageE.NONE:
+            # NONE 是停控空策略，保留当前位置零速输出，和 STANDBY 本地盘旋分开处理。
             if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
                 self._rally_join.reset()
             copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)
@@ -167,10 +179,12 @@ class RallyFollowerEntity(EntityBase):
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
-        if stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.JOINING:
-            # JOINING 阶段：平等飞行 / 盘旋 / 切出
-            self._rally_join_u.t_ref = self.cxt.rally_t_ref
-            self._rally_join_u.t_ref_valid = self.cxt.rally_t_ref_valid
+        if stage == FormStageE.STANDBY or (stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.JOINING):
+            # STANDBY/JOINING 都属于 RallyJoinPos 位置解算策略，只由 standby 输入切换内部状态。
+            # 待命没有长机 T_ref，显式压成无效，切到 RALLY 后再恢复广播值。
+            self._rally_join_u.standby = stage == FormStageE.STANDBY
+            self._rally_join_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
+            self._rally_join_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
             self._rally_join_u.t_now = u.now_s
             self._rally_join.step(self._rally_join_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
@@ -179,8 +193,19 @@ class RallyFollowerEntity(EntityBase):
             # CATCHUP 与 LOOSE/COMPRESS 用同一套算法——slotScale 处于松散值时即是 CATCHUP/LOOSE，
             # 二者的区别只在 Rally 任务的阶段门控上，位置解算本身不需要区分。
             self._pos_calc_slot.step(self._slot_u, self._pos_calc_y)
+            # CATCHUP 尚未形成松散队形，继续错高；LOOSE 后再回到正常槽位高度。
+            if (
+                stage == FormStageE.RALLY
+                and self.cxt.cmd.step == RallyPhaseE.CATCHUP
+                and self._rally_layer_altitude_m is not None
+            ):
+                self.cxt.selfCmd.pos.h = self._rally_layer_altitude_m
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
-        self._update_outbound()
+        if stage == FormStageE.STANDBY:
+            # STANDBY 仍走出站槽位，只把回报语义固定为本地待命。
+            self._update_standby_outbound()
+        else:
+            self._update_outbound()
         self._outbound.step(self._outbound_u, self._outbound_y)
         fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
 
@@ -208,3 +233,10 @@ class RallyFollowerEntity(EntityBase):
         self._outbound_u.eta_s = self._rally_join.eta_s
         self._outbound_u.reached_slot_once = self._rally_join.reached_slot_once
         self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
+
+    def _update_standby_outbound(self) -> None:
+        """将本地待命盘旋状态同步到僚机回报端口。"""
+        self._outbound_u.rally_state = RALLY_STATE_STANDBY
+        self._outbound_u.eta_s = 0.0
+        self._outbound_u.reached_slot_once = False
+        self._outbound_u.selfArrived = 0

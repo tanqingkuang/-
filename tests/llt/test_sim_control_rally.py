@@ -9,10 +9,13 @@ import unittest
 from pathlib import Path
 
 from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS
+from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
+from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 from tests.llt._geo_route import geodetic_config
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.runner.sim_control import (
+    RallyPlanGeometryState,
     SimulationController,
     _build_formation_comm_init,
     _build_rally_route,
@@ -54,6 +57,7 @@ def _rally_config() -> dict[str, object]:
             "compress_time_s": 0.2,
             "tight_radius_m": 2.0,
             "stale_timeout_s": 1.0,
+            "altitude_separation_m": 60.0,
         },
         "formation": {
             "coordinate_system": "x_forward_y_up_z_right",
@@ -113,6 +117,12 @@ def _write_json(directory: Path, config: dict[str, object]) -> Path:
     path = directory / "rally_case.json"
     path.write_text(json.dumps(geodetic_config(config)), encoding="utf-8")
     return path
+
+
+def _snapshot_node_phases(controller: SimulationController) -> dict[str, str]:
+    """读取快照中的节点集结阶段。注意：测试只关心 node_id 到 phase 的稳定映射。"""
+
+    return {node.node_id: node.rally_phase for node in controller.get_snapshot().nodes}
 
 
 class SimControlRallyTests(unittest.TestCase):
@@ -177,6 +187,154 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=3)
             self.assertAlmostEqual(snapshot.route.end_x_m, 200.0, places=3)
 
+    def test_rally_snapshot_ready_hides_phase_and_exposes_plan_geometry(self) -> None:
+        """验证 READY 阶段只暴露几何预览，不把算法待命盘旋阶段写入节点状态。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            result = controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            snapshot = controller.get_snapshot()
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(snapshot.run_state, "READY")
+            self.assertEqual(snapshot.control_report, "待命")
+            self.assertEqual(_snapshot_node_phases(controller), {"R01": "", "R02": "", "R03": ""})
+            self.assertEqual(set(snapshot.rally_geometry), {"R01", "R02", "R03"})
+            for geometry in snapshot.rally_geometry.values():
+                self.assertIsInstance(geometry, RallyPlanGeometryState)
+                self.assertGreater(geometry.local_radius_m, 0.0)
+                self.assertGreater(geometry.rally_radius_m, 0.0)
+                self.assertTrue(math.isfinite(geometry.local_tangent_east_m))
+                self.assertTrue(math.isfinite(geometry.rally_tangent_north_m))
+
+    def test_start_rally_command_requires_loaded_running_or_paused_standby(self) -> None:
+        """验证开始集结命令只允许在已开始运行后的本地待命盘旋阶段触发。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            self.assertEqual(controller.start_rally().code, "ERR_NO_CONFIG")
+            load_result = controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            ready_result = controller.start_rally()
+            step_result = controller.step(1)
+            standby_phases = _snapshot_node_phases(controller)
+            first_start = controller.start_rally()
+            duplicate_start = controller.start_rally()
+
+            self.assertEqual(load_result.code, "OK")
+            self.assertEqual(ready_result.code, "ERR_INVALID_STATE")
+            self.assertIn("请先开始运行", ready_result.message)
+            self.assertEqual(step_result.code, "OK")
+            self.assertEqual(standby_phases, {"R01": "LOCAL_LOITER", "R02": "LOCAL_LOITER", "R03": "LOCAL_LOITER"})
+            self.assertEqual(first_start.code, "OK")
+            self.assertEqual(duplicate_start.code, "ERR_INVALID_STATE")
+            self.assertIn("已在集结中", duplicate_start.message)
+
+    def test_pause_in_local_loiter_keeps_control_report_standby(self) -> None:
+        """验证本地待命盘旋暂停时，全局回报仍派生为待命而不是写死保持。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            controller.step(1)
+            controller._run_state = "RUNNING"
+
+            result = controller.pause()
+            snapshot = controller.get_snapshot()
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(snapshot.run_state, "PAUSED")
+            self.assertEqual(snapshot.control_report, "待命")
+            self.assertEqual(_snapshot_node_phases(controller), {"R01": "LOCAL_LOITER", "R02": "LOCAL_LOITER", "R03": "LOCAL_LOITER"})
+
+    def test_set_duration_to_current_time_keeps_local_loiter_report_standby(self) -> None:
+        """验证待命阶段被时长边界结束时，全局回报仍按当前阶段派生。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            controller.step(1)
+            current_time_s = controller.get_snapshot().time_s
+
+            result = controller.set_duration(current_time_s)
+            snapshot = controller.get_snapshot()
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(snapshot.run_state, "FINISHED")
+            self.assertEqual(snapshot.control_report, "待命")
+            self.assertEqual(_snapshot_node_phases(controller), {"R01": "LOCAL_LOITER", "R02": "LOCAL_LOITER", "R03": "LOCAL_LOITER"})
+
+    def test_rally_standby_tick_is_executed_by_entity_layer(self) -> None:
+        """验证待命盘旋由实体层执行，runner 只把 STANDBY 遥控阶段转发进去。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            algorithm = controller._node_algorithms["R01"]
+            calls: list[FormStageE] = []
+            original_step = algorithm._entity.step
+
+            def wrapped_step(entity_input: object, entity_output: object) -> None:
+                remote = getattr(entity_input, "remote", None)
+                calls.append(remote.stage if remote is not None else FormStageE.NONE)
+                original_step(entity_input, entity_output)  # type: ignore[arg-type]
+
+            algorithm._entity.step = wrapped_step  # type: ignore[method-assign]
+
+            result = controller.step(1)
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(calls, [FormStageE.STANDBY])
+
+    def test_run_until_complete_auto_starts_rally_config(self) -> None:
+        """验证批处理运行集结配置时会自动离开本地待命，而不是盘旋到结束。"""
+
+        config = _rally_config()
+        config["duration_s"] = 0.05
+        controller = SimulationController()
+        self.addCleanup(controller.close)
+
+        result = controller.run_until_complete(config)
+        snapshot = controller.get_snapshot()
+        phases = {node.node_id: node.rally_phase for node in snapshot.nodes}
+
+        self.assertEqual(result.code, "OK")
+        self.assertEqual(snapshot.run_state, "FINISHED")
+        self.assertEqual(snapshot.control_report, "集结")
+        self.assertNotEqual(set(phases.values()), {"LOCAL_LOITER"})
+
+    def test_rally_scenario_supports_runtime_formation_switch_entry(self) -> None:
+        """验证集结场景复用现有队形重构入口，运行期切换 rally_leader 的目标队形索引。"""
+
+        config = _rally_config()
+        config["formation"]["formations"].append(  # type: ignore[index]
+            {
+                "name": "LINE",
+                "slots": [
+                    {"node_id": "R01", "x_m": 0.0, "y_m": 0.0, "z_m": 0.0},
+                    {"node_id": "R02", "x_m": -20.0, "y_m": 0.0, "z_m": 0.0},
+                    {"node_id": "R03", "x_m": -40.0, "y_m": 0.0, "z_m": 0.0},
+                ],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            load_result = controller.load_config(str(_write_json(Path(tmp), config)))
+
+            switch_result = controller.switch_formation(1)
+            task = controller._node_algorithms["R01"]._entity._task
+
+            self.assertEqual(load_result.code, "OK")
+            self.assertEqual(switch_result.code, "OK")
+            self.assertEqual(controller.get_formation_index(), 1)
+            self.assertEqual(task._target_pattern, 1)
+
     def test_rally_cfg_approach_speed_is_injected_into_followers(self) -> None:
         """验证 rally_cfg.approach_speed_mps 会注入僚机 RallyJoinPos。"""
 
@@ -210,8 +368,8 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertAlmostEqual(follower._rally_join._v_up_min, -2.0)
             self.assertAlmostEqual(follower._rally_join._v_up_max, 2.5)
 
-    def test_manual_step_runs_rally_stage_and_sends_leader_broadcast(self) -> None:
-        """验证手动步进后集结长机进入 RALLY 并通过通信信道投递长机广播。"""
+    def test_manual_step_before_start_rally_stays_local_loiter(self) -> None:
+        """验证点开始集结前，手动步进进入本地待命盘旋，并正常投递 STANDBY 广播。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()
@@ -221,9 +379,81 @@ class SimControlRallyTests(unittest.TestCase):
             result = controller.step(1)
             stage = controller._node_algorithms["R01"].current_stage()
             inbox = controller._comm.read_inbox("R02")
+            leader_inbox = controller._comm.read_inbox("R01")
 
             self.assertEqual(result.code, "OK")
+            self.assertEqual(stage, FormStageE.STANDBY)
+            self.assertEqual(_snapshot_node_phases(controller), {"R01": "LOCAL_LOITER", "R02": "LOCAL_LOITER", "R03": "LOCAL_LOITER"})
+            self.assertTrue(any(
+                msg.topic == "formation.leader" and msg.payload.get("cmd", {}).get("stage") == int(FormStageE.STANDBY)
+                for msg in inbox
+            ))
+            self.assertTrue(any(
+                msg.topic == FOLLOWER_STATUS_TOPIC and msg.payload.get("rally_state") == RALLY_STATE_STANDBY
+                for msg in leader_inbox
+            ))
+
+    def test_local_loiter_standby_outputs_tangential_control(self) -> None:
+        """验证集结待命阶段输出本地盘旋切向速度和非零控制，而不是原地冻结。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+
+            result = controller.step(1)
+            snapshot = controller.get_snapshot()
+            node = next(item for item in snapshot.nodes if item.node_id == "R02")
+            control = controller._current_controls["R02"]
+
+            self.assertEqual(result.code, "OK")
+            self.assertGreater(math.hypot(node.cmd_vel_east_mps, node.cmd_vel_north_mps), 1.0)
+            self.assertGreater(abs(control.ax_cmd_mps2) + abs(control.ay_cmd_mps2), 0.01)
+
+    def test_rally_standby_and_joining_use_layered_altitudes(self) -> None:
+        """验证待命和 JOINING 阶段按集结高度分层，避免多机同高转场。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+
+            controller.step(1)
+            standby_altitudes = {
+                node.node_id: node.cmd_pos_h_m
+                for node in controller.get_snapshot().nodes
+            }
+            controller.start_rally()
+            controller.step(4)
+            joining_altitudes = {
+                node.node_id: node.cmd_pos_h_m
+                for node in controller.get_snapshot().nodes
+            }
+
+            self.assertEqual(standby_altitudes, {"R01": 500.0, "R02": 560.0, "R03": 440.0})
+            self.assertEqual(joining_altitudes, {"R01": 500.0, "R02": 560.0, "R03": 440.0})
+
+    def test_start_rally_then_step_enters_rally_transit_and_sends_leader_broadcast(self) -> None:
+        """验证点击开始集结后，下一拍进入集结转场并恢复长机广播。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            controller.step(1)
+
+            start_result = controller.start_rally()
+            step_result = controller.step(2)
+            stage = controller._node_algorithms["R01"].current_stage()
+            inbox = controller._comm.read_inbox("R02")
+
+            self.assertEqual(start_result.code, "OK")
+            self.assertEqual(step_result.code, "OK")
             self.assertEqual(stage, FormStageE.RALLY)
+            phases = _snapshot_node_phases(controller)
+            self.assertIn(phases["R01"], {"RALLY_TRANSIT", "RALLY_LOITER"})
+            self.assertEqual(phases["R02"], "RALLY_TRANSIT")
+            self.assertEqual(phases["R03"], "RALLY_TRANSIT")
             self.assertTrue(any(msg.topic == "formation.leader" for msg in inbox))
 
     def test_snapshot_exposes_latched_rally_analysis(self) -> None:
@@ -311,26 +541,39 @@ class SimControlRallyTests(unittest.TestCase):
         with self.assertRaises(ValueError, msg="rally_cfg is required"):
             _ConfigLoader().validate(config)
 
-    def test_repository_rally_demo_config_loads(self) -> None:
-        """验证仓库内 rally_demo.json 与控制器当前配置契约一致。"""
+    def test_repository_legacy_three_aircraft_rally_demo_removed(self) -> None:
+        """验证旧三机 rally_demo.json 不再作为仓库演示配置保留。"""
+
+        self.assertFalse(Path("configs/rally_demo.json").exists())
+
+    def test_repository_rally_demo_5_aircraft_config_loads(self) -> None:
+        """验证仓库内 5 机集结配置复用五机多队形，并以 A03 作为集结长机。"""
 
         controller = SimulationController()
         self.addCleanup(controller.close)
-        result = controller.load_config("configs/rally_demo.json")
+        result = controller.load_config("configs/rally_demo_5_aircraft.json")
 
         self.assertEqual(result.code, "OK")
-        self.assertEqual([node.role for node in controller.get_snapshot().nodes], ["rally_leader", "rally_follower", "rally_follower"])
+        snapshot = controller.get_snapshot()
+        self.assertEqual(
+            [node.role for node in snapshot.nodes],
+            ["rally_follower", "rally_follower", "rally_leader", "rally_follower", "rally_follower"],
+        )
+        self.assertEqual(controller.get_formation_names(), ["五机楔形", "五机横队", "五机双纵队"])
+        self.assertEqual(len(snapshot.route_segments), 4)
+        self.assertEqual(controller.switch_formation(1).code, "OK")
+        self.assertEqual(controller.switch_formation(2).code, "OK")
 
     def test_repository_rally_demo_initial_heading_points_toward_rally_origin(self) -> None:
-        """验证仓库内 rally_demo.json 三机初始航向大致对齐集结航线起点，避免起始瞬间大转向。
+        """验证默认五机集结配置初始航向大致对齐集结航线起点，避免起始瞬间大转向。
 
-        回归背景：三机 psi_v_deg 曾固定为 0，与各自实际需要飞向的方向偏差很大，
+        回归背景：集结演示的 psi_v_deg 曾固定为 0，与各自实际需要飞向的方向偏差很大，
         导致运行开始的几秒内速度矢量方向剧烈摆动，观感上像是一开始就在打转。
         """
-        with open("configs/rally_demo.json", encoding="utf-8") as f:
+        with open("configs/rally_demo_5_aircraft.json", encoding="utf-8") as f:
             config = json.load(f)
 
-        expected_psi_deg = {"A01": 153.43, "A02": 33.69, "A03": -158.20}
+        expected_psi_deg = {"A01": 153.43, "A02": 33.69, "A03": -158.20, "A04": -25.64, "A05": 156.37}
         for node in config["nodes"]:
             node_id = node["node_id"]
             bearing_to_origin_deg = math.degrees(math.atan2(-node["y_m"], -node["x_m"]))

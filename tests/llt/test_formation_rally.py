@@ -18,6 +18,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     NetWorkS,
     PosInEarthS,
+    RallyPhaseE,
     RallySlotScaleS,
     RemoteCmdS,
     VdInEarthS,
@@ -36,6 +37,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RALLY_STATE_FLYING,
     RALLY_STATE_LOITERING,
+    RALLY_STATE_STANDBY,
     RallyJoinPos,
     RallyJoinPosInitS,
     RallyJoinPosInputS,
@@ -318,6 +320,7 @@ class RallyLeafTypesAndContextTests(unittest.TestCase):
     def test_rally_leaf_type_defaults_and_copy_helpers(self) -> None:
         """验证默认值与复制函数覆盖所有集结扩展字段。"""
 
+        self.assertEqual(FormStageE.STANDBY, 4)
         self.assertEqual(RallySlotScaleS(), RallySlotScaleS(scale=1.0, scaleRate=0.0))
         self.assertFalse(FollowerStateS().valid)
         self.assertEqual(FormationAnalysisS(), FormationAnalysisS())
@@ -436,6 +439,53 @@ class RallyTaskTests(unittest.TestCase):
         self.assertEqual(ctx.cmd.pattern, 0)
         self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
         self.assertFalse(output.rallyCompleted)
+
+    def test_remote_standby_keeps_task_out_of_rally_state_machine(self) -> None:
+        """验证 STANDBY 遥控不会被 Rally 任务误解释成开始集结。"""
+
+        task = _rally_task(expected=())
+        ctx = FormContextS()
+
+        output = _task_step(task, ctx, remote=FormStageE.STANDBY)
+
+        self.assertEqual(ctx.cmd.stage, FormStageE.STANDBY)
+        self.assertEqual(ctx.cmd.step, RallyPhaseE.JOINING)
+        self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
+        self.assertFalse(output.rallyCompleted)
+
+    def test_remote_rally_from_standby_resets_as_first_entry(self) -> None:
+        """验证 STANDBY→RALLY 按首次进入集结处理，不沿用待命前残留的子阶段和计时器。"""
+
+        task = _rally_task(expected=("R02",), dt_s=0.1)
+        ctx = FormContextS()
+        ctx.cmd.stage = FormStageE.STANDBY
+        ctx.cmd.step = RallyPhaseE.COMPRESS
+        task._stable_timer = 8.0
+        task._catchup_stable_timer = 7.0
+        task._compress_elapsed = 6.0
+        task._t_ref = 123.0
+
+        output = _task_step(task, ctx, remote=FormStageE.RALLY, states=[], now_s=5.0)
+
+        self.assertEqual(ctx.cmd.stage, FormStageE.RALLY)
+        self.assertEqual(ctx.cmd.step, RallyPhaseE.JOINING)
+        self.assertAlmostEqual(output.t_ref, 5.0)
+        self.assertAlmostEqual(task._stable_timer, 0.0)
+        self.assertAlmostEqual(task._catchup_stable_timer, 0.0)
+        self.assertAlmostEqual(task._compress_elapsed, 0.0)
+
+    def test_set_pattern_index_changes_hold_output(self) -> None:
+        """验证 Rally 完成集结进入 HOLD 后，也能按运行期索引切换目标队形。"""
+
+        task = _rally_task(expected=())
+        ctx = FormContextS()
+
+        task.set_pattern_index(1)
+        _task_step(task, ctx, remote=FormStageE.HOLD)
+
+        self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
+        self.assertEqual(ctx.cmd.pattern, 1)
+        self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
 
     def test_approach_requires_all_expected_arrived_and_fresh(self) -> None:
         """验证 JOINING→LOOSE 由全部期望僚机 EXITED 且长机 EXITED 立即推进（无计时器）。"""
@@ -744,6 +794,24 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
         self.assertEqual(msg.payload["arrived"], 1)
         self.assertAlmostEqual(msg.payload["pos_err_m"], 5.0)
 
+    def test_follower_broadcast_supports_standby_rally_state_constant(self) -> None:
+        """验证待命回报使用统一常量，避免业务代码散落裸字符串。"""
+
+        outbound = FollowerBroadcast()
+        outbound.init(FollowerBroadcastInitS(selfId="R02", leaderId="R01"))
+        output = OutboundOutputS()
+
+        outbound.step(
+            FollowerBroadcastInputS(
+                selfState=_motion(east=1.0, north=2.0, h=3.0),
+                selfCmd=_motion(east=1.0, north=2.0, h=3.0),
+                rally_state=RALLY_STATE_STANDBY,
+            ),
+            output,
+        )
+
+        self.assertEqual(output.outbox[0].payload["rally_state"], RALLY_STATE_STANDBY)
+
     def test_follower_broadcast_rejects_empty_leader_id_and_missing_ports(self) -> None:
         """验证显式 leaderId 和端口绑定是必需条件。"""
 
@@ -802,6 +870,31 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
         msg.payload["id"] = "伪造ID"
         inbound.step(FollowerStatusInputS(inbox=[msg], now_s=12.0), FollowerStatusOutputS(followerStates=states))
         self.assertEqual(states[-1].id, "R05")
+
+    def test_follower_status_defaults_missing_rally_state_to_legacy_flying(self) -> None:
+        """验证旧协议缺省 rally_state 时按 FLYING 兼容，而不是误判为待命。"""
+
+        states: list[FollowerStateS] = []
+        inbound = FollowerStatus()
+        inbound.init(None)
+        msg = MessageEnvelope(
+            FOLLOWER_STATUS_TOPIC,
+            "R02",
+            "R01",
+            0.0,
+            {
+                "pos_east": 1.0,
+                "pos_north": 2.0,
+                "pos_h": 3.0,
+                "pos_err_m": 4.0,
+                "eta_s": 12.0,
+            },
+        )
+
+        inbound.step(FollowerStatusInputS(inbox=[msg], now_s=5.0), FollowerStatusOutputS(followerStates=states))
+
+        self.assertEqual(len(states), 1)
+        self.assertEqual(states[0].rally_state, RALLY_STATE_FLYING)
 
     def test_follower_status_rejects_non_finite_payload_atomically(self) -> None:
         """验证非有限或转换失败的回报不会新增条目，也不会部分覆盖已有状态。"""
@@ -1054,6 +1147,90 @@ class RallyLoiterSpeedBoundsTests(unittest.TestCase):
 
 class RallyPosCalcTests(unittest.TestCase):
     """验证集结专用位置解算单元。"""
+
+    def test_rally_join_pos_standby_outputs_ccw_local_loiter_command(self) -> None:
+        """验证 STANDBY 是 RallyJoinPos 内部状态，输出本地圆盘旋目标。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(40.0, 5.0, 560.0),
+            approach_speed_mps=20.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+            mission_speed_mps=20.0,
+            control_period_s=0.05,
+            standby_altitude_m=560.0,
+        ))
+        output = PosCalcOutputS(selfCmd=MotionProfS())
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_motion(east=-50.0, north=20.0, h=500.0, v_east=20.0, v_psi=0.0),
+                standby=True,
+            ),
+            output,
+        )
+
+        assert output.selfCmd is not None
+        self.assertEqual(join.state, RALLY_STATE_STANDBY)
+        self.assertAlmostEqual(output.selfCmd.pos.east, -50.0)
+        self.assertAlmostEqual(output.selfCmd.pos.north, 20.0)
+        self.assertAlmostEqual(output.selfCmd.pos.h, 560.0)
+        self.assertAlmostEqual(output.selfCmd.v.vEast, 20.0)
+        self.assertAlmostEqual(output.selfCmd.v.vNorth, 0.0, places=6)
+        self.assertAlmostEqual(output.selfCmd.v.vPsi, 0.0, places=6)
+        self.assertAlmostEqual(output.selfCmd.v.dVPsi, 0.1)
+        self.assertAlmostEqual(output.selfCmd.v.vUp, 3.0)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_motion(east=-50.0, north=20.0, h=500.0, v_east=20.0, v_psi=0.0),
+                standby=False,
+                t_now=1.0,
+            ),
+            PosCalcOutputS(selfCmd=MotionProfS()),
+        )
+
+        self.assertEqual(join.state, RALLY_STATE_FLYING)
+
+    def test_rally_join_pos_standby_clamps_speed_to_loiter_bounds(self) -> None:
+        """验证待命盘旋速度以当前地速为参考，但必须夹到盘旋速度上下限内。"""
+
+        for initial_speed_mps, expected_speed_mps in ((5.0, 14.0), (60.0, 25.0)):
+            with self.subTest(initial_speed_mps=initial_speed_mps):
+                join = RallyJoinPos()
+                join.init(RallyJoinPosInitS(
+                    loose_slot=_pos(40.0, 5.0, 560.0),
+                    approach_speed_mps=20.0,
+                    loiter_radius_m=200.0,
+                    loiter_speed_min_mps=14.0,
+                    loiter_speed_max_mps=25.0,
+                    mission_heading_rad=0.0,
+                    mission_speed_mps=20.0,
+                    control_period_s=0.05,
+                ))
+                output = PosCalcOutputS(selfCmd=MotionProfS())
+
+                join.step(
+                    RallyJoinPosInputS(
+                        selfState=_motion(
+                            east=-50.0,
+                            north=20.0,
+                            h=500.0,
+                            v_east=initial_speed_mps,
+                            vd=initial_speed_mps,
+                            v_psi=0.0,
+                        ),
+                        standby=True,
+                    ),
+                    output,
+                )
+
+                assert output.selfCmd is not None
+                self.assertAlmostEqual(output.selfCmd.v.vd, expected_speed_mps)
+                self.assertAlmostEqual(output.selfCmd.v.dVPsi, expected_speed_mps / 200.0)
 
     def test_slot_geometry_scales_position_and_adds_compress_feedforward(self) -> None:
         """验证槽位偏置缩放和 scaleRate 速度前馈。"""
@@ -1462,6 +1639,120 @@ class RallyPosCalcTests(unittest.TestCase):
 class RallyEntityTests(unittest.TestCase):
     """验证集结长机和僚机实体的主链路。"""
 
+    def test_rally_follower_standby_loiters_and_broadcasts_from_entity_layer(self) -> None:
+        """验证僚机实体在 STANDBY 阶段自行本地盘旋，并继续发送待命回报。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+                rally_approach_speed_mps=20.0,
+                rally_layer_altitude_m=560.0,
+            )
+        )
+        output = EntityOutputS()
+
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=-50.0, north=20.0, h=500.0, v_east=20.0, v_psi=0.0),
+                inbox=[_leader_msg(stage=FormStageE.RALLY, step=0)],
+                remote=RemoteCmdS(FormStageE.STANDBY),
+                now_s=0.0,
+            ),
+            output,
+        )
+
+        assert output.selfCmd is not None
+        assert output.selfAccCmd is not None
+        self.assertEqual(follower.cxt.cmd.stage, FormStageE.STANDBY)
+        self.assertEqual(follower._rally_join.state, RALLY_STATE_STANDBY)
+        self.assertFalse(hasattr(follower, "_pos_calc_standby"))
+        self.assertFalse(hasattr(follower, "_standby_u"))
+        self.assertAlmostEqual(follower.cxt.leaderState.pos.east, 100.0)
+        self.assertAlmostEqual(output.selfCmd.pos.h, 560.0)
+        self.assertGreater(math.hypot(output.selfCmd.v.vEast, output.selfCmd.v.vNorth), 1.0)
+        self.assertGreater(abs(output.selfAccCmd.accEast) + abs(output.selfAccCmd.accNorth), 0.01)
+        self.assertEqual(output.outbox[0].payload["rally_state"], RALLY_STATE_STANDBY)
+        self.assertEqual(output.outbox[0].payload["arrived"], 0)
+
+    def test_rally_follower_standby_keeps_subject_flow_slots(self) -> None:
+        """验证僚机待命不在实体主体流程早退，仍经过轨迹规划槽位后再进入位置解算。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+            )
+        )
+        tra_plan_calls: list[FormStageE] = []
+        original_step = follower._tra_plan.step
+
+        def record_tra_plan_step(u: object, y: object) -> None:
+            """记录待命阶段是否进入轨迹规划槽位。"""
+
+            tra_plan_calls.append(follower.cxt.cmd.stage)
+            original_step(u, y)
+
+        follower._tra_plan.step = record_tra_plan_step  # type: ignore[method-assign]
+
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=-50.0, north=20.0, h=500.0, v_east=20.0),
+                inbox=[_leader_msg(stage=FormStageE.RALLY, step=0)],
+                remote=RemoteCmdS(FormStageE.STANDBY),
+            ),
+            EntityOutputS(),
+        )
+
+        self.assertEqual(tra_plan_calls, [FormStageE.STANDBY])
+        self.assertEqual(follower._rally_join.state, RALLY_STATE_STANDBY)
+
+    def test_rally_follower_catchup_keeps_layered_altitude_before_loose(self) -> None:
+        """验证 CATCHUP 阶段仍保持分层高度，直到进入 LOOSE 后再收敛到正常槽位高度。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+                rally_layer_altitude_m=560.0,
+            )
+        )
+
+        catchup = EntityOutputS()
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
+                inbox=[_leader_msg(step=1, scale=3.0, leader_state=_motion(east=100.0, north=200.0, h=500.0, v_east=20.0))],
+            ),
+            catchup,
+        )
+        assert catchup.selfCmd is not None
+        catchup_height_m = catchup.selfCmd.pos.h
+        loose = EntityOutputS()
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
+                inbox=[_leader_msg(step=2, scale=3.0, leader_state=_motion(east=100.0, north=200.0, h=500.0, v_east=20.0))],
+            ),
+            loose,
+        )
+
+        assert loose.selfCmd is not None
+        self.assertAlmostEqual(catchup_height_m, 560.0)
+        self.assertAlmostEqual(loose.selfCmd.pos.h, 500.0)
+
     def test_rally_follower_latches_arrival_and_switches_to_slot_scale_after_step_one(self) -> None:
         """验证僚机到达松散点后进入 EXITED 上报，并在长机进入 LOOSE/COMPRESS 后使用缩放槽位。"""
 
@@ -1664,6 +1955,108 @@ class RallyEntityTests(unittest.TestCase):
 
         self.assertEqual(leader._rally_join.state, RALLY_STATE_FLYING)
         self.assertFalse(leader._rally_completed)
+
+    def test_rally_leader_standby_parses_follower_status_and_broadcasts(self) -> None:
+        """验证长机待命阶段正常解析僚机回报，并继续广播 STANDBY 阶段。"""
+
+        leader = RallyLeaderEntity()
+        leader.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R01"),
+                commInit=_comm_init(),
+                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
+                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+            )
+        )
+
+        output = EntityOutputS()
+        leader.step(
+            EntityInputS(
+                selfState=_motion(east=0.0, north=0.0, h=500.0, v_east=20.0),
+                inbox=[_follower_status_msg("R02", pos_err_m=1.0, arrived=1)],
+                remote=RemoteCmdS(FormStageE.STANDBY),
+                now_s=1.0,
+            ),
+            output,
+        )
+
+        self.assertEqual(leader.cxt.cmd.stage, FormStageE.STANDBY)
+        self.assertEqual(leader._rally_join.state, RALLY_STATE_STANDBY)
+        self.assertFalse(hasattr(leader, "_pos_calc_standby"))
+        self.assertFalse(hasattr(leader, "_standby_u"))
+        self.assertEqual([state.id for state in leader.cxt.followerStates], ["R02"])
+        self.assertEqual(output.outbox[0].topic, "formation.leader")
+        self.assertEqual(output.outbox[0].payload["cmd"]["stage"], int(FormStageE.STANDBY))
+
+    def test_rally_leader_standby_does_not_clear_entity_state_before_flow(self) -> None:
+        """验证 STANDBY 不在实体主体流程前清理已有状态，清理职责不属于待命位置解算。"""
+
+        leader = RallyLeaderEntity()
+        leader.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R01"),
+                commInit=_comm_init(),
+                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
+                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+            )
+        )
+        leader.cxt.cmd.stage = FormStageE.RALLY
+        leader.cxt.followerStates.append(_follower_state("R03", pos_err_m=3.0))
+        leader._rally_completed = True
+
+        leader.step(
+            EntityInputS(
+                selfState=_motion(east=0.0, north=0.0, h=500.0, v_east=20.0),
+                inbox=[_follower_status_msg("R02", pos_err_m=1.0, arrived=1)],
+                remote=RemoteCmdS(FormStageE.STANDBY),
+                now_s=1.0,
+            ),
+            EntityOutputS(),
+        )
+
+        self.assertEqual([state.id for state in leader.cxt.followerStates], ["R03", "R02"])
+        self.assertTrue(leader._rally_completed)
+
+    def test_rally_leader_standby_keeps_subject_flow_slots(self) -> None:
+        """验证长机待命不在实体主体流程早退，仍经过任务编排槽位后再进入位置解算。"""
+
+        leader = RallyLeaderEntity()
+        leader.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R01"),
+                commInit=_comm_init(),
+                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
+                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+            )
+        )
+        task_calls: list[FormStageE] = []
+        original_step = leader._task.step
+
+        def record_task_step(u: object, y: object) -> None:
+            """记录待命阶段是否进入任务编排槽位。"""
+
+            assert getattr(u, "remote").stage == FormStageE.STANDBY
+            task_calls.append(getattr(u, "remote").stage)
+            original_step(u, y)
+
+        leader._task.step = record_task_step  # type: ignore[method-assign]
+
+        leader.step(
+            EntityInputS(
+                selfState=_motion(east=0.0, north=0.0, h=500.0, v_east=20.0),
+                inbox=[_follower_status_msg("R02", pos_err_m=1.0, arrived=1)],
+                remote=RemoteCmdS(FormStageE.STANDBY),
+                now_s=1.0,
+            ),
+            EntityOutputS(),
+        )
+
+        self.assertEqual(task_calls, [FormStageE.STANDBY])
+        self.assertEqual(leader._rally_join.state, RALLY_STATE_STANDBY)
+        self.assertEqual([state.id for state in leader.cxt.followerStates], ["R02"])
 
     def test_rally_leader_init_rejects_empty_route_list(self) -> None:
         """验证 route=[] 时抛出 ValueError 而非 IndexError。"""

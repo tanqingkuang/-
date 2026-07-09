@@ -43,6 +43,7 @@ class RallyTaskInitS(FormationTaskInitS):
     catchup_radius_m: float = 200.0  # CATCHUP→LOOSE 位置误差阈值（dist3d to slot），米
     catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
     catchup_stable_s: float = 3.0  # CATCHUP→LOOSE 需连续满足的时长，秒
+    altitude_separation_m: float = 60.0  # 待命/JOINING/CATCHUP 各机高度层间隔，米
 
 
 @dataclass
@@ -92,13 +93,18 @@ class Rally(FormationTaskBase):
         self._catchup_stable_s = cfg.catchup_stable_s
         self._expected_ids: list[str] = list(cfg.expectedFollowerIds)
         self._stale_timeout_s = cfg.staleTimeout_s
-        self._target_pattern = cfg.targetPattern
+        self._initial_pattern = int(cfg.targetPattern)
+        self._target_pattern = self._initial_pattern
         self._dt_s = cfg.dt_s
         # 运行期计时器
         self._catchup_stable_timer: float = 0.0
         self._stable_timer: float = 0.0
         self._compress_elapsed: float = 0.0
         self._t_ref: float = 0.0  # 最近一次有效 T_ref（有 FLYING 参与者时更新，之后锁存）
+
+    def set_pattern_index(self, index: int) -> None:
+        """运行时切换目标队形索引。注意：集结完成进入 HOLD 后，下一拍广播生效。"""
+        self._target_pattern = int(index)
 
     def step(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
@@ -130,6 +136,15 @@ class Rally(FormationTaskBase):
             y.slotScale.scale = 1.0
             y.slotScale.scaleRate = 0.0
             return
+        if remote_stage == FormStageE.STANDBY:
+            # STANDBY 是实体内本地盘旋阶段，任务单元只保持状态，不推进 Rally 子流程。
+            self._reset_timers()
+            y.cmd.stage = FormStageE.STANDBY
+            y.cmd.step = RallyPhaseE.JOINING
+            y.cmd.pattern = self._target_pattern
+            y.slotScale.scale = 1.0
+            y.slotScale.scaleRate = 0.0
+            return
 
         # remote == RALLY
         if y.cmd.stage == FormStageE.HOLD:
@@ -140,12 +155,12 @@ class Rally(FormationTaskBase):
             y.slotScale.scale = 1.0
             y.slotScale.scaleRate = 0.0
             return
-        if y.cmd.stage == FormStageE.NONE:
+        if y.cmd.stage in (FormStageE.NONE, FormStageE.STANDBY):
             # 首次进入集结
             self._reset_timers()
             y.cmd.step = RallyPhaseE.JOINING
 
-        # cmd.stage == RALLY（或从 NONE 首次进入）— 按 cmd.step 路由
+        # cmd.stage == RALLY（或从 NONE/STANDBY 首次进入）— 按 cmd.step 路由
         y.cmd.stage = FormStageE.RALLY
         step = RallyPhaseE(y.cmd.step) if y.cmd.step in RallyPhaseE._value2member_map_ else RallyPhaseE.JOINING
         # state_map 在整个 step() 内共用，避免各门控 helper 重复构建。
@@ -254,6 +269,7 @@ class Rally(FormationTaskBase):
     def reset(self) -> None:
         """复位 Rally 的动态状态。注意：保留配置参数，只清理运行期计时器与指令状态。"""
         self._reset_timers()
+        self._target_pattern = self._initial_pattern
 
     def _reset_timers(self) -> None:
         """清零所有内部计时器。注意：不清配置，仅清运行期状态。"""

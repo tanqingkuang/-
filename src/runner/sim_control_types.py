@@ -104,16 +104,51 @@ class RouteState:
 
 
 @dataclass(frozen=True)
-class RallyJoinGeometryState:
-    """集结节点的盘旋圆与关键点，按静态配置预计算，不随仿真推进变化。仅供 GUI 辅助展示。"""
+class RallyPlanGeometryState:
+    """集结节点的待命圆、集结圆与切线关键点。注意：供 GUI 预览与运行期叠加显示。"""
 
-    slot_east_m: float  # 松散目标点 M_i（同时是盘旋圆上的切出点），东向坐标
+    node_id: str
+    local_center_east_m: float  # 本地待命盘旋圆圆心东向坐标。
+    local_center_north_m: float
+    local_radius_m: float  # 本地待命盘旋圆半径。
+    rally_center_east_m: float  # 集结盘旋圆圆心东向坐标。
+    rally_center_north_m: float
+    rally_radius_m: float  # 集结盘旋圆半径。
+    local_tangent_east_m: float  # 从本地圆切出的位置，东向坐标。
+    local_tangent_north_m: float
+    rally_tangent_east_m: float  # 切入集结圆的位置，东向坐标。
+    rally_tangent_north_m: float
+    slot_east_m: float  # 松散目标点 M_i（同时是集结圆切出点），东向坐标。
     slot_north_m: float
-    loiter_center_east_m: float  # 盘旋圆圆心，东向坐标
-    loiter_center_north_m: float
-    loiter_radius_m: float  # 盘旋圆半径
-    entry_east_m: float  # 切入点 T（按节点初始位置求得的 CCW 切线切点），东向坐标
-    entry_north_m: float
+    fallback_used: bool = False  # True 表示几何退化时使用了直飞兜底点。
+
+    @property
+    def loiter_center_east_m(self) -> float:
+        """兼容旧 GUI 字段名，返回集结盘旋圆圆心东向坐标。"""
+        return self.rally_center_east_m
+
+    @property
+    def loiter_center_north_m(self) -> float:
+        """兼容旧 GUI 字段名，返回集结盘旋圆圆心北向坐标。"""
+        return self.rally_center_north_m
+
+    @property
+    def loiter_radius_m(self) -> float:
+        """兼容旧 GUI 字段名，返回集结盘旋圆半径。"""
+        return self.rally_radius_m
+
+    @property
+    def entry_east_m(self) -> float:
+        """兼容旧 GUI 字段名，返回集结圆切入点东向坐标。"""
+        return self.rally_tangent_east_m
+
+    @property
+    def entry_north_m(self) -> float:
+        """兼容旧 GUI 字段名，返回集结圆切入点北向坐标。"""
+        return self.rally_tangent_north_m
+
+
+RallyJoinGeometryState = RallyPlanGeometryState
 
 
 @dataclass(frozen=True)
@@ -131,7 +166,7 @@ class SimulationSnapshot:
     route_segments: list[RouteState] = field(default_factory=list)  # 全部航段。
     cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。
     rally_analysis: object | None = None  # FormationAnalysisS；集结完成首帧非 None，控制器锁存
-    rally_geometry: dict[str, RallyJoinGeometryState] = field(default_factory=dict)  # 按 node_id 索引，非集结场景为空字典
+    rally_geometry: dict[str, RallyPlanGeometryState] = field(default_factory=dict)  # 按 node_id 索引，非集结场景为空字典
 
 
 @dataclass(frozen=True)

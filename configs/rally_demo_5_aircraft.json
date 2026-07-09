@@ -1,9 +1,9 @@
 {
-  "duration_s": 500.0,
+  "duration_s": 1000.0,
   "step_s": 0.005,
   "playback_rate": 1.0,
   "seed": 1,
-  "route_file": "element/rally_demo_rally_route.json",
+  "route_file": "element/rally_demo_mission_route.json",
   "rally_route_file": "element/rally_demo_rally_route.json",
   "rally_cfg": {
     "loose_scale": 3.0,
@@ -19,7 +19,9 @@
   "formation": {
     "coordinate_system": "x_forward_y_up_z_right",
     "formation_files": [
-      "element/formations/triangle_3_aircraft_a01_a03.json"
+      "element/formations/wedge_5_aircraft_a01_a05.json",
+      "element/formations/line_abreast_5_aircraft_a01_a05.json",
+      "element/formations/double_column_5_aircraft_a01_a05.json"
     ]
   },
   "model": {
@@ -52,7 +54,7 @@
   "nodes": [
     {
       "node_id": "A01",
-      "role": "rally_leader",
+      "role": "rally_follower",
       "x_m": 2000.0,
       "y_m": -1000.0,
       "altitude_m": 500.0,
@@ -74,11 +76,33 @@
     },
     {
       "node_id": "A03",
-      "role": "rally_follower",
+      "role": "rally_leader",
       "x_m": 2500.0,
       "y_m": 1000.0,
       "altitude_m": 500.0,
       "psi_v_deg": -158.20,
+      "speed_mps": 20.0,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 0.0
+    },
+    {
+      "node_id": "A04",
+      "role": "rally_follower",
+      "x_m": -2500.0,
+      "y_m": 1200.0,
+      "altitude_m": 500.0,
+      "psi_v_deg": -25.64,
+      "speed_mps": 20.0,
+      "cross_track_error_m": 0.0,
+      "distance_to_go_m": 0.0
+    },
+    {
+      "node_id": "A05",
+      "role": "rally_follower",
+      "x_m": 3200.0,
+      "y_m": -1400.0,
+      "altitude_m": 500.0,
+      "psi_v_deg": 156.37,
       "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
       "distance_to_go_m": 0.0
@@ -100,9 +124,44 @@
       "status": "normal"
     },
     {
+      "link_id": "A03-A04",
+      "direction": "duplex",
+      "latency_ms": 24.0,
+      "loss_rate": 0.01,
+      "status": "normal"
+    },
+    {
+      "link_id": "A01-A05",
+      "direction": "duplex",
+      "latency_ms": 26.0,
+      "loss_rate": 0.01,
+      "status": "normal"
+    },
+    {
       "link_id": "A02-A03",
       "direction": "duplex",
       "latency_ms": 30.0,
+      "loss_rate": 0.02,
+      "status": "normal"
+    },
+    {
+      "link_id": "A02-A04",
+      "direction": "duplex",
+      "latency_ms": 32.0,
+      "loss_rate": 0.02,
+      "status": "normal"
+    },
+    {
+      "link_id": "A03-A05",
+      "direction": "duplex",
+      "latency_ms": 34.0,
+      "loss_rate": 0.02,
+      "status": "normal"
+    },
+    {
+      "link_id": "A04-A05",
+      "direction": "duplex",
+      "latency_ms": 36.0,
       "loss_rate": 0.02,
       "status": "normal"
     }

@@ -14,6 +14,7 @@ class FormStageE(IntEnum):
     RALLY = 1
     HOLD = 2
     RECONFIG = 3
+    STANDBY = 4
 
 
 class CommDirE(IntEnum):
@@ -184,9 +185,9 @@ class FormSnapshotS:
 
 @dataclass
 class RemoteCmdS:
-    """外部下发的遥控指令。注意：当前仅承载目标阶段，由任务单元解释。"""
+    """外部下发的遥控指令。注意：当前仅承载目标阶段，由实体或任务单元解释。"""
 
-    stage: FormStageE = FormStageE.NONE  # 期望进入的编队阶段
+    stage: FormStageE = FormStageE.NONE  # 期望进入的编队阶段；集结待命使用 STANDBY
 
 
 def copy_position(src: PosInEarthS, dst: PosInEarthS) -> None:
@@ -279,7 +280,7 @@ class FollowerStateS:
     valid: bool = False  # 本帧数据是否有效（收到最新报文则置 True）
     lastUpdate_s: float = 0.0  # 最近一次收到该机报文的仿真时间戳，秒
     eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）；LOITERING/EXITED 时为当前时刻
-    rally_state: str = "FLYING"  # 集结汇合状态：FLYING / LOITERING / EXITED
+    rally_state: str = "STANDBY"  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
     reachedSlotOnce: bool = False  # 是否已至少一次路过松散点 M_i（LOITERING 但尚未路过时仍应计入 T_ref 聚合）
 
 
