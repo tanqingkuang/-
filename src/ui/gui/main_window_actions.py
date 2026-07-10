@@ -21,9 +21,7 @@ from src.ui.gui.view_models import (
     APP_CONFIG_SECTION,
     LinkState,
     NodeState,
-    playback_rate_to_slider_value,
     Snapshot,
-    slider_value_to_playback_rate,
     WORLD_HEIGHT,
     WORLD_WIDTH,
     default_project_root,
@@ -144,10 +142,11 @@ class MainWindowActionMixin:
 
     def _toggle_play_pause(self) -> None:
         """响应播放/暂停按钮。注意：按钮文案显示下一步动作。"""
+        decision = self.sim.playback_vm.command_for_toggle(self.sim.snapshot().run_state)
         # RUNNING 下执行暂停，其余可用状态执行开始/继续；禁用态不会触发此槽。
-        if self.sim.snapshot().run_state == "RUNNING":
+        if decision.should_pause:
             self._pause()
-        else:
+        elif decision.should_start:
             self._start()
 
     def _start(self) -> None:
@@ -323,10 +322,13 @@ class MainWindowActionMixin:
     def _sync_speed_controls(self, speed: float) -> None:
         """同步 speed controls 显示。注意：程序设置滑条时不重复下发倍率。"""
         # 配置加载后控制器已持有倍率，这里只让滑条和文本追上当前真实倍率。
-        slider_value = playback_rate_to_slider_value(speed)
-        with QSignalBlocker(self.speed_slider):
-            self.speed_slider.setValue(slider_value)
-        self.speed_label.setText(f"{speed:.1f}x")
+        update = self.sim.playback_vm.begin_programmatic_slider_sync(speed)
+        try:
+            if update.slider_value is not None:
+                self.speed_slider.setValue(update.slider_value)
+        finally:
+            self.sim.playback_vm.finish_programmatic_slider_sync()
+        self.speed_label.setText(update.label_text)
 
     def _config_dialog_start_dir(self) -> Path:
         """处理 dialog start dir 配置路径。注意：兼容源码运行和打包运行路径。"""
@@ -410,10 +412,13 @@ class MainWindowActionMixin:
 
     def _on_speed_changed(self, value: int) -> None:
         """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
-        # 滑块位置映射到离散倍率档位，低倍率细调，高倍率按大步长跳转。
-        speed = slider_value_to_playback_rate(value)
-        self.sim.set_speed(speed)
-        self.speed_label.setText(f"{speed:.1f}x")
+        update = self.sim.playback_vm.on_slider_changed(value)
+        if update.slider_value is not None and update.slider_value != self.speed_slider.value():
+            # 非法输入按最近档位回填；Qt 正常拖动不会走到这里。
+            self._sync_speed_controls(update.display_rate)
+        if update.controller_rate is not None:
+            self.sim.set_speed(update.controller_rate)
+        self.speed_label.setText(update.label_text)
 
     def _on_segment_lock_changed(self) -> None:
         """处理 segment lock changed 信号回调。注意：只改变侧视图显示方式。"""

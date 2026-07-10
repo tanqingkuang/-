@@ -7,6 +7,7 @@ import math
 from src.algorithm.context.leaf_types import WayPointInputS
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
+from src.ui.gui.playback_view_model import PlaybackViewModel
 from src.ui.gui.view_models import (
     WORLD_HEIGHT,
     WORLD_WIDTH,
@@ -26,6 +27,7 @@ class MockSimulation:
         """初始化 MockSimulation 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.duration = 120.0
         self.step = 0.1
+        self.playback_vm = PlaybackViewModel()
         self.speed = 1.0
         self.time = 0.0
         self.running = False
@@ -83,9 +85,15 @@ class MockSimulation:
 
     def pause(self) -> Snapshot:
         """暂停 MockSimulation 的运行流程。注意：只暂停调度，不清空当前状态。"""
-        if self.running:
-            self.paused = not self.paused
+        decision = self.playback_vm.command_for_pause_request(self.snapshot().run_state)
+        if decision.should_pause and self.running:
+            self.paused = True
         return self.snapshot()
+
+    def set_speed(self, speed: float) -> None:
+        """设置 MockSimulation 播放速度。注意：与真实 adapter 保持同名接口。"""
+        playback_update = self.playback_vm.on_rate_requested(speed)
+        self.speed = playback_update.display_rate
 
     def single_step(self) -> Snapshot:
         """执行单步推进。注意：仅在暂停或可单步状态下使用。"""
@@ -219,6 +227,7 @@ class ControllerSimulationAdapter:
         """初始化 ControllerSimulationAdapter 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self.controller = SimulationController()
         self.speed = 1.0
+        self.playback_vm = PlaybackViewModel()
         self.disturbance = "无"
         # 控制器只给瞬时位置，尾迹需由本适配器按 node_id 自行累积缓存。
         self._trail_by_node: dict[str, list[TrailPoint]] = {}
@@ -259,7 +268,8 @@ class ControllerSimulationAdapter:
         if result.code == "OK":
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
-            self.speed = self.controller.playback_rate
+            playback_update = self.playback_vm.on_config_loaded(self.controller.playback_rate)
+            self.speed = playback_update.display_rate
             # 数据源自身也同步半程尾迹，保证非 MainWindow 调用 load_config 时行为一致。
             self.set_trail_seconds(trail_seconds_for_duration(self.controller.get_snapshot().duration_s))
             # 把事件游标推到当前末尾，避免把加载前的旧事件当成新扰动消费。
@@ -283,6 +293,7 @@ class ControllerSimulationAdapter:
 
     def pause(self) -> Snapshot:
         """暂停 ControllerSimulationAdapter 的运行流程。注意：只暂停调度，不清空当前状态。"""
+        # 暂停语义（含 PAUSED 幂等、非法态报错）由控制器状态机独家裁决，适配器不复刻守卫。
         result = self.controller.pause()
         self.last_result_code = result.code
         self.last_result_message = result.message
@@ -301,8 +312,11 @@ class ControllerSimulationAdapter:
         self.last_result_code = result.code
         self.last_result_message = result.message
         if result.code == "OK":
+            playback_update = self.playback_vm.on_reset()
+            self.speed = playback_update.display_rate
             # 控制器 reset 会按配置重建模块，需要把 UI 当前倍率重新下发给墙钟调度。
-            self.controller.set_playback_rate(self.speed)
+            if playback_update.controller_rate is not None:
+                self.controller.set_playback_rate(playback_update.controller_rate)
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
             self.disturbance = "无"
@@ -374,9 +388,11 @@ class ControllerSimulationAdapter:
 
     def set_speed(self, speed: float) -> None:
         """设置播放速度。注意：只影响界面或控制器调度倍率。"""
+        playback_update = self.playback_vm.on_rate_requested(speed)
         # 记录倍率并下发给控制器调度（影响推进节奏，不影响本适配器换算）。
-        self.speed = speed
-        self.controller.set_playback_rate(speed)
+        self.speed = playback_update.display_rate
+        if playback_update.controller_rate is not None:
+            self.controller.set_playback_rate(playback_update.controller_rate)
 
     def set_duration(self, duration_s: float) -> Snapshot:
         """设置仿真总时长。注意：只改变停止边界，不改变步长。"""
