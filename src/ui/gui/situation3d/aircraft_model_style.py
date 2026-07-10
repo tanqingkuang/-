@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from abc import ABC
 from enum import Enum
+from pathlib import Path
+import sys
 
 
 class AircraftModelType(str, Enum):
@@ -22,7 +24,7 @@ class AircraftModelStyle(ABC):
     model_type: AircraftModelType
     # label 只面向下拉显示，不能作为反查键。
     label: str
-    # 路径保持相对 qml 目录，QML 侧统一用 Qt.resolvedUrl 解析。
+    # 源码运行时路径保持相对 qml 目录，QML 侧统一用 Qt.resolvedUrl 解析。
     model_source: str
     # 只校正资产自身机头朝向，不叠加仿真航迹角。
     yaw_offset_deg: float
@@ -38,6 +40,22 @@ class AircraftModelStyle(ABC):
         # baseScale 保持纯尺寸换算，远景可辨识放大由 QML 另行计算。
         return self.real_wingspan_m / self.unit_wingspan
 
+    @property
+    def packaged_model_source(self) -> str:
+        """返回打包态模型文件 URL。注意：发布包要求 glb 与 exe 平级放置。"""
+
+        model_name = Path(self.model_source).name
+        model_path = Path(sys.executable).resolve().parent / model_name
+        return model_path.as_uri()
+
+    @property
+    def qml_model_source(self) -> str:
+        """返回 QML 可加载的模型源。注意：源码态走内置 assets，打包态走 exe 同级文件。"""
+
+        if getattr(sys, "frozen", False):
+            return self.packaged_model_source
+        return self.model_source
+
     def style_payload(self) -> dict[str, object]:
         """生成 QML 机型样式 payload。注意：位置和航迹角仍由 scene_data 单机数据提供。"""
 
@@ -45,7 +63,7 @@ class AircraftModelStyle(ABC):
         return {
             "value": self.model_type.value,
             "label": self.label,
-            "modelSource": self.model_source,
+            "modelSource": self.qml_model_source,
             "yawOffsetDeg": self.yaw_offset_deg,
             "baseScale": self.base_scale,
             "unitWingspan": self.unit_wingspan,
