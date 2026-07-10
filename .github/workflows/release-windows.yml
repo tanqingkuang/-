@@ -1,0 +1,94 @@
+name: Windows 发布
+
+on:
+  push:
+    tags:
+      - "V*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建 ${{ matrix.profile }} 发布包
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: full
+            script: ./scripts/build_windows_full_release.ps1
+            exe: 编队仿真.exe
+            package: 编队仿真-windows-x64-full
+            include_models: true
+          - profile: lite
+            script: ./scripts/build_windows_lite_release.ps1
+            exe: 编队仿真-裁剪版.exe
+            package: 编队仿真-windows-x64-lite
+            include_models: false
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: 构建 Windows exe
+        shell: pwsh
+        run: ${{ matrix.script }}
+
+      - name: 组装发布压缩包
+        shell: pwsh
+        env:
+          EXE_NAME: ${{ matrix.exe }}
+          PACKAGE_NAME: ${{ matrix.package }}
+          INCLUDE_MODELS: ${{ matrix.include_models }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:RUNNER_TEMP $env:PACKAGE_NAME
+          $archive = Join-Path $env:RUNNER_TEMP "$env:PACKAGE_NAME.zip"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "dist\$env:EXE_NAME") -Destination $stage
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "configs") -Destination $stage -Recurse
+          Copy-Item -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "README.md") -Destination $stage
+
+          if ($env:INCLUDE_MODELS -eq "true") {
+            Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE "dist") -Filter *.glb |
+              Copy-Item -Destination $stage
+          }
+
+          Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -Force
+          "ARCHIVE_PATH=$archive" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: 上传发布压缩包
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: ${{ runner.temp }}/${{ matrix.package }}.zip
+          if-no-files-found: error
+
+  release:
+    name: 创建 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 下载发布压缩包
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: 编队仿真-windows-x64-*
+          merge-multiple: true
+
+      - name: 创建 Release 并上传资产
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/*.zip \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
