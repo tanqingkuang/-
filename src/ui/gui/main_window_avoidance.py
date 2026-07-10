@@ -24,6 +24,13 @@ from PySide6.QtWidgets import (
 from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.data.config_loader import _LINE_FILE_MANAGER
+from src.ui.gui.avoidance_panel_view_model import (
+    adopt_enabled,
+    avoidance_status_text,
+    export_enabled,
+    param_widgets_enabled,
+    simplify_should_follow,
+)
 from src.ui.gui.avoidance_tools import (
     AvoidanceParams,
     AvoidanceWindow,
@@ -332,10 +339,11 @@ class MainWindowAvoidanceMixin:
 
     def _on_avoidance_param_changed(self, _value: object = None) -> None:
         """规划参数被用户调整：使已有预览失效（需按新参数重新生成）。注意：安全间距变化同步刷新膨胀圈显示。"""
-        if (
-            self.sender() is self.clearance_spin
-            and self._avoidance_params is not None
-            and not self._avoidance_params.simplify_clearance_explicit
+        params = self._avoidance_params
+        if simplify_should_follow(
+            self.sender() is self.clearance_spin,
+            params is not None,
+            params.simplify_clearance_explicit if params is not None else False,
         ):
             # 旧配置未显式给 simplify_clearance_m 时，它继续跟随安全间距。
             self.simplify_clearance_spin.blockSignals(True)
@@ -357,6 +365,7 @@ class MainWindowAvoidanceMixin:
         """把解析到的规划参数灌进界面控件。注意：无 avoidance 配置时禁用；编程赋值屏蔽信号避免误失效。"""
         params = self._avoidance_params
         has_params = params is not None
+        has_preview = self._preview_route is not None
         widgets = (
             self.turn_radius_spin,
             self.leg_margin_spin,
@@ -371,13 +380,11 @@ class MainWindowAvoidanceMixin:
             self.reset_route_button,
         )
         for widget in widgets:
-            widget.setEnabled(has_params)
+            widget.setEnabled(param_widgets_enabled(has_params))
+        self.adopt_route_button.setEnabled(adopt_enabled(has_preview))
+        self.export_route_button.setEnabled(export_enabled(has_params, has_preview))
         if not has_params:
-            # 没有 avoidance 或有效航点时，采用按钮也必须保持禁用。
-            self.adopt_route_button.setEnabled(False)
-            self.export_route_button.setEnabled(False)
             return
-        self.export_route_button.setEnabled(self._preview_route is not None)
         # 配置值灌入控件时屏蔽信号，避免加载配置被误判为用户调参。
         for spin, value in (
             (self.turn_radius_spin, params.turn_radius_m),
@@ -410,19 +417,14 @@ class MainWindowAvoidanceMixin:
         self._preview_route = None
         self.top_view.set_preview_route(None)
         if hasattr(self, "adopt_route_button"):
-            self.adopt_route_button.setEnabled(False)
+            self.adopt_route_button.setEnabled(adopt_enabled(False))
         if hasattr(self, "export_route_button"):
-            self.export_route_button.setEnabled(False)
+            self.export_route_button.setEnabled(export_enabled(self._avoidance_params is not None, False))
 
     def _update_avoidance_status(self) -> None:
         """空闲时在反馈区显示操作提示（生成成功/失败时由 _generate_route 覆盖）。"""
-        if not self.obstacles:
-            self.avoidance_status.setText("未加载障碍：当前配置无 avoidance.obstacles。")
-            return
         enabled = sum(1 for obstacle in self.obstacles if obstacle.enabled)
-        self.avoidance_status.setText(
-            f"已勾选 {enabled}/{len(self.obstacles)} 个障碍。\n设置参数后点「生成航线」预览，满意再「采用航线」。"
-        )
+        self.avoidance_status.setText(avoidance_status_text(enabled, len(self.obstacles)))
 
     def _set_obstacles_from_config(self, path: str) -> None:
         """从配置文件解析障碍与规划参数并刷新显示。注意：解析失败时清空，保持界面一致。"""
