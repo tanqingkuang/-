@@ -16,6 +16,7 @@ from src.ui.gui.avoidance_tools import _geo_origin_from_config_for_ui, parse_avo
 from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.simulation_adapter import link_direction_label
 from src.ui.gui.theme_widgets import THEMES
+from src.ui.gui.trail_view_model import TrailControlUpdate
 from src.ui.gui.view_models import (
     APP_CONFIG_KEY_LAST_CONFIG,
     APP_CONFIG_SECTION,
@@ -26,7 +27,6 @@ from src.ui.gui.view_models import (
     WORLD_WIDTH,
     default_project_root,
     leader_node_from,
-    trail_seconds_for_duration,
 )
 
 
@@ -272,7 +272,7 @@ class MainWindowActionMixin:
         snapshot = self.sim.load_config(path)
         if self.sim.last_result_code == "OK":
             # 切换配置必须重新应用半程尾迹；即使新旧配置时长相同，也不能沿用用户上次手动值。
-            self._trail_duration_basis = None
+            self.trail_vm.on_reset()
             self._sync_speed_controls(self.sim.speed)
             # 按新配置刷新队形下拉框选项。
             self._refresh_formation_options()
@@ -517,16 +517,8 @@ class MainWindowActionMixin:
 
     def _sync_trail_seconds_for_duration(self, duration_s: float) -> None:
         """按飞行时长同步默认尾迹长度。注意：同一时长不覆盖用户临时手动值。"""
-        if getattr(self, "_trail_duration_basis", None) == duration_s:
-            return
-        seconds = trail_seconds_for_duration(duration_s)
-        # 长时长配置的一半可能超过旧 600s 上限，先放宽范围再写入值，避免被控件截断。
-        with QSignalBlocker(self.trail_seconds_input):
-            self.trail_seconds_input.setRange(0.0, max(600.0, seconds))
-            self.trail_seconds_input.setValue(seconds)
-        # 记录本次同步的飞行时长；用户随后手动调尾迹时，不会被每帧刷新覆盖。
-        self._trail_duration_basis = duration_s
-        self._apply_trail_seconds(seconds, refresh_features=False)
+        update = self.trail_vm.on_duration_synced(duration_s)
+        self._apply_trail_control_update(update)
 
     @staticmethod
     def _format_duration_text(duration_s: float) -> str:
@@ -573,7 +565,18 @@ class MainWindowActionMixin:
 
     def _on_trail_seconds_changed(self) -> None:
         """处理尾迹长度输入。注意：0 表示关闭尾迹显示与缓存。"""
-        self._apply_trail_seconds(self.trail_seconds_input.value())
+        update = self.trail_vm.on_manual_seconds(self.trail_seconds_input.value())
+        self._apply_trail_control_update(update)
+
+    def _apply_trail_control_update(self, update: TrailControlUpdate) -> None:
+        """应用尾迹 ViewModel 输出。注意：seconds 为 None 时保留当前手动值。"""
+        if update.seconds is None:
+            return
+        # 程序回填输入框时屏蔽 valueChanged，避免默认同步路径被解释成手动输入。
+        with QSignalBlocker(self.trail_seconds_input):
+            self.trail_seconds_input.setRange(0.0, update.range_max)
+            self.trail_seconds_input.setValue(update.seconds)
+        self._apply_trail_seconds(update.seconds, refresh_features=update.refresh_features)
 
     def _apply_trail_seconds(self, seconds: float, *, refresh_features: bool = True) -> None:
         """把尾迹时长下发给数据源和视图。注意：输入框同步时也复用该路径。"""

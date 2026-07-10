@@ -459,7 +459,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(repeated.nodes[0].vy, 8.0)
         self.assertAlmostEqual(repeated.cpu_utilization, 0.42)
 
-    def test_trail_seconds_input_uses_half_loaded_duration_and_propagates(self) -> None:
+    def test_trail_seconds_input_applies_view_model_output_to_controls_and_views(self) -> None:
         self._load_ui_config(duration_s=2400.0)
         expected_seconds = trail_seconds_for_duration(2400.0)
 
@@ -472,18 +472,14 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window.trail_seconds_input.setValue(6.5)
         self.app.processEvents()
 
+        self.assertAlmostEqual(self.window.trail_seconds_input.value(), 6.5)
+        # 手动改小尾迹不应把长航时放宽后的范围上限缩回默认 600。
+        self.assertGreaterEqual(self.window.trail_seconds_input.maximum(), expected_seconds)
         self.assertAlmostEqual(self.window.top_view.trail_seconds, 6.5)
         self.assertAlmostEqual(self.window.side_view.trail_seconds, 6.5)
         self.assertAlmostEqual(self.window.sim.trail_seconds, 6.5)
 
-        self.window.trail_seconds_input.setValue(0.0)
-        self.app.processEvents()
-
-        self.assertAlmostEqual(self.window.top_view.trail_seconds, 0.0)
-        self.assertAlmostEqual(self.window.side_view.trail_seconds, 0.0)
-        self.assertAlmostEqual(self.window.sim.trail_seconds, 0.0)
-
-    def test_loading_same_duration_config_resets_manual_trail_seconds(self) -> None:
+    def test_loading_same_duration_config_reapplies_trail_view_model_output(self) -> None:
         self._load_ui_config(duration_s=120.0)
         self.window.trail_seconds_input.setValue(6.5)
         self.app.processEvents()
@@ -492,8 +488,6 @@ class GuiViewInteractionTests(unittest.TestCase):
         expected_seconds = trail_seconds_for_duration(120.0)
 
         self.assertAlmostEqual(self.window.trail_seconds_input.value(), expected_seconds)
-        self.assertAlmostEqual(self.window.top_view.trail_seconds, expected_seconds)
-        self.assertAlmostEqual(self.window.side_view.trail_seconds, expected_seconds)
         self.assertAlmostEqual(self.window.sim.trail_seconds, expected_seconds)
 
     def test_manual_trail_seconds_change_refreshes_situation3d_snapshot(self) -> None:

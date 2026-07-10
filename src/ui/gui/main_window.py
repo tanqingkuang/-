@@ -46,6 +46,7 @@ from src.ui.gui.side_view import SideView
 from src.ui.gui.simulation_adapter import ControllerSimulationAdapter, MockSimulation
 from src.ui.gui.theme_widgets import THEMES, SelectButton, Theme
 from src.ui.gui.top_view import TopView
+from src.ui.gui.trail_view_model import TrailViewModel
 from src.ui.gui.view_models import (
     APP_CONFIG_FILE_NAME,
     APP_CONFIG_KEY_LAST_CONFIG,
@@ -106,6 +107,8 @@ class MainWindow(
         self.setMinimumSize(1280, 780)
         # 接入真实控制器适配器作为数据源。
         self.sim = ControllerSimulationAdapter()
+        # 尾迹同步基准属于窗口输入框策略，不放入 controller 数据源。
+        self.trail_vm = TrailViewModel()
         # GUI 可选功能按运行档位选择具体实现，裁剪逻辑不散落在主窗口流程里。
         self.features = build_gui_feature_registry()
         self.theme_key = "light"
