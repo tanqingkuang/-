@@ -1610,18 +1610,7 @@ class GuiViewInteractionTests(unittest.TestCase):
                     track_pos_err_y=-3.4,
                     track_pos_err_z=5.6,
                 ),
-                NodeState(
-                    "A02",
-                    "wingman",
-                    80.0,
-                    90.0,
-                    20.0,
-                    0.0,
-                    1210.0,
-                    track_pos_err_x=-7.8,
-                    track_pos_err_y=9.1,
-                    track_pos_err_z=-2.3,
-                ),
+                NodeState("A02", "wingman", 80.0, 90.0, 20.0, 0.0, 1210.0),
             ],
             links=[],
         )
@@ -1629,6 +1618,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window._update_snapshot(snapshot)
 
         self.assertEqual(self.window.node_table.columnCount(), 5)
+        # 表头文案与悬浮提示属于布局层契约，函数级 VM 测试覆盖不到，保留在 GUI 层验证。
         self.assertEqual(self.window.node_table.horizontalHeaderItem(1).text(), "待飞距(m)")
         self.assertEqual(self.window.node_table.horizontalHeaderItem(2).text(), "高飘(m)")
         self.assertEqual(self.window.node_table.horizontalHeaderItem(3).text(), "右偏(m)")
@@ -1637,21 +1627,10 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIn("本机-目标", self.window.node_table.horizontalHeaderItem(3).toolTip())
         self.assertEqual(self.window.node_table.item(0, 1).text(), "1.2")
         self.assertEqual(self.window.node_table.item(0, 1).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
-        self.assertEqual(self.window.node_table.item(0, 2).text(), "3.4")
-        self.assertEqual(self.window.node_table.item(0, 3).text(), "-5.6")
-        self.assertEqual(self.window.node_table.item(1, 1).text(), "-7.8")
-        self.assertEqual(self.window.node_table.item(1, 2).text(), "-9.1")
-        self.assertEqual(self.window.node_table.item(1, 3).text(), "2.3")
         self.assertEqual(self.window.overall_table.rowCount(), 1)
         self.assertEqual(self.window.overall_table.columnCount(), 5)
-        self.assertEqual(self.window.overall_table.horizontalHeaderItem(3).text(), "地速(m/s)")
-        self.assertEqual(self.window.overall_table.horizontalHeaderItem(4).text(), "天向速度(m/s)")
         self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
-        self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
-        self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
-        self.assertEqual(self.window.overall_table.item(0, 3).text(), "20")
-        self.assertEqual(self.window.overall_table.item(0, 3).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
-        self.assertEqual(self.window.overall_table.item(0, 4).text(), "3")
+        self.assertEqual(self.window.overall_table.item(0, 0).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
         self.assertLessEqual(self.window.overall_table.height(), 66)
         self.assertEqual(self.window.node_table.horizontalScrollBar().maximum(), 0)
         self.assertEqual(self.window.overall_table.horizontalScrollBar().maximum(), 0)
@@ -1704,41 +1683,16 @@ class GuiViewInteractionTests(unittest.TestCase):
             control_report="待命",
             disturbance="无",
             nodes=[
-                NodeState(
-                    "A01",
-                    "wingman",
-                    100.0,
-                    120.0,
-                    20.0,
-                    0.0,
-                    1300.0,
-                    cross_track_error=99.4,
-                    distance_to_go=888.6,
-                ),
-                NodeState(
-                    "A05",
-                    "leader",
-                    80.0,
-                    90.0,
-                    20.0,
-                    0.0,
-                    1200.0,
-                    vertical_speed=-4.4,
-                    cross_track_error=12.4,
-                    distance_to_go=345.6,
-                ),
+                NodeState("A01", "wingman", 100.0, 120.0, 20.0, 0.0, 1300.0, cross_track_error=99.4, distance_to_go=888.6),
+                NodeState("A05", "leader", 80.0, 90.0, 20.0, 0.0, 1200.0, cross_track_error=12.4, distance_to_go=345.6),
             ],
             links=[],
         )
 
         self.window._update_snapshot(snapshot)
 
+        self.assertEqual(self.window.overall_table.rowCount(), 1)
         self.assertEqual(self.window.overall_table.item(0, 0).text(), "12")
-        self.assertEqual(self.window.overall_table.item(0, 1).text(), "346")
-        self.assertEqual(self.window.overall_table.item(0, 2).text(), "1200")
-        self.assertEqual(self.window.overall_table.item(0, 3).text(), "20")
-        self.assertEqual(self.window.overall_table.item(0, 4).text(), "-4")
-
 
     def test_link_table_displays_direction_from_controller_snapshot(self) -> None:
         self._load_ui_config(
@@ -1748,17 +1702,10 @@ class GuiViewInteractionTests(unittest.TestCase):
             ]
         )
 
-        directions = {
-            self.window.link_table.item(row, 0).text(): self.window.link_table.item(row, 1).text()
-            for row in range(self.window.link_table.rowCount())
-        }
-
         self.assertEqual(self.window.link_table.columnCount(), 5)
         self.assertEqual(self.window.link_table.horizontalHeaderItem(1).text(), "方向")
-        self.assertEqual(directions["A01-A02"], "双向")
-        self.assertEqual(directions["A02-A03"], "单向")
-        self.assertEqual(self.window.link_table.item(0, 0).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
-        self.assertEqual(self.window.link_table.item(0, 4).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
+        self.assertEqual(self.window.link_table.item(0, 1).text(), "双向")
+        self.assertEqual(self.window.link_table.item(0, 1).textAlignment(), int(Qt.AlignmentFlag.AlignCenter))
         self.assertEqual(self.window.link_table.horizontalScrollBar().maximum(), 0)
         self.assert_table_uses_full_width(self.window.link_table)
 
@@ -1766,7 +1713,6 @@ class GuiViewInteractionTests(unittest.TestCase):
         self._load_ui_config(duration_s=2400.0)
 
         self.assertEqual(self.window.duration_input.text(), "2400")
-        self.assertEqual(self.window.timeline_label.text(), "0.0 / 2400s")
         self.assertAlmostEqual(self.window.trail_seconds_input.value(), trail_seconds_for_duration(2400.0))
         self.assertAlmostEqual(self.window.sim.trail_seconds, trail_seconds_for_duration(2400.0))
 
@@ -1779,7 +1725,6 @@ class GuiViewInteractionTests(unittest.TestCase):
         snapshot = self.window.sim.controller.get_snapshot()
 
         self.assertAlmostEqual(snapshot.duration_s, 120.0)
-        self.assertEqual(self.window.timeline_label.text(), "0.0 / 120s")
         self.assertAlmostEqual(self.window.trail_seconds_input.value(), trail_seconds_for_duration(120.0))
         self.assertAlmostEqual(self.window.top_view.trail_seconds, trail_seconds_for_duration(120.0))
         self.assertAlmostEqual(self.window.side_view.trail_seconds, trail_seconds_for_duration(120.0))
