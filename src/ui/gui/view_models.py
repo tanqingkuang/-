@@ -262,3 +262,9 @@ def leader_node_from(nodes: list[NodeState]) -> NodeState | None:
     """从节点列表中取长机。注意：缺少显式长机时回退首节点，保持旧配置可显示。"""
 
     return next((node for node in nodes if is_leader_node(node)), nodes[0] if nodes else None)
+
+
+def link_direction_label(direction: str) -> str:
+    """生成通信链路方向显示文本。注意：只负责界面文案，不改变链路状态。"""
+
+    return {"duplex": "双向", "simplex": "单向"}.get(direction, direction)

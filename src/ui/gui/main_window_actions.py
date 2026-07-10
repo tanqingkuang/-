@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from configparser import ConfigParser
 import json
-import math
 import os
 from pathlib import Path
 
@@ -14,8 +13,9 @@ from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidge
 from src.data.geo import enu_to_geodetic
 from src.ui.gui.avoidance_tools import _geo_origin_from_config_for_ui, parse_avoidance_config
 from src.ui.gui.dialogs import StageFullscreenDialog
-from src.ui.gui.simulation_adapter import link_direction_label
 from src.ui.gui.theme_widgets import THEMES
+from src.ui.gui.sim_control_view_model import parse_duration_text, rally_button_enabled
+from src.ui.gui.status_table_view_model import link_table_rows, node_table_rows, overall_table_row
 from src.ui.gui.trail_view_model import TrailControlUpdate
 from src.ui.gui.view_models import (
     APP_CONFIG_KEY_LAST_CONFIG,
@@ -23,10 +23,7 @@ from src.ui.gui.view_models import (
     LinkState,
     NodeState,
     Snapshot,
-    WORLD_HEIGHT,
-    WORLD_WIDTH,
     default_project_root,
-    leader_node_from,
 )
 
 
@@ -36,24 +33,20 @@ class MainWindowActionMixin:
     def _update_snapshot(self, snapshot: Snapshot, *, fit_top_view: bool = False, fit_side_view: bool = False) -> None:
         """更新 snapshot 状态。注意：保持界面显示和内部数据一致。"""
         # 左侧状态文本与时间轴。
+        display = self.sim_control_vm.on_snapshot(snapshot)
         self.run_state_label.setText(snapshot.run_state)
-        self.report_label.setText(f"回报：{snapshot.control_report}")
-        self.timeline_label.setText(f"{snapshot.time:.1f} / {snapshot.duration:.0f}s")
-        self.cpu_label.setText(f"CPU {snapshot.cpu_utilization * 100:.0f}%")
+        self.report_label.setText(display.report_text)
+        self.timeline_label.setText(display.timeline_text)
+        self.cpu_label.setText(display.cpu_text)
         self._sync_duration_input(snapshot)
-        # 进度 = time/duration 换算到千分刻度；duration 为 0 时置 0 防除零。
-        self.progress.setValue(round(snapshot.time / snapshot.duration * 1000) if snapshot.duration else 0)
-        # 依据运行态启停各按钮：未加载配置(UNLOADED)时全部相关操作不可用。
-        config_loaded = snapshot.run_state != "UNLOADED"
-        self.play_button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
-        self.rally_button.setEnabled(self._rally_button_enabled(snapshot))
-        self.step_button.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
-        self.reset_button.setEnabled(config_loaded)
-        # 仿真结束后禁止再注入扰动。
+        self.progress.setValue(display.progress_permille)
+        self.play_button.setEnabled(display.play_enabled)
+        self.rally_button.setEnabled(display.rally_enabled)
+        self.step_button.setEnabled(display.step_enabled)
+        self.reset_button.setEnabled(display.reset_enabled)
         for button in self.disturbance_buttons:
-            button.setEnabled(config_loaded and snapshot.run_state != "FINISHED")
-        # 单个播放控制按钮始终显示“点下去会发生什么”。
-        self.play_button.setText({"RUNNING": "暂停", "PAUSED": "继续"}.get(snapshot.run_state, "开始"))
+            button.setEnabled(display.disturbance_enabled)
+        self.play_button.setText(display.play_text)
         # 把快照下发给两视图与状态表；仅在需要时让视图自适应铺满。
         self.top_view.set_snapshot(snapshot, fit_view=fit_top_view)
         self.side_view.set_snapshot(snapshot)
@@ -65,78 +58,27 @@ class MainWindowActionMixin:
 
     @staticmethod
     def _rally_button_enabled(snapshot: Snapshot) -> bool:
-        """判断集结按钮是否可用。注意：集结中保持可点，用于返回明确提示。"""
-        # READY 阶段只显示几何预览，算法还没开始本地盘旋，因此不能发开始集结。
-        if snapshot.run_state in {"UNLOADED", "READY", "FINISHED"}:
-            return False
-        # 普通保持/避障等非集结配置不显示可执行入口，避免按钮语义混淆。
-        rally_nodes = [
-            node
-            for node in snapshot.nodes
-            if node.role.strip().lower() in {"rally_leader", "rally_follower"}
-        ]
-        if not rally_nodes:
-            return False
-        phases = {node.rally_phase for node in rally_nodes}
-        # 空 phase 只会出现在 READY 预览或异常冷启动场景，不能据此开放按钮。
-        # 多机 phase 不完全一致时取并集判断，只要仍有集结活动阶段就允许重复点击提示。
-        # HOLD 是集结的单向终态，本轮方案不支持回退到本地待命或重新集结。
-        if "HOLD" in phases:
-            return False
-        # LOCAL_LOITER 触发真正开始；ACTIVE 阶段保留可点状态，让控制器返回“已在集结中”。
-        return bool(phases & {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"})
+        """判断集结按钮是否可用。注意：兼容旧测试入口，实际规则由 ViewModel 承载。"""
+
+        return rally_button_enabled(snapshot.run_state, snapshot.nodes)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
-        # 节点表：前向保留待飞距(目标-本机)，高飘/右偏按飞行诊断习惯显示本机相对目标偏差。
-        self.node_table.setRowCount(len(snapshot.nodes))
-        for row, node in enumerate(snapshot.nodes):
-            # 健康枚举翻译成中文；未知值原样显示。
-            status = {"normal": "正常", "degraded": "降级", "fault": "故障", "lost": "失联"}.get(node.health, node.health)
-            # 节点表固定展示五列；rally_phase 仅保留在快照中，不写入隐藏的越界列。
-            values = [
-                node.node_id,
-                f"{node.track_pos_err_x:.1f}",
-                f"{-node.track_pos_err_y:.1f}",
-                f"{-node.track_pos_err_z:.1f}",
-                status,
-            ]
+        node_rows = node_table_rows(snapshot.nodes)
+        self.node_table.setRowCount(len(node_rows))
+        for row, values in enumerate(node_rows):
             for column, value in enumerate(values):
                 self.node_table.setItem(row, column, self._centered_table_item(value))
 
-        # 整体跟踪表：用长机代表当前全局航线跟踪情况，缺少显式长机时才回退首节点。
-        self.overall_table.setRowCount(1 if snapshot.nodes else 0)
-        if snapshot.nodes:
-            leader = leader_node_from(snapshot.nodes)
-            assert leader is not None
-            side_offset = leader.cross_track_error
-            if side_offset is None:
-                side_offset = (leader.y - WORLD_HEIGHT / 2) * 0.8
-            distance_to_go = leader.distance_to_go
-            if distance_to_go is None:
-                distance_to_go = max(0.0, (WORLD_WIDTH - leader.x) * 4)
-            # 地速按水平面速度模长显示，不把垂向爬升率计入整体跟踪表。
-            ground_speed = math.hypot(leader.vx, leader.vy)
-            values = [
-                f"{side_offset:.0f}",
-                f"{distance_to_go:.0f}",
-                f"{leader.altitude:.0f}",
-                f"{ground_speed:.0f}",
-                f"{leader.vertical_speed:.0f}",
-            ]
-            for column, value in enumerate(values):
+        overall_row = overall_table_row(snapshot.nodes)
+        self.overall_table.setRowCount(1 if overall_row is not None else 0)
+        if overall_row is not None:
+            for column, value in enumerate(overall_row):
                 self.overall_table.setItem(0, column, self._centered_table_item(value))
 
-        # 链路表：丢包率换算成百分比，ok 标志映射为正常/丢包文案。
-        self.link_table.setRowCount(len(snapshot.links))
-        for row, link in enumerate(snapshot.links):
-            values = [
-                f"{link.source}-{link.target}",
-                link_direction_label(link.direction),
-                f"{link.latency_ms}ms",
-                f"{link.loss * 100:.0f}%",
-                "正常" if link.ok else "丢包",
-            ]
+        link_rows = link_table_rows(snapshot.links)
+        self.link_table.setRowCount(len(link_rows))
+        for row, values in enumerate(link_rows):
             for column, value in enumerate(values):
                 self.link_table.setItem(row, column, self._centered_table_item(value))
 
@@ -461,9 +403,8 @@ class MainWindowActionMixin:
 
     def _on_duration_changed(self) -> None:
         """处理 duration changed 信号回调。注意：只在非运行态下更新控制器时长。"""
-        try:
-            duration_s = float(self.duration_input.text())
-        except ValueError:
+        duration_s = parse_duration_text(self.duration_input.text())
+        if duration_s is None:
             self._log("WARN", f"非法仿真时长：{self.duration_input.text()}")
             self._sync_duration_input(self.sim.snapshot())
             return
@@ -508,24 +449,18 @@ class MainWindowActionMixin:
 
     def _sync_duration_input(self, snapshot: Snapshot) -> None:
         """同步 duration input 显示。注意：加载配置后以控制器快照为准。"""
-        if snapshot.run_state == "UNLOADED":
-            self.duration_input.setEnabled(False)
+        display = self.sim_control_vm.on_snapshot(snapshot)
+        if display.duration_text is None:
+            self.duration_input.setEnabled(display.duration_enabled)
             return
-        self.duration_input.setText(self._format_duration_text(snapshot.duration))
-        self.duration_input.setEnabled(snapshot.run_state in {"READY", "PAUSED"})
+        self.duration_input.setText(display.duration_text)
+        self.duration_input.setEnabled(display.duration_enabled)
         self._sync_trail_seconds_for_duration(snapshot.duration)
 
     def _sync_trail_seconds_for_duration(self, duration_s: float) -> None:
         """按飞行时长同步默认尾迹长度。注意：同一时长不覆盖用户临时手动值。"""
         update = self.trail_vm.on_duration_synced(duration_s)
         self._apply_trail_control_update(update)
-
-    @staticmethod
-    def _format_duration_text(duration_s: float) -> str:
-        """格式化仿真时长文本。注意：整数秒不显示小数。"""
-        if math.isfinite(duration_s) and duration_s.is_integer():
-            return str(int(duration_s))
-        return f"{duration_s:.3f}".rstrip("0").rstrip(".")
 
     def _set_theme(self, theme_key: str) -> None:
         """切换界面主题。注意：只改变显示，不改变仿真状态。"""

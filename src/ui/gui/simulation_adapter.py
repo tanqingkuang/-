@@ -18,6 +18,7 @@ from src.ui.gui.view_models import (
     ReferenceRoute,
     Snapshot,
     TrailPoint,
+    link_direction_label,
     trail_seconds_for_duration,
 )
 
@@ -588,9 +589,3 @@ def node_altitude(index: int, time_value: float) -> float:
 
     # 基准高度 1200m，按机序错开 35m 层差，再叠加随时间起伏的正弦扰动。
     return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
-
-
-def link_direction_label(direction: str) -> str:
-    """生成通信链路方向显示文本。注意：只负责界面文案，不改变链路状态。"""
-
-    return {"duplex": "双向", "simplex": "单向"}.get(direction, direction)
