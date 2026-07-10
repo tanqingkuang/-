@@ -88,7 +88,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          cat > release-notes.md <<'EOF'
+          ## 版本说明
+
+          本版本提供 Windows x64 全量版和裁剪版客户端。
+
+          ## 主要更新
+
+          - 支持可插拔机型和三维态势显示。
+          - 支持集结待命、五机演示和相关仿真流程。
+          - 完善自动化测试、持续集成和发布打包流程。
+
+          ## 下载说明
+
+          - 全量版：包含完整功能和三维模型文件。
+          - 裁剪版：保留核心仿真与避障功能，包体更小。
+          EOF
           gh release create "${GITHUB_REF_NAME}" release-assets/*.zip \
             --repo "${GITHUB_REPOSITORY}" \
             --title "${GITHUB_REF_NAME}" \
-            --generate-notes
+            --notes-file release-notes.md
