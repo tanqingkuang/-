@@ -43,6 +43,7 @@ from src.ui.gui.main_window_avoidance import MainWindowAvoidanceMixin
 from src.ui.gui.main_window_layout import MainWindowLayoutMixin
 from src.ui.gui.main_window_style import MainWindowStyleMixin
 from src.ui.gui.side_view import SideView
+from src.ui.gui.side_view_control_view_model import SideViewControlViewModel
 from src.ui.gui.sim_control_view_model import SimControlViewModel
 from src.ui.gui.simulation_adapter import ControllerSimulationAdapter, MockSimulation
 from src.ui.gui.theme_widgets import THEMES, SelectButton, Theme
@@ -108,8 +109,9 @@ class MainWindow(
         self.setMinimumSize(1280, 780)
         # 接入真实控制器适配器作为数据源。
         self.sim = ControllerSimulationAdapter()
-        # 控制区和尾迹输入框策略属于窗口绑定层，不放入 controller 数据源。
+        # 控制区、侧视图和尾迹策略属于窗口绑定层，不放入 controller 数据源。
         self.sim_control_vm = SimControlViewModel()
+        self.side_view_control_vm = SideViewControlViewModel()
         self.trail_vm = TrailViewModel()
         # GUI 可选功能按运行档位选择具体实现，裁剪逻辑不散落在主窗口流程里。
         self.features = build_gui_feature_registry()
@@ -137,7 +139,6 @@ class MainWindow(
         self._avoidance_params: AvoidanceParams | None = None
         self._preview_route: list[WayPointInputS] | None = None
         self._top_view_geo_origin: GeoOrigin | None = None
-        self._segment_lock_preferred = True
         self.avoidance_window: AvoidanceWindow | None = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()

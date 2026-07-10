@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from configparser import ConfigParser
 import json
-import os
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
@@ -12,8 +11,15 @@ from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidge
 
 from src.data.geo import enu_to_geodetic
 from src.ui.gui.avoidance_tools import _geo_origin_from_config_for_ui, parse_avoidance_config
+from src.ui.gui.config_state_view_model import (
+    dialog_start_dir,
+    display_config_path,
+    parse_last_config_value,
+    relative_config_path,
+)
 from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.theme_widgets import THEMES
+from src.ui.gui.side_view_control_view_model import geodetic_click_text
 from src.ui.gui.sim_control_view_model import parse_duration_text, rally_button_enabled
 from src.ui.gui.status_table_view_model import link_table_rows, node_table_rows, overall_table_row
 from src.ui.gui.trail_view_model import TrailControlUpdate
@@ -250,15 +256,14 @@ class MainWindowActionMixin:
 
     def _on_top_view_point_clicked(self, east_m: float, north_m: float) -> None:
         """处理俯视图单击坐标。注意：只显示经纬度，不修改仿真状态。"""
-        if self._top_view_geo_origin is None:
-            # 失败提示也放进同一个输入框，避免用户误复制上一配置遗留坐标。
-            self.top_view_coordinate.setText("当前配置无经纬 origin")
-            self.top_view_coordinate.selectAll()
-            return
-        latitude_deg, longitude_deg = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
-        self.top_view_coordinate.setText(f"{longitude_deg:.7f}, {latitude_deg:.7f}")
-        # 自动选中，用户单击后可直接 Ctrl+C 复制数字。
-        self.top_view_coordinate.setFocus(Qt.FocusReason.OtherFocusReason)
+        geodetic = None
+        if self._top_view_geo_origin is not None:
+            # 坐标系转换属于 data 层，ViewModel 只负责缺失提示与复制文案。
+            geodetic = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
+        self.top_view_coordinate.setText(geodetic_click_text(geodetic))
+        if geodetic is not None:
+            # 有效坐标沿用原聚焦行为，用户单击后可直接 Ctrl+C 复制数字。
+            self.top_view_coordinate.setFocus(Qt.FocusReason.OtherFocusReason)
         self.top_view_coordinate.selectAll()
 
     def _sync_speed_controls(self, speed: float) -> None:
@@ -274,20 +279,13 @@ class MainWindowActionMixin:
 
     def _config_dialog_start_dir(self) -> Path:
         """处理 dialog start dir 配置路径。注意：兼容源码运行和打包运行路径。"""
-        # config.ini 里存的是相对项目根的路径；据此推出对话框起始目录。
-        relative_path = self._read_last_config_path()
-        if relative_path is None:
-            return self.project_root
-        config_path = (self.project_root / relative_path).resolve()
-        candidate = config_path.parent
-        # 目录已不存在则退回项目根，避免对话框打开到无效位置。
-        return candidate if candidate.exists() else self.project_root
+        # config.ini 只提供原始记忆值，目录选择和失效回退交给零 Qt 规则。
+        return dialog_start_dir(self._read_last_config_path(), self.project_root)
 
     def _display_config_path(self, path: Path) -> str:
         """生成 config path 显示文本。注意：仅用于界面展示。"""
-        # 优先展示相对项目根的路径，无法相对化时退而显示文件名。
-        relative_path = self._relative_to_project_root(path)
-        return relative_path if relative_path is not None else path.name
+        # GUI 层只绑定显示结果，不再自行判断相对路径回退。
+        return display_config_path(path, self.project_root)
 
     def _load_last_config_from_state(self) -> None:
         """加载上次使用的配置路径。注意：路径不存在时回退到默认配置。"""
@@ -314,14 +312,14 @@ class MainWindowActionMixin:
             # 读失败不致命，记录告警并按“无记录”处理。
             self._log("WARN", f"读取 config.ini 失败：{exc}")
             return None
-        # 取 [config] last_config；空白串归一化为 None。
-        value = parser.get(APP_CONFIG_SECTION, APP_CONFIG_KEY_LAST_CONFIG, fallback="").strip()
-        return value or None
+        # 取 [config] last_config；空白归一化规则由零 Qt 函数统一处理。
+        value = parser.get(APP_CONFIG_SECTION, APP_CONFIG_KEY_LAST_CONFIG, fallback="")
+        return parse_last_config_value(value)
 
     def _save_last_config_path(self, path: Path) -> None:
         """保存 last config path 数据。注意：写入失败不应影响主仿真流程。"""
         # 只记录相对路径，便于项目整体移动后仍能定位；不可相对化则放弃记忆。
-        relative_path = self._relative_to_project_root(path)
+        relative_path = relative_config_path(path, self.project_root)
         if relative_path is None:
             self._log("WARN", "配置路径无法相对到程序目录，未更新 config.ini")
             return
@@ -337,20 +335,9 @@ class MainWindowActionMixin:
             self._log("WARN", f"写入 config.ini 失败：{exc}")
 
     def _relative_to_project_root(self, path: Path) -> str | None:
-        """计算 to project root 相对路径。注意：路径不可相对化时返回原始路径。"""
-        try:
-            # Windows 上跨盘符无法相对化会抛 ValueError。
-            relative_path = os.path.relpath(path.resolve(), self.project_root)
-        except ValueError:
-            return None
-        # relpath 仍返回绝对路径（如不同盘）则视为不可相对化。
-        if os.path.isabs(relative_path):
-            return None
-        try:
-            # 统一用正斜杠存储，跨平台一致。
-            return Path(relative_path).as_posix()
-        except ValueError:
-            return None
+        """计算 to project root 相对路径。注意：兼容旧调用入口，规则由 ViewModel 承载。"""
+
+        return relative_config_path(path, self.project_root)
 
     def _on_speed_changed(self, value: int) -> None:
         """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
@@ -364,13 +351,14 @@ class MainWindowActionMixin:
 
     def _on_segment_lock_changed(self) -> None:
         """处理 segment lock changed 信号回调。注意：只改变侧视图显示方式。"""
-        checked = self.segment_lock.isChecked()
-        previous_angle = self.side_view.current_view_angle_deg()
-        if self.segment_lock.isEnabled():
-            self._segment_lock_preferred = checked
-        if not checked:
-            self.side_view.view_angle_deg = previous_angle
-        self.side_view.set_segment_locked(checked)
+        update = self.side_view_control_vm.on_lock_toggled(
+            checked=self.segment_lock.isChecked(),
+            lock_enabled=self.segment_lock.isEnabled(),
+            current_angle=self.side_view.current_view_angle_deg(),
+        )
+        if update.view_angle_deg is not None:
+            self.side_view.view_angle_deg = update.view_angle_deg
+        self.side_view.set_segment_locked(update.apply_locked)
         self._sync_side_view_controls()
 
     def _on_view_angle_changed(self, value: int) -> None:
@@ -385,21 +373,29 @@ class MainWindowActionMixin:
     def _sync_side_view_controls(self) -> None:
         """同步侧视图控制状态。注意：程序刷新控件时不触发用户回调。"""
         lock_available = self.side_view.lock_available()
-        locked = lock_available and self._segment_lock_preferred
-
+        update = self.side_view_control_vm.on_sync(
+            lock_available=lock_available,
+            side_view_locked=self.side_view.segment_locked,
+            current_angle=self.side_view.current_view_angle_deg(),
+        )
         with QSignalBlocker(self.segment_lock):
-            self.segment_lock.setEnabled(lock_available)
-            self.segment_lock.setChecked(locked)
-        if self.side_view.segment_locked != locked:
-            self.side_view.set_segment_locked(locked)
+            self.segment_lock.setEnabled(update.lock_enabled)
+            self.segment_lock.setChecked(update.lock_checked)
+        if update.apply_locked is not None:
+            self.side_view.set_segment_locked(update.apply_locked)
+            # 锁状态写入会更新实际投影角，需按新视图状态重新生成角度回填值。
+            update = self.side_view_control_vm.on_sync(
+                lock_available=lock_available,
+                side_view_locked=self.side_view.segment_locked,
+                current_angle=self.side_view.current_view_angle_deg(),
+            )
 
-        angle = round(self.side_view.current_view_angle_deg()) % 360
         with QSignalBlocker(self.view_angle_input):
-            self.view_angle_input.setEnabled(not locked)
-            self.view_angle_input.setValue(angle)
+            self.view_angle_input.setEnabled(update.angle_controls_enabled)
+            self.view_angle_input.setValue(update.angle_value)
         with QSignalBlocker(self.view_angle_slider):
-            self.view_angle_slider.setEnabled(not locked)
-            self.view_angle_slider.setValue(angle)
+            self.view_angle_slider.setEnabled(update.angle_controls_enabled)
+            self.view_angle_slider.setValue(update.angle_value)
 
     def _on_duration_changed(self) -> None:
         """处理 duration changed 信号回调。注意：只在非运行态下更新控制器时长。"""
