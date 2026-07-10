@@ -8,6 +8,7 @@ from src.algorithm.context.leaf_types import WayPointInputS
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 from src.ui.gui.playback_view_model import PlaybackViewModel
+from src.ui.gui.trail_view_model import prune_trail
 from src.ui.gui.view_models import (
     WORLD_HEIGHT,
     WORLD_WIDTH,
@@ -52,7 +53,7 @@ class MockSimulation:
             return
         for node in self.nodes:
             # 切到更短时长时立即裁剪旧点，避免下一帧前仍显示超长尾迹。
-            node.trail = [point for point in node.trail if self.time - point.time <= self.trail_seconds]
+            node.trail = prune_trail(node.trail, self.time, self.trail_seconds)
 
     def reset(self) -> Snapshot:
         """复位 MockSimulation 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -165,7 +166,7 @@ class MockSimulation:
             else:
                 # 追加当前采样点并裁掉超过保留时长的旧点。
                 node.trail.append(TrailPoint(node.x, node.y, node_altitude(index, self.time), self.time))
-                node.trail = [point for point in node.trail if self.time - point.time <= self.trail_seconds]
+                node.trail = prune_trail(node.trail, self.time, self.trail_seconds)
 
         # 扰动窗口到期后自动清除，恢复正常显示。
         if self.disturbance != "无" and self.time > self.disturbance_until:
@@ -257,7 +258,7 @@ class ControllerSimulationAdapter:
         current_time = self.controller.get_snapshot().time_s
         for trail in self._trail_by_node.values():
             # 切到更短时长时立即裁剪缓存，避免后续快照继续携带旧点。
-            trail[:] = [point for point in trail if current_time - point.time <= self.trail_seconds]
+            trail[:] = prune_trail(trail, current_time, self.trail_seconds)
 
     def load_config(self, path: str) -> Snapshot:
         """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
@@ -441,7 +442,7 @@ class ControllerSimulationAdapter:
                 if not trail or trail[-1].time != snapshot.time_s:
                     trail.append(TrailPoint(node.x_m, node.y_m, node.altitude_m, snapshot.time_s))
                 # 裁剪阈值跟随工具栏输入，保留同一列表对象便于后续引用稳定。
-                trail[:] = [point for point in trail if snapshot.time_s - point.time <= self.trail_seconds]
+                trail[:] = prune_trail(trail, snapshot.time_s, self.trail_seconds)
             nodes.append(
                 NodeState(
                     node_id=node.node_id,
