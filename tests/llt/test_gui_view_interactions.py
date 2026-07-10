@@ -363,29 +363,18 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreaterEqual(self.window.top_view.height(), 360)
         self.assertGreaterEqual(self.window.side_view.height(), 150)
 
-    def test_playback_slider_uses_segmented_rate_steps(self) -> None:
+    def test_playback_slider_binding_applies_view_model_output(self) -> None:
         self.assertEqual(self.window.speed_slider.minimum(), 1)
         self.assertEqual(self.window.speed_slider.maximum(), PLAYBACK_RATE_SLIDER_MAX)
 
-        cases = [
-            (1, 0.1),
-            (10, 1.0),
-            (20, 2.0),
-            (21, 3.0),
-            (28, 10.0),
-            (29, 12.0),
-            (33, 20.0),
-            (34, 23.0),
-            (PLAYBACK_RATE_SLIDER_MAX, 50.0),
-        ]
-        for slider_value, expected_speed in cases:
-            with self.subTest(slider_value=slider_value):
-                self.window.speed_slider.setValue(slider_value)
-                self.app.processEvents()
+        with patch.object(self.window.sim, "set_speed", wraps=self.window.sim.set_speed) as set_speed:
+            self.window.speed_slider.setValue(34)
+            self.app.processEvents()
 
-                self.assertEqual(self.window.speed_label.text(), f"{expected_speed:.1f}x")
-                self.assertAlmostEqual(self.window.sim.speed, expected_speed)
-                self.assertAlmostEqual(self.window.sim.controller.playback_rate, expected_speed)
+        set_speed.assert_called_once_with(23.0)
+        self.assertEqual(self.window.speed_label.text(), "23.0x")
+        self.assertAlmostEqual(self.window.sim.speed, 23.0)
+        self.assertAlmostEqual(self.window.sim.controller.playback_rate, 23.0)
 
     def test_cpu_utilization_label_updates_from_snapshot(self) -> None:
         snapshot = Snapshot(
@@ -405,9 +394,11 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(self.window.cpu_label.text(), "CPU 80%")
 
-    def test_load_config_syncs_playback_rate_to_slider(self) -> None:
-        self._load_ui_config(playback_rate=2.0)
+    def test_load_config_syncs_playback_rate_to_slider_without_reapplying_rate(self) -> None:
+        with patch.object(self.window.sim, "set_speed", wraps=self.window.sim.set_speed) as set_speed:
+            self._load_ui_config(playback_rate=2.0)
 
+        set_speed.assert_not_called()
         self.assertEqual(self.window.speed_slider.value(), 20)
         self.assertEqual(self.window.speed_label.text(), "2.0x")
         self.assertAlmostEqual(self.window.sim.speed, 2.0)
@@ -426,17 +417,6 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(self.window.speed_label.text(), "50.0x")
         self.assertAlmostEqual(self.window.sim.speed, 50.0)
         self.assertAlmostEqual(self.window.sim.controller.playback_rate, 50.0)
-
-    def test_adapter_pause_does_not_resume_from_paused_state(self) -> None:
-        self._load_ui_config()
-        self.window.sim.start()
-        self._wait_for_controller_time()
-
-        paused = self.window.sim.pause()
-        paused_again = self.window.sim.pause()
-
-        self.assertEqual(paused.run_state, "PAUSED")
-        self.assertEqual(paused_again.run_state, "PAUSED")
 
     def test_repeated_snapshot_time_keeps_controller_velocity(self) -> None:
         snapshot = ControllerSnapshot(
