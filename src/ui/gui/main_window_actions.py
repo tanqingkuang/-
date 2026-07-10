@@ -19,6 +19,7 @@ from src.ui.gui.config_state_view_model import (
 )
 from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.theme_widgets import THEMES
+from src.ui.gui.side_view_control_view_model import geodetic_click_text
 from src.ui.gui.sim_control_view_model import parse_duration_text, rally_button_enabled
 from src.ui.gui.status_table_view_model import link_table_rows, node_table_rows, overall_table_row
 from src.ui.gui.trail_view_model import TrailControlUpdate
@@ -255,15 +256,14 @@ class MainWindowActionMixin:
 
     def _on_top_view_point_clicked(self, east_m: float, north_m: float) -> None:
         """处理俯视图单击坐标。注意：只显示经纬度，不修改仿真状态。"""
-        if self._top_view_geo_origin is None:
-            # 失败提示也放进同一个输入框，避免用户误复制上一配置遗留坐标。
-            self.top_view_coordinate.setText("当前配置无经纬 origin")
-            self.top_view_coordinate.selectAll()
-            return
-        latitude_deg, longitude_deg = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
-        self.top_view_coordinate.setText(f"{longitude_deg:.7f}, {latitude_deg:.7f}")
-        # 自动选中，用户单击后可直接 Ctrl+C 复制数字。
-        self.top_view_coordinate.setFocus(Qt.FocusReason.OtherFocusReason)
+        geodetic = None
+        if self._top_view_geo_origin is not None:
+            # 坐标系转换属于 data 层，ViewModel 只负责缺失提示与复制文案。
+            geodetic = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
+        self.top_view_coordinate.setText(geodetic_click_text(geodetic))
+        if geodetic is not None:
+            # 有效坐标沿用原聚焦行为，用户单击后可直接 Ctrl+C 复制数字。
+            self.top_view_coordinate.setFocus(Qt.FocusReason.OtherFocusReason)
         self.top_view_coordinate.selectAll()
 
     def _sync_speed_controls(self, speed: float) -> None:
@@ -351,13 +351,14 @@ class MainWindowActionMixin:
 
     def _on_segment_lock_changed(self) -> None:
         """处理 segment lock changed 信号回调。注意：只改变侧视图显示方式。"""
-        checked = self.segment_lock.isChecked()
-        previous_angle = self.side_view.current_view_angle_deg()
-        if self.segment_lock.isEnabled():
-            self._segment_lock_preferred = checked
-        if not checked:
-            self.side_view.view_angle_deg = previous_angle
-        self.side_view.set_segment_locked(checked)
+        update = self.side_view_control_vm.on_lock_toggled(
+            checked=self.segment_lock.isChecked(),
+            lock_enabled=self.segment_lock.isEnabled(),
+            current_angle=self.side_view.current_view_angle_deg(),
+        )
+        if update.view_angle_deg is not None:
+            self.side_view.view_angle_deg = update.view_angle_deg
+        self.side_view.set_segment_locked(update.apply_locked)
         self._sync_side_view_controls()
 
     def _on_view_angle_changed(self, value: int) -> None:
@@ -372,21 +373,29 @@ class MainWindowActionMixin:
     def _sync_side_view_controls(self) -> None:
         """同步侧视图控制状态。注意：程序刷新控件时不触发用户回调。"""
         lock_available = self.side_view.lock_available()
-        locked = lock_available and self._segment_lock_preferred
-
+        update = self.side_view_control_vm.on_sync(
+            lock_available=lock_available,
+            side_view_locked=self.side_view.segment_locked,
+            current_angle=self.side_view.current_view_angle_deg(),
+        )
         with QSignalBlocker(self.segment_lock):
-            self.segment_lock.setEnabled(lock_available)
-            self.segment_lock.setChecked(locked)
-        if self.side_view.segment_locked != locked:
-            self.side_view.set_segment_locked(locked)
+            self.segment_lock.setEnabled(update.lock_enabled)
+            self.segment_lock.setChecked(update.lock_checked)
+        if update.apply_locked is not None:
+            self.side_view.set_segment_locked(update.apply_locked)
+            # 锁状态写入会更新实际投影角，需按新视图状态重新生成角度回填值。
+            update = self.side_view_control_vm.on_sync(
+                lock_available=lock_available,
+                side_view_locked=self.side_view.segment_locked,
+                current_angle=self.side_view.current_view_angle_deg(),
+            )
 
-        angle = round(self.side_view.current_view_angle_deg()) % 360
         with QSignalBlocker(self.view_angle_input):
-            self.view_angle_input.setEnabled(not locked)
-            self.view_angle_input.setValue(angle)
+            self.view_angle_input.setEnabled(update.angle_controls_enabled)
+            self.view_angle_input.setValue(update.angle_value)
         with QSignalBlocker(self.view_angle_slider):
-            self.view_angle_slider.setEnabled(not locked)
-            self.view_angle_slider.setValue(angle)
+            self.view_angle_slider.setEnabled(update.angle_controls_enabled)
+            self.view_angle_slider.setValue(update.angle_value)
 
     def _on_duration_changed(self) -> None:
         """处理 duration changed 信号回调。注意：只在非运行态下更新控制器时长。"""
