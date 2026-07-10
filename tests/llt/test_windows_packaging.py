@@ -8,6 +8,7 @@ import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FULL_RELEASE_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_full_release.ps1"
+WINDOWS_EXE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "build-windows-exe.yml"
 
 
 class WindowsPackagingScriptTests(unittest.TestCase):
@@ -26,6 +27,16 @@ class WindowsPackagingScriptTests(unittest.TestCase):
         self.assertIn("Get-ChildItem -LiteralPath $AircraftModelSourceDir -Filter *.glb", script)
         self.assertIn("Copy-Item -LiteralPath $_.FullName -Destination $DistDir -Force", script)
         self.assertNotIn("src/ui/gui/situation3d/qml;src/ui/gui/situation3d/qml", script)
+
+    def test_full_release_artifact_uploads_exe_and_external_glb(self) -> None:
+        """全量 GitHub artifact 应同时包含 exe 和平铺 glb，避免客户包漏模型。"""
+
+        workflow = WINDOWS_EXE_WORKFLOW.read_text(encoding="utf-8")
+
+        self.assertIn("artifact_paths: |\n              dist/编队仿真.exe\n              dist/*.glb", workflow)
+        self.assertIn("artifact_paths: dist/编队仿真-裁剪版.exe", workflow)
+        self.assertIn("path: ${{ matrix.artifact_paths }}", workflow)
+        self.assertNotIn("path: ${{ matrix.exe_path }}", workflow)
 
 
 if __name__ == "__main__":

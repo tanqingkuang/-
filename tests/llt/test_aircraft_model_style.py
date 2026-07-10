@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 import unittest
 from unittest.mock import patch
@@ -121,14 +122,16 @@ class AircraftModelStyleTests(unittest.TestCase):
     def test_style_payload_uses_exe_sibling_glb_when_packaged(self) -> None:
         """打包态应从 exe 同级加载 glb，避免模型资产塞进 onefile exe。"""
 
+        packaged_exe = Path.cwd().resolve() / "release" / "编队仿真.exe"
+
         with patch("src.ui.gui.situation3d.aircraft_model_style.sys.frozen", True, create=True):
             with patch(
                 "src.ui.gui.situation3d.aircraft_model_style.sys.executable",
-                r"C:\release\编队仿真.exe",
+                str(packaged_exe),
             ):
                 payload = create_aircraft_model_style(AircraftModelType.BAYRAKTAR_TB2).style_payload()
 
-        self.assertEqual(payload["modelSource"], "file:///C:/release/BayraktarTB2.glb")
+        self.assertEqual(payload["modelSource"], (packaged_exe.parent / "BayraktarTB2.glb").as_uri())
 
     def test_factory_rejects_unregistered_type(self) -> None:
         """未注册机型应抛出 ValueError。注意：避免 QML 静默加载错误资产。"""
