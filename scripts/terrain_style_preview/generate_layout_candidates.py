@@ -81,6 +81,7 @@ class Saddle:
     v: float
     height: float
     label: str
+    kind: str = "saddle"
 
 
 @dataclass(frozen=True)
@@ -311,6 +312,24 @@ def load_layout_spec_from_json(path: Path) -> LayoutSpec:
             ridges.append(RidgeSegment(first.u, first.v, second.u, second.v, height, ridge_width, role, label))
             if role == "saddle":
                 saddles.append(Saddle((first.u + second.u) * 0.5, (first.v + second.v) * 0.5, height, label))
+    for link in data.get("saddle_links", []):
+        start_u, start_v = float(link["from_uv"][0]), float(link["from_uv"][1])
+        end_u, end_v = float(link["to_uv"][0]), float(link["to_uv"][1])
+        height = float(link["height_m"])
+        label = str(link.get("label", "鞍部连接"))
+        ridges.append(
+            RidgeSegment(
+                start_u=start_u,
+                start_v=start_v,
+                end_u=end_u,
+                end_v=end_v,
+                height=height,
+                width_km=float(link.get("ridge_width_km", 0.52)),
+                role=str(link.get("role", "saddle")),
+                label=label,
+            )
+        )
+        saddles.append(Saddle((start_u + end_u) * 0.5, (start_v + end_v) * 0.5, height, label, str(link.get("kind", "saddle"))))
     flight = data["flight"]
     return LayoutSpec(
         key=str(data["key"]),
@@ -359,10 +378,19 @@ def layout_height(spec: LayoutSpec, x_grid: np.ndarray, y_grid: np.ndarray, seed
         local_x = (dx * cos_a + dy * sin_a) / peak.radius_u
         local_y = (-dx * sin_a + dy * cos_a) / peak.radius_v
         body = np.exp(-1.20 * (np.abs(local_x) ** 1.65 + np.abs(local_y) ** 1.80))
-        ridge = warped_ridged_fbm(uu + index * 0.037, vv - index * 0.023, 16 + index % 5, 4, seed + 41 + index, 0.030)
-        drainage = warped_ridged_fbm(uu - index * 0.011, vv + index * 0.019, 22 + index % 7, 3, seed + 91 + index, 0.025)
-        rugged = np.clip(0.72 + 0.42 * ridge - 0.24 * (1.0 - drainage) ** 2.0, 0.42, 1.26)
+        ridge = warped_ridged_fbm(uu + index * 0.037, vv - index * 0.023, 22 + index % 5, 5, seed + 41 + index, 0.034)
+        drainage = warped_ridged_fbm(uu - index * 0.011, vv + index * 0.019, 34 + index % 7, 4, seed + 91 + index, 0.030)
+        fine_ridge = warped_ridged_fbm(uu + index * 0.019, vv + index * 0.031, 66 + index % 9, 3, seed + 131 + index, 0.022)
+        rugged = np.clip(0.58 + 0.50 * ridge + 0.30 * fine_ridge - 0.36 * (1.0 - drainage) ** 2.0, 0.30, 1.42)
         height += peak.height * body * rugged
+    mountain_mask = smoothstep((height - 220.0) / 780.0)
+    ridge_detail = warped_ridged_fbm(uu * 1.017 + 0.041, vv * 0.983 - 0.027, 58, 5, seed + 503, 0.034)
+    gully_detail = warped_ridged_fbm(uu * 0.971 - 0.063, vv * 1.029 + 0.019, 42, 4, seed + 607, 0.030)
+    rock_detail = warped_ridged_fbm(uu * 1.039 + 0.012, vv * 1.011 + 0.071, 96, 3, seed + 719, 0.020)
+    crest = np.clip((ridge_detail - 0.54) / 0.46, 0.0, 1.0)
+    gully = np.clip((0.62 - gully_detail) / 0.62, 0.0, 1.0)
+    high_frequency = 250.0 * (ridge_detail - 0.46) + 160.0 * crest**1.7 - 260.0 * gully**2.0 + 92.0 * (rock_detail - 0.50)
+    height += mountain_mask * high_frequency
     # 航线走廊在段1和段4更平缓，段2保留低丘层次。
     corridor = np.exp(-0.5 * (v_grid / 0.75) ** 2)
     gather = smoothstep((6.0 - u_grid) / 2.2)
@@ -403,10 +431,14 @@ def style_a_colors(height: np.ndarray, x_grid: np.ndarray, y_grid: np.ndarray) -
     light_dir = np.array([-0.58, 0.66, 0.48], dtype=np.float32)
     light_dir /= np.linalg.norm(light_dir)
     lambert = np.clip(np.sum(normals * light_dir, axis=-1), 0.0, 1.0)
-    veg_relief = 0.86 + 0.24 * (lambert[..., None] ** 0.82)
-    rock_relief = 0.46 + 0.96 * (lambert[..., None] ** 0.78)
+    broad_height = box_blur(height, 10, passes=2)
+    concavity = np.clip((broad_height - height - 28.0) / 210.0, 0.0, 1.0)
+    ridge_lift = np.clip((height - broad_height - 45.0) / 240.0, 0.0, 1.0)
+    ao = (1.0 - 0.40 * concavity + 0.12 * ridge_lift)[..., None]
+    veg_relief = 0.78 + 0.34 * (lambert[..., None] ** 0.80)
+    rock_relief = 0.36 + 1.14 * (lambert[..., None] ** 0.74)
     relief = veg_relief * (1.0 - rock_weight[..., None]) + rock_relief * rock_weight[..., None]
-    color = np.maximum(mixed * relief, np.array([0.036, 0.052, 0.070], dtype=np.float32))
+    color = np.maximum(mixed * relief * ao, np.array([0.032, 0.046, 0.064], dtype=np.float32))
     linear = srgb_to_linear(np.clip(color, 0.0, 0.85))
     alpha = np.ones((*height.shape, 1), dtype=np.float32)
     return np.concatenate([linear.astype(np.float32), alpha], axis=-1), normals
@@ -420,7 +452,7 @@ class LayoutScene:
 
         self.spec = spec
         self.grid_size = grid_size
-        self.extent_km = 58.0
+        self.extent_km = 90.0
         axis = np.linspace(-self.extent_km, self.extent_km, grid_size, dtype=np.float32)
         self.x_grid, self.y_grid = np.meshgrid(axis, axis)
         self.height = layout_height(spec, self.x_grid, self.y_grid, seed)

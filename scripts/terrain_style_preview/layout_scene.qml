@@ -28,10 +28,10 @@ Item {
             fog: Fog {
                 enabled: true
                 color: "#081723"
-                density: 0.18
+                density: 0.09
                 depthEnabled: true
                 depthNear: 32000
-                depthFar: 62000
+                depthFar: 68000
                 depthCurve: 1.05
                 heightEnabled: false
             }
@@ -40,26 +40,26 @@ Item {
         Node {
             id: cameraPivot
             position: Qt.vector3d(0, 980, 0)
-            eulerRotation: Qt.vector3d(-43, -42, 0)
+            eulerRotation: Qt.vector3d(-35, -42, 0)
 
             PerspectiveCamera {
-                position: Qt.vector3d(0, 0, 23200)
+                position: Qt.vector3d(0, 0, 22400)
                 clipNear: 10
                 clipFar: 140000
-                fieldOfView: 49
+                fieldOfView: 47
             }
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-35, -52, 0)
-            brightness: 2.45
+            brightness: 3.20
             color: "#fff0d6"
             castsShadow: false
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 132, 0)
-            brightness: 0.56
+            brightness: 0.72
             color: "#4faec6"
             castsShadow: false
         }
