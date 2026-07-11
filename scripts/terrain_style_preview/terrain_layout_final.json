@@ -1,0 +1,114 @@
+{
+  "_comment": "定稿布局 D：B+C 融合。坐标为局部 ENU 航线坐标系 u/v，单位 km；高度为相对高度 m。山体只允许通过 mountain_chains 定义，禁止孤立峰。",
+  "key": "d",
+  "title": "方案 D：B+C 融合定稿",
+  "description": "段2 使用约 2km 宽高陡峡谷，段3 使用错位双障碍峰与低鞍部脊线，重规划航线呈 S 形并从鞍部上方穿过。",
+  "map": {
+    "_comment": "effective_extent_km 为正式避障有效区；render_extent_km 为渲染裙边远山范围。",
+    "effective_extent_km": 32,
+    "render_extent_km": 42
+  },
+  "flight": {
+    "_comment": "原始航线为红色虚线，重规划航线为青色实线；cruise_altitude_m=900，clearance_m=200，鞍部须低于 700m。",
+    "cruise_altitude_m": 900,
+    "clearance_m": 200,
+    "original_route_uv": [
+      [0.0, 0.0],
+      [26.0, 0.0]
+    ],
+    "planned_route_uv": [
+      [0.0, 0.0],
+      [5.8, 0.0],
+      [10.8, 0.0],
+      [13.4, -1.62],
+      [16.25, 0.12],
+      [18.9, 1.70],
+      [22.0, 0.40],
+      [26.0, 0.0]
+    ]
+  },
+  "corridor": {
+    "_comment": "演示走廊分段说明，供布局层消费；高度场生成时段1/段4更平缓，段2保留低丘层次。",
+    "segments": [
+      {"name": "集结段", "u_start": 0.0, "u_end": 6.0, "terrain": "平原/低丘"},
+      {"name": "穿越段", "u_start": 6.0, "u_end": 12.0, "terrain": "约 2km 宽高陡峡谷"},
+      {"name": "避障段", "u_start": 12.0, "u_end": 20.0, "terrain": "错位双峰与低鞍部脊线"},
+      {"name": "收尾段", "u_start": 20.0, "u_end": 26.0, "terrain": "出谷平缓丘陵"}
+    ]
+  },
+  "mountain_chains": [
+    {
+      "id": "north_canyon_chain",
+      "name": "北侧峡谷高山链",
+      "role": "valley",
+      "_comment": "穿越段北侧连续高山，峰高 2200~2600m，靠近走廊形成压迫感。",
+      "polyline_uv": [[3.4, 2.25], [6.8, 1.22], [10.4, 1.08], [12.5, 1.55], [14.4, 2.15]],
+      "saddle_height_factor": 0.38,
+      "ridge_width_km": 0.72,
+      "peaks": [
+        {"station": 0.10, "lateral_offset_km": 0.05, "height_m": 1180, "base_radius_km": 1.45, "aspect_ratio": 1.45, "role": "background", "label": "北前导 1180m"},
+        {"station": 0.38, "lateral_offset_km": 0.00, "height_m": 2320, "base_radius_km": 1.48, "aspect_ratio": 1.72, "role": "valley", "label": "北侧 2320m"},
+        {"station": 0.68, "lateral_offset_km": -0.03, "height_m": 2580, "base_radius_km": 1.44, "aspect_ratio": 1.78, "role": "valley", "label": "北侧 2580m"},
+        {"station": 0.92, "lateral_offset_km": 0.05, "height_m": 1740, "base_radius_km": 1.55, "aspect_ratio": 1.50, "role": "background", "label": "北衔接 1740m"}
+      ]
+    },
+    {
+      "id": "south_canyon_chain",
+      "name": "南侧峡谷高山链",
+      "role": "valley",
+      "_comment": "穿越段南侧连续高山，与北链共同把谷宽压到约 2km。",
+      "polyline_uv": [[4.0, -2.15], [7.2, -1.18], [10.8, -1.10], [13.0, -1.62], [15.0, -2.28]],
+      "saddle_height_factor": 0.36,
+      "ridge_width_km": 0.70,
+      "peaks": [
+        {"station": 0.16, "lateral_offset_km": -0.05, "height_m": 1320, "base_radius_km": 1.42, "aspect_ratio": 1.48, "role": "background", "label": "南前导 1320m"},
+        {"station": 0.43, "lateral_offset_km": 0.02, "height_m": 2240, "base_radius_km": 1.42, "aspect_ratio": 1.72, "role": "valley", "label": "南侧 2240m"},
+        {"station": 0.72, "lateral_offset_km": 0.00, "height_m": 2460, "base_radius_km": 1.40, "aspect_ratio": 1.76, "role": "valley", "label": "南侧 2460m"},
+        {"station": 0.94, "lateral_offset_km": -0.04, "height_m": 1620, "base_radius_km": 1.55, "aspect_ratio": 1.45, "role": "background", "label": "南衔接 1620m"}
+      ]
+    },
+    {
+      "id": "hazard_saddle_chain",
+      "name": "避障双峰低鞍部链",
+      "role": "obstacle",
+      "_comment": "两座障碍峰属于同一条山脉链，中间鞍部由 saddle_height_factor 控制，目标约 600m，不构成障碍。",
+      "polyline_uv": [[12.8, 0.92], [16.25, 0.05], [19.7, -0.90]],
+      "saddle_height_factor": 0.20,
+      "ridge_width_km": 0.62,
+      "peaks": [
+        {"station": 0.22, "lateral_offset_km": 0.10, "height_m": 2360, "base_radius_km": 1.06, "aspect_ratio": 1.24, "role": "obstacle", "label": "障碍峰 2360m"},
+        {"station": 0.82, "lateral_offset_km": -0.10, "height_m": 2480, "base_radius_km": 1.08, "aspect_ratio": 1.24, "role": "obstacle", "label": "障碍峰 2480m"}
+      ]
+    },
+    {
+      "id": "central_link_chain",
+      "name": "中央低矮衔接山脉链",
+      "role": "background",
+      "_comment": "用低丘与低脊自然衔接峡谷、障碍双峰和收尾山群，避免孤立馒头山。",
+      "polyline_uv": [[5.2, 0.18], [8.0, -0.18], [11.4, 0.18], [14.2, 0.55], [17.0, 0.02], [21.4, 1.05], [25.0, 1.65]],
+      "saddle_height_factor": 0.42,
+      "ridge_width_km": 0.58,
+      "peaks": [
+        {"station": 0.08, "lateral_offset_km": 0.00, "height_m": 420, "base_radius_km": 0.64, "aspect_ratio": 1.10, "role": "low", "label": "低丘 420m"},
+        {"station": 0.25, "lateral_offset_km": -0.10, "height_m": 560, "base_radius_km": 0.70, "aspect_ratio": 1.18, "role": "low", "label": "低丘 560m"},
+        {"station": 0.40, "lateral_offset_km": 0.08, "height_m": 510, "base_radius_km": 0.66, "aspect_ratio": 1.12, "role": "low", "label": "低丘 510m"},
+        {"station": 0.70, "lateral_offset_km": 0.08, "height_m": 980, "base_radius_km": 1.48, "aspect_ratio": 1.38, "role": "background", "label": "衔接峰 980m"},
+        {"station": 0.92, "lateral_offset_km": -0.06, "height_m": 1120, "base_radius_km": 1.70, "aspect_ratio": 1.44, "role": "background", "label": "远端峰 1120m"}
+      ]
+    },
+    {
+      "id": "far_background_chain",
+      "name": "远景背景山脉链",
+      "role": "background",
+      "_comment": "外围远山链只提供层次和出画轮廓，不参与避障。",
+      "polyline_uv": [[1.0, 6.4], [6.0, 5.0], [11.2, 5.6], [17.8, 4.7], [24.0, 4.2]],
+      "saddle_height_factor": 0.34,
+      "ridge_width_km": 0.92,
+      "peaks": [
+        {"station": 0.08, "lateral_offset_km": 0.00, "height_m": 940, "base_radius_km": 2.10, "aspect_ratio": 1.35, "role": "background", "label": "远山 940m"},
+        {"station": 0.48, "lateral_offset_km": 0.08, "height_m": 1280, "base_radius_km": 2.20, "aspect_ratio": 1.42, "role": "background", "label": "远山 1280m"},
+        {"station": 0.82, "lateral_offset_km": -0.05, "height_m": 1160, "base_radius_km": 2.00, "aspect_ratio": 1.36, "role": "background", "label": "远山 1160m"}
+      ]
+    }
+  ]
+}
