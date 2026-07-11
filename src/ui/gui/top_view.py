@@ -746,14 +746,17 @@ class TopView(QGraphicsView):
             return
         base = self.theme.leader if is_leader else self.theme.wingman
         pen_width = 2.4 / self.scale_value
-        trail_distance = 0.0
+        segments = [
+            (previous, current, math.hypot(current.x - previous.x, current.y - previous.y))
+            for previous, current in zip(node.trail, node.trail[1:])
+        ]
+        remaining_distance = sum(segment_length for _, _, segment_length in segments)
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
-        for previous, current in zip(node.trail, node.trail[1:]):
-            segment_length = math.hypot(current.x - previous.x, current.y - previous.y)
+        for previous, current, segment_length in segments:
             age = max(0.0, current_time - current.time)
             # 数据源可能保留旧点，绘制端仍按当前设置再兜底裁剪一次。
             if age > self.trail_seconds:
-                trail_distance += segment_length
+                remaining_distance -= segment_length
                 continue
             # 透明度随存活时间线性衰减，并设 0.08 下限防止完全消失突变。
             alpha = max(0.08, 1.0 - age / self.trail_seconds)
@@ -763,9 +766,9 @@ class TopView(QGraphicsView):
             # 世界坐标已整体缩放，线宽反向缩放才能在长航线低缩放下保持可见。
             pen = QPen(color, pen_width)
             if not is_leader:
-                # 用累计路程续接虚线相位，避免短采样段反复从实线段起点开始。
+                # 从尾迹末端反向锚定相位，裁掉任意首部点后保留线段都不会跳变。
                 pen.setDashPattern([6.0, 4.0])
-                pen.setDashOffset(trail_distance / pen_width)
+                pen.setDashOffset(-remaining_distance / pen_width)
             painter.setPen(pen)
             painter.drawLine(QPointF(previous.x, previous.y), QPointF(current.x, current.y))
-            trail_distance += segment_length
+            remaining_distance -= segment_length

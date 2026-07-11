@@ -1095,6 +1095,30 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(all(pen.style() == Qt.PenStyle.CustomDashLine for pen in wingman_pens))
         self.assertNotEqual(wingman_pens[0].dashOffset(), wingman_pens[1].dashOffset())
 
+    def test_top_view_wingman_dash_offset_stays_stable_after_oldest_trail_point_is_pruned(self) -> None:
+        view = self.window.top_view
+        view.trail_seconds = 10.0
+        full_trail = [
+            TrailPoint(0.0, 0.0, 1200.0, 0.0),
+            TrailPoint(12.0, 0.0, 1200.0, 1.0),
+            TrailPoint(24.0, 0.0, 1200.0, 2.0),
+        ]
+
+        full_painter = Mock()
+        view._draw_trail(full_painter, NodeState("A02", "wingman", 24.0, 0.0, 1.0, 0.0, trail=full_trail), False, 2.0)
+        full_pens = [call.args[0] for call in full_painter.setPen.call_args_list]
+
+        pruned_painter = Mock()
+        view._draw_trail(
+            pruned_painter,
+            NodeState("A02", "wingman", 24.0, 0.0, 1.0, 0.0, trail=full_trail[1:]),
+            False,
+            2.0,
+        )
+        pruned_pens = [call.args[0] for call in pruned_painter.setPen.call_args_list]
+
+        self.assertAlmostEqual(full_pens[1].dashOffset(), pruned_pens[0].dashOffset())
+
     def test_top_view_trail_seconds_zero_hides_trail(self) -> None:
         view = self.window.top_view
         view.show_grid = False
