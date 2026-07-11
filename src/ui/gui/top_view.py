@@ -540,8 +540,10 @@ class TopView(QGraphicsView):
         routes = self._route_segments()
         if not routes:
             return
-        # 航线用虚线绘制（线宽随缩放归一）；圆弧段按弧采样，与预览画法一致。
-        pen = QPen(self.theme.route, 2.0 / self.scale_value)
+        # 未飞参考航线使用浅灰蓝细虚线；线宽随缩放归一，圆弧段按弧采样。
+        route_color = QColor(self.theme.formation_reference)
+        route_color.setAlphaF(0.82)
+        pen = QPen(route_color, 1.0 / self.scale_value)
         pen.setDashPattern([8, 7])
         painter.setPen(pen)
         for route in routes:

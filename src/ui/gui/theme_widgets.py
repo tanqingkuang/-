@@ -20,6 +20,7 @@ class Theme:
         canvas: str,
         grid: str,
         route: str,
+        formation_reference: str,
         leader: str,
         wingman: str,
         link: str,
@@ -39,6 +40,7 @@ class Theme:
         self.minor_grid = QColor(grid)  # 次网格沿用主网格色相，只降低透明度
         self.minor_grid.setAlphaF(0.48)
         self.route = QColor(route)  # 参考航线
+        self.formation_reference = QColor(formation_reference)  # 编队参考线
         self.leader = QColor(leader)  # 长机
         self.wingman = QColor(wingman)  # 僚机
         self.link = QColor(link)  # 正常链路
@@ -57,6 +59,7 @@ THEMES = {
         canvas="#e2edf6",
         grid="#c5d4e2",
         route="#94a3b8",
+        formation_reference="#7898b8",
         leader="#2563eb",
         wingman="#7c3aed",
         link="#0891b2",
@@ -73,6 +76,7 @@ THEMES = {
         canvas="#101923",
         grid="#243141",
         route="#64748b",
+        formation_reference="#7892ac",
         leader="#60a5fa",
         wingman="#c084fc",
         link="#22d3ee",
