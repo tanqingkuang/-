@@ -772,6 +772,29 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(thin, thick, delta=2)
 
+    def test_top_view_uses_thin_gray_blue_dashes_for_unflown_reference_route(self) -> None:
+        view = self.window.top_view
+        view.scale_value = 2.0
+        view.snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="",
+            disturbance="无",
+            nodes=[],
+            links=[],
+            route=ReferenceRoute(0.0, 0.0, 1200.0, 100.0, 0.0, 1200.0),
+        )
+        painter = Mock()
+
+        view._draw_route(painter)
+
+        route_pen = painter.setPen.call_args_list[0].args[0]
+        self.assertEqual(route_pen.color().name(), self.window.theme.formation_reference.name())
+        self.assertAlmostEqual(route_pen.widthF(), 0.5)
+        self.assertEqual(route_pen.style(), Qt.PenStyle.CustomDashLine)
+
     def test_link_visibility_checkbox_hides_top_view_links(self) -> None:
         self.assertTrue(self.window.legend_link.isChecked())
         self.assertTrue(self.window.top_view.show_links)
