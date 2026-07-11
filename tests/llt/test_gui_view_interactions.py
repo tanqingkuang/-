@@ -12,7 +12,7 @@ import unittest
 from configparser import ConfigParser
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -1071,6 +1071,29 @@ class GuiViewInteractionTests(unittest.TestCase):
         ]
 
         self.assertGreaterEqual(len(touched), 6)
+
+    def test_top_view_keeps_leader_trail_solid_and_draws_wingman_trail_dashed(self) -> None:
+        view = self.window.top_view
+        view.trail_seconds = 10.0
+        trail = [
+            TrailPoint(0.0, 0.0, 1200.0, 0.0),
+            TrailPoint(12.0, 0.0, 1200.0, 1.0),
+            TrailPoint(24.0, 0.0, 1200.0, 2.0),
+        ]
+
+        leader_painter = Mock()
+        view._draw_trail(leader_painter, NodeState("A01", "leader", 24.0, 0.0, 1.0, 0.0, trail=trail), True, 2.0)
+        leader_pens = [call.args[0] for call in leader_painter.setPen.call_args_list]
+
+        wingman_painter = Mock()
+        view._draw_trail(wingman_painter, NodeState("A02", "wingman", 24.0, 0.0, 1.0, 0.0, trail=trail), False, 2.0)
+        wingman_pens = [call.args[0] for call in wingman_painter.setPen.call_args_list]
+
+        self.assertTrue(leader_pens)
+        self.assertTrue(wingman_pens)
+        self.assertTrue(all(pen.style() == Qt.PenStyle.SolidLine for pen in leader_pens))
+        self.assertTrue(all(pen.style() == Qt.PenStyle.CustomDashLine for pen in wingman_pens))
+        self.assertNotEqual(wingman_pens[0].dashOffset(), wingman_pens[1].dashOffset())
 
     def test_top_view_trail_seconds_zero_hides_trail(self) -> None:
         view = self.window.top_view

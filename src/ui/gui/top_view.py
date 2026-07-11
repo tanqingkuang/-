@@ -745,11 +745,15 @@ class TopView(QGraphicsView):
         if self.trail_seconds <= 0.0 or len(node.trail) <= 1:
             return
         base = self.theme.leader if is_leader else self.theme.wingman
+        pen_width = 2.4 / self.scale_value
+        trail_distance = 0.0
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
         for previous, current in zip(node.trail, node.trail[1:]):
+            segment_length = math.hypot(current.x - previous.x, current.y - previous.y)
             age = max(0.0, current_time - current.time)
             # 数据源可能保留旧点，绘制端仍按当前设置再兜底裁剪一次。
             if age > self.trail_seconds:
+                trail_distance += segment_length
                 continue
             # 透明度随存活时间线性衰减，并设 0.08 下限防止完全消失突变。
             alpha = max(0.08, 1.0 - age / self.trail_seconds)
@@ -757,5 +761,11 @@ class TopView(QGraphicsView):
             # 长机尾迹整体比僚机略浓。
             color.setAlphaF((0.52 if is_leader else 0.44) * alpha)
             # 世界坐标已整体缩放，线宽反向缩放才能在长航线低缩放下保持可见。
-            painter.setPen(QPen(color, 2.4 / self.scale_value))
+            pen = QPen(color, pen_width)
+            if not is_leader:
+                # 用累计路程续接虚线相位，避免短采样段反复从实线段起点开始。
+                pen.setDashPattern([6.0, 4.0])
+                pen.setDashOffset(trail_distance / pen_width)
+            painter.setPen(pen)
             painter.drawLine(QPointF(previous.x, previous.y), QPointF(current.x, current.y))
+            trail_distance += segment_length
