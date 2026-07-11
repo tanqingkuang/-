@@ -104,6 +104,24 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(self.window.dark_theme_action.isChecked())
         self.assertFalse(self.window.light_theme_action.isChecked())
 
+    def test_macos_wraps_avoidance_and_3d_entries_in_top_level_menus(self) -> None:
+        """macOS 原生菜单栏必须显示避障和 3D 顶层入口。"""
+
+        # 裸 QAction 在 macOS 原生菜单栏会被忽略，两个入口都应改由 QMenu 承载。
+        with (
+            patch("src.ui.gui.main_window_layout.sys.platform", "darwin"),
+            patch("src.ui.gui.features.full.situation3d.sys.platform", "darwin"),
+        ):
+            window = MainWindow(auto_load_config=False)
+
+        try:
+            self.assertEqual(window.avoidance_menu.title(), "避障规划(&O)")
+            self.assertEqual(window.situation3d_menu.title(), "3D态势(&3)")
+            self.assertIn(window.avoidance_action, window.avoidance_menu.actions())
+            self.assertIn(window.situation3d_action, window.situation3d_menu.actions())
+        finally:
+            window.close()
+
     def test_situation3d_menu_opens_independent_window(self) -> None:
         self.assertIsNone(self.window.features.situation3d.window)
         menu_titles = [action.text() for action in self.window.menuBar().actions()]

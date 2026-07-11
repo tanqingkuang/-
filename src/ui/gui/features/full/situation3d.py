@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtGui import QAction
@@ -24,12 +25,17 @@ class FullSituation3DFeature:
     def register_menu(self, window: MainWindow) -> None:
         """注册 3D 态势入口。注意：保持顶层菜单栏动作形态。"""
 
-        # 3D 态势历史上是顶层 QAction，不是下拉菜单。
-        self.action = QAction("3D态势(&3)", window)
+        # 非 macOS 平台保持历史上的顶层 QAction；macOS 原生菜单栏会忽略裸 QAction，
+        # 因此改用单一动作的 QMenu 承载，确保顶层标题可见。
+        if sys.platform == "darwin":
+            window.situation3d_menu = window.menuBar().addMenu("3D态势(&3)")
+            self.action = window.situation3d_menu.addAction("打开3D态势")
+        else:
+            self.action = QAction("3D态势(&3)", window)
+            window.menuBar().addAction(self.action)
         window.situation3d_action = self.action
         # 触发时才导入 Qt Quick 3D，源码 lite 档位构造时不会碰到 QML。
         self.action.triggered.connect(lambda checked=False: self.open(window))
-        window.menuBar().addAction(self.action)
 
     def open(self, window: MainWindow) -> None:
         """打开 3D 态势窗口。注意：重复触发复用同一个窗口实例。"""

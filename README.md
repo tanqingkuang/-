@@ -36,6 +36,19 @@ macOS 也可以直接双击：
 编队仿真.app
 ```
 
+也可使用与 Windows 对应的全量版、裁剪版开发启动脚本；首次或依赖变化后追加
+`--install-dependencies`。发布构建会在当前 macOS 架构以标准 app 目录结构生成 `.app`：
+
+```bash
+./scripts/run_macos_full_dev.sh
+./scripts/run_macos_lite_dev.sh
+./scripts/build_macos_full_release.sh
+./scripts/build_macos_lite_release.sh
+```
+
+开发启动脚本支持 `--python <解释器路径>`，并将其余参数透传给主程序；发布构建脚本
+还支持 `--app-name <名称>` 覆盖应用名称。
+
 启动后默认处于 `UNLOADED` 状态，不会自动创建飞机。可以在左侧“选择文件”中加载示例配置：
 
 ```text
