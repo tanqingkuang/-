@@ -38,7 +38,7 @@ from src.ui.gui.main_window import (
     default_project_root,
     run_gui,
 )
-from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, trail_seconds_for_duration
+from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, is_major_grid_line, trail_seconds_for_duration
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -646,6 +646,22 @@ class GuiViewInteractionTests(unittest.TestCase):
             self.assertLessEqual(screen_spacing, 96.0)
             self.assertGreaterEqual(side_screen_spacing, 36.0)
             self.assertLessEqual(side_screen_spacing, 96.0)
+
+    def test_major_grid_line_repeats_every_five_cells_for_positive_and_negative_coordinates(self) -> None:
+        spacing = 48
+        cases = (
+            (-6, False),
+            (-5, True),
+            (-4, False),
+            (4, False),
+            (5, True),
+            (6, False),
+            (10, True),
+        )
+
+        for multiple, expected in cases:
+            with self.subTest(multiple=multiple):
+                self.assertEqual(is_major_grid_line(multiple * spacing, spacing), expected)
 
     @staticmethod
     def _color_distance(first, second) -> int:  # noqa: ANN001
