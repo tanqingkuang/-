@@ -35,7 +35,9 @@ class Theme:
         self.muted = QColor(muted)  # 次要文字/轴标注
         self.line = QColor(line)  # 边框/分隔线
         self.canvas = QColor(canvas)  # 画布底色
-        self.grid = QColor(grid)  # 网格线
+        self.grid = QColor(grid)  # 每五格出现的主网格线
+        self.minor_grid = QColor(grid)  # 次网格沿用主网格色相，只降低透明度
+        self.minor_grid.setAlphaF(0.48)
         self.route = QColor(route)  # 参考航线
         self.leader = QColor(leader)  # 长机
         self.wingman = QColor(wingman)  # 僚机

@@ -25,6 +25,8 @@ FIT_VIEWPORT_RATIO = 0.80
 WORLD_GRID_SPACING = 48
 GRID_MIN_SCREEN_SPACING = 36.0
 GRID_MAX_SCREEN_SPACING = 96.0
+# 每五条次网格强化一条主线，便于不增加刻度文字时快速估算距离。
+GRID_MAJOR_INTERVAL = 5
 # config.ini 中记忆“上次加载配置”用的小节名、键名与文件名。
 APP_CONFIG_SECTION = "config"
 APP_CONFIG_KEY_LAST_CONFIG = "last_config"
@@ -82,6 +84,12 @@ def adaptive_world_grid_spacing(scale_value: float) -> int:
     while spacing > 1 and spacing * safe_scale > GRID_MAX_SCREEN_SPACING:
         spacing = max(1, spacing // 2)
     return spacing
+
+
+def is_major_grid_line(coordinate: int, spacing: int) -> bool:
+    """判断世界坐标是否落在主网格线上。注意：spacing 必须是正整数。"""
+
+    return coordinate % (spacing * GRID_MAJOR_INTERVAL) == 0
 
 
 def default_project_root() -> Path:

@@ -589,6 +589,51 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertLess(grid_x, image.width())
         self.assertNotEqual(image.pixelColor(grid_x, 10).name(), canvas)
 
+    def test_top_grid_uses_dashed_major_lines_every_five_cells(self) -> None:
+        view = self.window.top_view
+        view.snapshot = None
+        view.scale_value = 1.0
+        view.offset = QPointF(40.0, 40.0)
+        view.viewport().update()
+        self.app.processEvents()
+
+        image = view.viewport().grab().toImage()
+        spacing = view._grid_world_spacing()
+        canvas = self.window.theme.canvas
+        major_distances = [
+            self._color_distance(image.pixelColor(round(view.offset.x()), y), canvas) for y in range(8, 32)
+        ]
+        minor_distances = [
+            self._color_distance(image.pixelColor(round(view.offset.x() + spacing), y), canvas) for y in range(8, 32)
+        ]
+
+        self.assertGreater(max(major_distances), max(minor_distances))
+        self.assertLess(min(major_distances), max(major_distances))
+        self.assertGreater(min(minor_distances), 0)
+
+    def test_side_grid_uses_dashed_major_lines_every_five_cells(self) -> None:
+        view = self.window.side_view
+        view.snapshot = None
+        view.horizontal_offset = 73.0
+        view.horizontal_scale = 1.0
+        view.update()
+        self.app.processEvents()
+
+        image = view.grab().toImage()
+        spacing = view._grid_world_spacing()
+        canvas = self.window.theme.canvas
+        major_distances = [
+            self._color_distance(image.pixelColor(round(view._map_x(0.0)), y), canvas) for y in range(8, 32)
+        ]
+        minor_distances = [
+            self._color_distance(image.pixelColor(round(view._map_x(float(spacing))), y), canvas)
+            for y in range(8, 32)
+        ]
+
+        self.assertGreater(max(major_distances), max(minor_distances))
+        self.assertLess(min(major_distances), max(major_distances))
+        self.assertGreater(min(minor_distances), 0)
+
     def test_world_grid_keeps_readable_screen_spacing_during_zoom(self) -> None:
         for scale in (0.45, 1.0, 3.5):
             self.window.top_view.scale_value = scale
@@ -601,6 +646,12 @@ class GuiViewInteractionTests(unittest.TestCase):
             self.assertLessEqual(screen_spacing, 96.0)
             self.assertGreaterEqual(side_screen_spacing, 36.0)
             self.assertLessEqual(side_screen_spacing, 96.0)
+
+    @staticmethod
+    def _color_distance(first, second) -> int:  # noqa: ANN001
+        """返回两种渲染颜色的 RGB 曼哈顿距离。注意：仅比较可见色差。"""
+
+        return abs(first.red() - second.red()) + abs(first.green() - second.green()) + abs(first.blue() - second.blue())
 
     def test_top_view_aircraft_marker_keeps_screen_size_during_zoom(self) -> None:
         small = self._leader_marker_bounds_at_scale(0.45)
