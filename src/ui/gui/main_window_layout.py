@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
@@ -77,9 +78,14 @@ class MainWindowLayoutMixin:
         self.features.register_primary_menus(self)
 
         # 避障规划放到菜单栏顶层入口，避免窄左栏承载复杂参数面板。
-        self.avoidance_action = QAction("避障规划(&O)", self)
+        # macOS 原生菜单栏会忽略裸 QAction，必须由 QMenu 承载才会显示顶层标题。
+        if sys.platform == "darwin":
+            self.avoidance_menu = self.menuBar().addMenu("避障规划(&O)")
+            self.avoidance_action = self.avoidance_menu.addAction("打开避障规划")
+        else:
+            self.avoidance_action = QAction("避障规划(&O)", self)
+            self.menuBar().addAction(self.avoidance_action)
         self.avoidance_action.triggered.connect(self._open_avoidance_window)
-        self.menuBar().addAction(self.avoidance_action)
 
         # 3D 态势位于避障之后；裁剪版不注册该入口。
         self.features.register_secondary_menus(self)
