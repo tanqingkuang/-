@@ -659,10 +659,13 @@ class TopView(QGraphicsView):
         for link in snapshot.links:
             source = by_id[link.source]
             target = by_id[link.target]
-            # 正常链路用链路色半透明细线，异常链路用警示色更不透明的粗线突出。
+            # 正常通信链路用青色短虚线弱化显示，异常链路用警示色粗实线突出。
             color = QColor(self.theme.link if link.ok else self.theme.warn)
-            color.setAlphaF(0.58 if link.ok else 0.75)
-            painter.setPen(QPen(color, (2 if link.ok else 3) / self.scale_value))
+            color.setAlphaF(0.72 if link.ok else 0.75)
+            pen = QPen(color, (1 if link.ok else 3) / self.scale_value)
+            if link.ok:
+                pen.setDashPattern([3.0, 4.0])
+            painter.setPen(pen)
             painter.drawLine(QPointF(source.x, source.y), QPointF(target.x, target.y))
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
