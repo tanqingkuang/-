@@ -118,6 +118,7 @@ class TrailPoint:
     y: float  # 采样时刻的世界 north 坐标
     altitude: float  # 采样时刻高度
     time: float  # 采样仿真时刻，用于按当前尾迹窗口老化淡出
+    path_distance: float = 0.0  # 从本轮尾迹起点累计的路程，裁剪后仍保留原基准
 
 
 @dataclass

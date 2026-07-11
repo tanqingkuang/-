@@ -574,6 +574,43 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(closed.nodes[0].trail, [])
         self.assertEqual(self.window.sim._trail_by_node, {})
 
+    def test_adapter_keeps_monotonic_trail_distance_after_old_points_are_pruned(self) -> None:
+        node = ControllerNodeState(
+            node_id="A02",
+            role="wingman",
+            health="normal",
+            x_m=100.0,
+            y_m=200.0,
+            altitude_m=1200.0,
+            psi_v_deg=90.0,
+            theta_deg=0.0,
+            speed_mps=12.0,
+            vx_mps=12.0,
+            vy_mps=0.0,
+            vz_mps=0.0,
+            nx=0.0,
+            nz=1.0,
+            phi_deg=0.0,
+            psi_dot_deg_s=0.0,
+        )
+        snapshot = ControllerSnapshot(
+            time_s=1.0,
+            duration_s=10.0,
+            step_s=0.1,
+            run_state="RUNNING",
+            control_report="保持",
+            cpu_utilization=0.42,
+            nodes=[node],
+            links=[],
+        )
+        self.window.sim.set_trail_seconds(1.5)
+        self.window.sim._convert_snapshot(snapshot)
+        self.window.sim._convert_snapshot(replace(snapshot, time_s=2.0, nodes=[replace(node, x_m=112.0)]))
+        converted = self.window.sim._convert_snapshot(replace(snapshot, time_s=3.0, nodes=[replace(node, x_m=124.0)]))
+
+        self.assertEqual([point.x for point in converted.nodes[0].trail], [112.0, 124.0])
+        self.assertEqual([point.path_distance for point in converted.nodes[0].trail], [12.0, 24.0])
+
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
         self.window.side_view.horizontal_offset = 73.0
@@ -1076,9 +1113,9 @@ class GuiViewInteractionTests(unittest.TestCase):
         view = self.window.top_view
         view.trail_seconds = 10.0
         trail = [
-            TrailPoint(0.0, 0.0, 1200.0, 0.0),
-            TrailPoint(12.0, 0.0, 1200.0, 1.0),
-            TrailPoint(24.0, 0.0, 1200.0, 2.0),
+            TrailPoint(0.0, 0.0, 1200.0, 0.0, 0.0),
+            TrailPoint(12.0, 0.0, 1200.0, 1.0, 12.0),
+            TrailPoint(24.0, 0.0, 1200.0, 2.0, 24.0),
         ]
 
         leader_painter = Mock()
@@ -1099,9 +1136,9 @@ class GuiViewInteractionTests(unittest.TestCase):
         view = self.window.top_view
         view.trail_seconds = 10.0
         full_trail = [
-            TrailPoint(0.0, 0.0, 1200.0, 0.0),
-            TrailPoint(12.0, 0.0, 1200.0, 1.0),
-            TrailPoint(24.0, 0.0, 1200.0, 2.0),
+            TrailPoint(0.0, 0.0, 1200.0, 0.0, 0.0),
+            TrailPoint(12.0, 0.0, 1200.0, 1.0, 12.0),
+            TrailPoint(24.0, 0.0, 1200.0, 2.0, 24.0),
         ]
 
         full_painter = Mock()
@@ -1118,6 +1155,38 @@ class GuiViewInteractionTests(unittest.TestCase):
         pruned_pens = [call.args[0] for call in pruned_painter.setPen.call_args_list]
 
         self.assertAlmostEqual(full_pens[1].dashOffset(), pruned_pens[0].dashOffset())
+
+    def test_top_view_wingman_dash_offset_stays_stable_after_new_trail_point_is_appended(self) -> None:
+        view = self.window.top_view
+        view.trail_seconds = 10.0
+        full_trail = [
+            TrailPoint(0.0, 0.0, 1200.0, 0.0, 0.0),
+            TrailPoint(12.0, 0.0, 1200.0, 1.0, 12.0),
+            TrailPoint(24.0, 0.0, 1200.0, 2.0, 24.0),
+        ]
+
+        before_painter = Mock()
+        view._draw_trail(before_painter, NodeState("A02", "wingman", 24.0, 0.0, 1.0, 0.0, trail=full_trail), False, 2.0)
+        before_pens = [call.args[0] for call in before_painter.setPen.call_args_list]
+
+        after_painter = Mock()
+        view._draw_trail(
+            after_painter,
+            NodeState(
+                "A02",
+                "wingman",
+                36.0,
+                0.0,
+                1.0,
+                0.0,
+                trail=[*full_trail, TrailPoint(36.0, 0.0, 1200.0, 3.0, 36.0)],
+            ),
+            False,
+            3.0,
+        )
+        after_pens = [call.args[0] for call in after_painter.setPen.call_args_list]
+
+        self.assertEqual([pen.dashOffset() for pen in before_pens], [pen.dashOffset() for pen in after_pens[:2]])
 
     def test_top_view_trail_seconds_zero_hides_trail(self) -> None:
         view = self.window.top_view
