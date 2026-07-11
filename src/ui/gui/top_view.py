@@ -745,6 +745,7 @@ class TopView(QGraphicsView):
         if self.trail_seconds <= 0.0 or len(node.trail) <= 1:
             return
         base = self.theme.leader if is_leader else self.theme.wingman
+        pen_width = 2.4 / self.scale_value
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
         for previous, current in zip(node.trail, node.trail[1:]):
             age = max(0.0, current_time - current.time)
@@ -757,5 +758,10 @@ class TopView(QGraphicsView):
             # 长机尾迹整体比僚机略浓。
             color.setAlphaF((0.52 if is_leader else 0.44) * alpha)
             # 世界坐标已整体缩放，线宽反向缩放才能在长航线低缩放下保持可见。
-            painter.setPen(QPen(color, 2.4 / self.scale_value))
+            pen = QPen(color, pen_width)
+            if not is_leader:
+                # 采样点携带不随列表裁剪变化的累计路程，追加和裁剪都不会改变旧段相位。
+                pen.setDashPattern([6.0, 4.0])
+                pen.setDashOffset(previous.path_distance / pen_width)
+            painter.setPen(pen)
             painter.drawLine(QPointF(previous.x, previous.y), QPointF(current.x, current.y))

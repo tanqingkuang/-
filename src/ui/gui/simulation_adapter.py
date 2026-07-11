@@ -22,6 +22,23 @@ from src.ui.gui.view_models import (
     trail_seconds_for_duration,
 )
 
+
+def _append_trail_point(
+    trail: list[TrailPoint],
+    x: float,
+    y: float,
+    altitude: float,
+    time: float,
+) -> None:
+    """追加带单调累计路程的尾迹点。注意：裁剪首部点不会重置已有路程基准。"""
+
+    path_distance = 0.0
+    if trail:
+        previous = trail[-1]
+        path_distance = previous.path_distance + math.hypot(x - previous.x, y - previous.y)
+    trail.append(TrailPoint(x, y, altitude, time, path_distance))
+
+
 class MockSimulation:
     """真实控制器接入前使用的小型 UI 演示数据源。注意：仅作为界面兜底。"""
 
@@ -166,7 +183,7 @@ class MockSimulation:
                 node.trail.clear()
             else:
                 # 追加当前采样点并裁掉超过保留时长的旧点。
-                node.trail.append(TrailPoint(node.x, node.y, node_altitude(index, self.time), self.time))
+                _append_trail_point(node.trail, node.x, node.y, node_altitude(index, self.time), self.time)
                 node.trail = prune_trail(node.trail, self.time, self.trail_seconds)
 
         # 扰动窗口到期后自动清除，恢复正常显示。
@@ -441,7 +458,7 @@ class ControllerSimulationAdapter:
                 # 取出该节点尾迹缓存；仅当时间戳推进时追加新点，避免同一帧重复入栈。
                 trail = self._trail_by_node.setdefault(node.node_id, [])
                 if not trail or trail[-1].time != snapshot.time_s:
-                    trail.append(TrailPoint(node.x_m, node.y_m, node.altitude_m, snapshot.time_s))
+                    _append_trail_point(trail, node.x_m, node.y_m, node.altitude_m, snapshot.time_s)
                 # 裁剪阈值跟随工具栏输入，保留同一列表对象便于后续引用稳定。
                 trail[:] = prune_trail(trail, snapshot.time_s, self.trail_seconds)
             nodes.append(
