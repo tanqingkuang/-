@@ -772,6 +772,37 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertAlmostEqual(thin, thick, delta=2)
 
+    def test_top_view_uses_thin_cyan_dashes_for_normal_communication_links(self) -> None:
+        view = self.window.top_view
+        view.scale_value = 2.0
+        snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="",
+            disturbance="无",
+            nodes=[
+                NodeState("A01", "leader", 0.0, 0.0, 1.0, 0.0),
+                NodeState("A02", "wingman", 80.0, 0.0, 1.0, 0.0),
+            ],
+            links=[
+                LinkState("A01", "A02", "duplex", 18, 0.01, True),
+                LinkState("A02", "A01", "duplex", 80, 0.30, False),
+            ],
+        )
+        painter = Mock()
+
+        view._draw_links(painter, snapshot)
+
+        normal_pen, abnormal_pen = [call.args[0] for call in painter.setPen.call_args_list]
+        self.assertEqual(normal_pen.color().name(), self.window.theme.link.name())
+        self.assertAlmostEqual(normal_pen.widthF(), 0.5)
+        self.assertEqual(normal_pen.style(), Qt.PenStyle.CustomDashLine)
+        self.assertEqual(abnormal_pen.color().name(), self.window.theme.warn.name())
+        self.assertAlmostEqual(abnormal_pen.widthF(), 1.5)
+        self.assertEqual(abnormal_pen.style(), Qt.PenStyle.SolidLine)
+
     def test_top_view_uses_thin_gray_blue_dashes_for_unflown_reference_route(self) -> None:
         view = self.window.top_view
         view.scale_value = 2.0
@@ -2215,8 +2246,16 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         image = view.grab().toImage()
         canvas = self.window.theme.canvas.name()
-        x = round(view.offset.x())
-        return [y for y in range(image.height()) if image.pixelColor(x, y).name() != canvas]
+        center_x = round(view.offset.x())
+        # 虚线中心可能落在空隙，采样邻近列以稳定识别线宽与显示开关。
+        return sorted(
+            {
+                y
+                for x in range(max(0, center_x - 6), min(image.width(), center_x + 7))
+                for y in range(image.height())
+                if image.pixelColor(x, y).name() != canvas
+            }
+        )
 
     def _wait_for_controller_time(self, timeout_s: float = 1.0):
         deadline = time.monotonic() + timeout_s
