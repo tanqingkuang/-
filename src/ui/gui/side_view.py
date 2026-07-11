@@ -17,6 +17,7 @@ from src.ui.gui.view_models import (
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
+    is_major_grid_line,
     is_leader_node,
     leader_node_from,
     reference_route_points,
@@ -306,22 +307,37 @@ class SideView(QWidget):
         """绘制 grid 画面元素。注意：只做渲染，不修改仿真状态。"""
         # 横向网格间距按当前缩放自适应，和俯视图保持相近读数密度。
         # 高度网格固定米制间隔，避免缩放时高度标签频繁跳档。
-        painter.setPen(QPen(self.theme.grid, 1))
         spacing = self._grid_world_spacing()
         left = self._screen_to_world_x(0.0)
         right = self._screen_to_world_x(float(self.width()))
         start_x = math.floor(left / spacing) * spacing
         end_x = math.ceil(right / spacing) * spacing
+        painter.setPen(QPen(self.theme.minor_grid, 0.55))
         for world_x in range(start_x, end_x + spacing, spacing):
-            x = self._map_x(float(world_x))
-            painter.drawLine(QPointF(x, 0.0), QPointF(x, float(self.height())))
+            if not is_major_grid_line(world_x, spacing):
+                x = self._map_x(float(world_x))
+                painter.drawLine(QPointF(x, 0.0), QPointF(x, float(self.height())))
 
         altitude_spacing = self.ALTITUDE_GRID_SPACING
         start_altitude = math.floor(self.altitude_min / altitude_spacing) * altitude_spacing
         end_altitude = math.ceil(self.altitude_max / altitude_spacing) * altitude_spacing
         for altitude in range(start_altitude, end_altitude + altitude_spacing, altitude_spacing):
-            y = self._map_y(float(altitude))
-            painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
+            if not is_major_grid_line(altitude, altitude_spacing):
+                y = self._map_y(float(altitude))
+                painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
+
+        # 主网格沿用俯视图的 6:4 虚线节奏，避免上下画布视觉语义不一致。
+        major_pen = QPen(self.theme.grid, 1)
+        major_pen.setDashPattern([6.0, 4.0])
+        painter.setPen(major_pen)
+        for world_x in range(start_x, end_x + spacing, spacing):
+            if is_major_grid_line(world_x, spacing):
+                x = self._map_x(float(world_x))
+                painter.drawLine(QPointF(x, 0.0), QPointF(x, float(self.height())))
+        for altitude in range(start_altitude, end_altitude + altitude_spacing, altitude_spacing):
+            if is_major_grid_line(altitude, altitude_spacing):
+                y = self._map_y(float(altitude))
+                painter.drawLine(QPointF(0.0, y), QPointF(float(self.width()), y))
 
     def _grid_world_spacing(self) -> int:
         """返回侧视图当前应使用的横轴网格间距。"""

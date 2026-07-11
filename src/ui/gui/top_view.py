@@ -20,6 +20,7 @@ from src.ui.gui.view_models import (
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
+    is_major_grid_line,
     is_leader_node,
     leader_node_from,
     reference_route_points,
@@ -429,13 +430,25 @@ class TopView(QGraphicsView):
         start_y = math.floor(bottom / spacing) * spacing
         end_y = math.ceil(top / spacing) * spacing
 
-        # 线宽除以 scale，使网格线在任意缩放下都呈现 1px 视觉粗细。
-        painter.setPen(QPen(self.theme.grid, 1.0 / self.scale_value))
-        # 仅绘制可见区内的竖线与横线，避免遍历整个世界。
+        # 先画更细、更淡的次网格，再覆盖每五格一条的主网格；线宽反除 scale 以保持屏幕粗细稳定。
+        painter.setPen(QPen(self.theme.minor_grid, 0.55 / self.scale_value))
         for x in range(start_x, end_x + spacing, spacing):
-            painter.drawLine(x, start_y, x, end_y)
+            if not is_major_grid_line(x, spacing):
+                painter.drawLine(x, start_y, x, end_y)
         for y in range(start_y, end_y + spacing, spacing):
-            painter.drawLine(start_x, y, end_x, y)
+            if not is_major_grid_line(y, spacing):
+                painter.drawLine(start_x, y, end_x, y)
+
+        # 6:4 虚线既能和连续次网格区分，也保持缩放后节奏稳定。
+        major_pen = QPen(self.theme.grid, 1.0 / self.scale_value)
+        major_pen.setDashPattern([6.0, 4.0])
+        painter.setPen(major_pen)
+        for x in range(start_x, end_x + spacing, spacing):
+            if is_major_grid_line(x, spacing):
+                painter.drawLine(x, start_y, x, end_y)
+        for y in range(start_y, end_y + spacing, spacing):
+            if is_major_grid_line(y, spacing):
+                painter.drawLine(start_x, y, end_x, y)
 
     def _grid_world_spacing(self) -> int:
         """返回俯视图当前应使用的网格世界间距（依据自身缩放自适应）。"""
