@@ -10,6 +10,7 @@ import math
 import os
 import struct
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from PySide6.QtQuick3D import QQuick3DGeometry
 
 WIDTH_PX = 1600
 HEIGHT_PX = 900
-MAP_SIZE_M = 50000.0
+MAP_SIZE_M = 120000.0
 ROUTE_ALTITUDE_M = 900.0
 FLOAT_SIZE = 4
 VERTEX_COMPONENTS = 12
@@ -71,6 +72,23 @@ def lerp_color(
     return a + (b - a) * mix[..., None]
 
 
+def box_blur(field: np.ndarray, radius: int, passes: int = 2) -> np.ndarray:
+    """用积分图做方盒低通滤波，避免颜色权重跟随高频几何抖动。"""
+
+    result = field.astype(np.float32, copy=True)
+    if radius <= 0:
+        return result
+    kernel_size = radius * 2 + 1
+    for _ in range(passes):
+        padded_x = np.pad(result, ((0, 0), (radius, radius)), mode="edge")
+        cumsum_x = np.pad(np.cumsum(padded_x, axis=1, dtype=np.float64), ((0, 0), (1, 0)), mode="constant")
+        result = ((cumsum_x[:, kernel_size:] - cumsum_x[:, :-kernel_size]) / kernel_size).astype(np.float32)
+        padded_y = np.pad(result, ((radius, radius), (0, 0)), mode="edge")
+        cumsum_y = np.pad(np.cumsum(padded_y, axis=0, dtype=np.float64), ((1, 0), (0, 0)), mode="constant")
+        result = ((cumsum_y[kernel_size:, :] - cumsum_y[:-kernel_size, :]) / kernel_size).astype(np.float32)
+    return result
+
+
 def value_noise(u_coord: np.ndarray, v_coord: np.ndarray, frequency: int, rng: np.random.Generator) -> np.ndarray:
     """二维 value noise，输入坐标范围约为 0 到 1。"""
 
@@ -85,6 +103,25 @@ def value_noise(u_coord: np.ndarray, v_coord: np.ndarray, frequency: int, rng: n
     b = grid[iy, ix + 1]
     c = grid[iy + 1, ix]
     d = grid[iy + 1, ix + 1]
+    return ((a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy).astype(np.float32)
+
+
+def value_noise_wrapped(u_coord: np.ndarray, v_coord: np.ndarray, frequency: int, rng: np.random.Generator) -> np.ndarray:
+    """二维周期 value noise，允许输入坐标旋转和偏移后越界。"""
+
+    grid = rng.uniform(-1.0, 1.0, size=(frequency, frequency)).astype(np.float32)
+    x = np.mod(u_coord * frequency, frequency)
+    y = np.mod(v_coord * frequency, frequency)
+    ix0 = np.floor(x).astype(np.int32)
+    iy0 = np.floor(y).astype(np.int32)
+    ix1 = (ix0 + 1) % frequency
+    iy1 = (iy0 + 1) % frequency
+    fx = smoothstep(x - ix0)
+    fy = smoothstep(y - iy0)
+    a = grid[iy0, ix0]
+    b = grid[iy0, ix1]
+    c = grid[iy1, ix0]
+    d = grid[iy1, ix1]
     return ((a * (1.0 - fx) + b * fx) * (1.0 - fy) + (c * (1.0 - fx) + d * fx) * fy).astype(np.float32)
 
 
@@ -132,6 +169,54 @@ def ridged_fbm(
         amplitude *= 0.50
         frequency *= 2
     return np.clip(total / max(amplitude_sum, 1e-6), 0.0, 1.0)
+
+
+def ridged_fbm_rotated(
+    u_coord: np.ndarray,
+    v_coord: np.ndarray,
+    base_frequency: int,
+    octaves: int,
+    seed: int,
+) -> np.ndarray:
+    """随机旋转/偏移的脊状分形噪声，避免固定方向平行纹理。"""
+
+    rng = np.random.default_rng(seed)
+    total = np.zeros_like(u_coord, dtype=np.float32)
+    amplitude = 0.64
+    amplitude_sum = 0.0
+    frequency = base_frequency
+    centered_u = u_coord - 0.5
+    centered_v = v_coord - 0.5
+    for _ in range(octaves):
+        angle = rng.uniform(0.0, math.tau)
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        offset_u = rng.uniform(-19.0, 19.0)
+        offset_v = rng.uniform(-19.0, 19.0)
+        rotated_u = centered_u * cos_a - centered_v * sin_a + 0.5 + offset_u
+        rotated_v = centered_u * sin_a + centered_v * cos_a + 0.5 + offset_v
+        noise = value_noise_wrapped(rotated_u, rotated_v, frequency, rng)
+        ridge = (1.0 - np.abs(noise)) ** 2.15
+        total += amplitude * ridge
+        amplitude_sum += amplitude
+        amplitude *= 0.49
+        frequency *= 2
+    return np.clip(total / max(amplitude_sum, 1e-6), 0.0, 1.0)
+
+
+def warped_ridged_fbm(
+    u_coord: np.ndarray,
+    v_coord: np.ndarray,
+    base_frequency: int,
+    octaves: int,
+    seed: int,
+    warp_strength: float,
+) -> np.ndarray:
+    """先域扭曲再采样的各向同性脊状 fBm。"""
+
+    warp_u = fbm(u_coord + 0.37, v_coord - 0.19, 4, 3, seed + 101) * warp_strength
+    warp_v = fbm(u_coord - 0.23, v_coord + 0.41, 4, 3, seed + 102) * warp_strength
+    return ridged_fbm_rotated(u_coord + warp_u, v_coord + warp_v, base_frequency, octaves, seed)
 
 
 def route_z_from_x(x_coord: np.ndarray | float) -> np.ndarray | float:
@@ -229,10 +314,14 @@ class TerrainPreviewScene:
         self.x_grid, self.z_grid = np.meshgrid(self.axis, self.axis)
         self.route = route_points()
         self.peaks = build_peak_specs()
+        total_start = time.perf_counter()
+        height_start = time.perf_counter()
         self.height = self._build_height_field()
+        self.height_build_seconds = time.perf_counter() - height_start
         self.grad_z, self.grad_x = np.gradient(self.height, self.axis, self.axis)
         self.slope = np.sqrt(self.grad_x * self.grad_x + self.grad_z * self.grad_z)
         self.normals = self._build_normals()
+        self.curvature_ao = self._build_curvature_ao()
         self.risk_peaks = self._select_risk_peaks()
         self.risk_mask = self._build_risk_mask()
         self.colors_a = self._build_style_a_colors()
@@ -246,6 +335,7 @@ class TerrainPreviewScene:
         self.blocked_route = self._build_blocked_route()
         self.blocked_cross = self._build_blocked_cross()
         self.drone_icons = self._build_drone_icons()
+        self.total_build_seconds = time.perf_counter() - total_start
 
     def _build_height_field(self) -> np.ndarray:
         """生成险峻山地高度场，主峰外叠加脊状噪声和域扭曲。"""
@@ -258,9 +348,10 @@ class TerrainPreviewScene:
         zw = self.z_grid + warp_z
         uw = (xw + self.extent) / MAP_SIZE_M
         vw = (zw + self.extent) / MAP_SIZE_M
-        global_ridge = ridged_fbm(uw, vw, 10, 5, self.seed + 31)
-        sharp_ridge = ridged_fbm(uw + 0.13, vw - 0.07, 28, 4, self.seed + 32)
-        micro_ridge = ridged_fbm(uw - 0.19, vw + 0.11, 58, 3, self.seed + 33)
+        global_ridge = warped_ridged_fbm(uw, vw, 10, 5, self.seed + 31, 0.045)
+        sharp_ridge = warped_ridged_fbm(uw + 0.13, vw - 0.07, 24, 4, self.seed + 32, 0.035)
+        micro_ridge = warped_ridged_fbm(uw - 0.19, vw + 0.11, 48, 3, self.seed + 33, 0.022)
+        drainage = warped_ridged_fbm(uw + 0.29, vw + 0.17, 18, 4, self.seed + 34, 0.040)
         distance_to_route = terrain_distance_to_route(self.x_grid, self.z_grid, self.route)
         corridor_gate = 0.30 + 0.70 * smoothstep((distance_to_route - 780.0) / 3000.0)
         main = np.zeros_like(self.x_grid, dtype=np.float32)
@@ -273,19 +364,19 @@ class TerrainPreviewScene:
             local_x = (dx * cos_a + dz * sin_a) / peak.radius_x
             local_z = (-dx * sin_a + dz * cos_a) / peak.radius_z
             body = np.exp(-1.12 * (np.abs(local_x) ** 1.55 + np.abs(local_z) ** 1.82))
-            striation = 0.5 + 0.5 * np.sin(local_x * 18.0 + local_z * 7.2 + global_ridge * 7.0 + index)
-            knife_ridge = np.maximum(0.0, np.sin(local_x * 28.0 - local_z * 5.5 + sharp_ridge * 8.0 + index)) ** 3.2
-            gullies = (1.0 - sharp_ridge) ** 2.4 * smoothstep(body * 1.85)
-            rugged = 0.58 + 0.64 * global_ridge + 0.28 * sharp_ridge + 0.24 * striation + 0.22 * knife_ridge - 0.34 * gullies
+            gully_mask = (1.0 - drainage) ** 2.15 * smoothstep(body * 1.85)
+            ridge_branch = np.clip((sharp_ridge - 0.34) * 1.55, 0.0, 1.0)
+            micro_branch = np.clip((micro_ridge - 0.38) * 1.85, 0.0, 1.0)
+            rugged = 0.56 + 0.58 * global_ridge + 0.36 * ridge_branch + 0.18 * micro_branch - 0.34 * gully_mask
             main += peak.height * body * np.clip(rugged, 0.42, 1.42)
-            local_detail = (micro_ridge - 0.42) * (0.72 + knife_ridge) - gullies * 0.30
+            local_detail = (sharp_ridge - 0.48) * 0.42 + (micro_ridge - 0.44) * 0.62 - gully_mask * 0.44
             main += peak.height * 0.115 * (body ** 0.82) * np.clip(local_detail, -0.55, 0.85)
         small = self._build_corridor_hills()
         connectors = self._build_connector_hills()
         rolling = (
             115.0 * fbm(u, v, 5, 4, self.seed + 41)
-            + 90.0 * ridged_fbm(uw, vw, 16, 3, self.seed + 42)
-            + 42.0 * (ridged_fbm(uw + 0.07, vw - 0.21, 42, 3, self.seed + 43) - 0.42)
+            + 90.0 * warped_ridged_fbm(uw, vw, 16, 3, self.seed + 42, 0.030)
+            + 42.0 * (warped_ridged_fbm(uw + 0.07, vw - 0.21, 38, 3, self.seed + 43, 0.020) - 0.42)
         )
         terrain = main * corridor_gate + connectors + small + rolling + 65.0
         edge_x = smoothstep((self.extent - np.abs(self.x_grid)) / 2100.0)
@@ -360,6 +451,18 @@ class TerrainPreviewScene:
         length = np.sqrt(nx * nx + ny * ny + nz * nz)
         return np.stack([nx / length, ny / length, nz / length], axis=-1).astype(np.float32)
 
+    def _build_curvature_ao(self) -> np.ndarray:
+        """用高度场曲率近似 AO，压暗沟壑和凹陷区域。"""
+
+        grad_xx = np.gradient(self.grad_x, self.axis, axis=1)
+        grad_zz = np.gradient(self.grad_z, self.axis, axis=0)
+        laplacian = grad_xx + grad_zz
+        scale = float(np.percentile(np.abs(laplacian), 94))
+        scale = max(scale, 1e-5)
+        concavity = smoothstep(np.clip(laplacian / (scale * 0.95), 0.0, 1.0))
+        steep_valleys = smoothstep((self.slope - 0.20) / 0.80) * concavity
+        return np.clip(1.0 - 0.30 * steep_valleys, 0.68, 1.0).astype(np.float32)
+
     def _select_risk_peaks(self) -> list[PeakSpec]:
         """选择航线两侧各一座近中景主峰作为风险区。"""
 
@@ -383,27 +486,59 @@ class TerrainPreviewScene:
         return mask
 
     def _build_style_a_colors(self) -> np.ndarray:
-        """写实风格颜色：海拔和坡度共同驱动植被、岩石和雪线。"""
+        """写实风格颜色：低频权重控制植被、岩石和浅色峰顶。"""
 
         h = np.clip(self.height / 3040.0, 0.0, 1.0)
-        slope_mix = smoothstep((self.slope - 0.30) / 0.80)
-        low = lerp_color((0.10, 0.17, 0.12), (0.29, 0.34, 0.18), smoothstep(h / 0.30))
-        mid = lerp_color((0.29, 0.34, 0.18), (0.46, 0.40, 0.31), smoothstep((h - 0.22) / 0.38))
-        rock = lerp_color((0.34, 0.32, 0.30), (0.70, 0.68, 0.63), smoothstep((h - 0.50) / 0.36))
-        snow = lerp_color((0.70, 0.68, 0.63), (0.84, 0.84, 0.79), smoothstep((h - 0.80) / 0.16))
-        base = np.where((h < 0.30)[..., None], low, mid)
-        base = np.where((h > 0.58)[..., None], rock, base)
-        base = np.where((h > 0.82)[..., None], snow, base)
-        mixed = base * (1.0 - slope_mix[..., None] * 0.68) + rock * (slope_mix[..., None] * 0.68)
+        height_low = box_blur(h, 7, passes=3)
+        slope_low = box_blur(self.slope, 8, passes=3)
+        ridge_source = box_blur(np.clip(1.0 - self.curvature_ao, 0.0, 1.0), 10, passes=3)
+        elevation_rock = smoothstep((height_low - 0.60) / 0.22)
+        ridge_rock = smoothstep((ridge_source - 0.12) / 0.24) * smoothstep((height_low - 0.50) / 0.24)
+        wall_rock = smoothstep((slope_low - 0.50) / 0.58) * smoothstep((height_low - 0.56) / 0.26)
+        rock_weight = np.clip(0.78 * elevation_rock + 0.18 * ridge_rock + 0.08 * wall_rock, 0.0, 1.0)
+        rock_weight = box_blur(rock_weight, 14, passes=2)
+        rock_weight = smoothstep((rock_weight - 0.10) / 0.82)
+        snow_weight = smoothstep((height_low - 0.86) / 0.12)
+        snow_weight = box_blur(snow_weight, 8, passes=2)
+        vegetation = lerp_color((0.045, 0.075, 0.060), (0.235, 0.265, 0.155), smoothstep(height_low / 0.42))
+        alpine = lerp_color((0.235, 0.265, 0.155), (0.345, 0.335, 0.245), smoothstep((height_low - 0.30) / 0.36))
+        vegetation = vegetation * (1.0 - smoothstep((height_low - 0.28) / 0.36)[..., None]) + alpine * smoothstep((height_low - 0.28) / 0.36)[..., None]
+        rock_dark = lerp_color((0.280, 0.280, 0.270), (0.500, 0.500, 0.480), smoothstep((height_low - 0.52) / 0.30))
+        rock_light = lerp_color((0.500, 0.500, 0.480), (0.720, 0.725, 0.700), smoothstep((height_low - 0.76) / 0.18))
+        rock = rock_dark * (1.0 - snow_weight[..., None]) + rock_light * snow_weight[..., None]
+        mixed = vegetation * (1.0 - rock_weight[..., None]) + rock * rock_weight[..., None]
+        far_distance = np.sqrt(self.x_grid * self.x_grid + self.z_grid * self.z_grid)
+        far_mix = smoothstep((far_distance - 8800.0) / 12800.0)[..., None]
+        far_blue = np.array([0.082, 0.118, 0.148], dtype=np.float32)
+        mixed = mixed * (1.0 - far_mix * 0.74) + far_blue * (far_mix * 0.74)
         edge_distance = self.extent - np.maximum(np.abs(self.x_grid), np.abs(self.z_grid))
-        edge_visibility = smoothstep(edge_distance / 7600.0)[..., None]
-        mixed = mixed * edge_visibility + np.array([0.03, 0.055, 0.080], dtype=np.float32) * (1.0 - edge_visibility)
-        light_dir = np.array([-0.56, 0.68, 0.47], dtype=np.float32)
+        edge_visibility = smoothstep(edge_distance / 18000.0)[..., None]
+        mixed = mixed * edge_visibility + np.array([0.036, 0.058, 0.088], dtype=np.float32) * (1.0 - edge_visibility)
+        light_dir = np.array([-0.58, 0.66, 0.48], dtype=np.float32)
         light_dir /= np.linalg.norm(light_dir)
         lambert = np.clip(np.sum(self.normals * light_dir, axis=-1), 0.0, 1.0)
-        relief = 0.62 + 0.54 * (lambert[..., None] ** 0.85)
-        ridge_shadow = np.clip(1.03 - self.slope[..., None] * 0.11, 0.72, 1.06)
-        linear = srgb_to_linear(np.clip(mixed * relief * ridge_shadow, 0.0, 1.0))
+        rock_channel = rock_weight[..., None]
+        warm_light = np.array([1.06, 1.00, 0.88], dtype=np.float32)
+        neutral_light = np.array([0.82, 0.88, 0.74], dtype=np.float32)
+        cool_shadow = np.array([0.42, 0.56, 0.74], dtype=np.float32)
+        veg_temperature = cool_shadow * 0.20 + neutral_light * 0.80
+        rock_temperature = cool_shadow * (1.0 - lambert[..., None]) + warm_light * lambert[..., None]
+        temperature = veg_temperature * (1.0 - rock_channel) + rock_temperature * rock_channel
+        veg_relief = 0.86 + 0.24 * (lambert[..., None] ** 0.82)
+        rock_relief = 0.42 + 1.02 * (lambert[..., None] ** 0.78)
+        relief = veg_relief * (1.0 - rock_channel) + rock_relief * rock_channel
+        ridge_shadow = np.clip(1.05 - self.slope[..., None] * 0.090, 0.68, 1.12)
+        ao = self.curvature_ao[..., None]
+        color = mixed * temperature * relief * ridge_shadow * ao
+        color = color * ao + np.array([0.020, 0.034, 0.052], dtype=np.float32) * (1.0 - ao)
+        highlight = smoothstep((lambert - 0.62) / 0.34)[..., None] * smoothstep((height_low - 0.68) / 0.24)[..., None]
+        color += np.array([0.035, 0.038, 0.035], dtype=np.float32) * highlight
+        color *= 1.10 - 0.22 * far_mix
+        color = np.maximum(color, np.array([0.040, 0.057, 0.074], dtype=np.float32))
+        color = np.clip((color - 0.055) * 1.16 + 0.050, 0.0, 1.0)
+        color = np.maximum(color, np.array([0.036, 0.052, 0.070], dtype=np.float32))
+        color = np.minimum(color, np.array([0.85, 0.85, 0.82], dtype=np.float32))
+        linear = srgb_to_linear(np.clip(color, 0.0, 1.0))
         alpha = np.ones((*self.height.shape, 1), dtype=np.float32)
         return np.concatenate([linear.astype(np.float32), alpha], axis=-1)
 
@@ -1024,6 +1159,33 @@ def render_style(app: QGuiApplication, qml_path: Path, style: str, output_path: 
     app.processEvents()
 
 
+def run_live_preview(app: QGuiApplication, qml_path: Path, style: str, live_ms: int) -> None:
+    """实时显示一个预览窗口，不抓图，用于观察窗口运行流畅度。"""
+
+    if live_ms <= 0:
+        return
+    view = QQuickView()
+    view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+    view.rootContext().setContextProperty("initialPreviewStyle", style)
+    view.setWidth(WIDTH_PX)
+    view.setHeight(HEIGHT_PX)
+    view.setTitle(f"terrain style {style} live preview")
+    view.setSource(QUrl.fromLocalFile(str(qml_path)))
+    if view.status() == QQuickView.Status.Error:
+        for error in view.errors():
+            print(error.toString(), file=sys.stderr)
+        raise RuntimeError(f"QML 加载失败：{qml_path}")
+    view.show()
+    view.requestActivate()
+    app.processEvents()
+    loop = QEventLoop()
+    QTimer.singleShot(live_ms, loop.quit)
+    loop.exec()
+    view.close()
+    view.deleteLater()
+    app.processEvents()
+
+
 def parse_args() -> argparse.Namespace:
     """解析命令行参数。"""
 
@@ -1033,6 +1195,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contour-step", type=float, default=185.0, help="风格 B 普通等高线间隔，单位米。")
     parser.add_argument("--wait-ms", type=int, default=1500, help="每张图显示后等待渲染稳定的毫秒数。")
     parser.add_argument("--output-dir", type=Path, default=Path(__file__).resolve().parent / "output", help="PNG 输出目录。")
+    parser.add_argument("--styles", default="a,b", help="要渲染的风格，逗号分隔，可选 a、b，默认 a,b。")
+    parser.add_argument("--live-ms", type=int, default=0, help="实时显示 style A 窗口的毫秒数，不抓图，默认 0。")
     return parser.parse_args()
 
 
@@ -1046,14 +1210,30 @@ def main() -> int:
     os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "0")
     global SCENE
     SCENE = TerrainPreviewScene(args.grid_size, args.seed, args.contour_step)
+    vertex_count = args.grid_size * args.grid_size
+    triangle_count = (args.grid_size - 1) * (args.grid_size - 1) * 2
+    print(
+        "height_build={:.2f}s total_build={:.2f}s vertices={} triangles={}".format(
+            SCENE.height_build_seconds,
+            SCENE.total_build_seconds,
+            vertex_count,
+            triangle_count,
+        )
+    )
     qmlRegisterType(TerrainPreviewGeometry, "TerrainPreview", 1, 0, "TerrainPreviewGeometry")
     qmlRegisterType(HazardPatchGeometry, "TerrainPreview", 1, 0, "HazardPatchGeometry")
     qmlRegisterType(LinePreviewGeometry, "TerrainPreview", 1, 0, "LinePreviewGeometry")
     app = QGuiApplication.instance() or QGuiApplication(sys.argv)
     qml_path = Path(__file__).resolve().parent / "preview_scene.qml"
-    render_style(app, qml_path, "a", args.output_dir / "style_a.png", args.wait_ms)
-    render_style(app, qml_path, "b", args.output_dir / "style_b.png", args.wait_ms)
-    for filename in ("style_a.png", "style_b.png"):
+    styles = [item.strip().lower() for item in str(args.styles).split(",") if item.strip()]
+    for style in styles:
+        if style not in {"a", "b"}:
+            raise ValueError("--styles 只能包含 a 或 b")
+        render_style(app, qml_path, style, args.output_dir / f"style_{style}.png", args.wait_ms)
+    if args.live_ms > 0:
+        run_live_preview(app, qml_path, "a", args.live_ms)
+        print(f"live_preview=style_a {args.live_ms}ms")
+    for filename in tuple(f"style_{style}.png" for style in styles):
         path = args.output_dir / filename
         size_kb = path.stat().st_size / 1024.0
         print(f"{path.resolve()}  {size_kb:.1f} KB")

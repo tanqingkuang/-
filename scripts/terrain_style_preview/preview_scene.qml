@@ -13,9 +13,11 @@ Item {
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#05080d" }
-            GradientStop { position: 0.58; color: "#0b121b" }
-            GradientStop { position: 1.0; color: "#101c26" }
+            GradientStop { position: 0.0; color: root.styleA ? "#02060d" : "#05080d" }
+            GradientStop { position: 0.16; color: root.styleA ? "#06111b" : "#0b121b" }
+            GradientStop { position: 0.22; color: root.styleA ? "#123448" : "#0b121b" }
+            GradientStop { position: 0.34; color: root.styleA ? "#0b1b25" : "#0b121b" }
+            GradientStop { position: 1.0; color: root.styleA ? "#101c26" : "#101c26" }
         }
     }
 
@@ -28,12 +30,12 @@ Item {
             antialiasingQuality: SceneEnvironment.VeryHigh
             fog: Fog {
                 enabled: true
-                color: root.styleA ? "#101c26" : "#07111a"
-                density: root.styleA ? 0.42 : 0.58
+                color: root.styleA ? "#081723" : "#07111a"
+                density: root.styleA ? 0.24 : 0.58
                 depthEnabled: true
-                depthNear: root.styleA ? 15000 : 9200
-                depthFar: root.styleA ? 28000 : 24500
-                depthCurve: root.styleA ? 1.25 : 1.32
+                depthNear: root.styleA ? 14500 : 9200
+                depthFar: root.styleA ? 25500 : 24500
+                depthCurve: root.styleA ? 1.18 : 1.32
                 heightEnabled: !root.styleA
                 leastIntenseY: 3800
                 mostIntenseY: -400
@@ -57,20 +59,22 @@ Item {
 
         DirectionalLight {
             eulerRotation: root.styleA ? Qt.vector3d(-35, -52, 0) : Qt.vector3d(-58, -36, 0)
-            brightness: root.styleA ? 1.62 : 0.66
+            brightness: root.styleA ? 2.10 : 0.66
+            color: root.styleA ? "#fff0d6" : "#ffffff"
             castsShadow: false
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 132, 0)
-            brightness: root.styleA ? 0.18 : 0.24
+            brightness: root.styleA ? 0.44 : 0.24
+            color: root.styleA ? "#4faec6" : "#ffffff"
             castsShadow: false
         }
 
         PointLight {
             position: Qt.vector3d(-5600, 4600, 5000)
-            brightness: root.styleA ? 0.55 : 0.45
-            color: root.styleA ? "#b8d9ff" : "#2fd6c7"
+            brightness: root.styleA ? 0.72 : 0.45
+            color: root.styleA ? "#6fc6d8" : "#2fd6c7"
         }
 
         Model {
@@ -85,6 +89,7 @@ Item {
                 cullMode: Material.NoCulling
                 roughness: root.styleA ? 0.96 : 0.98
                 specularAmount: root.styleA ? 0.02 : 0.0
+                emissiveFactor: root.styleA ? Qt.vector3d(0.014, 0.020, 0.026) : Qt.vector3d(0.0, 0.0, 0.0)
             }
         }
 
@@ -304,6 +309,22 @@ Item {
                 emissiveFactor: Qt.vector3d(0.74, 0.82, 0.90)
                 roughness: 0.60
             }
+        }
+    }
+
+    Rectangle {
+        z: 20
+        visible: root.styleA
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: parent.height * 0.26
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#00000000" }
+            GradientStop { position: 0.52; color: "#12384c30" }
+            GradientStop { position: 0.72; color: "#1f789170" }
+            GradientStop { position: 0.90; color: "#17475b38" }
+            GradientStop { position: 1.0; color: "#00000000" }
         }
     }
 }
