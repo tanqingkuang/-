@@ -21,14 +21,14 @@
     "longitude_deg": 116.0
   },
   "detail": {
-    "grid_resolution": 641,
-    "low_spec_grid_resolution": 384,
+    "grid_resolution": 768,
+    "low_spec_grid_resolution": 512,
     "seed": 1949,
     "style": "style_a_realistic_sci_fi_mountain"
   },
   "map": {
     "effective_extent_km": 32,
-    "render_extent_km": 90
+    "render_extent_km": 52
   },
   "flight": {
     "cruise_altitude_m": 900,
