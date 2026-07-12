@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import struct
+import time
 import unittest
 from unittest.mock import patch
 
@@ -128,12 +129,16 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLess(field.generation_time_ms, 5000.0)
 
     def test_payload_uses_layout_terrain_and_risk_zone_models(self) -> None:
-        """验证 terrain_display_file 会进入布局模式，并导出风险区渲染数据。"""
+        """验证 terrain_display_file 会进入布局模式，并导出风险区渲染数据(覆盖正式 768 网格)。"""
 
         snapshot = self._snapshot()
         snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        # 阻塞预热正式分辨率高度场,使 payload 走确定性的就绪路径。
+        layout_detail_pre = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
+        terrain_field_module.get_terrain_field(TERRAIN_LAYOUT_PATH, resolution=layout_detail_pre["grid_resolution"])
 
         payload = build_scene_payload(snapshot)
+        self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
 
         surface = payload["terrain"]["surface"]
         self.assertEqual(surface["mode"], "layout")
@@ -199,58 +204,177 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLessEqual(worst, cruise - clearance)
 
     def test_terrain_field_cache_is_shared_and_generates_once(self) -> None:
-        """验证 scene_data 与 TerrainGeometry 共享缓存,同参数高度场只生成一次。"""
+        """验证正式 build_scene_payload 链路与 TerrainGeometry 共享缓存,768 场只生成一次。"""
 
-        terrain_field_module._cached_field.cache_clear()
+        self._reset_terrain_caches()
+        layout_detail = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
+        resolution = int(layout_detail["grid_resolution"])
+        snapshot = self._snapshot()
+        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
         with patch.object(
             terrain_field_module,
             "generate_terrain_field_from_file",
             wraps=terrain_field_module.generate_terrain_field_from_file,
         ) as spy:
-            scene_data._cached_terrain_field(str(TERRAIN_LAYOUT_PATH), 128)
-            terrain_field_module.get_terrain_field(TERRAIN_LAYOUT_PATH, resolution=128)
+            payload = build_scene_payload(snapshot)
+            deadline = time.monotonic() + 60.0
+            # 正式链路是异步就绪:轮询到 fieldReady 后再走几何层,验证仍只生成一次。
+            while not payload["terrain"]["surface"]["fieldReady"] and time.monotonic() < deadline:
+                time.sleep(0.1)
+                payload = build_scene_payload(snapshot)
+            self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
             geometry = TerrainGeometry()
-            geometry.resolutionValue = 128
+            geometry.resolutionValue = resolution
             geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
+            self.assertGreater(geometry.boundsMax().y(), 2000.0)
         self.assertEqual(spy.call_count, 1)
 
-    def test_invalid_layout_falls_back_to_procedural_with_diagnostic(self) -> None:
-        """验证合法 JSON 携带非法字段类型时回退 procedural 并输出诊断。"""
+    def test_payload_stays_responsive_while_field_generates(self) -> None:
+        """验证冷缓存下 payload 构建不阻塞主线程,就绪后 fieldReady/revision 翻转。"""
 
         import tempfile
 
-        broken = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
-        broken["detail"]["grid_resolution"] = "很多"
+        layout = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
+        layout["detail"]["grid_resolution"] = 128
         with tempfile.TemporaryDirectory() as temp_dir:
-            broken_path = Path(temp_dir) / "broken_layout.json"
-            broken_path.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+            layout_path = Path(temp_dir) / "async_layout.json"
+            layout_path.write_text(json.dumps(layout, ensure_ascii=False), encoding="utf-8")
+            self._reset_terrain_caches()
             snapshot = self._snapshot()
-            snapshot.terrain_display_file = str(broken_path)
-            with self.assertLogs("src.ui.gui.situation3d.scene_data", level="WARNING"):
+            snapshot.terrain_display_file = str(layout_path)
+            started = time.monotonic()
+            payload = build_scene_payload(snapshot)
+            elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 1.0)
+            self.assertFalse(payload["terrain"]["surface"]["fieldReady"])
+            self.assertTrue(str(payload["terrain"]["surface"]["revision"]).endswith(":0"))
+            deadline = time.monotonic() + 30.0
+            while not payload["terrain"]["surface"]["fieldReady"] and time.monotonic() < deadline:
+                time.sleep(0.05)
                 payload = build_scene_payload(snapshot)
-        self.assertEqual(payload["terrain"]["surface"]["mode"], "procedural")
+            self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
+            self.assertTrue(str(payload["terrain"]["surface"]["revision"]).endswith(":1"))
+            # 就绪后风险线应贴地采样(y 有起伏),而不是占位的水平线。
+            points = json.loads(payload["riskZoneLines"][0]["pathValue"])
+            self.assertGreater(max(p[1] for p in points) - min(p[1] for p in points), 1.0)
+
+    @staticmethod
+    def _reset_terrain_caches() -> None:
+        """清空高度场与布局缓存。注意：仅测试使用,模拟冷启动。"""
+
+        terrain_field_module._cached_field.cache_clear()
+        with terrain_field_module._PENDING_LOCK:
+            terrain_field_module._READY_FIELDS.clear()
+            terrain_field_module._PENDING_KEYS.clear()
+        scene_data._cached_layout_versioned.cache_clear()
+
+    def test_invalid_layout_values_fall_back_to_procedural_with_diagnostic(self) -> None:
+        """验证坏配置族(错误类型/NaN/零范围)都回退 procedural 并输出诊断。"""
+
+        import tempfile
+
+        mutations = [
+            ("grid_resolution 类型错误", lambda data: data["detail"].__setitem__("grid_resolution", "很多")),
+            ("render_extent_km 为零", lambda data: data["map"].__setitem__("render_extent_km", 0)),
+            ("风险峰 height_m NaN", lambda data: data["mountain_chains"][4]["peaks"][0].__setitem__("height_m", "NaN")),
+            ("风险峰 risk_radius_km NaN", lambda data: data["mountain_chains"][4]["peaks"][0].__setitem__("risk_radius_km", "NaN")),
+        ]
+        for label, mutate in mutations:
+            with self.subTest(label):
+                broken = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
+                mutate(broken)
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    broken_path = Path(temp_dir) / "broken_layout.json"
+                    broken_path.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+                    snapshot = self._snapshot()
+                    snapshot.terrain_display_file = str(broken_path)
+                    with self.assertLogs("src.ui.gui.situation3d.scene_data", level="WARNING"):
+                        payload = build_scene_payload(snapshot)
+                self.assertEqual(payload["terrain"]["surface"]["mode"], "procedural", label)
+                # 末端防线:payload 必须可被 QML JSON.parse 消费,不含 NaN/Inf。
+                json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
     def test_release_scripts_bundle_detail_normal_texture(self) -> None:
-        """验证细节法线贴图存在且被 Windows/macOS 打包脚本显式收录。"""
+        """验证细节法线贴图存在且以 --add-data 形式进入双平台打包参数(注释不算数)。"""
+
+        import re
 
         project_root = Path(__file__).resolve().parents[2]
         texture = project_root / "src" / "ui" / "gui" / "situation3d" / "qml" / "assets" / "terrain_detail_normal.png"
         self.assertTrue(texture.is_file())
+        self.assertGreater(texture.stat().st_size, 0)
+        # 必须是真实的 --add-data 参数:源为该 PNG、目标为 QML 同级 assets 目录。
+        pattern = re.compile(
+            r'--add-data\s+"src/ui/gui/situation3d/qml/assets/terrain_detail_normal\.png[;:]src/ui/gui/situation3d/qml/assets"'
+        )
         for script_name in ("scripts/build_windows_full_release.ps1", "scripts/build_macos_full_release.sh"):
             script_text = (project_root / script_name).read_text(encoding="utf-8")
-            self.assertIn("terrain_detail_normal.png", script_text, script_name)
+            self.assertRegex(script_text, pattern, script_name)
 
-    def test_qml_follow_view_tracks_leader_continuously(self) -> None:
-        """验证跟随视角按长机角色选目标,且更新快照时持续刷新焦点。"""
+    def test_follow_view_tracks_moving_leader_with_terrain_clearance(self) -> None:
+        """谷地运动双帧测试:跟随锁定长机角色、随快照更新焦点,相机与视线保持地形净空。"""
 
-        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
-        self.assertIn("function leaderAircraftIndex()", qml)
-        self.assertIn("indexOf(\"leader\")", qml)
-        self.assertIn("property string followNodeId", qml)
-        update_scene = qml.index("function updateScene(")
-        # updateScene 函数体内必须存在跟随焦点刷新调用,保证快照更新时相机持续跟踪。
-        self.assertGreater(qml.index("applyFollowFocus()", update_scene), update_scene)
-        self.assertNotIn("aircraftModel.get(0)", qml)
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+
+        def canyon_snapshot(leader_east: float) -> Snapshot:
+            # 僚机排在第 0 位,验证跟随按角色而不是下标选目标。
+            return Snapshot(
+                time=1.0,
+                duration=120.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[
+                    NodeState("A01", "wingman", leader_east - 400.0, -120.0, 20.0, 0.0, altitude=900.0),
+                    NodeState("A03", "leader", leader_east, 0.0, 20.0, 0.0, altitude=900.0),
+                ],
+                links=[],
+                route_segments=[],
+            )
+
+        window = Situation3DWindow()
+        window.set_snapshot(canyon_snapshot(9000.0))
+        app.processEvents()
+        root = window.quick_view.rootObject()
+        self.assertIsNotNone(root)
+        root.setFollowView()
+        app.processEvents()
+        self.assertEqual(str(root.property("followNodeId")), "A03")
+        self.assertEqual(str(root.property("cameraMode")), "跟随")
+
+        # 第二帧:长机沿峡谷东移,焦点必须跟上(Behavior 平滑,轮询等待收敛)。
+        window.set_snapshot(canyon_snapshot(9600.0))
+        deadline = time.monotonic() + 3.0
+        while abs(float(root.property("focusX")) - 9600.0) > 5.0 and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.02)
+        self.assertLess(abs(float(root.property("focusX")) - 9600.0), 5.0)
+
+        # 相机与视线净空:按跟随构图公式还原相机点,采样正式地形验证离地。
+        import math as pymath
+
+        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=257)
+        focus = (float(root.property("focusX")), float(root.property("focusY")), float(root.property("focusZ")))
+        yaw = pymath.radians(float(root.property("yaw")))
+        pitch = pymath.radians(float(root.property("pitch")))
+        distance = float(root.property("distance"))
+        horizontal = distance * pymath.cos(pitch)
+        camera = (
+            focus[0] + horizontal * pymath.sin(yaw),
+            focus[1] - distance * pymath.sin(pitch),
+            focus[2] + horizontal * pymath.cos(yaw),
+        )
+        for ratio in (0.0, 0.25, 0.5, 0.75, 1.0):
+            x = camera[0] + (focus[0] - camera[0]) * ratio
+            y = camera[1] + (focus[1] - camera[1]) * ratio
+            z = camera[2] + (focus[2] - camera[2]) * ratio
+            ground = scene_data._sample_field_height(field, x, -z)
+            self.assertGreater(y, ground + 50.0, f"视线采样点 {ratio} 距地不足")
+        window.close()
 
     def test_controller_adapter_keeps_terrain_display_file_as_gui_metadata(self) -> None:
         """验证演示配置能加载，且地形文件只作为 Snapshot 显示元数据透传。"""
@@ -345,6 +469,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
     def test_terrain_geometry_consumes_layout_file_and_keeps_fallback(self) -> None:
         """验证 TerrainGeometry 有布局时使用新高度场，无布局时仍回退旧行为。"""
 
+        # 几何层是非阻塞消费:先阻塞预热,再验证布局 mesh 构建。
+        terrain_field_module.get_terrain_field(TERRAIN_LAYOUT_PATH, resolution=128)
         geometry = TerrainGeometry()
         geometry.resolutionValue = 128
         geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)

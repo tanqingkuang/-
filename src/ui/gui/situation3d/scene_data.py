@@ -22,7 +22,7 @@ from src.ui.gui.situation3d.aircraft_model_style import (
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
-    get_terrain_field,
+    peek_terrain_field,
     risk_zones_from_layout,
     terrain_extent_from_layout,
     load_terrain_layout,
@@ -231,7 +231,7 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
             "nodeId": node_id,
             "color": color,
             "width": 44.0,
-            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
+            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
         }
     ]
 
@@ -292,7 +292,7 @@ def _route_dash_payload(polyline: list[tuple[float, float, float]]) -> list[dict
                 {
                     "color": ROUTE_DASH_COLOR,
                     "width": ROUTE_DASH_WIDTH_M,
-                    "pathValue": json.dumps(dash_path, ensure_ascii=False, separators=(",", ":")),
+                    "pathValue": json.dumps(dash_path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
                 }
             )
         # 无论当前 dash 是否因退化被跳过，都按完整周期推进，保持虚线节奏稳定。
@@ -516,70 +516,87 @@ def _layout_terrain_payload(terrain_display_file: str) -> dict[str, object] | No
 
     layout_path = str(Path(terrain_display_file).resolve())
     try:
-        layout = _cached_layout(layout_path)
+        layout, revision = _cached_layout(layout_path)
         extent = terrain_extent_from_layout(layout)
-        # 合法 JSON 也可能携带错误类型或非有限值,所有转换必须在保护块内完成。
+        # 合法 JSON 也可能携带错误类型或非有限值,包括风险区构造在内的全部转换
+        # 都必须留在保护块内,任何一步失败都整体回退 procedural。
         for key in ("min_east_m", "max_east_m", "min_north_m", "max_north_m"):
             if not math.isfinite(float(extent[key])):
                 raise ValueError(f"terrain extent {key} 非有限值")
+        width = float(extent["max_east_m"]) - float(extent["min_east_m"])
+        depth = float(extent["max_north_m"]) - float(extent["min_north_m"])
+        if width <= 0.0 or depth <= 0.0:
+            raise ValueError("terrain extent 端点顺序错误或范围为零")
         resolution = _layout_resolution(layout)
         effective_span = float(layout.get("map", {}).get("effective_extent_km", 32.0)) * 1000.0 if isinstance(layout.get("map"), dict) else 32000.0
         if not math.isfinite(effective_span) or effective_span <= 0.0:
             raise ValueError("effective_extent_km 非法")
         field = _cached_terrain_field(layout_path, resolution)
+        center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
+        center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
+        # 风险区线网和地形 mesh 使用同一高度场，避免 QML 里出现悬浮平面。
+        risk_zones = [_risk_zone_payload(zone, field) for zone in risk_zones_from_layout(layout)]
+        # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
+        risk_zone_lines = [
+            line
+            for zone in risk_zones
+            for line in _risk_zone_line_payload(zone, field)
+        ]
+        # 缓冲圈同样贴地，但 offset 更低，用来表达山脚安全边界。
+        risk_zone_buffers = [
+            dash
+            for zone in risk_zones
+            for dash in _risk_zone_buffer_payload(zone, field)
+        ]
+        payload = {
+            "ground": {
+                "mode": "layout",
+                "x": center_east,
+                "y": -10.0,
+                "z": -center_north,
+                "width": width,
+                "depth": depth,
+                "height": 20.0,
+            },
+            "surface": {
+                "mode": "layout",
+                "x": center_east,
+                "y": 0.0,
+                "z": -center_north,
+                "width": width,
+                "depth": depth,
+                "height": max([zone["height"] for zone in risk_zones] + [2600.0]),
+                "layoutFile": layout_path,
+                "resolution": resolution,
+                # revision 用字符串传递:mtime_ns 超出 QML double 精度(2^53)会丢位。
+                "revision": f"{revision}:{1 if field is not None else 0}",
+                "fieldReady": field is not None,
+                "effectiveSpan": effective_span,
+            },
+            "riskZones": risk_zones,
+            "riskZoneLines": risk_zone_lines,
+            "riskZoneBuffers": risk_zone_buffers,
+        }
+        # 末端防线:payload 里任何 NaN/Inf 都在这里拦下,而不是送进 QML JSON.parse。
+        json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        return payload
     except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError, OverflowError) as error:
         # 显示层坏配置不允许打断 3D 刷新:回退 procedural 地形并输出可见诊断。
         logging.getLogger(__name__).warning("地形布局 %s 不可用,回退旧地形: %s", layout_path, error)
         return None
-    center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
-    center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
-    width = extent["max_east_m"] - extent["min_east_m"]
-    depth = extent["max_north_m"] - extent["min_north_m"]
-    # 风险区线网和地形 mesh 使用同一高度场，避免 QML 里出现悬浮平面。
-    risk_zones = [_risk_zone_payload(zone, field) for zone in risk_zones_from_layout(layout)]
-    # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
-    risk_zone_lines = [
-        line
-        for zone in risk_zones
-        for line in _risk_zone_line_payload(zone, field)
-    ]
-    # 缓冲圈同样贴地，但 offset 更低，用来表达山脚安全边界。
-    risk_zone_buffers = [
-        dash
-        for zone in risk_zones
-        for dash in _risk_zone_buffer_payload(zone, field)
-    ]
-    return {
-        "ground": {
-            "mode": "layout",
-            "x": center_east,
-            "y": -10.0,
-            "z": -center_north,
-            "width": width,
-            "depth": depth,
-            "height": 20.0,
-        },
-        "surface": {
-            "mode": "layout",
-            "x": center_east,
-            "y": 0.0,
-            "z": -center_north,
-            "width": width,
-            "depth": depth,
-            "height": max([zone["height"] for zone in risk_zones] + [2600.0]),
-            "layoutFile": layout_path,
-            "resolution": resolution,
-            "effectiveSpan": effective_span,
-        },
-        "riskZones": risk_zones,
-        "riskZoneLines": risk_zone_lines,
-        "riskZoneBuffers": risk_zone_buffers,
-    }
+
+
+def _cached_layout(path: str) -> tuple[dict[str, object], int]:
+    """缓存布局文件内容并返回版本号。注意：文件原地修改后 mtime 变化自动失效,
+    避免同一路径重载时 extent/风险元数据与高度场混用不同版本。"""
+
+    mtime_ns = Path(path).stat().st_mtime_ns
+    return _cached_layout_versioned(path, mtime_ns), mtime_ns
 
 
 @lru_cache(maxsize=4)
-def _cached_layout(path: str) -> dict[str, object]:
-    """缓存布局文件内容。注意：避免每帧刷新重复读取 JSON。"""
+def _cached_layout_versioned(path: str, mtime_ns: int) -> dict[str, object]:
+    """按(路径,修改时间)缓存布局 JSON。注意：仅由 _cached_layout 调用。"""
 
     return load_terrain_layout(path)
 
@@ -595,11 +612,11 @@ def _layout_resolution(layout: dict[str, object]) -> int:
     return value
 
 
-def _cached_terrain_field(path: str, resolution: int) -> TerrainField:
-    """获取共享高度场。注意：与 TerrainGeometry 共用 terrain_field.get_terrain_field
-    的进程级缓存,768² 场只生成一次,避免 GUI 主线程重复卡顿。"""
+def _cached_terrain_field(path: str, resolution: int) -> TerrainField | None:
+    """非阻塞获取共享高度场。注意：与 TerrainGeometry 共用 terrain_field 进程级缓存;
+    未就绪返回 None(风险线先按声明高度出图),就绪后 fieldReady 翻转驱动 QML 替换。"""
 
-    return get_terrain_field(path, resolution=resolution)
+    return peek_terrain_field(path, resolution=resolution)
 
 
 def _risk_zone_payload(zone, field: TerrainField | None = None) -> dict[str, object]:  # noqa: ANN001
@@ -644,7 +661,7 @@ def _risk_zone_line_payload(zone: dict[str, object], field: TerrainField | None 
                     "color": "#ff5a45",
                     # 风险网格必须显著细于主航线(16m):视觉层级上任务航线优先。
                     "width": 7.0,
-                    "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
+                    "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
                 }
             )
     return lines
@@ -673,7 +690,7 @@ def _risk_zone_buffer_payload(zone: dict[str, object], field: TerrainField | Non
                 "color": "#62d9e7",
                 # 缓冲圈是最弱的提示层,比风险网格更细。
                 "width": 5.0,
-                "pathValue": json.dumps(points, ensure_ascii=False, separators=(",", ":")),
+                "pathValue": json.dumps(points, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
             }
         )
     return dashes

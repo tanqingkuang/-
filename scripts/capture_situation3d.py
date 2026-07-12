@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
-import threading
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -42,8 +42,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=None, help="PNG 输出路径；缺省使用 docs/assets/p1 同名文件。")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="仿真配置路径，默认 configs/mountain_demo.json。")
     parser.add_argument("--wait-ms", type=int, default=DEFAULT_WAIT_MS, help="窗口显示后等待渲染稳定的毫秒数。")
-    parser.add_argument("--timeout-ms", type=int, default=DEFAULT_TIMEOUT_MS, help="硬超时毫秒数，超时直接退出进程。")
+    parser.add_argument("--timeout-ms", type=int, default=DEFAULT_TIMEOUT_MS, help="硬超时毫秒数，由父进程监督执行。")
     parser.add_argument("--backend", default="d3d11", help="QSG_RHI_BACKEND，默认 d3d11。")
+    parser.add_argument("--child", action="store_true", help="内部参数:子进程实际执行抓图,外层父进程负责超时与产物校验。")
     return parser.parse_args()
 
 
@@ -144,26 +145,91 @@ def resolve_project_path(path: Path) -> Path:
     return path if path.is_absolute() else default_project_root() / path
 
 
-def main() -> int:
-    """脚本入口。注意：一次只抓一个视角，便于失败后重试。"""
+def _supervise(args: argparse.Namespace, output_path: Path) -> int:
+    """父进程监督:超时杀子进程,校验退出码与产物后才接受截图。
+    注意：threading.Timer 在 GIL 被原生调用占住时无法抢占,超时必须由独立进程执行。"""
 
-    args = parse_args()
-    timeout = threading.Timer(max(1.0, int(args.timeout_ms) / 1000.0), lambda: os._exit(124))
-    timeout.daemon = True
-    timeout.start()
+    command = [sys.executable, "-X", "utf8", str(Path(__file__).resolve()), "--child", "--view", args.view]
+    command += ["--output", str(output_path), "--config", str(args.config)]
+    command += ["--wait-ms", str(int(args.wait_ms)), "--backend", str(args.backend)]
+    marker = _success_marker(output_path)
+    marker.unlink(missing_ok=True)
+    try:
+        completed = subprocess.run(command, timeout=max(5.0, int(args.timeout_ms) / 1000.0), check=False)
+    except subprocess.TimeoutExpired:
+        # subprocess.run 超时会先 kill 子进程再抛出;这里补一次树级清理防止残留窗口。
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/FI", "WINDOWTITLE eq 3D态势*"], capture_output=True, check=False)
+        print(f"抓图超时({args.timeout_ms}ms),产物不可信,已终止子进程", flush=True)
+        return 124
+    # PySide6 进程关停与 Qt 渲染线程存在竞态,退出码不可靠(直跑 0,监督下偶发异常码);
+    # 成功判据 = 子进程截图落盘后写下的哨兵 + 产物内容校验,退出码仅作告警。
+    if not marker.is_file():
+        print(f"抓图子进程未写成功哨兵(退出码 {completed.returncode}),产物不可信", flush=True)
+        return completed.returncode or 1
+    marker.unlink(missing_ok=True)
+    if completed.returncode != 0:
+        print(f"提示:子进程退出码 {completed.returncode}(Qt 关停竞态),以产物校验为准", flush=True)
+    return _validate_output(output_path)
+
+
+def _success_marker(output_path: Path) -> Path:
+    """返回截图成功哨兵路径。注意：哨兵只由子进程在落盘成功后写入。"""
+
+    return output_path.with_name(output_path.name + ".ok")
+
+
+def _validate_output(output_path: Path) -> int:
+    """校验截图产物:存在、尺寸正确、内容非空(不是纯色黑帧)。"""
+
+    if not output_path.is_file() or output_path.stat().st_size <= 0:
+        print(f"产物缺失或为空: {output_path}", flush=True)
+        return 2
+    from PIL import Image
+    import numpy as np
+
+    image = np.asarray(Image.open(output_path).convert("RGB"), dtype=np.float32) / 255.0
+    if image.shape[0] != CAPTURE_HEIGHT_PX or image.shape[1] != CAPTURE_WIDTH_PX:
+        print(f"产物尺寸异常: {image.shape}", flush=True)
+        return 3
+    if float(image.std()) < 0.01:
+        print(f"产物疑似纯色帧(std={image.std():.4f}),不可作为回归依据", flush=True)
+        return 4
+    print(f"{output_path.resolve()}  {output_path.stat().st_size / 1024.0:.1f} KB  校验通过", flush=True)
+    return 0
+
+
+def _run_child(args: argparse.Namespace, output_path: Path) -> int:
+    """子进程实际抓图。注意：截图落盘后硬退出,规避 PySide6 关停阶段析构死锁。"""
+
     configure_environment(str(args.backend))
     config_path = resolve_project_path(args.config)
-    output_path = resolve_project_path(args.output or DEFAULT_OUTPUTS[args.view])
     adapter, snapshot = load_snapshot(config_path)
     try:
+        if snapshot.terrain_display_file:
+            # 抓图脚本没有 10Hz 刷新循环,必须阻塞等高度场就绪,否则截到占位地形。
+            from src.ui.gui.situation3d import scene_data
+            from src.ui.gui.situation3d.terrain_field import get_terrain_field, load_terrain_layout
+
+            layout = load_terrain_layout(snapshot.terrain_display_file)
+            get_terrain_field(snapshot.terrain_display_file, resolution=scene_data._layout_resolution(layout))
         capture_view(snapshot, args.view, output_path, int(args.wait_ms))
     finally:
         adapter.close()
-    size_kb = output_path.stat().st_size / 1024.0
-    print(f"{output_path.resolve()}  {size_kb:.1f} KB", flush=True)
-    # PySide6 解释器关停阶段会因 Quick3D 对象析构顺序死锁(曾把窗口挂成"未响应"20 分钟),
-    # 截图落盘后直接硬退出;看门狗也保留到最后,不提前 cancel。
+    print(f"{output_path.resolve()}  {output_path.stat().st_size / 1024.0:.1f} KB", flush=True)
+    # 成功哨兵必须在硬退出前写入:父进程以它为成功判据,退出码受 Qt 关停竞态影响不可靠。
+    _success_marker(output_path).write_text("ok", encoding="utf-8")
     os._exit(0)
+
+
+def main() -> int:
+    """脚本入口。注意：默认作为父进程监督执行,一次只抓一个视角。"""
+
+    args = parse_args()
+    output_path = resolve_project_path(args.output or DEFAULT_OUTPUTS[args.view])
+    if args.child:
+        return _run_child(args, output_path)
+    return _supervise(args, output_path)
 
 
 if __name__ == "__main__":

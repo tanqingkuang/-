@@ -15,7 +15,7 @@ import numpy as np
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
-    get_terrain_field,
+    peek_terrain_field,
 )
 
 # 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
@@ -55,6 +55,7 @@ class _TerrainGeometryBase(QQuick3DGeometry):
     depthValueChanged = Signal()
     amplitudeValueChanged = Signal()
     layoutFileChanged = Signal()
+    layoutRevisionChanged = Signal()
     resolutionValueChanged = Signal()
     generationTimeMsChanged = Signal()
 
@@ -67,6 +68,7 @@ class _TerrainGeometryBase(QQuick3DGeometry):
         self._depth_value = 2200.0
         self._amplitude_value = 260.0
         self._layout_file_value = ""
+        self._layout_revision_value = ""
         self._resolution_value = DEFAULT_TERRAIN_RESOLUTION
         self._generation_time_ms = 0.0
         self._rebuild()
@@ -142,6 +144,23 @@ class _TerrainGeometryBase(QQuick3DGeometry):
         self._rebuild()
         self.layoutFileChanged.emit()
 
+    @Property(str, notify=layoutRevisionChanged)
+    def layoutRevision(self) -> str:
+        """返回布局版本号(mtime+就绪标志)。注意：同路径原地改文件或高度场就绪时变化。"""
+
+        return self._layout_revision_value
+
+    @layoutRevision.setter
+    def layoutRevision(self, value: str) -> None:
+        """更新布局版本号。注意：版本变化触发重建,解决同路径重载混用旧 mesh 的问题。"""
+
+        normalized = str(value or "")
+        if normalized == self._layout_revision_value:
+            return
+        self._layout_revision_value = normalized
+        self._rebuild()
+        self.layoutRevisionChanged.emit()
+
     @Property(int, notify=resolutionValueChanged)
     def resolutionValue(self) -> int:
         """返回布局地形网格分辨率。注意：无布局文件时该值不影响旧地形。"""
@@ -200,16 +219,17 @@ class TerrainGeometry(_TerrainGeometryBase):
 
         if self._layout_file_value:
             try:
-                # 与 scene_data 共享同一进程级高度场缓存,避免 768² 场在主线程重复生成。
-                self._rebuild_from_field(
-                    get_terrain_field(self._layout_file_value, resolution=self._resolution_value)
-                )
-                return
+                # 非阻塞获取共享高度场:未就绪先落旧地形占位,payload 的 revision
+                # 在就绪后翻转,QML 重设本属性触发再次重建完成替换,首开不冻结主线程。
+                field = peek_terrain_field(self._layout_file_value, resolution=self._resolution_value)
+                if field is not None:
+                    self._rebuild_from_field(field)
+                    return
             except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError, OverflowError) as error:
                 # 布局文件异常时回落旧地形，避免 3D 窗口空白;诊断进日志供排障。
                 logging.getLogger(__name__).warning("地形布局 %s 不可用,回退旧地形: %s", self._layout_file_value, error)
-                self._generation_time_ms = 0.0
-                self.generationTimeMsChanged.emit()
+            self._generation_time_ms = 0.0
+            self.generationTimeMsChanged.emit()
 
         width = self._width_value
         depth = self._depth_value

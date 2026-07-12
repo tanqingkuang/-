@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+import logging
 import math
 from pathlib import Path
 import threading
@@ -18,6 +19,10 @@ DEFAULT_TERRAIN_RESOLUTION = 641
 LOW_SPEC_TERRAIN_RESOLUTION = 384
 # 共享缓存锁:预热线程与 GUI 线程可能并发请求同一高度场。
 _FIELD_CACHE_LOCK = threading.Lock()
+# 非阻塞入口的就绪表与在途集合:GUI 线程 peek 时绝不等待生成。
+_PENDING_LOCK = threading.Lock()
+_PENDING_KEYS: set[tuple[str, int, int]] = set()
+_READY_FIELDS: dict[tuple[str, int, int], "TerrainField"] = {}
 _MIN_RESOLUTION = 96
 _MAX_RESOLUTION = 1024
 _SRGB_LOW = np.array([0.045, 0.082, 0.105], dtype=np.float32)
@@ -115,14 +120,49 @@ def generate_terrain_field_from_file(path: str | Path, *, resolution: int = DEFA
 
 
 def get_terrain_field(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> TerrainField:
-    """获取共享缓存的高度场。注意：scene_data 与 TerrainGeometry 必须走同一入口，
+    """获取共享缓存的高度场(阻塞)。注意：scene_data 与 TerrainGeometry 必须走同一入口，
     避免 768² 场在 GUI 主线程重复生成(实测单次约 4s,重复即翻倍卡顿)。"""
 
     resolved = Path(path).resolve()
     mtime_ns = resolved.stat().st_mtime_ns
+    key = (str(resolved), mtime_ns, _normalized_resolution(resolution))
     # 锁保证并发预热线程与 GUI 线程不会同时算两份同参数场。
     with _FIELD_CACHE_LOCK:
-        return _cached_field(str(resolved), mtime_ns, _normalized_resolution(resolution))
+        field = _cached_field(*key)
+    # 阻塞入口同样登记就绪表,预热完成后 peek 立即命中。
+    with _PENDING_LOCK:
+        _READY_FIELDS[key] = field
+    return field
+
+
+def peek_terrain_field(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> TerrainField | None:
+    """非阻塞获取高度场:已就绪立即返回,否则触发后台生成并返回 None。
+    注意：GUI 主线程一律走本入口,未就绪时先用占位地形,就绪后由 payload 驱动替换。"""
+
+    resolved = Path(path).resolve()
+    mtime_ns = resolved.stat().st_mtime_ns
+    key = (str(resolved), mtime_ns, _normalized_resolution(resolution))
+    with _PENDING_LOCK:
+        if key in _READY_FIELDS:
+            return _READY_FIELDS[key]
+        if key not in _PENDING_KEYS:
+            _PENDING_KEYS.add(key)
+            threading.Thread(target=_background_generate, args=(key,), name="terrain-field-async", daemon=True).start()
+    return None
+
+
+def _background_generate(key: tuple[str, int, int]) -> None:
+    """后台线程体:生成高度场并登记就绪表。注意：失败仅记诊断,不重试不抛出。"""
+
+    try:
+        field = get_terrain_field(key[0], resolution=key[2])
+        with _PENDING_LOCK:
+            _READY_FIELDS[key] = field
+    except Exception as error:  # noqa: BLE001
+        logging.getLogger(__name__).warning("后台生成高度场失败 %s: %s", key[0], error)
+    finally:
+        with _PENDING_LOCK:
+            _PENDING_KEYS.discard(key)
 
 
 @lru_cache(maxsize=4)
@@ -156,6 +196,9 @@ def generate_terrain_field(layout: dict[str, Any], *, resolution: int = DEFAULT_
     over = heights > knee
     heights[over] = knee + (cap - knee) * (1.0 - np.exp(-(heights[over] - knee) / (cap - knee)))
     heights *= _edge_fade(east_grid, north_grid, extent)
+    if not np.isfinite(heights).all():
+        # 坏配置(如零范围 extent)可能算出 NaN 高度,必须在出口拦截由上层回退。
+        raise ValueError("高度场包含非有限值,布局配置非法")
     # 法线必须在最终高度处理后计算，否则烘焙光照会偏软。
     normals = _normal_grid(heights, float(east[1] - east[0]), float(north[1] - north[0]))
     colors = _color_grid(heights, normals, east_grid, north_grid, extent)
@@ -177,7 +220,7 @@ def generate_terrain_field(layout: dict[str, Any], *, resolution: int = DEFAULT_
 def terrain_extent_from_layout(layout: dict[str, Any]) -> dict[str, float]:
     """计算布局渲染范围。注意：输入 u/v 单位为 km，输出为 ENU 米。"""
 
-    render_extent_km = float(_read_path(layout, ("map", "render_extent_km"), 58.0))
+    render_extent_km = _finite_positive(float(_read_path(layout, ("map", "render_extent_km"), 58.0)), "render_extent_km")
     chains = layout.get("mountain_chains")
     u_values: list[float] = []
     v_values: list[float] = []
@@ -231,16 +274,16 @@ def risk_zones_from_layout(layout: dict[str, Any]) -> list[TerrainRiskZone]:
             if not isinstance(peak, dict) or not bool(peak.get("risk_zone", False)):
                 continue
             center_u, center_v = _peak_center_uv(chain, peak)
-            radius_m = float(peak.get("risk_radius_km", peak.get("base_radius_km", 1.0))) * 1000.0
+            radius_m = _finite_positive(float(peak.get("risk_radius_km", peak.get("base_radius_km", 1.0))), "risk_radius_km") * 1000.0
             zones.append(
                 TerrainRiskZone(
                     zone_id=str(peak.get("id") or f"{chain.get('id', 'risk')}_{index}"),
                     label=str(peak.get("label") or chain.get("name") or "风险峰"),
-                    east_m=center_u * 1000.0,
-                    north_m=center_v * 1000.0,
+                    east_m=_finite(center_u * 1000.0, "risk center east"),
+                    north_m=_finite(center_v * 1000.0, "risk center north"),
                     radius_m=radius_m,
-                    height_m=float(peak.get("height_m", 0.0)),
-                    buffer_radius_m=float(peak.get("buffer_radius_km", peak.get("base_radius_km", 1.0) * 1.55)) * 1000.0,
+                    height_m=_finite_positive(float(peak.get("height_m", 0.0)), "height_m", allow_zero=True),
+                    buffer_radius_m=_finite_positive(float(peak.get("buffer_radius_km", peak.get("base_radius_km", 1.0) * 1.55)), "buffer_radius_km") * 1000.0,
                 )
             )
     return zones
@@ -746,6 +789,23 @@ def _read_path(data: dict[str, Any], keys: tuple[str, ...], default: float) -> A
             return default
         current = current[key]
     return current
+
+
+def _finite(value: float, label: str) -> float:
+    """校验数值有限性。注意：NaN/Inf 一律视为坏配置抛 ValueError,由上层回退。"""
+
+    if not math.isfinite(value):
+        raise ValueError(f"{label} 非有限值: {value}")
+    return value
+
+
+def _finite_positive(value: float, label: str, *, allow_zero: bool = False) -> float:
+    """校验数值为有限正数。注意：风险区半径/高度等语义量不允许非正值。"""
+
+    _finite(value, label)
+    if value < 0.0 or (value == 0.0 and not allow_zero):
+        raise ValueError(f"{label} 必须为正数: {value}")
+    return value
 
 
 def _normalized_resolution(value: int) -> int:

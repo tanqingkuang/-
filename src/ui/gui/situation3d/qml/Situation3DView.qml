@@ -325,6 +325,8 @@ Item {
             if (surface.mode === "layout") {
                 terrainGeometry.resolutionValue = surface.resolution || 641
                 terrainGeometry.layoutFile = surface.layoutFile || ""
+                // revision 含 mtime 和高度场就绪标志:原地改文件或后台生成完成都会触发重建。
+                terrainGeometry.layoutRevision = String(surface.revision || "")
             } else {
                 terrainGeometry.layoutFile = ""
                 terrainGeometry.widthValue = surface.width
@@ -391,7 +393,9 @@ Item {
         focusX = lead.sx
         focusY = lead.sy
         focusZ = lead.sz
-        yaw = lead.yawDeg - 35
+        // 相机语义:yaw = 机头航向 - 90 为正后方,再加 25° 侧偏形成斜后跟随;
+        // 偏移过大(历史值 -35 ≈ 侧后 55°)会把相机压进峡谷侧壁。
+        yaw = lead.yawDeg - 65
     }
 
     function setFollowView() {
@@ -549,7 +553,8 @@ Item {
             delegate: Model {
                 geometry: TrailRibbonGeometry {
                     pathValue: model.pathValue
-                    widthValue: model.widthValue
+                    // 与主航线同一距离缩放,任何距离下风险网格都细于航线,层级不反转。
+                    widthValue: model.widthValue * root.routeDashWidthScale
                     alphaMode: "solid"
                 }
                 castsShadows: false
@@ -561,7 +566,8 @@ Item {
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.66
-                    emissiveFactor: Qt.vector3d(1.80, 0.28, 0.02)
+                    // 发光降档:风险网是提示层,不允许压过主任务航线成为画面主角。
+                    emissiveFactor: Qt.vector3d(1.05, 0.16, 0.01)
                 }
             }
         }
@@ -571,7 +577,7 @@ Item {
             delegate: Model {
                 geometry: TrailRibbonGeometry {
                     pathValue: model.pathValue
-                    widthValue: model.widthValue
+                    widthValue: model.widthValue * root.routeDashWidthScale
                     alphaMode: "solid"
                 }
                 castsShadows: false
@@ -583,7 +589,7 @@ Item {
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.78
-                    emissiveFactor: Qt.vector3d(0.18, 0.95, 1.05)
+                    emissiveFactor: Qt.vector3d(0.12, 0.62, 0.68)
                 }
             }
         }
@@ -600,11 +606,12 @@ Item {
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.82
+                    opacity: 0.88
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.88
-                    emissiveFactor: Qt.vector3d(0.10, 0.30, 0.34)
+                    // 主任务航线辉光加强一档:风格 A 的态势层级里航线优先于风险提示。
+                    emissiveFactor: Qt.vector3d(0.18, 0.55, 0.62)
                 }
             }
         }
@@ -665,34 +672,38 @@ Item {
             }
         }
 
-        Repeater3D {
-            model: aircraftModel
-            delegate: Node {
-                id: aircraftNode
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
-                Behavior on position {
-                    Vector3dAnimation {
-                        duration: 90
-                        easing.type: Easing.Linear
+        Node {
+            id: aircraftGroup
+
+            DirectionalLight {
+                // 全编队共享一盏轮廓侧逆光:scope 限定机群子树,把机体从山体背景里分离。
+                // 正式 D3D 后端方向光上限 4 盏,禁止按机实例化(五机会到 8 盏被裁剪)。
+                scope: aircraftGroup
+                eulerRotation: Qt.vector3d(-18, 148, 0)
+                brightness: 2.4
+                castsShadow: false
+                color: "#dceeff"
+            }
+
+            Repeater3D {
+                model: aircraftModel
+                delegate: Node {
+                    position: Qt.vector3d(model.sx, model.sy, model.sz)
+                    eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
+                    Behavior on position {
+                        Vector3dAnimation {
+                            duration: 90
+                            easing.type: Easing.Linear
+                        }
                     }
-                }
 
-                DirectionalLight {
-                    // 轮廓侧逆光:scope 只照本机,把机体从山体背景里分离出来,不影响地形曝光。
-                    scope: aircraftNode
-                    eulerRotation: Qt.vector3d(-18, 148, 0)
-                    brightness: 2.4
-                    castsShadow: false
-                    color: "#dceeff"
-                }
-
-                RuntimeLoader {
-                    source: Qt.resolvedUrl(root.aircraftModelSource)
-                    // 资产机头朝向由 Python 策略给出偏航校正，统一转到本场景机头朝 +X 的约定。
-                    eulerRotation: Qt.vector3d(0, root.aircraftYawOffsetDeg, 0)
-                    // 近观按真实翼展 1:1 显示；相机拉远后改为恒定视角大小(翼展约占视距 2%)，避免退化成小点。
-                    scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)
+                    RuntimeLoader {
+                        source: Qt.resolvedUrl(root.aircraftModelSource)
+                        // 资产机头朝向由 Python 策略给出偏航校正，统一转到本场景机头朝 +X 的约定。
+                        eulerRotation: Qt.vector3d(0, root.aircraftYawOffsetDeg, 0)
+                        // 近观按真实翼展 1:1 显示；相机拉远后改为恒定视角大小(翼展约占视距 2%)，避免退化成小点。
+                        scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)
+                    }
                 }
             }
         }
