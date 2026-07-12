@@ -479,6 +479,18 @@ Item {
                 specularAmount: 0.02
                 // 反照率已是白天量级,自发光只留极小底线,避免整体发灰。
                 emissiveFactor: Qt.vector3d(0.012, 0.016, 0.020)
+                // 近景细节法线:顶点间距 68m,顶点色插值在极限放大时糊成水彩;
+                // 平铺细节法线在像素级补出岩面粗糙度,曝光不受影响(P1.5)。
+                normalMap: Texture {
+                    source: "assets/terrain_detail_normal.png"
+                    tilingModeHorizontal: Texture.Repeat
+                    tilingModeVertical: Texture.Repeat
+                    scaleU: 112
+                    scaleV: 112
+                    generateMipmaps: true
+                    mipFilter: Texture.Linear
+                }
+                normalStrength: 0.48
             }
         }
 
