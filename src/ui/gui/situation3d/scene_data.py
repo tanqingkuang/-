@@ -57,12 +57,16 @@ class TrailPayloadState:
         # 同一时刻重推也算下一条消息；QML 展示队列会等当前补间完成后再按序应用它。
         self._observed_ends: dict[str, tuple[int, int]] = {}
         self._eligible_ends: dict[str, tuple[int, int]] = {}
+        # 坐标锚独立于 TrailBuffer 生命周期；队首越过展示地平线后仍能连接上一飞机位置。
+        self._observed_anchors: dict[str, tuple[int, object, object]] = {}
+        self._eligible_anchors: dict[str, tuple[int, object, object]] = {}
 
     def begin_frame(self) -> None:
         """开始构造一条展示消息。注意：本轮只能固化上一条消息观察到的队尾。"""
 
         # 新展示消息只允许固化上一条消息已观察到的尾后序号；本轮批量点继续留在活动末段。
         self._eligible_ends = dict(self._observed_ends)
+        self._eligible_anchors = dict(self._observed_anchors)
 
     def presentation_length(
         self,
@@ -70,17 +74,32 @@ class TrailPayloadState:
         generation: int,
         first_sequence: int,
         end_sequence: int,
-        point_count: int,
+        trail: Sequence[object],
     ) -> int:
         """返回本帧可固化的稳定前缀长度。注意：首次出现可直接提交完整队列。"""
 
+        point_count = len(trail)
         self._observed_ends[node_id] = (generation, end_sequence)
+        if point_count:
+            self._observed_anchors[node_id] = (
+                generation,
+                trail[-2] if point_count >= 2 else trail[-1],
+                trail[-1],
+            )
         eligible = self._eligible_ends.get(node_id)
         if eligible is None or eligible[0] != generation:
             return point_count
-        # 正常窗口远大于一条展示消息；防御性保留一个锚点，避免极短窗口生成无根活动段。
+        # 允许稳定前缀清空；活动小网格会改用独立保存的上一展示锚，不抢用本轮新队首。
         eligible_length = eligible[1] - first_sequence
-        return min(point_count, max(1, eligible_length))
+        return min(point_count, max(0, eligible_length))
+
+    def presentation_anchor(self, node_id: str, generation: int) -> tuple[object, object] | None:
+        """返回上一条消息的末段方向点与队尾锚。注意：锚可已从数据队列淘汰。"""
+
+        anchor = self._eligible_anchors.get(node_id)
+        if anchor is None or anchor[0] != generation:
+            return None
+        return anchor[1], anchor[2]
 
     def cursor(self, node_id: str) -> tuple[int, int, int] | None:
         """返回飞机上次发送的 generation、队首序号和尾后序号。"""
@@ -98,6 +117,8 @@ class TrailPayloadState:
         self._cursors.pop(node_id, None)
         self._observed_ends.pop(node_id, None)
         self._eligible_ends.pop(node_id, None)
+        self._observed_anchors.pop(node_id, None)
+        self._eligible_anchors.pop(node_id, None)
 
     def retain(self, node_ids: set[str]) -> None:
         """只保留本帧仍有 ribbon 的飞机，防止消失后重现时误发 delta。"""
@@ -108,6 +129,10 @@ class TrailPayloadState:
             self._observed_ends.pop(node_id, None)
         for node_id in set(self._eligible_ends) - node_ids:
             self._eligible_ends.pop(node_id, None)
+        for node_id in set(self._observed_anchors) - node_ids:
+            self._observed_anchors.pop(node_id, None)
+        for node_id in set(self._eligible_anchors) - node_ids:
+            self._eligible_anchors.pop(node_id, None)
 
 # 3D payload 设计说明：
 # 1. QML 侧只接收 JSON 字符串，因此 payload 不能携带完整高度场大数组。
@@ -308,14 +333,24 @@ def _trail_ribbon_payload(
             generation,
             first_sequence,
             end_sequence,
-            trail_length,
+            trail,
         )
     # 数据队列保留全部固定点；历史网格延后一条展示消息，活动末段始终从已展示队尾出发。
     stream = _trail_stream_value(node_id, trail, trail_length, trail_state)
-    tip_start = _trail_quick3d_point(trail[trail_length - 1])
-    tip_previous = _trail_quick3d_point(
-        trail[trail_length - 2] if trail_length >= 2 else trail[trail_length - 1]
-    )
+    if trail_length:
+        tip_start = _trail_quick3d_point(trail[trail_length - 1])
+        tip_previous = _trail_quick3d_point(
+            trail[trail_length - 2] if trail_length >= 2 else trail[trail_length - 1]
+        )
+    else:
+        # 短窗口可能已淘汰上一队尾；用窗口级展示锚连接，绝不提前采用本轮新队首。
+        if trail_state is None or metadata is None:
+            return []
+        anchor = trail_state.presentation_anchor(node_id, metadata[0])
+        if anchor is None:
+            return []
+        tip_previous = _trail_quick3d_point(anchor[0])
+        tip_start = _trail_quick3d_point(anchor[1])
     return [
         {
             "nodeId": node_id,

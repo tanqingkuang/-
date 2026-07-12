@@ -419,6 +419,8 @@ Item {
         } else {
             // 初始空桥接数据不能占用展示队列，否则首个真实快照会无端等待 90ms。
             presentationProgress = 1.0
+            // 空帧没有动画 onFinished 信号；异步续取可排空后继消息，并避免连续空帧同步递归。
+            Qt.callLater(function() { root.consumePendingSceneUpdate() })
         }
         if (cameraMode === "跟随") {
             // 跟随是持续行为:每帧刷新焦点与航向,长机移动后相机不掉队。

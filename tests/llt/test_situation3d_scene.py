@@ -565,6 +565,75 @@ class Situation3DSceneDataTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_qml_presentation_queue_continues_after_empty_aircraft_frame(self) -> None:
+        """动画后的空节点帧没有 onFinished 信号，也必须继续消费其后的非空消息。"""
+
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+
+        def snapshot_at(time_s: float, east_m: float | None) -> Snapshot:
+            """构造单机或空节点场景，复现配置切换期间的展示消息序列。"""
+
+            nodes = []
+            if east_m is not None:
+                nodes = [
+                    NodeState(
+                        "A01",
+                        "leader",
+                        east_m,
+                        0.0,
+                        20.0,
+                        0.0,
+                        altitude=100.0,
+                        trail=[TrailPoint(east_m, 0.0, 100.0, time_s)],
+                    )
+                ]
+            return Snapshot(
+                time=time_s,
+                duration=100.0,
+                step=0.1,
+                run_state="READY",
+                control_report="待命",
+                disturbance="无",
+                nodes=nodes,
+                links=[],
+            )
+
+        def process_until(predicate, timeout_s: float = 2.0) -> None:  # noqa: ANN001
+            """处理事件直到空帧后的最后消息已应用。"""
+
+            deadline = time.monotonic() + timeout_s
+            while not predicate() and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.002)
+            app.processEvents()
+
+        window = Situation3DWindow()
+        try:
+            window.show()
+            window.set_snapshot(snapshot_at(0.0, 0.0))
+            root = window.quick_view.rootObject()
+            process_until(lambda: float(root.property("presentationProgress")) >= 0.999)
+
+            window.set_snapshot(snapshot_at(1.0, 100.0))
+            app.processEvents()
+            window.set_snapshot(snapshot_at(2.0, None))
+            app.processEvents()
+            window.set_snapshot(snapshot_at(3.0, 300.0))
+            app.processEvents()
+            process_until(
+                lambda: str(root.property("sceneTime")) == "3.0s"
+                and float(root.property("presentationProgress")) >= 0.999
+            )
+
+            self.assertEqual(str(root.property("sceneTime")), "3.0s")
+            self.assertEqual(root.property("pendingSceneUpdates").toVariant(), [])
+            self.assertEqual(root.currentAircraftPositions().toVariant()["A01"]["x"], 300.0)
+        finally:
+            window.close()
+
     def test_reset_camera_does_not_replay_latest_scene_outside_presentation_queue(self) -> None:
         """重置相机只能读取相机字段，不能绕过 FIFO 重放最新场景并打乱尾迹 delta 游标。"""
 
@@ -855,6 +924,40 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(receiving["tipStartX"], 0.0)
         self.assertEqual(json.loads(committed["pathValue"])["endSequence"], 8)
         self.assertEqual(committed["tipStartX"], 70.0)
+
+    def test_3d_live_tip_keeps_previous_anchor_when_queue_head_overtakes_horizon(self) -> None:
+        """上一队尾被容量淘汰时历史可清空，但活动末段仍必须从上一展示锚点起步。"""
+
+        from src.ui.gui.trail_view_model import TrailBuffer
+
+        snapshot = self._snapshot()
+        trail = TrailBuffer(capacity=1)
+        trail.append_position(0.0, 0.0, 100.0, 0.0)
+        snapshot.nodes[0].x = 0.0
+        snapshot.nodes[0].trail = trail.snapshot()
+        state = scene_data.TrailPayloadState()
+        initial = build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]
+
+        trail.append_position(10.0, 0.0, 100.0, 0.1)
+        snapshot.nodes[0].x = 10.0
+        snapshot.nodes[0].trail = trail.snapshot()
+        receiving = build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]
+
+        trail.append_position(20.0, 0.0, 100.0, 0.2)
+        snapshot.nodes[0].x = 20.0
+        snapshot.nodes[0].trail = trail.snapshot()
+        following = build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]
+
+        receiving_stream = json.loads(receiving["pathValue"])
+        self.assertEqual(receiving_stream["endSequence"], 1)
+        self.assertEqual(receiving_stream["addedPoints"], [])
+        self.assertEqual(receiving["tipStartX"], 0.0)
+        self.assertEqual(json.loads(following["pathValue"])["endSequence"], 2)
+        self.assertEqual(following["tipStartX"], 10.0)
+        history = TrailRibbonGeometry()
+        history.pathValue = initial["pathValue"]
+        history.pathValue = receiving["pathValue"]
+        self.assertEqual(list(history._stream_points), [])
 
     def test_terrain_geometry_builds_connected_heightfield(self) -> None:
         """验证 3D 地形使用一张连续 mesh，而不是多个独立山体模型。"""

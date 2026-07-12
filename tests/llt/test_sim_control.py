@@ -118,6 +118,20 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertTrue(controller.get_recent_events())
             controller.close()
 
+    def test_config_rejects_step_larger_than_timed_snapshot_period(self) -> None:
+        """基础步长不得跨过多个 0.1 秒采样边界，否则固定 10 Hz 快照会永久缺点。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            result = controller.load_config(
+                str(_write_config(Path(tmp), duration_s=1.0, step_s=0.25))
+            )
+
+            self.assertEqual(result.code, "ERR_CONFIG_INVALID")
+            self.assertIn("step_s must be <= 0.1", result.message)
+            self.assertEqual(controller.get_snapshot().run_state, "UNLOADED")
+            controller.close()
+
     def test_manual_step_advances_and_stays_paused(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()

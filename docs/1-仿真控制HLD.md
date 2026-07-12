@@ -202,7 +202,7 @@ def load_config(path: str) -> CommandResult
 语义：
 
 - 读取 `.yaml`、`.yml` 或 `.json` 配置。
-- 校验必填字段、节点列表、链路拓扑、航线 `route`、队形 `formation`、仿真时长、步长、算法分频、扰动配置。
+- 校验必填字段、节点列表、链路拓扑、航线 `route`、队形 `formation`、仿真时长、步长、算法分频、扰动配置；`step_s` 必须满足 `0 < step_s <= 0.1`，避免单个基础 tick 跨过多个固定快照边界。
 - **航线只支持经纬度**：`route` / `rally_route`（含 `route_file`/`rally_route_file` 引用）的航点必须给 `latitude_deg` + `longitude_deg`，加载期由 `route_to_internal` 统一转成内部 ENU（以首航点为 ENU 原点）；非经纬(如 ENU `x_m`/`y_m`)航线在加载期被拒绝，返回 `ERR_CONFIG_INVALID`。节点初始位置 `nodes[*]` 不受此约束；`formation.formation_files` 引用的外部队形文件使用局部航迹坐标 `x_forward_y_up_z_right`，同样不参与经纬转换。
 - 初始化模型、通信、算法、加扰和日志对象，但不开始推进仿真时间。
 - 成功后状态进入 `READY`，并通过 `get_snapshot()` 或订阅推送提供初始快照。
@@ -463,7 +463,7 @@ def _tick() -> SimulationSnapshot
 
 频率约束：
 
-- 各 sim-time 频率优先选取能被基础仿真 tick 整除的值，避免分数 tick 调度；本版关键数据记录固定以 `0.1 s` 采样点为准，若配置步长不能整除 `0.1 s`，则在跨过采样点后的第一个基础 tick 记录。
+- 各 sim-time 频率优先选取能被基础仿真 tick 整除的值，避免分数 tick 调度；本版关键数据记录固定以 `0.1 s` 采样点为准，要求 `step_s <= 0.1 s`。若步长不能整除 `0.1 s`，则在跨过采样点后的第一个基础 tick 记录，但一个 tick 不会跨过两个采样边界。
 - 显示回显刷新按 wall-clock 节流，不随 `playback_rate` 增大而提高刷新频率。
 - `playback_rate` 只影响 wall-clock 调度间隔，不改变任何 sim-time 频率。
 - 编队算法控制周期由仿真控制统一计算并注入算法实体：`control_period_s = step_s * algorithm_decimation`。默认 `step_s=0.005`、`algorithm_decimation=10`，因此默认控制周期为 `0.05 s`（20 Hz）。
