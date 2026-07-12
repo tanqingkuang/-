@@ -1184,7 +1184,10 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(wingman_pens)
         self.assertTrue(all(pen.style() == Qt.PenStyle.SolidLine for pen in leader_pens))
         self.assertTrue(all(pen.style() == Qt.PenStyle.CustomDashLine for pen in wingman_pens))
-        self.assertNotEqual(wingman_pens[0].dashOffset(), wingman_pens[1].dashOffset())
+        self.assertEqual(leader_painter.drawPath.call_count, 1)
+        self.assertEqual(wingman_painter.drawPath.call_count, 1)
+        self.assertEqual(wingman_pens[0].capStyle(), Qt.PenCapStyle.RoundCap)
+        self.assertEqual(wingman_pens[0].joinStyle(), Qt.PenJoinStyle.RoundJoin)
 
     def test_top_view_wingman_dash_offset_stays_stable_after_oldest_trail_point_is_pruned(self) -> None:
         view = self.window.top_view
@@ -1208,7 +1211,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         )
         pruned_pens = [call.args[0] for call in pruned_painter.setPen.call_args_list]
 
-        self.assertAlmostEqual(full_pens[1].dashOffset(), pruned_pens[0].dashOffset())
+        self.assertAlmostEqual(full_pens[0].dashOffset(), 0.0)
+        self.assertAlmostEqual(pruned_pens[0].dashOffset(), 12.0 * view.scale_value / 2.4)
 
     def test_top_view_wingman_dash_offset_stays_stable_after_new_trail_point_is_appended(self) -> None:
         view = self.window.top_view
