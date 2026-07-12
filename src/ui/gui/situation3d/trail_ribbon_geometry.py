@@ -105,8 +105,6 @@ Point3D = tuple[float, float, float]
 # 73. 流式增量不会调用 json.dumps；序列化职责留在 scene_data 与桥接层。
 # 74. 诊断计数不做 Signal 通知，避免测试属性给场景图增加额外绑定工作。
 # 75. 任何后续优化都必须同时通过槽复用索引、弹头 deque 和无全量 bounds 扫描测试。
-
-
 @dataclass(frozen=True)
 class _TrailMessage:
     """一次原子尾迹消息。注意：reset 的 points 是全量，delta 的 points 仅是新增尾部。"""

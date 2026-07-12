@@ -11,8 +11,8 @@ from itertools import count, islice
 from src.ui.gui.view_models import TrailPoint, trail_seconds_for_duration
 
 
-# 主窗口以 10 FPS 采集尾迹；32768 点可完整覆盖内置最长配置的 2100 秒默认窗口，
-# 同时为异常长航时或高刷新率提供明确内存上界。渲染缓存可据此推导最大块数。
+# 控制器按仿真时间固定 10 Hz 采集尾迹；32768 点可完整覆盖内置最长配置的 2100 秒默认窗口，
+# 且不因播放倍率或 GUI 刷新率变化。该硬上界也供渲染缓存推导最大块数。
 MAX_TRAIL_POINTS = 32_768
 # 每次新建或显式清空缓冲区都取得不同代号，让绘制端可靠识别重置与配置切换。
 _TRAIL_GENERATION_IDS = count(1)

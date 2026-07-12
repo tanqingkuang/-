@@ -41,6 +41,7 @@ from src.environment.comm import CommunicationChannel
 from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
 from src.runner.sim_control_constants import (
     _DEFAULT_ALGORITHM_DECIMATION,
+    _LOG_SAMPLE_PERIOD_S,
     _MAX_MISSION_RALLY_HEADING_MISMATCH_DEG,
     _MAX_PLAYBACK_RATE,
     _MIN_PLAYBACK_RATE,
@@ -104,6 +105,9 @@ class _ConfigLoader:
             raise ValueError("duration_s must be positive")
         if step_s <= 0:
             raise ValueError("step_s must be positive")
+        if step_s > _LOG_SAMPLE_PERIOD_S:
+            # 单个基础 tick 不得跨过多个关键数据边界，否则 10 Hz 快照与尾迹无法补齐中间状态。
+            raise ValueError(f"step_s must be <= {_LOG_SAMPLE_PERIOD_S:g}")
         if not _MIN_PLAYBACK_RATE <= playback_rate <= _MAX_PLAYBACK_RATE:
             raise ValueError(f"playback_rate must be in [{_MIN_PLAYBACK_RATE}, {_MAX_PLAYBACK_RATE}]")
         if (

@@ -396,24 +396,47 @@ class SideView(QWidget):
         )
         painter.scale(self.horizontal_scale, -vertical_scale)
         try:
+            # 尾迹路径只允许描边；主动清除任何调用方画刷，防止开放折线被隐式闭合填充。
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             for node in snapshot.nodes:
-                if len(node.trail) <= 1:
+                if not node.trail:
                     continue
                 is_leader = is_leader_node(node)
                 base = self.theme.leader if is_leader else self.theme.wingman
                 cache = self._trail_path_caches[node.node_id]
                 for batch in cache.render_batches(current_time=snapshot.time, trail_seconds=self.trail_seconds):
-                    color = QColor(base)
-                    color.setAlphaF((0.48 if is_leader else 0.40) * batch.opacity_factor)
-                    # cosmetic 画笔抵消两轴不同缩放；圆帽和圆角避免急转折点形成尖锐棱角。
-                    pen = QPen(color, 2.0)
-                    pen.setCosmetic(True)
-                    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-                    painter.setPen(pen)
+                    painter.setPen(self._trail_pen(base, is_leader=is_leader, opacity_factor=batch.opacity_factor))
                     painter.drawPath(batch.path)
+
+                tail = node.trail[-1]
+                tail_x = self._horizontal_for_point(tail.x, tail.y)
+                current_x = self._horizontal_for_point(node.x, node.y)
+                endpoint_changed = not (
+                    math.isclose(tail_x, current_x, rel_tol=0.0, abs_tol=1e-9)
+                    and math.isclose(tail.altitude, node.altitude, rel_tol=0.0, abs_tol=1e-9)
+                )
+                if endpoint_changed:
+                    # 当前机位只补一条队列外实时段，不进入投影缓存，也不修改稳定尾迹队列。
+                    painter.setPen(self._trail_pen(base, is_leader=is_leader, opacity_factor=1.0))
+                    painter.drawLine(
+                        QPointF(tail_x, tail.altitude),
+                        QPointF(current_x, node.altitude),
+                    )
         finally:
             painter.restore()
+
+    @staticmethod
+    def _trail_pen(base: QColor, *, is_leader: bool, opacity_factor: float) -> QPen:
+        """构造侧视尾迹画笔。注意：历史批次和队列外实时段使用完全相同的描边风格。"""
+
+        color = QColor(base)
+        color.setAlphaF((0.48 if is_leader else 0.40) * opacity_factor)
+        # cosmetic 画笔抵消两轴不同缩放；圆帽和圆角避免急转折点形成尖锐棱角。
+        pen = QPen(color, 2.0)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        return pen
 
     def _sync_trail_path_caches(self, snapshot: Snapshot) -> None:
         """增量同步全部侧视尾迹路径。注意：投影语义键不包含任何屏幕变换参数。"""

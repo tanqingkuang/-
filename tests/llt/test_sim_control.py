@@ -8,6 +8,7 @@ import os
 import tempfile
 import time
 import unittest
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +23,7 @@ from src.runner.sim_control import (
     RouteState,
     SimulationController,
     SimulationSnapshot,
+    TimedSnapshotCursor,
     _DataLogger,
     _NodeAlgorithm,
     _build_formation_comm_init,
@@ -114,6 +116,20 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(snapshot.links[0].latency_ms, 31.0)
             self.assertEqual(snapshot.links[0].loss_rate, 0.04)
             self.assertTrue(controller.get_recent_events())
+            controller.close()
+
+    def test_config_rejects_step_larger_than_timed_snapshot_period(self) -> None:
+        """基础步长不得跨过多个 0.1 秒采样边界，否则固定 10 Hz 快照会永久缺点。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            result = controller.load_config(
+                str(_write_config(Path(tmp), duration_s=1.0, step_s=0.25))
+            )
+
+            self.assertEqual(result.code, "ERR_CONFIG_INVALID")
+            self.assertIn("step_s must be <= 0.1", result.message)
+            self.assertEqual(controller.get_snapshot().run_state, "UNLOADED")
             controller.close()
 
     def test_manual_step_advances_and_stays_paused(self) -> None:
@@ -937,6 +953,64 @@ class SimulationControllerTests(unittest.TestCase):
             logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
 
             self.assertEqual(logged_times, [0.1, 0.2, 0.3, 0.4, 0.5])
+            controller.close()
+
+    def test_read_timed_snapshots_returns_incremental_immutable_batches(self) -> None:
+        """定时快照读取应只返回游标后的新项，且不得暴露 logger 的可变列表。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            unloaded_cursor, unloaded_batch = controller.read_timed_snapshots(None)
+            self.assertEqual(unloaded_batch, ())
+            controller.load_config(str(_write_config(Path(tmp), duration_s=1.0, step_s=0.005)))
+            controller._logger._file_logging_disabled = True
+
+            cursor, initial_batch = controller.read_timed_snapshots(unloaded_cursor)
+            self.assertIsInstance(cursor, TimedSnapshotCursor)
+            self.assertNotEqual(cursor.run_generation, unloaded_cursor.run_generation)
+            self.assertEqual(cursor.next_index, 0)
+            self.assertEqual(initial_batch, ())
+
+            controller.step(20)
+            first_cursor, first_batch = controller.read_timed_snapshots(cursor)
+            self.assertIsInstance(first_batch, tuple)
+            self.assertIsNot(first_batch, controller._logger.snapshots)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in first_batch], [0.1])
+            self.assertEqual(first_cursor.next_index, 1)
+
+            controller.step(20)
+            second_cursor, second_batch = controller.read_timed_snapshots(first_cursor)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in second_batch], [0.2])
+            self.assertEqual(second_cursor.next_index, 2)
+            unchanged_cursor, empty_batch = controller.read_timed_snapshots(second_cursor)
+            self.assertEqual(unchanged_cursor, second_cursor)
+            self.assertEqual(empty_batch, ())
+
+            with self.assertRaises(FrozenInstanceError):
+                cursor.next_index = 99
+            with self.assertRaises(TypeError):
+                first_batch[0] = first_batch[0]
+            controller.close()
+
+    def test_old_timed_snapshot_cursor_restarts_from_zero_after_reset(self) -> None:
+        """reset 后旧代游标必须从新运行索引零读取，不能跳过新代首批样本。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp), duration_s=1.0, step_s=0.005)))
+            controller._logger._file_logging_disabled = True
+            controller.step(20)
+            old_cursor, old_batch = controller.read_timed_snapshots(None)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in old_batch], [0.1])
+
+            self.assertEqual(controller.reset().code, "OK")
+            controller._logger._file_logging_disabled = True
+            controller.step(20)
+            new_cursor, new_batch = controller.read_timed_snapshots(old_cursor)
+
+            self.assertNotEqual(new_cursor.run_generation, old_cursor.run_generation)
+            self.assertEqual(new_cursor.next_index, 1)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in new_batch], [0.1])
             controller.close()
 
     def test_realtime_snapshot_generation_is_limited_to_display_rate(self) -> None:

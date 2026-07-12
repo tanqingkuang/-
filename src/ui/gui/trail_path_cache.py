@@ -12,12 +12,12 @@ from PySide6.QtCore import QPointF
 from PySide6.QtGui import QPainterPath
 
 
-# 默认每块 128 条原始线段；配合块内 4 段显示预算，最大容量下只需约 1024 段栅格化。
+# 默认每块 128 条原始线段；配合块内 8 段显示预算，最大容量下只需约 2048 段栅格化。
 DEFAULT_TRAIL_PATH_CHUNK_SIZE = 128
 # 透明度只分少量档位，绘制端即可把任意长尾迹压到固定次数的 drawPath 调用。
 DEFAULT_TRAIL_OPACITY_BUCKETS = 8
-# 每块显示路径最多四段；分块边界提供局部性，不会随全局尾迹长度重新选点。
-DEFAULT_TRAIL_MAX_SEGMENTS_PER_CHUNK = 4
+# 每块显示路径最多八段；足以让典型 10 Hz 盘旋圆弧满足亚米级误差，同时保持硬上界。
+DEFAULT_TRAIL_MAX_SEGMENTS_PER_CHUNK = 8
 # 小于一米的投影抖动无需成为显示折点；真正拐弯仍会由几何误差优先保留。
 DEFAULT_TRAIL_SIMPLIFY_TOLERANCE = 0.75
 
