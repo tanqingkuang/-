@@ -36,6 +36,8 @@ Item {
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
+    // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线/障碍/风险区模型。
+    property string staticContentKey: ""
 
     ListModel { id: aircraftModel }
     ListModel { id: modelOptions }
@@ -226,15 +228,7 @@ Item {
         }
     }
 
-    function updateScene(payload, forceCamera) {
-        if (!payload || payload.length === 0) {
-            return false
-        }
-        const data = JSON.parse(payload)
-        syncAircraftStyle(data.aircraftStyle)
-        syncModelOptions(data.modelOptions || [])
-        syncAircraftModel(data.aircraft || [])
-        syncTrailModel(data.trailRibbons || [])
+    function rebuildStaticModels(data) {
         routeDashModel.clear()
         for (const item of data.routeDashes || []) {
             routeDashModel.append({
@@ -266,25 +260,6 @@ Item {
                 heightValue: item.height
             })
         }
-        const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
-        if (surface) {
-            terrainSurfaceModel.visible = true
-            terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
-            root.terrainSpan = Math.max(surface.width || 0, surface.depth || 0, 20000)
-            root.terrainEffectiveSpan = Math.max(surface.effectiveSpan || 0, 20000)
-            if (surface.mode === "layout") {
-                terrainGeometry.resolutionValue = surface.resolution || 641
-                terrainGeometry.layoutFile = surface.layoutFile || ""
-            } else {
-                terrainGeometry.layoutFile = ""
-                terrainGeometry.widthValue = surface.width
-                terrainGeometry.depthValue = surface.depth
-                terrainGeometry.amplitudeValue = surface.height
-            }
-        } else {
-            terrainSurfaceModel.visible = false
-            terrainGeometry.layoutFile = ""
-        }
         riskZoneModel.clear()
         for (const item of data.riskZones || []) {
             riskZoneModel.append({
@@ -312,6 +287,43 @@ Item {
                 widthValue: item.width,
                 pathValue: item.pathValue
             })
+        }
+    }
+
+    function updateScene(payload, forceCamera) {
+        if (!payload || payload.length === 0) {
+            return false
+        }
+        const data = JSON.parse(payload)
+        syncAircraftStyle(data.aircraftStyle)
+        syncModelOptions(data.modelOptions || [])
+        syncAircraftModel(data.aircraft || [])
+        syncTrailModel(data.trailRibbons || [])
+        // 航线/障碍/风险区是静态内容：每帧 clear+append 会销毁重建上百个几何模型,
+        // 造成周期性掉帧(飞机"一跳一跳")。签名不变时整体跳过静态模型重建。
+        const staticChanged = (data.staticKey || "") !== staticContentKey
+        if (staticChanged) {
+            staticContentKey = data.staticKey || ""
+            rebuildStaticModels(data)
+        }
+        const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
+        if (surface) {
+            terrainSurfaceModel.visible = true
+            terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
+            root.terrainSpan = Math.max(surface.width || 0, surface.depth || 0, 20000)
+            root.terrainEffectiveSpan = Math.max(surface.effectiveSpan || 0, 20000)
+            if (surface.mode === "layout") {
+                terrainGeometry.resolutionValue = surface.resolution || 641
+                terrainGeometry.layoutFile = surface.layoutFile || ""
+            } else {
+                terrainGeometry.layoutFile = ""
+                terrainGeometry.widthValue = surface.width
+                terrainGeometry.depthValue = surface.depth
+                terrainGeometry.amplitudeValue = surface.height
+            }
+        } else {
+            terrainSurfaceModel.visible = false
+            terrainGeometry.layoutFile = ""
         }
         let cameraApplied = false
         if (data.camera && (!cameraInitialized || forceCamera === true)) {
@@ -421,15 +433,16 @@ Item {
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-35, -52, 0)
-            // 暖主光只提山脊受光面，暗部仍交给冷色顶点色压住。
-            brightness: 2.10
+            // 暖主光提亮受光面；正式布局比原型样张稀疏、平均海拔低，受光总量少，亮度按实测补偿。
+            brightness: 3.20
             castsShadow: false
             color: "#fff0d6"
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 132, 0)
-            brightness: 0.44
+            // 冷色补光负责背光坡可读性：暗部应是深蓝可读，而不是纯黑糊成一片。
+            brightness: 1.05
             castsShadow: false
             color: "#4faec6"
         }
@@ -455,7 +468,8 @@ Item {
                 vertexColorsEnabled: true
                 roughness: 0.96
                 specularAmount: 0.02
-                emissiveFactor: Qt.vector3d(0.014, 0.020, 0.026)
+                // 自发光是全场景亮度底线：平原和深谷至少呈现深蓝灰，保证轮廓可读。
+                emissiveFactor: Qt.vector3d(0.030, 0.042, 0.056)
             }
         }
 

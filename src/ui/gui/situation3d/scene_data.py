@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from functools import lru_cache
@@ -145,7 +146,10 @@ def build_scene_payload(
     camera_payload = _camera_payload(bounds, aircraft)
     if terrain.get("surface", {}).get("mode") == "layout":
         camera_payload = _layout_camera_payload(terrain["surface"])
+    # 静态内容签名：QML 据此决定是否重建航线/障碍/风险区模型，避免每帧 clear+append 造成卡顿。
+    static_key = _static_content_key(route_points, route_dashes, obstacle_items, risk_zones, risk_zone_lines, risk_zone_buffers)
     return {
+        "staticKey": static_key,
         "time": snapshot.time,
         "runState": snapshot.run_state,
         "controlReport": snapshot.control_report,
@@ -170,6 +174,16 @@ def build_scene_payload(
             "riskZones": len(risk_zones),
         },
     }
+
+
+def _static_content_key(*static_groups: list) -> str:
+    """计算静态显示内容签名。注意：内容不变时签名稳定，QML 跳过静态模型重建。"""
+
+    # 航线/障碍/风险区在一次运行中基本不变，序列化摘要的开销远小于每帧重建 QML 对象。
+    digest = hashlib.md5()
+    for group in static_groups:
+        digest.update(json.dumps(group, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def enu_to_quick3d(east_m: float, north_m: float, up_m: float) -> dict[str, float]:
