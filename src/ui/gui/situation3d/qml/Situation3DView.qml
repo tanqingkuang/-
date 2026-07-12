@@ -31,6 +31,8 @@ Item {
     property real aircraftVisualScale: aircraftBaseScale * Math.max(1.0, distance * 0.0207 / aircraftRealWingspanM)
     property real routeDashWidthScale: nearViewWidthScale
     property real trailWidthScale: Math.min(0.17, aircraftVisualScale * aircraftUnitWingspan / 5.0 / 44.0)
+    property real terrainSpan: 20000
+    property real terrainEffectiveSpan: 20000
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -41,6 +43,9 @@ Item {
     ListModel { id: routeDashModel }
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
+    ListModel { id: riskZoneModel }
+    ListModel { id: riskLineModel }
+    ListModel { id: riskBufferModel }
 
     function clampPitch(value) {
         return Math.max(-88, Math.min(-6, value))
@@ -265,11 +270,48 @@ Item {
         if (surface) {
             terrainSurfaceModel.visible = true
             terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
-            terrainGeometry.widthValue = surface.width
-            terrainGeometry.depthValue = surface.depth
-            terrainGeometry.amplitudeValue = surface.height
+            root.terrainSpan = Math.max(surface.width || 0, surface.depth || 0, 20000)
+            root.terrainEffectiveSpan = Math.max(surface.effectiveSpan || 0, 20000)
+            if (surface.mode === "layout") {
+                terrainGeometry.resolutionValue = surface.resolution || 641
+                terrainGeometry.layoutFile = surface.layoutFile || ""
+            } else {
+                terrainGeometry.layoutFile = ""
+                terrainGeometry.widthValue = surface.width
+                terrainGeometry.depthValue = surface.depth
+                terrainGeometry.amplitudeValue = surface.height
+            }
         } else {
             terrainSurfaceModel.visible = false
+            terrainGeometry.layoutFile = ""
+        }
+        riskZoneModel.clear()
+        for (const item of data.riskZones || []) {
+            riskZoneModel.append({
+                zoneId: item.id,
+                label: item.label,
+                sx: item.x,
+                sy: item.y,
+                sz: item.z,
+                radiusValue: item.radius,
+                heightValue: item.height
+            })
+        }
+        riskLineModel.clear()
+        for (const item of data.riskZoneLines || []) {
+            riskLineModel.append({
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            })
+        }
+        riskBufferModel.clear()
+        for (const item of data.riskZoneBuffers || []) {
+            riskBufferModel.append({
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            })
         }
         let cameraApplied = false
         if (data.camera && (!cameraInitialized || forceCamera === true)) {
@@ -277,7 +319,7 @@ Item {
         }
         sceneTime = Number(data.time || 0).toFixed(1) + "s"
         const counts = data.counts || {}
-        sceneSummary = "飞机 " + (counts.aircraft || 0) + " / 障碍 " + (counts.obstacles || 0)
+        sceneSummary = "飞机 " + (counts.aircraft || 0) + " / 风险区 " + (counts.riskZones || 0)
         return cameraApplied
     }
 
@@ -293,13 +335,16 @@ Item {
 
     function setTopView() {
         yaw = 0
-        pitch = -89
+        pitch = -76
+        distance = Math.max(15500, terrainEffectiveSpan * 0.56)
+        focusY = Math.max(focusY, 900)
         cameraMode = "俯视"
     }
 
     function setSideView() {
         yaw = -90
         pitch = -8
+        distance = Math.max(distance, terrainEffectiveSpan * 0.56)
         cameraMode = "侧视"
     }
 
@@ -310,8 +355,8 @@ Item {
             focusY = lead.sy
             focusZ = lead.sz
             yaw = lead.yawDeg - 35
-            pitch = -22
-            distance = Math.max(520, distance * 0.55)
+            pitch = -18
+            distance = Math.max(720, Math.min(distance * 0.55, 1800))
         }
         cameraMode = "跟随"
     }
@@ -329,14 +374,35 @@ Item {
         }
     }
 
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#02060d" }
+            GradientStop { position: 0.16; color: "#06111b" }
+            GradientStop { position: 0.22; color: "#123448" }
+            GradientStop { position: 0.34; color: "#0b1b25" }
+            GradientStop { position: 1.0; color: "#101c26" }
+        }
+    }
+
     View3D {
         id: view3d
         anchors.fill: parent
         environment: SceneEnvironment {
-            backgroundMode: SceneEnvironment.Color
-            clearColor: "#101923"
+            backgroundMode: SceneEnvironment.Transparent
+            clearColor: "transparent"
             antialiasingMode: SceneEnvironment.MSAA
-            antialiasingQuality: SceneEnvironment.High
+            antialiasingQuality: SceneEnvironment.VeryHigh
+            fog: Fog {
+                enabled: true
+                color: "#081723"
+                density: 0.24
+                depthEnabled: true
+                depthNear: Math.max(2800, root.distance * 1.30)
+                depthFar: Math.max(8000, root.distance * 2.28)
+                depthCurve: 1.18
+                heightEnabled: false
+            }
         }
 
         Node {
@@ -347,27 +413,31 @@ Item {
             PerspectiveCamera {
                 id: camera
                 position: Qt.vector3d(0, 0, root.distance)
-                clipNear: 1
+                clipNear: 10
                 clipFar: 100000
+                fieldOfView: 50
             }
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-38, -52, 0)
-            // 顶点色是真实反照率,亮度回到 1 量级避免过曝成白色。
-            brightness: 1.35
+            eulerRotation: Qt.vector3d(-35, -52, 0)
+            // 暖主光只提山脊受光面，暗部仍交给冷色顶点色压住。
+            brightness: 2.10
             castsShadow: false
+            color: "#fff0d6"
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-68, 138, 0)
-            brightness: 0.3
+            eulerRotation: Qt.vector3d(-68, 132, 0)
+            brightness: 0.44
             castsShadow: false
+            color: "#4faec6"
         }
 
         PointLight {
-            position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
-            brightness: 1.4
+            position: Qt.vector3d(root.focusX - 5600, root.focusY + 3820, root.focusZ + 5000)
+            brightness: 0.72
+            color: "#6fc6d8"
         }
 
         Model {
@@ -383,8 +453,73 @@ Item {
                 baseColor: "#ffffff"
                 cullMode: Material.NoCulling
                 vertexColorsEnabled: true
-                roughness: 0.94
-                specularAmount: 0.03
+                roughness: 0.96
+                specularAmount: 0.02
+                emissiveFactor: Qt.vector3d(0.014, 0.020, 0.026)
+            }
+        }
+
+        Repeater3D {
+            model: riskZoneModel
+            delegate: Model {
+                visible: false
+                source: "#Cylinder"
+                position: Qt.vector3d(model.sx, model.sy - 20.0, model.sz)
+                scale: Qt.vector3d(model.radiusValue / 50.0, 0.020, model.radiusValue / 50.0)
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: Qt.rgba(1.0, 0.16, 0.12, 0.16)
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.32
+                    cullMode: Material.NoCulling
+                    roughness: 0.92
+                    emissiveFactor: Qt.vector3d(0.18, 0.03, 0.02)
+                }
+            }
+        }
+
+        Repeater3D {
+            model: riskLineModel
+            delegate: Model {
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue
+                    alphaMode: "solid"
+                }
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.95
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.66
+                    emissiveFactor: Qt.vector3d(1.80, 0.28, 0.02)
+                }
+            }
+        }
+
+        Repeater3D {
+            model: riskBufferModel
+            delegate: Model {
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue
+                    alphaMode: "solid"
+                }
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.70
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.78
+                    emissiveFactor: Qt.vector3d(0.18, 0.95, 1.05)
+                }
             }
         }
 

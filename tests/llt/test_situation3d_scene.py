@@ -15,8 +15,13 @@ from src.ui.gui.situation3d.scene_data import (
     build_scene_payload,
     enu_to_quick3d,
 )
+from src.ui.gui.situation3d.terrain_field import (
+    DEFAULT_TERRAIN_RESOLUTION,
+    generate_terrain_field_from_file,
+)
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
 from src.ui.gui.situation3d.trail_ribbon_geometry import TrailRibbonGeometry
+from src.ui.gui.simulation_adapter import ControllerSimulationAdapter
 from src.ui.gui.view_models import (
     LinkState,
     NodeState,
@@ -27,6 +32,8 @@ from src.ui.gui.view_models import (
 )
 
 QML_VIEW_PATH = Path(__file__).resolve().parents[2] / "src" / "ui" / "gui" / "situation3d" / "qml" / "Situation3DView.qml"
+TERRAIN_LAYOUT_PATH = Path(__file__).resolve().parents[2] / "configs" / "element" / "terrain_mountain_demo.json"
+MOUNTAIN_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "mountain_demo.json"
 
 
 class Situation3DSceneDataTests(unittest.TestCase):
@@ -93,14 +100,66 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(route_dash_path[0], [0.0, 100.0, -0.0])
         self.assertEqual(payload["terrain"]["ground"]["width"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["ground"]["depth"], DEFAULT_TERRAIN_SPAN_M)
+        self.assertEqual(payload["terrain"]["surface"]["mode"], "procedural")
         self.assertEqual(payload["terrain"]["surface"]["width"], DEFAULT_TERRAIN_SPAN_M)
         self.assertEqual(payload["terrain"]["surface"]["depth"], DEFAULT_TERRAIN_SPAN_M)
         self.assertGreater(payload["terrain"]["surface"]["height"], 0.0)
+        self.assertEqual(payload["riskZones"], [])
 
         obstacle_payload = payload["obstacles"][0]
         self.assertEqual(obstacle_payload["kind"], "circle")
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
+
+    def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
+        """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
+
+        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=128)
+
+        self.assertEqual(field.resolution, 128)
+        self.assertEqual(field.heights_m.shape, (128, 128))
+        self.assertEqual(field.normals.shape, (128, 128, 3))
+        self.assertEqual(field.colors.shape, (128, 128, 3))
+        self.assertFalse(bool((field.heights_m != field.heights_m).any()))
+        self.assertGreater(float(field.heights_m.max()), 2000.0)
+        self.assertEqual([zone.zone_id for zone in field.risk_zones], ["hazard_peak_west", "hazard_peak_east"])
+        self.assertLess(field.generation_time_ms, 5000.0)
+
+    def test_payload_uses_layout_terrain_and_risk_zone_models(self) -> None:
+        """验证 terrain_display_file 会进入布局模式，并导出风险区渲染数据。"""
+
+        snapshot = self._snapshot()
+        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+
+        payload = build_scene_payload(snapshot)
+
+        surface = payload["terrain"]["surface"]
+        self.assertEqual(surface["mode"], "layout")
+        self.assertEqual(surface["layoutFile"], str(TERRAIN_LAYOUT_PATH.resolve()))
+        self.assertEqual(surface["resolution"], DEFAULT_TERRAIN_RESOLUTION)
+        self.assertEqual(payload["counts"]["riskZones"], 2)
+        self.assertEqual(len(payload["riskZones"]), 2)
+        self.assertGreater(len(payload["riskZoneLines"]), 0)
+        self.assertGreater(len(payload["riskZoneBuffers"]), 0)
+        self.assertEqual(payload["riskZoneLines"][0]["width"], 18.0)
+        risk_line_points = json.loads(payload["riskZoneLines"][0]["pathValue"])
+        self.assertGreater(len(risk_line_points), 2)
+        self.assertGreater(max(point[1] for point in risk_line_points) - min(point[1] for point in risk_line_points), 1.0)
+        buffer_points = json.loads(payload["riskZoneBuffers"][0]["pathValue"])
+        self.assertGreater(buffer_points[0][1], 0.0)
+
+    def test_controller_adapter_keeps_terrain_display_file_as_gui_metadata(self) -> None:
+        """验证演示配置能加载，且地形文件只作为 Snapshot 显示元数据透传。"""
+
+        adapter = ControllerSimulationAdapter()
+        try:
+            snapshot = adapter.load_config(str(MOUNTAIN_CONFIG_PATH))
+            self.assertEqual(adapter.last_result_code, "OK")
+            self.assertEqual(snapshot.terrain_display_file, str(TERRAIN_LAYOUT_PATH.resolve()))
+            self.assertIsNotNone(snapshot.route)
+            self.assertGreaterEqual(len(snapshot.route_segments), 1)
+        finally:
+            adapter.close()
 
     def test_trail_smoothing_is_default_on_and_only_affects_trails(self) -> None:
         """尾迹默认平滑，但航线虚线仍使用原始采样结果。"""
@@ -178,6 +237,24 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLessEqual(geometry.boundsMin().y(), 0.0)
         self.assertGreater(geometry.boundsMax().y(), 760.0)
         self.assertGreater(max(y_values) - min(y_values), 450.0)
+
+    def test_terrain_geometry_consumes_layout_file_and_keeps_fallback(self) -> None:
+        """验证 TerrainGeometry 有布局时使用新高度场，无布局时仍回退旧行为。"""
+
+        geometry = TerrainGeometry()
+        geometry.resolutionValue = 128
+        geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
+        layout_vertex_size = geometry.vertexData().size()
+
+        self.assertEqual(geometry.stride(), 48)
+        self.assertEqual(layout_vertex_size, 128 * 128 * geometry.stride())
+        self.assertGreater(geometry.indexData().size(), 0)
+        self.assertGreater(geometry.generationTimeMs, 0.0)
+        self.assertGreater(geometry.boundsMax().y(), 2000.0)
+
+        geometry.layoutFile = ""
+        geometry.widthValue = DEFAULT_TERRAIN_SPAN_M
+        self.assertNotEqual(geometry.vertexData().size(), layout_vertex_size)
 
     def test_trail_ribbon_geometry_builds_single_continuous_mesh(self) -> None:
         """验证尾迹 ribbon 使用一张连续三角带，而不是离散点或分段圆柱。"""
@@ -290,6 +367,12 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("1800m 是默认自由视角量级", qml)
         self.assertIn("Math.max(0.25, Math.min(1.0, distance / 1800.0))", qml)
         self.assertIn("ListModel { id: routeDashModel }", qml)
+        self.assertIn("ListModel { id: riskZoneModel }", qml)
+        self.assertIn("data.riskZones", qml)
+        self.assertIn("data.riskZoneLines", qml)
+        self.assertIn("data.riskZoneBuffers", qml)
+        self.assertIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
+        self.assertIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)
         self.assertIn("data.routeDashes", qml)
         self.assertIn("model: routeDashModel", qml)
         self.assertIn("TrailRibbonGeometry", qml)

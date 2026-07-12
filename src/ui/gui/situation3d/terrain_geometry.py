@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import math
+import json
 import struct
 
 from PySide6.QtCore import QByteArray, Property, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
+import numpy as np
+
+from src.ui.gui.situation3d.terrain_field import (
+    DEFAULT_TERRAIN_RESOLUTION,
+    TerrainField,
+    generate_terrain_field_from_file,
+)
 
 # 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
 _FLOAT_SIZE = 4
@@ -45,6 +53,9 @@ class _TerrainGeometryBase(QQuick3DGeometry):
     widthValueChanged = Signal()
     depthValueChanged = Signal()
     amplitudeValueChanged = Signal()
+    layoutFileChanged = Signal()
+    resolutionValueChanged = Signal()
+    generationTimeMsChanged = Signal()
 
     def __init__(self, parent: object | None = None) -> None:
         """初始化地形参数。注意：子类负责把参数转换成具体几何数据。"""
@@ -54,6 +65,9 @@ class _TerrainGeometryBase(QQuick3DGeometry):
         self._width_value = 3000.0
         self._depth_value = 2200.0
         self._amplitude_value = 260.0
+        self._layout_file_value = ""
+        self._resolution_value = DEFAULT_TERRAIN_RESOLUTION
+        self._generation_time_ms = 0.0
         self._rebuild()
 
     @Property(float, notify=widthValueChanged)
@@ -110,6 +124,50 @@ class _TerrainGeometryBase(QQuick3DGeometry):
         self._rebuild()
         self.amplitudeValueChanged.emit()
 
+    @Property(str, notify=layoutFileChanged)
+    def layoutFile(self) -> str:
+        """返回地形布局文件路径。注意：空字符串表示使用旧参数化地形。"""
+
+        return self._layout_file_value
+
+    @layoutFile.setter
+    def layoutFile(self, value: str) -> None:
+        """更新地形布局文件路径。注意：文件变化时才触发新高度场生成。"""
+
+        normalized = str(value or "")
+        if normalized == self._layout_file_value:
+            return
+        self._layout_file_value = normalized
+        self._rebuild()
+        self.layoutFileChanged.emit()
+
+    @Property(int, notify=resolutionValueChanged)
+    def resolutionValue(self) -> int:
+        """返回布局地形网格分辨率。注意：无布局文件时该值不影响旧地形。"""
+
+        return self._resolution_value
+
+    @resolutionValue.setter
+    def resolutionValue(self, value: int) -> None:
+        """更新布局地形网格分辨率。注意：默认 641，低配可降到 384。"""
+
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            normalized = DEFAULT_TERRAIN_RESOLUTION
+        normalized = max(96, min(1024, normalized))
+        if normalized == self._resolution_value:
+            return
+        self._resolution_value = normalized
+        self._rebuild()
+        self.resolutionValueChanged.emit()
+
+    @Property(float, notify=generationTimeMsChanged)
+    def generationTimeMs(self) -> float:
+        """返回最近一次布局高度场生成耗时，单位毫秒。"""
+
+        return self._generation_time_ms
+
     def _rebuild(self) -> None:
         """重建具体几何数据。注意：仅由子类覆盖。"""
 
@@ -138,6 +196,17 @@ class TerrainGeometry(_TerrainGeometryBase):
 
     def _rebuild(self) -> None:
         """重建地表顶点、法线、纹理坐标、顶点色和索引数据。"""
+
+        if self._layout_file_value:
+            try:
+                self._rebuild_from_field(
+                    generate_terrain_field_from_file(self._layout_file_value, resolution=self._resolution_value)
+                )
+                return
+            except (OSError, ValueError, json.JSONDecodeError, TypeError):
+                # 布局文件异常时回落旧地形，避免 3D 窗口空白；配置错误仍会在测试里单独覆盖。
+                self._generation_time_ms = 0.0
+                self.generationTimeMsChanged.emit()
 
         width = self._width_value
         depth = self._depth_value
@@ -202,6 +271,77 @@ class TerrainGeometry(_TerrainGeometryBase):
         self._apply_bounds(min_height, max_height)
         self.setVertexData(QByteArray(bytes(vertices)))
         self.setIndexData(QByteArray(bytes(indices)))
+        self.update()
+
+    def _rebuild_from_field(self, field: TerrainField) -> None:
+        """把 terrain_field 输出转换为 QQuick3DGeometry。注意：顶点数据用 numpy 批量打包。"""
+
+        rows = field.resolution
+        columns = field.resolution
+        local_x = np.linspace(-field.width_m / 2.0, field.width_m / 2.0, columns, dtype=np.float32)
+        # Quick3D z 轴为 -north；height 行从 north 最小到最大，因此 local_z 反向排列。
+        local_z = np.linspace(field.depth_m / 2.0, -field.depth_m / 2.0, rows, dtype=np.float32)
+        x_grid, z_grid = np.meshgrid(local_x, local_z)
+        u_grid = np.linspace(0.0, 1.0, columns, dtype=np.float32)[None, :].repeat(rows, axis=0)
+        v_grid = np.linspace(0.0, 1.0, rows, dtype=np.float32)[:, None].repeat(columns, axis=1)
+
+        vertices = np.empty((rows, columns, _SURFACE_COMPONENTS), dtype=np.float32)
+        vertices[:, :, 0] = x_grid
+        vertices[:, :, 1] = field.heights_m[::-1, :]
+        vertices[:, :, 2] = z_grid
+        # y=h(east,north)、z=-north 的曲面法线为 (-dh/de, 1, +dh/dn)，_normal_grid 已按此输出；
+        # 行翻转只重排存储顺序，z 分量不得再取反，否则南北坡受光互换、朝南受光面整体变黑。
+        vertices[:, :, 3:6] = field.normals[::-1, :, :]
+        vertices[:, :, 6] = u_grid
+        vertices[:, :, 7] = v_grid
+        vertices[:, :, 8:11] = field.colors[::-1, :, :]
+        vertices[:, :, 11] = 1.0
+
+        top_left = (np.arange(rows - 1, dtype=np.uint32)[:, None] * columns) + np.arange(columns - 1, dtype=np.uint32)[None, :]
+        top_right = top_left + 1
+        bottom_left = top_left + columns
+        bottom_right = bottom_left + 1
+        indices = np.stack((top_left, bottom_left, top_right, top_right, bottom_left, bottom_right), axis=2).astype(np.uint32)
+
+        self.clear()
+        self.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Triangles)
+        self.setStride(_SURFACE_STRIDE)
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.PositionSemantic,
+            0,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.NormalSemantic,
+            3 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.TexCoordSemantic,
+            6 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
+            8 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.IndexSemantic,
+            0,
+            QQuick3DGeometry.Attribute.ComponentType.U32Type,
+        )
+        self.setBounds(
+            QVector3D(-field.width_m / 2.0, min(0.0, float(np.min(field.heights_m)) - 4.0), -field.depth_m / 2.0),
+            QVector3D(field.width_m / 2.0, float(np.max(field.heights_m)) + 16.0, field.depth_m / 2.0),
+        )
+        self.setVertexData(QByteArray(vertices.reshape(-1, _SURFACE_COMPONENTS).tobytes()))
+        self.setIndexData(QByteArray(indices.reshape(-1).tobytes()))
+        self._width_value = field.width_m
+        self._depth_value = field.depth_m
+        self._amplitude_value = float(np.max(field.heights_m))
+        self._generation_time_ms = field.generation_time_ms
+        self.generationTimeMsChanged.emit()
         self.update()
 
     def _sample_height_grid(self, step_x: float, step_z: float) -> list[list[float]]:

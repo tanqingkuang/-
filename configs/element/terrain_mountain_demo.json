@@ -1,0 +1,208 @@
+{
+  "schema": "terrain_mountain_demo.v1",
+  "字段说明": {
+    "coordinate_system": "布局坐标 u/v 单位 km；u 映射 ENU east，v 映射 ENU north；渲染层再把 north 翻转为 Quick3D z。",
+    "geo_reference": "经纬度参考原点，对应 local_origin_uv_km；演示航线由该原点按 src/data/geo.py 映射到经纬度。",
+    "mountain_chains": "山脉链骨架。polyline_uv 定义山脉走向，peaks 沿 station 分布，saddle_height_factor 控制连续鞍部高度。",
+    "risk_zone": "显式风险区标记。只有 risk_zone=true 的峰会进入 3D riskZones payload，P1 不做自动避障判定。",
+    "detail": "细节层噪声和网格参数。默认 641，低配可在本字段或运行时改为 384。"
+  },
+  "key": "mountain_demo_d",
+  "title": "定稿山地态势演示布局",
+  "description": "四段式原始航线：集结低丘、2km 峡谷穿越、双障碍峰 472m 鞍部 S 绕、东北出口开阔；P1 仅显示风险区，不接避障流程。",
+  "coordinate_system": {
+    "horizontal": "u_east_v_north",
+    "unit": "km",
+    "height_unit": "m"
+  },
+  "geo_reference": {
+    "local_origin_uv_km": [0.0, 0.0],
+    "latitude_deg": 39.0,
+    "longitude_deg": 116.0
+  },
+  "detail": {
+    "grid_resolution": 641,
+    "low_spec_grid_resolution": 384,
+    "seed": 1949,
+    "style": "style_a_realistic_sci_fi_mountain"
+  },
+  "map": {
+    "effective_extent_km": 32,
+    "render_extent_km": 90
+  },
+  "flight": {
+    "cruise_altitude_m": 900,
+    "clearance_m": 200,
+    "original_route_uv": [
+      [0.0, 0.0],
+      [6.0, 0.0],
+      [12.0, 0.0],
+      [20.0, 0.0],
+      [26.0, 0.0]
+    ],
+    "planned_route_uv": [
+      [0.0, 0.34],
+      [4.0, 0.26],
+      [8.2, 0.2],
+      [11.5, 0.3],
+      [13.5, 1.1],
+      [15.1, 2.55],
+      [16.85, 0.34],
+      [18.7, -1.54],
+      [21.3, -1.42],
+      [24.3, -0.62],
+      [26.0, 0.02]
+    ]
+  },
+  "corridor": {
+    "segments": [
+      {
+        "name": "集结段",
+        "u_start": 0.0,
+        "u_end": 6.0,
+        "terrain": "平原与少量 100~300m 低丘"
+      },
+      {
+        "name": "穿越段",
+        "u_start": 6.0,
+        "u_end": 12.0,
+        "terrain": "约 2km 宽长条峡谷"
+      },
+      {
+        "name": "避障段",
+        "u_start": 12.0,
+        "u_end": 20.0,
+        "terrain": "错位双峰与低鞍部连接"
+      },
+      {
+        "name": "收尾段",
+        "u_start": 20.0,
+        "u_end": 26.0,
+        "terrain": "出谷后东北出口开阔"
+      }
+    ]
+  },
+  "mountain_chains": [
+    {
+      "id": "northwest_background_group",
+      "name": "西北远离航线山群",
+      "role": "background",
+      "polyline_uv": [[-1.8, 6.8], [1.2, 7.3], [4.0, 6.8]],
+      "saddle_height_factor": 0.34,
+      "ridge_width_km": 0.95,
+      "peaks": [
+        {"id": "nw_880", "station": 0.08, "lateral_offset_km": 0.1, "height_m": 880, "base_radius_km": 1.65, "aspect_ratio": 1.3, "role": "background", "label": "西北远山 880m", "risk_zone": false},
+        {"id": "nw_1120", "station": 0.58, "lateral_offset_km": -0.05, "height_m": 1120, "base_radius_km": 1.85, "aspect_ratio": 1.42, "role": "background", "label": "西北远山 1120m", "risk_zone": false}
+      ]
+    },
+    {
+      "id": "north_branch_group",
+      "name": "北侧分叉小山群",
+      "role": "background",
+      "polyline_uv": [[6.5, 4.65], [8.4, 5.15], [10.2, 4.8]],
+      "saddle_height_factor": 0.36,
+      "ridge_width_km": 0.58,
+      "peaks": [
+        {"id": "north_branch_920", "station": 0.1, "lateral_offset_km": 0.0, "height_m": 920, "base_radius_km": 1.08, "aspect_ratio": 1.55, "role": "background", "label": "北支山 920m", "risk_zone": false},
+        {"id": "north_branch_1080", "station": 0.72, "lateral_offset_km": 0.05, "height_m": 1080, "base_radius_km": 1.12, "aspect_ratio": 1.45, "role": "background", "label": "北支山 1080m", "risk_zone": false}
+      ]
+    },
+    {
+      "id": "north_canyon_chain",
+      "name": "北侧穿越山脉链",
+      "role": "valley",
+      "polyline_uv": [[4.8, 1.72], [7.2, 1.45], [10.0, 1.7], [12.2, 2.05]],
+      "saddle_height_factor": 0.42,
+      "ridge_width_km": 0.66,
+      "peaks": [
+        {"id": "north_valley_1380", "station": 0.08, "lateral_offset_km": 0.05, "height_m": 1380, "base_radius_km": 1.38, "aspect_ratio": 1.9, "role": "valley", "label": "北侧 1380m", "risk_zone": false},
+        {"id": "north_valley_2260", "station": 0.4, "lateral_offset_km": 0.0, "height_m": 2260, "base_radius_km": 1.3, "aspect_ratio": 2.2, "role": "valley", "label": "北侧 2260m", "risk_zone": false},
+        {"id": "north_valley_2440", "station": 0.78, "lateral_offset_km": -0.04, "height_m": 2440, "base_radius_km": 1.28, "aspect_ratio": 2.25, "role": "valley", "label": "北侧 2440m", "risk_zone": false}
+      ]
+    },
+    {
+      "id": "south_canyon_chain",
+      "name": "南侧穿越山脉链",
+      "role": "valley",
+      "polyline_uv": [[4.2, -2.05], [7.0, -1.5], [10.2, -1.22], [12.9, -1.35], [14.9, -0.92]],
+      "saddle_height_factor": 0.4,
+      "ridge_width_km": 0.72,
+      "peaks": [
+        {"id": "south_valley_1180", "station": 0.08, "lateral_offset_km": -0.04, "height_m": 1180, "base_radius_km": 1.45, "aspect_ratio": 1.88, "role": "valley", "label": "南侧 1180m", "risk_zone": false},
+        {"id": "south_valley_2180", "station": 0.38, "lateral_offset_km": 0.0, "height_m": 2180, "base_radius_km": 1.35, "aspect_ratio": 2.15, "role": "valley", "label": "南侧 2180m", "risk_zone": false},
+        {"id": "south_valley_2360", "station": 0.7, "lateral_offset_km": 0.04, "height_m": 2360, "base_radius_km": 1.36, "aspect_ratio": 2.2, "role": "valley", "label": "南侧 2360m", "risk_zone": false},
+        {"id": "south_valley_1560", "station": 0.94, "lateral_offset_km": 0.0, "height_m": 1560, "base_radius_km": 1.32, "aspect_ratio": 1.75, "role": "valley", "label": "南端 1560m", "risk_zone": false}
+      ]
+    },
+    {
+      "id": "hazard_saddle_chain",
+      "name": "双峰低鞍部障碍链",
+      "role": "obstacle",
+      "polyline_uv": [[14.6, 0.18], [16.85, 0.34], [19.5, 0.22]],
+      "saddle_height_factor": 0.2,
+      "ridge_width_km": 0.5,
+      "peaks": [
+        {"id": "hazard_peak_west", "station": 0.08, "lateral_offset_km": 0.1, "height_m": 2360, "base_radius_km": 1.02, "aspect_ratio": 1.05, "role": "obstacle", "label": "障碍峰 2360m", "risk_zone": true, "risk_radius_km": 1.08, "buffer_radius_km": 1.55},
+        {"id": "hazard_peak_east", "station": 0.92, "lateral_offset_km": -0.05, "height_m": 2460, "base_radius_km": 1.05, "aspect_ratio": 1.06, "role": "obstacle", "label": "障碍峰 2460m", "risk_zone": true, "risk_radius_km": 1.1, "buffer_radius_km": 1.6}
+      ]
+    },
+    {
+      "id": "gather_low_hills",
+      "name": "集结段低丘链",
+      "role": "low",
+      "polyline_uv": [[0.8, -0.78], [2.5, -0.55], [4.6, -0.38]],
+      "saddle_height_factor": 0.35,
+      "ridge_width_km": 0.34,
+      "peaks": [
+        {"id": "low_160", "station": 0.05, "lateral_offset_km": 0.0, "height_m": 160, "base_radius_km": 0.5, "aspect_ratio": 1.2, "role": "low", "label": "低丘 160m", "risk_zone": false},
+        {"id": "low_260", "station": 0.45, "lateral_offset_km": -0.08, "height_m": 260, "base_radius_km": 0.58, "aspect_ratio": 1.25, "role": "low", "label": "低丘 260m", "risk_zone": false},
+        {"id": "low_210", "station": 0.88, "lateral_offset_km": 0.06, "height_m": 210, "base_radius_km": 0.52, "aspect_ratio": 1.18, "role": "low", "label": "低丘 210m", "risk_zone": false}
+      ]
+    },
+    {
+      "id": "south_background_long_chain",
+      "name": "南侧远处长背景山脉链",
+      "role": "background",
+      "polyline_uv": [[3.0, -7.0], [6.2, -7.8], [9.3, -7.2], [11.8, -6.1]],
+      "saddle_height_factor": 0.38,
+      "ridge_width_km": 0.88,
+      "peaks": [
+        {"id": "south_bg_760", "station": 0.04, "lateral_offset_km": -0.04, "height_m": 760, "base_radius_km": 1.75, "aspect_ratio": 1.75, "role": "background", "label": "南远山 760m", "risk_zone": false},
+        {"id": "south_bg_980", "station": 0.45, "lateral_offset_km": 0.05, "height_m": 980, "base_radius_km": 1.95, "aspect_ratio": 1.9, "role": "background", "label": "南远山 980m", "risk_zone": false},
+        {"id": "south_bg_860", "station": 0.9, "lateral_offset_km": 0.0, "height_m": 860, "base_radius_km": 1.7, "aspect_ratio": 1.55, "role": "background", "label": "南远山 860m", "risk_zone": false}
+      ]
+    },
+    {
+      "id": "south_background_short_chain",
+      "name": "南侧远处短背景山脉链",
+      "role": "background",
+      "polyline_uv": [[14.8, -6.4], [17.2, -6.2], [19.0, -6.5]],
+      "saddle_height_factor": 0.34,
+      "ridge_width_km": 0.7,
+      "peaks": [
+        {"id": "south_short_620", "station": 0.2, "lateral_offset_km": 0.0, "height_m": 620, "base_radius_km": 1.15, "aspect_ratio": 1.55, "role": "background", "label": "南短山 620m", "risk_zone": false},
+        {"id": "south_short_700", "station": 0.78, "lateral_offset_km": -0.04, "height_m": 700, "base_radius_km": 1.2, "aspect_ratio": 1.6, "role": "background", "label": "南短山 700m", "risk_zone": false}
+      ]
+    }
+  ],
+  "saddle_links": [
+    {
+      "from_uv": [11.2, 1.95],
+      "to_uv": [8.7, 4.35],
+      "height_m": 520,
+      "ridge_width_km": 0.42,
+      "role": "saddle",
+      "kind": "branch",
+      "label": "北侧分叉鞍部"
+    },
+    {
+      "from_uv": [14.9, -0.92],
+      "to_uv": [15.0, -0.42],
+      "height_m": 560,
+      "ridge_width_km": 0.46,
+      "role": "saddle",
+      "kind": "link",
+      "label": "峰1南侧鞍部"
+    }
+  ]
+}
