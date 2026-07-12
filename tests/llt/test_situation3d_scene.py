@@ -10,6 +10,8 @@ import time
 import unittest
 from unittest.mock import patch
 
+from PySide6.QtGui import QVector3D
+
 from src.ui.gui.situation3d import scene_data
 from src.ui.gui.situation3d.scene_data import (
     DEFAULT_TERRAIN_SPAN_M,
@@ -420,6 +422,145 @@ class Situation3DSceneDataTests(unittest.TestCase):
             self.assertGreater(y, ground + 50.0, f"视线采样点 {ratio} 距地不足")
         window.close()
 
+    def test_aircraft_and_trail_tip_remain_coincident_during_qml_interpolation(self) -> None:
+        """真实 QML 补间中途，飞机展示位置与可见尾迹末端必须逐帧重合。"""
+
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+
+        def moving_snapshot(time_s: float, east_m: float) -> Snapshot:
+            """构造沿东向运动的单机快照，尾迹真实末点始终等于飞机目标。"""
+
+            trail = [
+                TrailPoint(0.0, 0.0, 100.0, 0.0),
+                TrailPoint(100.0, 0.0, 100.0, 1.0),
+            ]
+            if east_m > 100.0:
+                trail.append(TrailPoint(east_m, 0.0, 100.0, time_s))
+            return Snapshot(
+                time=time_s,
+                duration=100.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[NodeState("A01", "leader", east_m, 0.0, 20.0, 0.0, altitude=100.0, trail=trail)],
+                links=[],
+                route_segments=[],
+            )
+
+        def process_until(predicate, timeout_s: float = 1.0) -> None:  # noqa: ANN001
+            """轮询 Qt 事件直至条件成立，避免依赖固定 sleep 命中动画中点。"""
+
+            deadline = time.monotonic() + timeout_s
+            while not predicate() and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.002)
+            app.processEvents()
+
+        window = Situation3DWindow()
+        try:
+            window.show()
+            window.set_snapshot(moving_snapshot(1.0, 100.0))
+            root = window.quick_view.rootObject()
+            process_until(lambda: float(root.property("presentationProgress")) >= 0.999)
+
+            window.set_snapshot(moving_snapshot(2.0, 300.0))
+            process_until(lambda: 0.2 <= float(root.property("presentationProgress")) <= 0.8)
+            progress = float(root.property("presentationProgress"))
+            self.assertGreaterEqual(progress, 0.2)
+            self.assertLessEqual(progress, 0.8)
+
+            aircraft = root.currentAircraftPositions().toVariant()["A01"]
+            tip = root.currentTrailTipPositions().toVariant()["A01"]
+            self.assertAlmostEqual(aircraft["x"], tip["x"], places=5)
+            self.assertAlmostEqual(aircraft["y"], tip["y"], places=5)
+            self.assertAlmostEqual(aircraft["z"], tip["z"], places=5)
+        finally:
+            window.close()
+
+    def test_qml_presentation_queue_consumes_rapid_trail_deltas_in_order(self) -> None:
+        """连续提前到帧必须有界排队并按序消费，不能丢 delta 或扩大真实尾迹容量。"""
+
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+        from src.ui.gui.trail_view_model import TrailBuffer
+
+        app = QApplication.instance() or QApplication([])
+        trail = TrailBuffer(capacity=8)
+
+        def append_snapshot(index: int) -> Snapshot:
+            """追加一个真实点并冻结本帧，供窗口级 delta 游标按顺序编码。"""
+
+            east_m = float(index * 100)
+            trail.append_position(east_m, 0.0, 100.0, float(index))
+            return Snapshot(
+                time=float(index),
+                duration=100.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[
+                    NodeState(
+                        "A01",
+                        "leader",
+                        east_m,
+                        0.0,
+                        20.0,
+                        0.0,
+                        altitude=100.0,
+                        trail=trail.snapshot(),
+                    )
+                ],
+                links=[],
+                route_segments=[],
+            )
+
+        def process_until(predicate, timeout_s: float = 2.0) -> None:  # noqa: ANN001
+            """处理事件直至快速帧全部消费。"""
+
+            deadline = time.monotonic() + timeout_s
+            while not predicate() and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.002)
+            app.processEvents()
+
+        window = Situation3DWindow()
+        try:
+            window.show()
+            window.set_snapshot(append_snapshot(0))
+            window.set_snapshot(append_snapshot(1))
+            root = window.quick_view.rootObject()
+            process_until(lambda: float(root.property("presentationProgress")) >= 0.999)
+            apply_count = int(root.property("sceneApplyCount"))
+
+            # 远快于 90ms 连续推四帧，覆盖容量 2 的排队与溢出完成当前目标分支。
+            for index in range(2, 6):
+                window.set_snapshot(append_snapshot(index))
+                app.processEvents()
+
+            def latest_delta_finished() -> bool:
+                """判断最后场景消息已应用且共同补间完成。"""
+
+                return bool(
+                    str(root.property("sceneTime")) == "5.0s"
+                    and float(root.property("presentationProgress")) >= 0.999
+                )
+
+            process_until(latest_delta_finished)
+            aircraft = root.currentAircraftPositions().toVariant()["A01"]
+            tip = root.currentTrailTipPositions().toVariant()["A01"]
+            self.assertEqual(int(root.property("sceneApplyCount")), apply_count + 4)
+            self.assertEqual(aircraft["x"], 500.0)
+            self.assertEqual(tip["x"], 500.0)
+            self.assertEqual(trail.capacity, 8)
+            self.assertLessEqual(len(root.property("pendingSceneUpdates").toVariant()), 2)
+        finally:
+            window.close()
+
     def test_controller_adapter_keeps_terrain_display_file_as_gui_metadata(self) -> None:
         """验证演示配置能加载，且地形文件只作为 Snapshot 显示元数据透传。"""
 
@@ -634,6 +775,77 @@ class Situation3DSceneDataTests(unittest.TestCase):
             middle_positions_before,
         )
         self.assertEqual(bytes(geometry.indexData())[2 * 9 * 4 : 3 * 9 * 4], middle_indices_before)
+
+    def test_trail_ribbon_tip_interpolation_only_updates_live_segment(self) -> None:
+        """展示补间只能移动最后一段末端，不能改写真实队列、扩容或重建整张网格。"""
+
+        geometry = TrailRibbonGeometry()
+        points = [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0], [200.0, 100.0, 0.0]]
+        geometry.pathValue = json.dumps(
+            {"op": "reset", "generation": 14, "firstSequence": 0, "endSequence": 3, "points": points}
+        )
+        rebuilds = geometry.fullRebuildCount
+        capacity = geometry._stream_segment_capacity
+        stable_points = tuple(geometry._stream_points)
+        first_slot = geometry._stream_segment_slots[0]
+        first_start = bytes(geometry.vertexData())[
+            first_slot * 5 * geometry.stride() : first_slot * 5 * geometry.stride() + 2 * geometry.stride()
+        ]
+
+        self.assertGreaterEqual(geometry.metaObject().indexOfProperty("tipPosition"), 0)
+        geometry.tipPosition = QVector3D(150.0, 100.0, 0.0)
+
+        self.assertEqual(tuple(geometry._stream_points), stable_points)
+        self.assertEqual(geometry._stream_segment_capacity, capacity)
+        self.assertEqual(geometry.fullRebuildCount, rebuilds)
+        self.assertEqual(
+            bytes(geometry.vertexData())[
+                first_slot * 5 * geometry.stride() : first_slot * 5 * geometry.stride() + 2 * geometry.stride()
+            ],
+            first_start,
+        )
+        last_slot = geometry._stream_segment_slots[-1]
+        last_offset = last_slot * 5 * geometry.stride()
+        vertex_data = bytes(geometry.vertexData())
+        left = struct.unpack_from("<fff", vertex_data, last_offset + 2 * geometry.stride())
+        right = struct.unpack_from("<fff", vertex_data, last_offset + 3 * geometry.stride())
+        rendered_tip = tuple((left[index] + right[index]) / 2.0 for index in range(3))
+        self.assertEqual(rendered_tip, (150.0, 100.0, 0.0))
+
+    def test_trail_ribbon_new_target_reuses_unchanged_visual_tip(self) -> None:
+        """新真实点入队时必须重新应用现有展示末端，避免尾迹先跳到目标而飞机仍在补间。"""
+
+        geometry = TrailRibbonGeometry()
+        geometry.pathValue = json.dumps(
+            {
+                "op": "reset",
+                "generation": 15,
+                "firstSequence": 0,
+                "endSequence": 2,
+                "points": [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0]],
+            }
+        )
+        geometry.tipPosition = QVector3D(100.0, 100.0, 0.0)
+
+        geometry.pathValue = json.dumps(
+            {
+                "op": "delta",
+                "generation": 15,
+                "firstSequence": 0,
+                "endSequence": 3,
+                "removedCount": 0,
+                "addedPoints": [[200.0, 100.0, 0.0]],
+            }
+        )
+
+        self.assertEqual(geometry._stream_points[-1], (200.0, 100.0, 0.0))
+        last_slot = geometry._stream_segment_slots[-1]
+        last_offset = last_slot * 5 * geometry.stride()
+        vertex_data = bytes(geometry.vertexData())
+        left = struct.unpack_from("<fff", vertex_data, last_offset + 2 * geometry.stride())
+        right = struct.unpack_from("<fff", vertex_data, last_offset + 3 * geometry.stride())
+        rendered_tip = tuple((left[index] + right[index]) / 2.0 for index in range(3))
+        self.assertEqual(rendered_tip, (100.0, 100.0, 0.0))
 
     def test_trail_ribbon_stream_reused_slot_indices_use_physical_vertex_base(self) -> None:
         """弹头后复用非零段槽时，主体索引必须指向该槽自己的五个顶点。"""
@@ -924,6 +1136,22 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("assets/PredatorUAV.glb", qml)
         self.assertNotIn("Math.max(8.5, distance / 85.0)", qml)
         self.assertIn("scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)", qml)
+
+    def test_aircraft_and_trail_tip_share_one_presentation_progress(self) -> None:
+        """飞机与尾迹末端必须由同一展示进度计算，不能让飞机独自执行位置 Behavior。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("property real presentationProgress: 1.0", qml)
+        self.assertIn("readonly property int presentationQueueCapacity: 2", qml)
+        self.assertIn("id: presentationMotion", qml)
+        self.assertIn("function presentationPosition(", qml)
+        self.assertIn("function currentTrailTipPositions(", qml)
+        self.assertIn("function enqueueSceneUpdate(", qml)
+        self.assertIn("presentationMotion.restart()", qml)
+        self.assertIn("position: root.presentationPosition(", qml)
+        self.assertIn("tipPosition: root.presentationPosition(", qml)
+        self.assertNotIn("Behavior on position", qml)
 
     def test_trail_width_is_one_fifth_of_near_view_aircraft_span(self) -> None:
         """近景尾迹宽度应约为飞机翼展 1/5，远景不应继续变粗。"""

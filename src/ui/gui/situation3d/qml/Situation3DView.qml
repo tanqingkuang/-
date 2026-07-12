@@ -18,6 +18,7 @@ Item {
     property string cameraMode: "自由"
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
+    property int sceneApplyCount: 0
     property string aircraftModelValue: "tb2"
     property string aircraftModelSource: "assets/BayraktarTB2.glb"
     property real aircraftYawOffsetDeg: 90
@@ -36,6 +37,11 @@ Item {
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
+    // 飞机与尾迹末段共享唯一展示时钟；真实队列点不参与 60Hz 补间，也不会增加容量。
+    property real presentationProgress: 1.0
+    // 正常 100ms 数据帧与 90ms 展示补间不会积压；容量 2 只保护偶发提前到帧。
+    property var pendingSceneUpdates: []
+    readonly property int presentationQueueCapacity: 2
     // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线/障碍/风险区模型。
     property string staticContentKey: ""
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
@@ -54,6 +60,17 @@ Item {
     ListModel { id: riskZoneModel }
     ListModel { id: riskLineModel }
     ListModel { id: riskBufferModel }
+
+    NumberAnimation {
+        id: presentationMotion
+        target: root
+        property: "presentationProgress"
+        from: 0.0
+        to: 1.0
+        duration: 90
+        easing.type: Easing.Linear
+        onFinished: root.consumePendingSceneUpdate()
+    }
 
     function clampPitch(value) {
         return Math.max(-88, Math.min(-6, value))
@@ -172,15 +189,62 @@ Item {
         return -1
     }
 
-    function syncAircraftModel(items) {
+    function presentationPosition(fromX, fromY, fromZ, targetX, targetY, targetZ) {
+        const ratio = Math.max(0.0, Math.min(1.0, presentationProgress))
+        return Qt.vector3d(
+            fromX + (targetX - fromX) * ratio,
+            fromY + (targetY - fromY) * ratio,
+            fromZ + (targetZ - fromZ) * ratio
+        )
+    }
+
+    function currentAircraftPositions() {
+        const positions = {}
+        for (let index = 0; index < aircraftModel.count; index += 1) {
+            const item = aircraftModel.get(index)
+            const position = presentationPosition(
+                item.fromX, item.fromY, item.fromZ,
+                item.sx, item.sy, item.sz
+            )
+            positions[item.nodeId] = { x: position.x, y: position.y, z: position.z }
+        }
+        return positions
+    }
+
+    function currentTrailTipPositions() {
+        const positions = {}
+        for (let index = 0; index < trailModel.count; index += 1) {
+            const item = trailModel.get(index)
+            const position = presentationPosition(
+                item.fromX, item.fromY, item.fromZ,
+                item.sx, item.sy, item.sz
+            )
+            positions[item.nodeId] = { x: position.x, y: position.y, z: position.z }
+        }
+        return positions
+    }
+
+    function aircraftTargetPositions(items) {
+        const positions = {}
+        for (const item of items || []) {
+            positions[item.nodeId] = { x: item.x, y: item.y, z: item.z }
+        }
+        return positions
+    }
+
+    function syncAircraftModel(items, visualPositions) {
         const seen = {}
         for (const item of items || []) {
             const index = findAircraftIndex(item.nodeId)
+            const start = visualPositions[item.nodeId] || { x: item.x, y: item.y, z: item.z }
             const entry = {
                 nodeId: item.nodeId,
                 role: item.role,
                 health: item.health,
                 color: item.color,
+                fromX: start.x,
+                fromY: start.y,
+                fromZ: start.z,
                 sx: item.x,
                 sy: item.y,
                 sz: item.z,
@@ -210,15 +274,26 @@ Item {
         return -1
     }
 
-    function syncTrailModel(items) {
+    function syncTrailModel(items, targetPositions, visualPositions) {
         const seen = {}
         for (const item of items || []) {
+            const target = targetPositions[item.nodeId]
+            if (!target) {
+                continue
+            }
             const index = findTrailIndex(item.nodeId)
+            const start = visualPositions[item.nodeId] || target
             const entry = {
                 nodeId: item.nodeId,
                 color: item.color,
                 widthValue: item.width,
-                pathValue: item.pathValue
+                pathValue: item.pathValue,
+                fromX: start.x,
+                fromY: start.y,
+                fromZ: start.z,
+                sx: target.x,
+                sy: target.y,
+                sz: target.z
             }
             if (index >= 0) {
                 trailModel.set(index, entry)
@@ -232,6 +307,29 @@ Item {
                 trailModel.remove(index)
             }
         }
+    }
+
+    function enqueueSceneUpdate(payload, forceCamera) {
+        if (!presentationMotion.running && pendingSceneUpdates.length === 0) {
+            return updateScene(payload, forceCamera)
+        }
+        pendingSceneUpdates.push({ payload: payload, forceCamera: forceCamera === true })
+        if (pendingSceneUpdates.length <= presentationQueueCapacity) {
+            return false
+        }
+        // 极端积压时先完成当前共同位置，再按顺序消费最老消息；不得丢 delta 或单独跳飞机。
+        presentationMotion.stop()
+        presentationProgress = 1.0
+        const next = pendingSceneUpdates.shift()
+        return updateScene(next.payload, next.forceCamera)
+    }
+
+    function consumePendingSceneUpdate() {
+        if (pendingSceneUpdates.length === 0) {
+            return
+        }
+        const next = pendingSceneUpdates.shift()
+        updateScene(next.payload, next.forceCamera)
     }
 
     function rebuildStaticModels(data) {
@@ -301,10 +399,21 @@ Item {
             return false
         }
         const data = JSON.parse(payload)
+        sceneApplyCount += 1
+        const visualPositions = currentAircraftPositions()
+        const targetPositions = aircraftTargetPositions(data.aircraft || [])
+        presentationMotion.stop()
+        presentationProgress = 0.0
         syncAircraftStyle(data.aircraftStyle)
         syncModelOptions(data.modelOptions || [])
-        syncAircraftModel(data.aircraft || [])
-        syncTrailModel(data.trailRibbons || [])
+        syncAircraftModel(data.aircraft || [], visualPositions)
+        syncTrailModel(data.trailRibbons || [], targetPositions, visualPositions)
+        if ((data.aircraft || []).length > 0) {
+            presentationMotion.restart()
+        } else {
+            // 初始空桥接数据不能占用展示队列，否则首个真实快照会无端等待 90ms。
+            presentationProgress = 1.0
+        }
         if (cameraMode === "跟随") {
             // 跟随是持续行为:每帧刷新焦点与航向,长机移动后相机不掉队。
             applyFollowFocus()
@@ -416,7 +525,7 @@ Item {
     Connections {
         target: sceneBridge
         function onSceneDataChanged(payload) {
-            root.updateScene(payload)
+            root.enqueueSceneUpdate(payload)
         }
     }
 
@@ -635,6 +744,11 @@ Item {
                 geometry: TrailRibbonGeometry {
                     pathValue: model.pathValue
                     widthValue: model.widthValue * root.trailWidthScale
+                    // 与飞机使用同一 presentationProgress，真实末点只作为本轮目标而非提前显示。
+                    tipPosition: root.presentationPosition(
+                        model.fromX, model.fromY, model.fromZ,
+                        model.sx, model.sy, model.sz
+                    )
                 }
                 castsShadows: false
                 materials: PrincipledMaterial {
@@ -688,14 +802,11 @@ Item {
             Repeater3D {
                 model: aircraftModel
                 delegate: Node {
-                    position: Qt.vector3d(model.sx, model.sy, model.sz)
+                    position: root.presentationPosition(
+                        model.fromX, model.fromY, model.fromZ,
+                        model.sx, model.sy, model.sz
+                    )
                     eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
-                    Behavior on position {
-                        Vector3dAnimation {
-                            duration: 90
-                            easing.type: Easing.Linear
-                        }
-                    }
 
                     RuntimeLoader {
                         source: Qt.resolvedUrl(root.aircraftModelSource)

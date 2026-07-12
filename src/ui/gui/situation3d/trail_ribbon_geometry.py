@@ -105,6 +105,13 @@ Point3D = tuple[float, float, float]
 # 73. 流式增量不会调用 json.dumps；序列化职责留在 scene_data 与桥接层。
 # 74. 诊断计数不做 Signal 通知，避免测试属性给场景图增加额外绑定工作。
 # 75. 任何后续优化都必须同时通过槽复用索引、弹头 deque 和无全量 bounds 扫描测试。
+# 76. tipPosition 只表示显示层瞬时机位，不能写入 _stream_points 或改变逻辑游标。
+# 77. 真实新点先进入流队列，最后一个物理段再按 tipPosition 临时覆写可见终点。
+# 78. 展示补间每帧最多重写最后一段和它与前一段的接头，复杂度与历史长度无关。
+# 79. tipPosition 到达真实末点后，临时段自然成为普通稳定段，不需要追加重复节点。
+# 80. 新 delta 到来时即使 tipPosition 数值未变化，也必须重新覆写刚创建的目标段。
+# 81. 普通数组路径不消费 tipPosition，航线、风险线和缓冲圈继续保持静态契约。
+# 82. 展示末段退化为零长度时清空自己的索引，并把前一稳定段恢复为平头端帽。
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,7 @@ class TrailRibbonGeometry(QQuick3DGeometry):
     pathValueChanged = Signal()
     widthValueChanged = Signal()
     alphaModeChanged = Signal()
+    tipPositionChanged = Signal()
 
     def __init__(self, parent: object | None = None) -> None:
         """初始化空几何与流游标。注意：流缓冲按需以二次幂扩容，不预占最大队列容量。"""
@@ -133,6 +141,8 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         self._path_value = "[]"
         self._width_value = 44.0
         self._alpha_mode = "trail"
+        self._tip_position = QVector3D()
+        self._has_tip_position = False
         self._stream_generation: int | None = None
         self._stream_first_sequence = 0
         self._stream_end_sequence = 0
@@ -191,6 +201,29 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         self._width_value = normalized
         self._rebuild_for_style_change()
         self.widthValueChanged.emit()
+
+    @Property(QVector3D, notify=tipPositionChanged)
+    def tipPosition(self) -> QVector3D:
+        """返回显示层瞬时尾迹末端。注意：它不是历史队列节点。"""
+
+        return QVector3D(self._tip_position)
+
+    @tipPosition.setter
+    def tipPosition(self, value: QVector3D) -> None:
+        """更新显示末端。注意：只局部覆写最新段，不改变真实点队列和容量。"""
+
+        try:
+            normalized = QVector3D(value)
+        except (TypeError, ValueError):
+            return
+        if not all(math.isfinite(component) for component in (normalized.x(), normalized.y(), normalized.z())):
+            return
+        if self._has_tip_position and normalized == self._tip_position:
+            return
+        self._tip_position = normalized
+        self._has_tip_position = True
+        self._apply_tip_position(request_update=True)
+        self.tipPositionChanged.emit()
 
     @Property(str, notify=alphaModeChanged)
     def alphaMode(self) -> str:
@@ -408,6 +441,8 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         self._incremental_update_count += 1
         # 弹头不收缩包围盒仍然是安全的；新增点只做 O(delta) 扩张，避免每帧扫描历史队列。
         self._expand_stream_bounds(appended_points)
+        # 新段先按真实目标写入，再立刻夹回飞机当前展示位置，不能等 tipPosition 再次变化。
+        self._apply_tip_position(request_update=False)
         self.update()
 
     def _rebuild_stream(
@@ -461,6 +496,8 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         self.setVertexData(QByteArray(bytes(vertices)))
         self.setIndexData(QByteArray(bytes(indices)))
         self._apply_bounds(points)
+        # QML 属性赋值顺序不固定；若 tipPosition 先到，reset 后也必须恢复同一展示末端。
+        self._apply_tip_position(request_update=False)
         self._full_rebuild_count += 1
         self.update()
 
@@ -521,6 +558,54 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         )
         self._segment_join_bevel[slot] = is_bevel
 
+    def _apply_tip_position(self, *, request_update: bool) -> bool:
+        """把最后一段末端覆写为展示机位。注意：真实末点和所有游标保持不变。"""
+
+        if (
+            not self._has_tip_position
+            or self._stream_generation is None
+            or len(self._stream_points) < 2
+            or not self._stream_segment_slots
+        ):
+            return False
+        tip = (self._tip_position.x(), self._tip_position.y(), self._tip_position.z())
+        start = self._stream_points[-2]
+        current_slot = self._stream_segment_slots[-1]
+        if math.dist(start, tip) <= 1e-6:
+            # 补间刚开始时末段没有长度；清空它并让前一段以稳定点为平头终点。
+            alpha = self._segment_alpha.get(current_slot, _TRAIL_ALPHA_MAX)
+            self._write_new_segment(current_slot, start, start, alpha)
+            self.setIndexData(
+                current_slot * _STREAM_SEGMENT_INDEX_BYTES,
+                QByteArray(bytes(_STREAM_SEGMENT_INDEX_BYTES)),
+            )
+            self._segment_join_bevel[current_slot] = False
+            if len(self._stream_segment_slots) >= 2:
+                previous_slot = self._stream_segment_slots[-2]
+                self._write_last_segment_cap(
+                    previous_slot,
+                    self._stream_points[-3],
+                    start,
+                )
+        else:
+            alpha = self._segment_alpha.get(current_slot, _TRAIL_ALPHA_MAX)
+            self._write_new_segment(current_slot, start, tip, alpha)
+            if len(self._stream_segment_slots) >= 2:
+                previous_slot = self._stream_segment_slots[-2]
+                is_bevel = self._write_joint(
+                    previous_slot,
+                    current_slot,
+                    self._stream_points[-3],
+                    start,
+                    tip,
+                    self._segment_alpha.get(previous_slot, _TRAIL_ALPHA_MIDDLE),
+                    alpha,
+                )
+                self._segment_join_bevel[current_slot] = is_bevel
+        if request_update:
+            self.update()
+        return True
+
     def _deactivate_segment(self, slot: int) -> None:
         """把一个环形段槽退化为空三角形并回收到空闲队列。"""
 
@@ -555,6 +640,17 @@ class TrailRibbonGeometry(QQuick3DGeometry):
         join_offset = slot * _STREAM_SEGMENT_INDEX_BYTES + 6 * 4
         self.setIndexData(join_offset, QByteArray(bytes(3 * 4)))
         self._segment_join_bevel[slot] = False
+
+    def _write_last_segment_cap(self, slot: int, start: Point3D, end: Point3D) -> None:
+        """恢复稳定尾段终点的平头端帽。注意：动态零长段不能继续改变前驱接头。"""
+
+        normal = self._segment_normal(start, end)
+        left, right = self._edge_positions(end, normal, self._width_value / 2.0)
+        alpha = self._segment_alpha.get(slot, _TRAIL_ALPHA_MIDDLE)
+        data = self._vertex_record(left, 1.0, 0.0, alpha)
+        data += self._vertex_record(right, 1.0, 1.0, alpha)
+        offset = slot * _STREAM_SEGMENT_VERTEX_BYTES + 2 * _RIBBON_STRIDE
+        self.setVertexData(offset, QByteArray(data))
 
     def _write_joint(
         self,
