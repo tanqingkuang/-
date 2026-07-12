@@ -136,7 +136,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
         surface = payload["terrain"]["surface"]
         self.assertEqual(surface["mode"], "layout")
         self.assertEqual(surface["layoutFile"], str(TERRAIN_LAYOUT_PATH.resolve()))
-        self.assertEqual(surface["resolution"], DEFAULT_TERRAIN_RESOLUTION)
+        # 分辨率应跟随布局文件 detail.grid_resolution,而不是模块默认值。
+        layout_detail = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
+        self.assertEqual(surface["resolution"], layout_detail["grid_resolution"])
         self.assertEqual(payload["counts"]["riskZones"], 2)
         self.assertEqual(len(payload["riskZones"]), 2)
         self.assertGreater(len(payload["riskZoneLines"]), 0)
