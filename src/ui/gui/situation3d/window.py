@@ -20,6 +20,7 @@ from src.ui.gui.situation3d.bridge import Situation3DBridge
 from src.ui.gui.situation3d.scene_data import TrailPayloadState, build_scene_payload
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
 from src.ui.gui.situation3d.trail_ribbon_geometry import TrailRibbonGeometry
+from src.ui.gui.situation3d.trail_tip_geometry import TrailTipGeometry
 from src.ui.gui.view_models import ObstacleView, Snapshot
 
 _QML_TYPES_REGISTERED = False
@@ -35,6 +36,7 @@ def _register_qml_types() -> None:
     QQuickStyle.setStyle("Basic")
     qmlRegisterType(TerrainGeometry, "Simu3D", 1, 0, "TerrainGeometry")
     qmlRegisterType(TrailRibbonGeometry, "Simu3D", 1, 0, "TrailRibbonGeometry")
+    qmlRegisterType(TrailTipGeometry, "Simu3D", 1, 0, "TrailTipGeometry")
     _QML_TYPES_REGISTERED = True
 
 

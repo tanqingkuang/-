@@ -255,19 +255,29 @@ def _trail_ribbon_payload(
     color: str,
     trail_state: TrailPayloadState | None = None,
 ) -> list[dict[str, object]]:
-    """生成连续尾迹流数据。注意：稳定队列逐点透传，不再随总长度重抽样。"""
+    """生成历史线带与活动末段数据。注意：最新真实点不进入补间期历史网格。"""
 
     if len(trail) < 2:
         if trail_state is not None:
             trail_state.discard(node_id)
         return []
-    stream = _trail_stream_value(node_id, trail, trail_state)
+    # 历史网格只提交到倒数第二个真实点；最新点由固定小网格追随飞机共同补间。
+    stable_length = len(trail) - 1
+    stream = _trail_stream_value(node_id, trail, stable_length, trail_state)
+    tip_start = _trail_quick3d_point(trail[-2])
+    tip_previous = _trail_quick3d_point(trail[-3] if len(trail) >= 3 else trail[-2])
     return [
         {
             "nodeId": node_id,
             "color": color,
             "width": 44.0,
             "pathValue": json.dumps(stream, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+            "tipPreviousX": tip_previous[0],
+            "tipPreviousY": tip_previous[1],
+            "tipPreviousZ": tip_previous[2],
+            "tipStartX": tip_start[0],
+            "tipStartY": tip_start[1],
+            "tipStartZ": tip_start[2],
         }
     ]
 
@@ -275,14 +285,18 @@ def _trail_ribbon_payload(
 def _trail_stream_value(
     node_id: str,
     trail: Sequence[object],
+    trail_length: int,
     trail_state: TrailPayloadState | None,
 ) -> dict[str, object]:
-    """编码 reset 或 delta。注意：稳定游标存在时，delta 只遍历真正新增的尾部切片。"""
+    """编码历史 reset 或 delta。注意：trail_length 可排除尚在展示补间的最新点。"""
 
-    trail_length = len(trail)
-    metadata = _trail_metadata(trail, trail_length)
+    source_length = len(trail)
+    trail_length = max(0, min(source_length, int(trail_length)))
+    metadata = _trail_metadata(trail, source_length)
     if trail_state is not None and metadata is not None:
         generation, first_sequence, end_sequence = metadata
+        # 原队列游标包含最新真实点；历史接收端的尾后序号按排除点数同步回退。
+        end_sequence -= source_length - trail_length
         previous = trail_state.cursor(node_id)
         if previous is not None:
             old_generation, old_first, old_end = previous
@@ -297,7 +311,7 @@ def _trail_stream_value(
             )
             if can_append:
                 # TrailSnapshot 支持切片；只转换新增项，使稳态每帧开销与历史长度无关。
-                added_items = trail[trail_length - added_count :] if added_count else ()
+                added_items = trail[trail_length - added_count : trail_length] if added_count else ()
                 added_points = _trail_quick3d_points(added_items)
                 trail_state.update(node_id, generation, first_sequence, end_sequence)
                 return {
@@ -312,7 +326,8 @@ def _trail_stream_value(
         generation, first_sequence, end_sequence = 0, 0, trail_length
     else:
         generation, first_sequence, end_sequence = metadata
-    path = _trail_quick3d_points(trail)
+        end_sequence -= source_length - trail_length
+    path = _trail_quick3d_points(trail[:trail_length])
     if trail_state is not None and metadata is not None:
         trail_state.update(node_id, generation, first_sequence, end_sequence)
     return {
@@ -356,6 +371,13 @@ def _trail_quick3d_points(points: Iterable[object]) -> list[list[float]]:
         # 已入队的坐标只做轴映射，禁止在数据桥内重新抽样或整条平滑。
         path.append([coord["x"], coord["y"], coord["z"]])
     return path
+
+
+def _trail_quick3d_point(point: object) -> list[float]:
+    """转换单个尾迹点，供活动末段锚点复用同一 ENU 轴映射。"""
+
+    coord = enu_to_quick3d(point.x, point.y, point.altitude)
+    return [coord["x"], coord["y"], coord["z"]]
 
 
 def _route_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:

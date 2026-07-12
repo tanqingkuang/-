@@ -288,6 +288,12 @@ Item {
                 color: item.color,
                 widthValue: item.width,
                 pathValue: item.pathValue,
+                tipPreviousX: item.tipPreviousX,
+                tipPreviousY: item.tipPreviousY,
+                tipPreviousZ: item.tipPreviousZ,
+                tipStartX: item.tipStartX,
+                tipStartY: item.tipStartY,
+                tipStartZ: item.tipStartZ,
                 fromX: start.x,
                 fromY: start.y,
                 fromZ: start.z,
@@ -459,8 +465,13 @@ Item {
     function resetCamera() {
         cameraMode = "自由"
         if (typeof sceneBridge !== "undefined") {
-            if (updateScene(sceneBridge.sceneData(), true)) {
-                return
+            const payload = sceneBridge.sceneData()
+            if (payload && payload.length > 0) {
+                const data = JSON.parse(payload)
+                // 重置相机不得重放整帧场景；否则会绕过展示 FIFO，令尾迹 delta 游标时间倒退。
+                if (data.camera && applyPayloadCamera(data.camera)) {
+                    return
+                }
             }
         }
         applyFallbackCamera()
@@ -744,14 +755,10 @@ Item {
                 geometry: TrailRibbonGeometry {
                     pathValue: model.pathValue
                     widthValue: model.widthValue * root.trailWidthScale
-                    // 与飞机使用同一 presentationProgress，真实末点只作为本轮目标而非提前显示。
-                    tipPosition: root.presentationPosition(
-                        model.fromX, model.fromY, model.fromZ,
-                        model.sx, model.sy, model.sz
-                    )
                 }
                 castsShadows: false
                 materials: PrincipledMaterial {
+                    id: trailMaterial
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
                     // 淡出完全交给几何体顶点 alpha(0.08~0.72)控制,这里不再叠加全局系数,
@@ -766,6 +773,25 @@ Item {
                         Qt.color(model.color).g * 0.35,
                         Qt.color(model.color).b * 0.35
                     )
+                }
+
+                Model {
+                    geometry: TrailTipGeometry {
+                        previousPosition: Qt.vector3d(
+                            model.tipPreviousX, model.tipPreviousY, model.tipPreviousZ
+                        )
+                        startPosition: Qt.vector3d(
+                            model.tipStartX, model.tipStartY, model.tipStartZ
+                        )
+                        // 只有固定六顶点小网格按共同展示进度变化；历史大网格在两帧之间保持不动。
+                        endPosition: root.presentationPosition(
+                            model.fromX, model.fromY, model.fromZ,
+                            model.sx, model.sy, model.sz
+                        )
+                        widthValue: model.widthValue * root.trailWidthScale
+                    }
+                    castsShadows: false
+                    materials: [trailMaterial]
                 }
             }
         }

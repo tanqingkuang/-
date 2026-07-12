@@ -103,9 +103,13 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 "op": "reset",
                 "generation": 0,
                 "firstSequence": 0,
-                "endSequence": 2,
-                "points": [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]],
+                "endSequence": 1,
+                "points": [[1.0, 3.0, -2.0]],
             },
+        )
+        self.assertEqual(
+            (trail_ribbon["tipStartX"], trail_ribbon["tipStartY"], trail_ribbon["tipStartZ"]),
+            (1.0, 3.0, -2.0),
         )
         route_dash = payload["routeDashes"][0]
         self.assertEqual(route_dash["color"], "#22d3ee")
@@ -561,6 +565,80 @@ class Situation3DSceneDataTests(unittest.TestCase):
         finally:
             window.close()
 
+    def test_reset_camera_does_not_replay_latest_scene_outside_presentation_queue(self) -> None:
+        """重置相机只能读取相机字段，不能绕过 FIFO 重放最新场景并打乱尾迹 delta 游标。"""
+
+        from PySide6.QtCore import QMetaObject
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+        from src.ui.gui.trail_view_model import TrailBuffer
+
+        app = QApplication.instance() or QApplication([])
+        trail = TrailBuffer(capacity=8)
+
+        def append_snapshot(index: int) -> Snapshot:
+            """追加一帧稳定尾迹，构造可验证应用次数的连续场景消息。"""
+
+            east_m = float(index * 100)
+            trail.append_position(east_m, 0.0, 100.0, float(index))
+            return Snapshot(
+                time=float(index),
+                duration=100.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[
+                    NodeState(
+                        "A01",
+                        "leader",
+                        east_m,
+                        0.0,
+                        20.0,
+                        0.0,
+                        altitude=100.0,
+                        trail=trail.snapshot(),
+                    )
+                ],
+                links=[],
+                route_segments=[],
+            )
+
+        def process_until(predicate, timeout_s: float = 2.0) -> None:  # noqa: ANN001
+            """处理事件直至 FIFO 消费完成。"""
+
+            deadline = time.monotonic() + timeout_s
+            while not predicate() and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.002)
+            app.processEvents()
+
+        window = Situation3DWindow()
+        try:
+            window.show()
+            window.set_snapshot(append_snapshot(0))
+            window.set_snapshot(append_snapshot(1))
+            root = window.quick_view.rootObject()
+            process_until(
+                lambda: str(root.property("sceneTime")) == "1.0s"
+                and float(root.property("presentationProgress")) >= 0.999
+            )
+            baseline_count = int(root.property("sceneApplyCount"))
+
+            for index in range(2, 5):
+                window.set_snapshot(append_snapshot(index))
+                app.processEvents()
+            self.assertTrue(QMetaObject.invokeMethod(root, "resetCamera"))
+
+            process_until(
+                lambda: str(root.property("sceneTime")) == "4.0s"
+                and float(root.property("presentationProgress")) >= 0.999
+            )
+            self.assertEqual(int(root.property("sceneApplyCount")), baseline_count + 3)
+            self.assertEqual(root.property("pendingSceneUpdates").toVariant(), [])
+        finally:
+            window.close()
+
     def test_controller_adapter_keeps_terrain_display_file_as_gui_metadata(self) -> None:
         """验证演示配置能加载，且地形文件只作为 Snapshot 显示元数据透传。"""
 
@@ -593,11 +671,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 [0.0, 100.0, -0.0],
                 [100.0, 100.0, -0.0],
                 [100.0, 100.0, -100.0],
-                [200.0, 100.0, -100.0],
             ],
         )
         self.assertEqual(stream["firstSequence"], 0)
-        self.assertEqual(stream["endSequence"], 4)
+        self.assertEqual(stream["endSequence"], 3)
         self.assertEqual(stream["op"], "reset")
 
     def test_trail_append_does_not_move_existing_payload_points(self) -> None:
@@ -614,7 +691,44 @@ class Situation3DSceneDataTests(unittest.TestCase):
         after = json.loads(build_scene_payload(snapshot)["trailRibbons"][0]["pathValue"])
 
         self.assertEqual(before["points"], after["points"][:-1])
-        self.assertEqual(len(after["points"]), 41)
+        self.assertEqual(len(after["points"]), 40)
+
+    def test_trail_payload_separates_stable_history_from_live_tip(self) -> None:
+        """最新真实点只作为活动末段目标，历史大网格必须停在它的前一个真实点。"""
+
+        snapshot = self._snapshot()
+        snapshot.nodes[0].trail = [
+            TrailPoint(0.0, 0.0, 100.0, 0.0),
+            TrailPoint(100.0, 10.0, 110.0, 1.0),
+            TrailPoint(180.0, 35.0, 120.0, 2.0),
+            TrailPoint(240.0, 80.0, 130.0, 3.0),
+        ]
+
+        ribbon = build_scene_payload(snapshot)["trailRibbons"][0]
+        stream = json.loads(ribbon["pathValue"])
+
+        self.assertEqual(
+            stream,
+            {
+                "op": "reset",
+                "generation": 0,
+                "firstSequence": 0,
+                "endSequence": 3,
+                "points": [
+                    [0.0, 100.0, -0.0],
+                    [100.0, 110.0, -10.0],
+                    [180.0, 120.0, -35.0],
+                ],
+            },
+        )
+        self.assertEqual(
+            {key: ribbon[key] for key in ("tipPreviousX", "tipPreviousY", "tipPreviousZ")},
+            {"tipPreviousX": 100.0, "tipPreviousY": 110.0, "tipPreviousZ": -10.0},
+        )
+        self.assertEqual(
+            {key: ribbon[key] for key in ("tipStartX", "tipStartY", "tipStartZ")},
+            {"tipStartX": 180.0, "tipStartY": 120.0, "tipStartZ": -35.0},
+        )
 
     def test_trail_payload_state_only_serializes_queue_delta_after_reset(self) -> None:
         """窗口级游标首帧发全量，后续只发弹头数量和新增点，避免每帧扫描全部历史。"""
@@ -658,7 +772,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         )
 
         self.assertEqual(initial["op"], "reset")
-        self.assertEqual(len(initial["points"]), 4)
+        self.assertEqual(len(initial["points"]), 3)
         self.assertEqual(trail.full_iteration_count, reset_iterations)
         self.assertEqual(
             delta,
@@ -666,9 +780,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 "op": "delta",
                 "generation": 3,
                 "firstSequence": 101,
-                "endSequence": 105,
+                "endSequence": 104,
                 "removedCount": 1,
-                "addedPoints": [[4.0, 100.0, -0.0]],
+                "addedPoints": [[3.0, 100.0, -0.0]],
             },
         )
 
@@ -776,47 +890,48 @@ class Situation3DSceneDataTests(unittest.TestCase):
         )
         self.assertEqual(bytes(geometry.indexData())[2 * 9 * 4 : 3 * 9 * 4], middle_indices_before)
 
-    def test_trail_ribbon_tip_interpolation_only_updates_live_segment(self) -> None:
-        """展示补间只能移动最后一段末端，不能改写真实队列、扩容或重建整张网格。"""
+    def test_live_tip_uses_fixed_small_geometry_without_touching_history_mesh(self) -> None:
+        """60Hz 补间只能更新独立定长小网格，历史顶点和索引在整个补间期必须逐字节不变。"""
 
-        geometry = TrailRibbonGeometry()
-        points = [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0], [200.0, 100.0, 0.0]]
-        geometry.pathValue = json.dumps(
-            {"op": "reset", "generation": 14, "firstSequence": 0, "endSequence": 3, "points": points}
+        from src.ui.gui.situation3d.trail_tip_geometry import TrailTipGeometry
+
+        history = TrailRibbonGeometry()
+        history.pathValue = json.dumps(
+            {
+                "op": "reset",
+                "generation": 14,
+                "firstSequence": 0,
+                "endSequence": 3,
+                "points": [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0], [180.0, 100.0, -20.0]],
+            }
         )
-        rebuilds = geometry.fullRebuildCount
-        capacity = geometry._stream_segment_capacity
-        stable_points = tuple(geometry._stream_points)
-        first_slot = geometry._stream_segment_slots[0]
-        first_start = bytes(geometry.vertexData())[
-            first_slot * 5 * geometry.stride() : first_slot * 5 * geometry.stride() + 2 * geometry.stride()
-        ]
+        history_vertices = bytes(history.vertexData())
+        history_indices = bytes(history.indexData())
+        tip = TrailTipGeometry()
+        tip.previousPosition = QVector3D(100.0, 100.0, 0.0)
+        tip.startPosition = QVector3D(180.0, 100.0, -20.0)
+        initial_vertex_bytes = tip.vertexData().size()
+        initial_index_bytes = tip.indexData().size()
 
-        self.assertGreaterEqual(geometry.metaObject().indexOfProperty("tipPosition"), 0)
-        geometry.tipPosition = QVector3D(150.0, 100.0, 0.0)
+        for ratio in (0.0, 0.25, 0.5, 0.75, 1.0):
+            tip.endPosition = QVector3D(180.0 + 80.0 * ratio, 100.0, -20.0 - 60.0 * ratio)
+            self.assertEqual(tip.vertexData().size(), initial_vertex_bytes)
+            self.assertEqual(tip.indexData().size(), initial_index_bytes)
 
-        self.assertEqual(tuple(geometry._stream_points), stable_points)
-        self.assertEqual(geometry._stream_segment_capacity, capacity)
-        self.assertEqual(geometry.fullRebuildCount, rebuilds)
-        self.assertEqual(
-            bytes(geometry.vertexData())[
-                first_slot * 5 * geometry.stride() : first_slot * 5 * geometry.stride() + 2 * geometry.stride()
-            ],
-            first_start,
-        )
-        last_slot = geometry._stream_segment_slots[-1]
-        last_offset = last_slot * 5 * geometry.stride()
-        vertex_data = bytes(geometry.vertexData())
-        left = struct.unpack_from("<fff", vertex_data, last_offset + 2 * geometry.stride())
-        right = struct.unpack_from("<fff", vertex_data, last_offset + 3 * geometry.stride())
-        rendered_tip = tuple((left[index] + right[index]) / 2.0 for index in range(3))
-        self.assertEqual(rendered_tip, (150.0, 100.0, 0.0))
+        self.assertEqual(history.metaObject().indexOfProperty("tipPosition"), -1)
+        self.assertEqual(bytes(history.vertexData()), history_vertices)
+        self.assertEqual(bytes(history.indexData()), history_indices)
+        self.assertEqual(initial_vertex_bytes, 6 * history.stride())
+        self.assertEqual(initial_index_bytes, 9 * 4)
 
-    def test_trail_ribbon_new_target_reuses_unchanged_visual_tip(self) -> None:
-        """新真实点入队时必须重新应用现有展示末端，避免尾迹先跳到目标而飞机仍在补间。"""
+    def test_live_tip_bevel_closes_turn_against_stable_history_cap(self) -> None:
+        """活动末段转弯时必须以定长 bevel 三角连接历史平头端帽，不能留下碎冰状楔形裂口。"""
 
-        geometry = TrailRibbonGeometry()
-        geometry.pathValue = json.dumps(
+        from src.ui.gui.situation3d.trail_tip_geometry import TrailTipGeometry
+
+        history = TrailRibbonGeometry()
+        history.widthValue = 20.0
+        history.pathValue = json.dumps(
             {
                 "op": "reset",
                 "generation": 15,
@@ -825,27 +940,29 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 "points": [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0]],
             }
         )
-        geometry.tipPosition = QVector3D(100.0, 100.0, 0.0)
+        history_data = bytes(history.vertexData())
+        stable_end_edges = {
+            struct.unpack_from("<fff", history_data, vertex_index * history.stride())
+            for vertex_index in (2, 3)
+        }
 
-        geometry.pathValue = json.dumps(
-            {
-                "op": "delta",
-                "generation": 15,
-                "firstSequence": 0,
-                "endSequence": 3,
-                "removedCount": 0,
-                "addedPoints": [[200.0, 100.0, 0.0]],
-            }
-        )
+        tip = TrailTipGeometry()
+        tip.widthValue = 20.0
+        tip.previousPosition = QVector3D(0.0, 100.0, 0.0)
+        tip.startPosition = QVector3D(100.0, 100.0, 0.0)
+        tip.endPosition = QVector3D(100.0, 100.0, -100.0)
+        tip_data = bytes(tip.vertexData())
+        positions = [
+            struct.unpack_from("<fff", tip_data, index * tip.stride())
+            for index in range(6)
+        ]
+        body_indices = struct.unpack_from("<IIIIII", bytes(tip.indexData()), 0)
+        join_indices = struct.unpack_from("<III", bytes(tip.indexData()), 6 * 4)
 
-        self.assertEqual(geometry._stream_points[-1], (200.0, 100.0, 0.0))
-        last_slot = geometry._stream_segment_slots[-1]
-        last_offset = last_slot * 5 * geometry.stride()
-        vertex_data = bytes(geometry.vertexData())
-        left = struct.unpack_from("<fff", vertex_data, last_offset + 2 * geometry.stride())
-        right = struct.unpack_from("<fff", vertex_data, last_offset + 3 * geometry.stride())
-        rendered_tip = tuple((left[index] + right[index]) / 2.0 for index in range(3))
-        self.assertEqual(rendered_tip, (100.0, 100.0, 0.0))
+        self.assertEqual(body_indices, (0, 2, 1, 1, 2, 3))
+        self.assertIn(positions[join_indices[0]], stable_end_edges)
+        self.assertEqual(positions[join_indices[2]], (100.0, 100.0, 0.0))
+        self.assertGreater(len(set(join_indices)), 1)
 
     def test_trail_ribbon_stream_reused_slot_indices_use_physical_vertex_base(self) -> None:
         """弹头后复用非零段槽时，主体索引必须指向该槽自己的五个顶点。"""
@@ -1150,7 +1267,11 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("function enqueueSceneUpdate(", qml)
         self.assertIn("presentationMotion.restart()", qml)
         self.assertIn("position: root.presentationPosition(", qml)
-        self.assertIn("tipPosition: root.presentationPosition(", qml)
+        self.assertIn("geometry: TrailTipGeometry {", qml)
+        self.assertIn("previousPosition: Qt.vector3d(", qml)
+        self.assertIn("startPosition: Qt.vector3d(", qml)
+        self.assertIn("endPosition: root.presentationPosition(", qml)
+        self.assertNotIn("tipPosition: root.presentationPosition(", qml)
         self.assertNotIn("Behavior on position", qml)
 
     def test_trail_width_is_one_fifth_of_near_view_aircraft_span(self) -> None:
