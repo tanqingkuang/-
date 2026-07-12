@@ -376,7 +376,27 @@ class Subscription:
 - 回调异常不能打断仿真循环；仿真控制记录 `WARN` 事件并继续。
 - 订阅回调中不允许重入调用 `step()`、`reset()` 等改变状态的接口；实现需要加锁或排队。
 
-### 5.13 读取最近事件
+### 5.13 增量读取固定时钟快照
+
+```python
+@dataclass(frozen=True)
+class TimedSnapshotCursor:
+    run_generation: int
+    next_index: int
+
+def read_timed_snapshots(
+    cursor: TimedSnapshotCursor | None,
+) -> tuple[TimedSnapshotCursor, tuple[SimulationSnapshot, ...]]
+```
+
+语义：
+
+- 返回关键数据记录器按仿真时间固定 `10 Hz` 产生、且位于传入游标之后的全部内存快照；GUI 可用它维护倍率无关的尾迹，但不得读取或修改记录器内部列表。
+- 读取与基础 tick、日志写入使用同一控制器锁；返回批次为不可变元组，一次墙钟轮询可以消费多个连续样本。
+- 每次成功加载配置、`reset()` 或其他完整模块重建都会递增 `run_generation`；旧代游标读取新运行时从索引 `0` 开始，不能沿用旧索引跳过新样本。
+- 播放倍率、显示回显节拍和调用频率都不改变该接口的采样时刻。
+
+### 5.14 读取最近事件
 
 ```python
 def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> list[SimulationEvent]
@@ -388,7 +408,7 @@ def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> 
 - 返回内存环形缓冲中的最近事件，不直接扫描 JSONL 关键数据日志或其他大日志文件。
 - UI 可以自己缓存已经收到的事件，但不能作为唯一事件源；仿真控制仍需维护最近事件，覆盖 UI 面板晚打开、UI 刷新丢帧、headless 运行和内部错误追踪等场景。
 
-### 5.14 headless 运行
+### 5.15 headless 运行
 
 ```python
 def run_until_complete(config: object | str, *, seed: int | None = None) -> CommandResult
@@ -607,7 +627,7 @@ class DataLogger:
 
 - UI 刷新快照低于仿真 tick 频率，默认每 `0.1s` wall-clock 生成 / 推送一次；该频率不随播放倍率增加。
 - 日志快照按仿真时间 `0.1s` 采样点写入，不等同 UI 刷新节拍；二者默认同为 10Hz，但时间基准不同。
-- 渐隐轨迹缓存由 UI 根据连续快照维护；仿真控制快照只携带当前时刻节点状态。
+- 渐隐轨迹缓存由 UI 通过 `read_timed_snapshots()` 增量维护；普通显示快照中的当前节点位置仅作为队列外实时端点，不能按墙钟轮询频率写入历史队列。
 - 快照对象生成后应视为不可变，避免 UI 渲染过程中被后台修改。
 
 ## 12. 模块归属

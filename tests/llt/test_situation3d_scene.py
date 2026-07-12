@@ -103,13 +103,13 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 "op": "reset",
                 "generation": 0,
                 "firstSequence": 0,
-                "endSequence": 1,
-                "points": [[1.0, 3.0, -2.0]],
+                "endSequence": 2,
+                "points": [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]],
             },
         )
         self.assertEqual(
             (trail_ribbon["tipStartX"], trail_ribbon["tipStartY"], trail_ribbon["tipStartZ"]),
-            (1.0, 3.0, -2.0),
+            (4.0, 6.0, -5.0),
         )
         route_dash = payload["routeDashes"][0]
         self.assertEqual(route_dash["color"], "#22d3ee")
@@ -671,10 +671,11 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 [0.0, 100.0, -0.0],
                 [100.0, 100.0, -0.0],
                 [100.0, 100.0, -100.0],
+                [200.0, 100.0, -100.0],
             ],
         )
         self.assertEqual(stream["firstSequence"], 0)
-        self.assertEqual(stream["endSequence"], 3)
+        self.assertEqual(stream["endSequence"], 4)
         self.assertEqual(stream["op"], "reset")
 
     def test_trail_append_does_not_move_existing_payload_points(self) -> None:
@@ -691,10 +692,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
         after = json.loads(build_scene_payload(snapshot)["trailRibbons"][0]["pathValue"])
 
         self.assertEqual(before["points"], after["points"][:-1])
-        self.assertEqual(len(after["points"]), 40)
+        self.assertEqual(len(after["points"]), 41)
 
     def test_trail_payload_separates_stable_history_from_live_tip(self) -> None:
-        """最新真实点只作为活动末段目标，历史大网格必须停在它的前一个真实点。"""
+        """固定时钟队列全部进入稳定网格，活动末段从队尾连接飞机实时位置。"""
 
         snapshot = self._snapshot()
         snapshot.nodes[0].trail = [
@@ -713,21 +714,42 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 "op": "reset",
                 "generation": 0,
                 "firstSequence": 0,
-                "endSequence": 3,
+                "endSequence": 4,
                 "points": [
                     [0.0, 100.0, -0.0],
                     [100.0, 110.0, -10.0],
                     [180.0, 120.0, -35.0],
+                    [240.0, 130.0, -80.0],
                 ],
             },
         )
         self.assertEqual(
             {key: ribbon[key] for key in ("tipPreviousX", "tipPreviousY", "tipPreviousZ")},
-            {"tipPreviousX": 100.0, "tipPreviousY": 110.0, "tipPreviousZ": -10.0},
+            {"tipPreviousX": 180.0, "tipPreviousY": 120.0, "tipPreviousZ": -35.0},
         )
         self.assertEqual(
             {key: ribbon[key] for key in ("tipStartX", "tipStartY", "tipStartZ")},
-            {"tipStartX": 180.0, "tipStartY": 120.0, "tipStartZ": -35.0},
+            {"tipStartX": 240.0, "tipStartY": 130.0, "tipStartZ": -80.0},
+        )
+
+    def test_single_stable_trail_point_still_builds_live_tip_segment(self) -> None:
+        """刚启用尾迹时，一个稳定点也必须能通过固定小网格连接当前飞机。"""
+
+        snapshot = self._snapshot()
+        snapshot.nodes[0].trail = [TrailPoint(12.0, 34.0, 120.0, 0.0)]
+
+        ribbon = build_scene_payload(snapshot)["trailRibbons"][0]
+        stream = json.loads(ribbon["pathValue"])
+
+        self.assertEqual(stream["points"], [[12.0, 120.0, -34.0]])
+        self.assertEqual(stream["endSequence"], 1)
+        self.assertEqual(
+            (ribbon["tipPreviousX"], ribbon["tipPreviousY"], ribbon["tipPreviousZ"]),
+            (12.0, 120.0, -34.0),
+        )
+        self.assertEqual(
+            (ribbon["tipStartX"], ribbon["tipStartY"], ribbon["tipStartZ"]),
+            (12.0, 120.0, -34.0),
         )
 
     def test_trail_payload_state_only_serializes_queue_delta_after_reset(self) -> None:
@@ -770,9 +792,12 @@ class Situation3DSceneDataTests(unittest.TestCase):
         delta = json.loads(
             build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]["pathValue"]
         )
+        committed = json.loads(
+            build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]["pathValue"]
+        )
 
         self.assertEqual(initial["op"], "reset")
-        self.assertEqual(len(initial["points"]), 3)
+        self.assertEqual(len(initial["points"]), 4)
         self.assertEqual(trail.full_iteration_count, reset_iterations)
         self.assertEqual(
             delta,
@@ -782,9 +807,54 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 "firstSequence": 101,
                 "endSequence": 104,
                 "removedCount": 1,
-                "addedPoints": [[3.0, 100.0, -0.0]],
+                "addedPoints": [],
             },
         )
+        self.assertEqual(
+            committed,
+            {
+                "op": "delta",
+                "generation": 3,
+                "firstSequence": 101,
+                "endSequence": 105,
+                "removedCount": 0,
+                "addedPoints": [[4.0, 100.0, -0.0]],
+            },
+        )
+
+    def test_rapid_batch_waits_one_presentation_frame_before_entering_3d_history(self) -> None:
+        """高倍频批量点只能在飞机到达上一目标后固化，历史队尾不得抢到机头前。"""
+
+        from src.ui.gui.trail_view_model import TrailBuffer
+
+        snapshot = self._snapshot()
+        trail = TrailBuffer(capacity=32)
+        trail.append_position(0.0, 0.0, 100.0, 0.0)
+        snapshot.time = 0.0
+        snapshot.nodes[0].x = 0.0
+        snapshot.nodes[0].trail = trail.snapshot()
+        state = scene_data.TrailPayloadState()
+        initial = build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]
+
+        for index in range(1, 8):
+            trail.append_position(index * 10.0, 0.0, 100.0, index * 0.1)
+        snapshot.time = 0.7
+        snapshot.nodes[0].x = 70.0
+        snapshot.nodes[0].trail = trail.snapshot()
+        receiving = build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]
+
+        for index in range(8, 15):
+            trail.append_position(index * 10.0, 0.0, 100.0, index * 0.1)
+        snapshot.time = 1.4
+        snapshot.nodes[0].x = 140.0
+        snapshot.nodes[0].trail = trail.snapshot()
+        committed = build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]
+
+        self.assertEqual(json.loads(initial["pathValue"])["endSequence"], 1)
+        self.assertEqual(json.loads(receiving["pathValue"])["endSequence"], 1)
+        self.assertEqual(receiving["tipStartX"], 0.0)
+        self.assertEqual(json.loads(committed["pathValue"])["endSequence"], 8)
+        self.assertEqual(committed["tipStartX"], 70.0)
 
     def test_terrain_geometry_builds_connected_heightfield(self) -> None:
         """验证 3D 地形使用一张连续 mesh，而不是多个独立山体模型。"""

@@ -170,6 +170,14 @@ class SimulationSnapshot:
 
 
 @dataclass(frozen=True)
+class TimedSnapshotCursor:
+    """固定仿真时钟快照的读取游标。注意：索引只在同一运行代内有意义。"""
+
+    run_generation: int  # 配置初始化或重置后递增，防止旧索引跳过新运行样本。
+    next_index: int  # 下一次应读取的快照索引，采用左闭右开序列语义。
+
+
+@dataclass(frozen=True)
 class SimulationEvent:
     """近期事件记录。注意：用于 GUI 日志窗口和 CLI 诊断。"""
 

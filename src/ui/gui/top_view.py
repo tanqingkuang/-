@@ -753,8 +753,8 @@ class TopView(QGraphicsView):
     def _draw_trail(self, painter: QPainter, node: NodeState, is_leader: bool, current_time: float) -> None:
         """绘制 trail 画面元素。注意：只做渲染，不修改仿真状态。"""
         # 0 秒时直接跳过绘制，避免后续透明度计算出现除零分支。
-        # 两个采样点即可表达刚启动后的位移，避免运行初期看起来像静止。
-        if self.trail_seconds <= 0.0 or len(node.trail) <= 1:
+        # 一个稳定采样点也能与队列外当前机位连接，只有空队列才无从绘制。
+        if self.trail_seconds <= 0.0 or not node.trail:
             return
         base = self.theme.leader if is_leader else self.theme.wingman
         cache = self._trail_path_caches.setdefault(node.node_id, TrailPathCache())
@@ -769,20 +769,56 @@ class TopView(QGraphicsView):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             # 中间稳定块按八档透明度合并，首尾活动块单独画，因此调用次数恒定不随点数增长。
             for batch in cache.render_batches(current_time=current_time, trail_seconds=self.trail_seconds):
-                color = QColor(base)
-                # 长机尾迹整体比僚机略浓。
-                color.setAlphaF((0.52 if is_leader else 0.44) * batch.opacity_factor)
-                # cosmetic 画笔在世界变换后仍保持固定像素宽度；圆角可消除急转折线的尖刺感。
-                pen = QPen(color, 2.4)
-                pen.setCosmetic(True)
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-                if not is_leader:
-                    # 按稳定累计里程换算设备像素相位，删头和加尾都不会让旧虚线跳动。
-                    pen.setDashPattern([6.0, 4.0])
-                    pen.setDashOffset(batch.start_path_distance * self.scale_value / 2.4)
-                painter.setPen(pen)
+                painter.setPen(
+                    self._trail_pen(
+                        base,
+                        is_leader=is_leader,
+                        opacity_factor=batch.opacity_factor,
+                        start_path_distance=batch.start_path_distance,
+                    )
+                )
                 painter.drawPath(batch.path)
+
+            tail = node.trail[-1]
+            endpoint_changed = not (
+                math.isclose(tail.x, node.x, rel_tol=0.0, abs_tol=1e-9)
+                and math.isclose(tail.y, node.y, rel_tol=0.0, abs_tol=1e-9)
+            )
+            if endpoint_changed:
+                # 当前机位只作为队列外实时端点；稳定历史缓存仍严格止于最后一个采样点。
+                painter.setPen(
+                    self._trail_pen(
+                        base,
+                        is_leader=is_leader,
+                        opacity_factor=1.0,
+                        start_path_distance=tail.path_distance,
+                    )
+                )
+                painter.drawLine(QPointF(tail.x, tail.y), QPointF(node.x, node.y))
         finally:
             # 尾迹绘制不得改变后续飞机、标签和障碍的画刷/画笔状态。
             painter.restore()
+
+    def _trail_pen(
+        self,
+        base: QColor,
+        *,
+        is_leader: bool,
+        opacity_factor: float,
+        start_path_distance: float,
+    ) -> QPen:
+        """构造俯视尾迹画笔。注意：历史批次与队列外实时段必须共用同一线型规则。"""
+
+        color = QColor(base)
+        # 长机尾迹整体比僚机略浓，实时端点以最新档 opacity_factor=1 绘制。
+        color.setAlphaF((0.52 if is_leader else 0.44) * opacity_factor)
+        # cosmetic 画笔在世界变换后仍保持固定像素宽度；圆角可消除急转折线的尖刺感。
+        pen = QPen(color, 2.4)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        if not is_leader:
+            # 稳定累计里程换算为设备像素相位，使实时段从队尾虚线相位连续起步。
+            pen.setDashPattern([6.0, 4.0])
+            pen.setDashOffset(start_path_distance * self.scale_value / 2.4)
+        return pen

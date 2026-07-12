@@ -59,9 +59,13 @@ class TrailBufferAdapterTests(unittest.TestCase):
         self.addCleanup(adapter.close)
         adapter.set_trail_seconds(10.0)
 
-        first_snapshot = adapter._convert_snapshot(_controller_snapshot(1.0, 10.0))
+        first_sample = _controller_snapshot(1.0, 10.0)
+        adapter._append_trail_sample(first_sample)
+        first_snapshot = adapter._convert_snapshot(first_sample)
         first_trail = first_snapshot.nodes[0].trail
-        second_snapshot = adapter._convert_snapshot(_controller_snapshot(2.0, 20.0))
+        second_sample = _controller_snapshot(2.0, 20.0)
+        adapter._append_trail_sample(second_sample)
+        second_snapshot = adapter._convert_snapshot(second_sample)
         second_trail = second_snapshot.nodes[0].trail
 
         self.assertIsInstance(adapter._trail_by_node["A01"], TrailBuffer)
@@ -80,11 +84,13 @@ class TrailBufferAdapterTests(unittest.TestCase):
         self.addCleanup(adapter.close)
         adapter.set_trail_seconds(10.0)
         first = _controller_snapshot(1.0, 10.0)
-        adapter._convert_snapshot(first)
-        adapter._convert_snapshot(replace(first, time_s=2.0, nodes=[_controller_node(22.0)]))
-        adapter._convert_snapshot(replace(first, time_s=3.0, nodes=[_controller_node(34.0)]))
+        adapter._append_trail_sample(first)
+        adapter._append_trail_sample(replace(first, time_s=2.0, nodes=[_controller_node(22.0)]))
+        adapter._append_trail_sample(replace(first, time_s=3.0, nodes=[_controller_node(34.0)]))
 
         adapter.set_trail_seconds(1.5)
+        # 伪造样本没有推进真实 controller 时间，按同步路径使用的当前时刻显式执行弹头。
+        adapter._trail_by_node["A01"].expire(3.0, 1.5)
         converted = adapter._convert_snapshot(replace(first, time_s=3.0, nodes=[_controller_node(34.0)]))
 
         trail = converted.nodes[0].trail
@@ -97,7 +103,8 @@ class TrailBufferAdapterTests(unittest.TestCase):
 
         adapter = ControllerSimulationAdapter()
         adapter.set_trail_seconds(10.0)
-        adapter._convert_snapshot(_controller_snapshot(1.0, 10.0))
+        adapter._append_trail_sample(_controller_snapshot(1.0, 10.0))
+        self.assertIn("A01", adapter._trail_by_node)
 
         adapter.close()
 
