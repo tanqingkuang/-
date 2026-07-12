@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
@@ -20,7 +22,7 @@ from src.ui.gui.situation3d.aircraft_model_style import (
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
-    generate_terrain_field,
+    get_terrain_field,
     risk_zones_from_layout,
     terrain_extent_from_layout,
     load_terrain_layout,
@@ -510,22 +512,29 @@ def _terrain_payload(bounds: dict[str, float], terrain_display_file: str | None 
 
 
 def _layout_terrain_payload(terrain_display_file: str) -> dict[str, object] | None:
-    """生成布局地形 payload。注意：文件不可读时返回 None 触发旧地形回退。"""
+    """生成布局地形 payload。注意：任何解析/数值/结构错误都回退旧地形并留诊断。"""
 
     layout_path = str(Path(terrain_display_file).resolve())
     try:
         layout = _cached_layout(layout_path)
-    except (OSError, ValueError, json.JSONDecodeError):
+        extent = terrain_extent_from_layout(layout)
+        # 合法 JSON 也可能携带错误类型或非有限值,所有转换必须在保护块内完成。
+        for key in ("min_east_m", "max_east_m", "min_north_m", "max_north_m"):
+            if not math.isfinite(float(extent[key])):
+                raise ValueError(f"terrain extent {key} 非有限值")
+        resolution = _layout_resolution(layout)
+        effective_span = float(layout.get("map", {}).get("effective_extent_km", 32.0)) * 1000.0 if isinstance(layout.get("map"), dict) else 32000.0
+        if not math.isfinite(effective_span) or effective_span <= 0.0:
+            raise ValueError("effective_extent_km 非法")
+        field = _cached_terrain_field(layout_path, resolution)
+    except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError, OverflowError) as error:
+        # 显示层坏配置不允许打断 3D 刷新:回退 procedural 地形并输出可见诊断。
+        logging.getLogger(__name__).warning("地形布局 %s 不可用,回退旧地形: %s", layout_path, error)
         return None
-    extent = terrain_extent_from_layout(layout)
     center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
     center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
     width = extent["max_east_m"] - extent["min_east_m"]
     depth = extent["max_north_m"] - extent["min_north_m"]
-    detail = layout.get("detail") if isinstance(layout.get("detail"), dict) else {}
-    resolution = int(detail.get("grid_resolution", DEFAULT_TERRAIN_RESOLUTION)) if isinstance(detail, dict) else DEFAULT_TERRAIN_RESOLUTION
-    effective_span = float(layout.get("map", {}).get("effective_extent_km", 32.0)) * 1000.0 if isinstance(layout.get("map"), dict) else 32000.0
-    field = _cached_terrain_field(layout_path, resolution)
     # 风险区线网和地形 mesh 使用同一高度场，避免 QML 里出现悬浮平面。
     risk_zones = [_risk_zone_payload(zone, field) for zone in risk_zones_from_layout(layout)]
     # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
@@ -575,11 +584,22 @@ def _cached_layout(path: str) -> dict[str, object]:
     return load_terrain_layout(path)
 
 
-@lru_cache(maxsize=4)
-def _cached_terrain_field(path: str, resolution: int) -> TerrainField:
-    """缓存布局高度场。注意：风险区贴地线和 TerrainGeometry 使用同一生成逻辑。"""
+def _layout_resolution(layout: dict[str, object]) -> int:
+    """解析布局网格分辨率。注意：SIM3D_LOW_SPEC=1 时采用低配档,供低端集显机使用。"""
 
-    return generate_terrain_field(_cached_layout(path), resolution=resolution)
+    detail = layout.get("detail") if isinstance(layout.get("detail"), dict) else {}
+    key = "low_spec_grid_resolution" if os.environ.get("SIM3D_LOW_SPEC") == "1" else "grid_resolution"
+    value = int(detail.get(key, DEFAULT_TERRAIN_RESOLUTION))
+    if value <= 0:
+        raise ValueError(f"{key} 必须为正整数")
+    return value
+
+
+def _cached_terrain_field(path: str, resolution: int) -> TerrainField:
+    """获取共享高度场。注意：与 TerrainGeometry 共用 terrain_field.get_terrain_field
+    的进程级缓存,768² 场只生成一次,避免 GUI 主线程重复卡顿。"""
+
+    return get_terrain_field(path, resolution=resolution)
 
 
 def _risk_zone_payload(zone, field: TerrainField | None = None) -> dict[str, object]:  # noqa: ANN001
@@ -622,7 +642,8 @@ def _risk_zone_line_payload(zone: dict[str, object], field: TerrainField | None 
             lines.append(
                 {
                     "color": "#ff5a45",
-                    "width": 18.0,
+                    # 风险网格必须显著细于主航线(16m):视觉层级上任务航线优先。
+                    "width": 7.0,
                     "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
                 }
             )
@@ -650,7 +671,8 @@ def _risk_zone_buffer_payload(zone: dict[str, object], field: TerrainField | Non
         dashes.append(
             {
                 "color": "#62d9e7",
-                "width": 12.0,
+                # 缓冲圈是最弱的提示层,比风险网格更细。
+                "width": 5.0,
                 "pathValue": json.dumps(points, ensure_ascii=False, separators=(",", ":")),
             }
         )

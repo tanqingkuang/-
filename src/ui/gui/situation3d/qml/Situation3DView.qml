@@ -38,6 +38,12 @@ Item {
     property bool cameraInitialized: false
     // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线/障碍/风险区模型。
     property string staticContentKey: ""
+    // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
+    property string followNodeId: ""
+    // 焦点平滑只在跟随模式启用:10Hz 快照下相机不跳变;自由模式平移保持即时响应。
+    Behavior on focusX { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
+    Behavior on focusY { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
+    Behavior on focusZ { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
 
     ListModel { id: aircraftModel }
     ListModel { id: modelOptions }
@@ -299,6 +305,10 @@ Item {
         syncModelOptions(data.modelOptions || [])
         syncAircraftModel(data.aircraft || [])
         syncTrailModel(data.trailRibbons || [])
+        if (cameraMode === "跟随") {
+            // 跟随是持续行为:每帧刷新焦点与航向,长机移动后相机不掉队。
+            applyFollowFocus()
+        }
         // 航线/障碍/风险区是静态内容：每帧 clear+append 会销毁重建上百个几何模型,
         // 造成周期性掉帧(飞机"一跳一跳")。签名不变时整体跳过静态模型重建。
         const staticChanged = (data.staticKey || "") !== staticContentKey
@@ -360,16 +370,36 @@ Item {
         cameraMode = "侧视"
     }
 
-    function setFollowView() {
-        if (aircraftModel.count > 0) {
-            const lead = aircraftModel.get(0)
-            focusX = lead.sx
-            focusY = lead.sy
-            focusZ = lead.sz
-            yaw = lead.yawDeg - 35
-            pitch = -18
-            distance = Math.max(720, Math.min(distance * 0.55, 1800))
+    function leaderAircraftIndex() {
+        for (let index = 0; index < aircraftModel.count; index += 1) {
+            const role = String(aircraftModel.get(index).role || "").toLowerCase()
+            if (role.indexOf("leader") >= 0) {
+                return index
+            }
         }
+        return aircraftModel.count > 0 ? 0 : -1
+    }
+
+    function applyFollowFocus() {
+        const index = followNodeId ? findAircraftIndex(followNodeId) : -1
+        const resolved = index >= 0 ? index : leaderAircraftIndex()
+        if (resolved < 0) {
+            return
+        }
+        const lead = aircraftModel.get(resolved)
+        followNodeId = lead.nodeId
+        focusX = lead.sx
+        focusY = lead.sy
+        focusZ = lead.sz
+        yaw = lead.yawDeg - 35
+    }
+
+    function setFollowView() {
+        // 跟随目标按长机角色选取(演示配置里第 0 项是僚机),并记录 nodeId 供逐帧跟踪。
+        followNodeId = ""
+        pitch = -18
+        distance = Math.max(720, Math.min(distance * 0.55, 1800))
+        applyFollowFocus()
         cameraMode = "跟随"
     }
 

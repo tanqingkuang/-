@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 import json
 import math
 from pathlib import Path
+import threading
 import time
 from typing import Any
 
@@ -14,6 +16,8 @@ import numpy as np
 
 DEFAULT_TERRAIN_RESOLUTION = 641
 LOW_SPEC_TERRAIN_RESOLUTION = 384
+# 共享缓存锁:预热线程与 GUI 线程可能并发请求同一高度场。
+_FIELD_CACHE_LOCK = threading.Lock()
 _MIN_RESOLUTION = 96
 _MAX_RESOLUTION = 1024
 _SRGB_LOW = np.array([0.045, 0.082, 0.105], dtype=np.float32)
@@ -32,7 +36,8 @@ _SRGB_SNOW = np.array([0.845, 0.855, 0.825], dtype=np.float32)
 # 8. 默认 641 分辨率对应约 41 万顶点，生成后由 QQuick3DGeometry 上传 GPU。
 # 9. 低配 384 分辨率保留同一布局和噪声，只降低采样密度。
 # 10. 所有随机数都由布局 detail.seed 固定，保证验收截图可复现。
-# 11. 山峰高度使用指数压缩，防止多个山脉链叠加处形成针状尖峰。
+# 11. 高度是米制语义：峰中心=height_m、脊线=均高×saddle_height_factor，
+#     脊/峰/鞍取最大值合成，仅超过 2800m 膝点后向下软压，禁止向上归一。
 # 12. 山脊沿 polyline 分段取最大值，保留连绵走向而不是孤立圆包。
 # 13. 鞍部用低宽高斯脊连接，不在航线语义上产生“可通行”判断。
 # 14. 颜色只表达海拔、坡度和冷暖光感，不加入碎斑贴图。
@@ -109,6 +114,24 @@ def generate_terrain_field_from_file(path: str | Path, *, resolution: int = DEFA
     return generate_terrain_field(load_terrain_layout(path), resolution=resolution)
 
 
+def get_terrain_field(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> TerrainField:
+    """获取共享缓存的高度场。注意：scene_data 与 TerrainGeometry 必须走同一入口，
+    避免 768² 场在 GUI 主线程重复生成(实测单次约 4s,重复即翻倍卡顿)。"""
+
+    resolved = Path(path).resolve()
+    mtime_ns = resolved.stat().st_mtime_ns
+    # 锁保证并发预热线程与 GUI 线程不会同时算两份同参数场。
+    with _FIELD_CACHE_LOCK:
+        return _cached_field(str(resolved), mtime_ns, _normalized_resolution(resolution))
+
+
+@lru_cache(maxsize=4)
+def _cached_field(resolved_path: str, mtime_ns: int, resolution: int) -> TerrainField:
+    """按(路径,修改时间,分辨率)缓存高度场。注意：文件被改动后 mtime 变化自动失效。"""
+
+    return generate_terrain_field_from_file(resolved_path, resolution=resolution)
+
+
 def generate_terrain_field(layout: dict[str, Any], *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> TerrainField:
     """生成山脉链高度场。注意：三层架构中这里属于细节层，不读取 QML 样式。"""
 
@@ -121,15 +144,19 @@ def generate_terrain_field(layout: dict[str, Any], *, resolution: int = DEFAULT_
 
     base = _base_relief(east_grid, north_grid, layout)
     detail = _detail_noise(east_grid, north_grid, layout)
-    heights = np.maximum(0.0, base + detail).astype(np.float32)
-    # 多条山脉交汇处会自然叠加，视觉层用指数压缩保留山势但避免针状过高峰。
-    heights = (3300.0 * (1.0 - np.exp(-heights / 3300.0))).astype(np.float32)
+    # 细节噪声按主体山势 mask 衰减:高度是米制语义(峰高=height_m,供避障与净空判断),
+    # 空布局/平原必须接近平坦,不允许全域噪声凭空造山。
+    detail_mask = _smoothstep((base - 150.0) / 900.0)
+    # 峰顶核心区二次衰减:细节长在山坡上,峰顶保持声明高度(偏差控制在数十米内)。
+    summit_damp = 1.0 - 0.85 * _smoothstep((base - 1800.0) / 600.0)
+    heights = np.maximum(0.0, base + detail * (0.05 + 0.95 * detail_mask) * summit_damp).astype(np.float32)
+    # 只做超上限的向下软压(膝点以下保持精确米制),禁止任何向上归一。
+    knee = 2800.0
+    cap = 3040.0
+    over = heights > knee
+    heights[over] = knee + (cap - knee) * (1.0 - np.exp(-(heights[over] - knee) / (cap - knee)))
     heights *= _edge_fade(east_grid, north_grid, extent)
-    max_height = float(np.max(heights))
-    if max_height > 1.0:
-        # 原型高度场最终归一到 3040m；正式显示层照抄该高度域以匹配配色雪线。
-        heights *= 3040.0 / max_height
-    # 法线必须在最终高度归一化后计算，否则烘焙光照会偏软。
+    # 法线必须在最终高度处理后计算，否则烘焙光照会偏软。
     normals = _normal_grid(heights, float(east[1] - east[0]), float(north[1] - north[0]))
     colors = _color_grid(heights, normals, east_grid, north_grid, extent)
     generation_time_ms = (time.perf_counter() - started) * 1000.0
@@ -226,18 +253,20 @@ def _base_relief(east_grid: np.ndarray, north_grid: np.ndarray, layout: dict[str
     chains = layout.get("mountain_chains")
     if not isinstance(chains, list):
         return height
+    # 脊线/峰体/鞍部一律取最大值合成:峰中心严格等于声明 height_m(米制语义,
+    # 供避障与净空判断);相加合成会把相邻体量叠高,历史上靠削顶归一掩盖,已废弃。
     for chain in chains:
         if not isinstance(chain, dict):
             continue
-        height += _chain_ridge_height(east_grid, north_grid, chain)
+        height = np.maximum(height, _chain_ridge_height(east_grid, north_grid, chain))
         for peak in chain.get("peaks", []):
             if isinstance(peak, dict):
-                height += _peak_height(east_grid, north_grid, chain, peak)
+                height = np.maximum(height, _peak_height(east_grid, north_grid, chain, peak))
     links = layout.get("saddle_links")
     if isinstance(links, list):
         for link in links:
             if isinstance(link, dict):
-                height += _link_height(east_grid, north_grid, link)
+                height = np.maximum(height, _link_height(east_grid, north_grid, link))
     return height
 
 
@@ -248,7 +277,9 @@ def _chain_ridge_height(east_grid: np.ndarray, north_grid: np.ndarray, chain: di
     if len(polyline) < 2:
         return np.zeros_like(east_grid, dtype=np.float32)
     ridge_width = float(chain.get("ridge_width_km", 0.65)) * 860.0
-    ridge_height = _chain_average_height(chain) * float(chain.get("saddle_height_factor", 0.35)) * 1.55
+    # 脊线高度严格等于 峰均高×saddle_height_factor(布局语义,如 hazard 链 2410×0.2≈472m 鞍部),
+    # 不允许再乘视觉系数抬高——山势的陡峭感由峰体剖面和细节层负责。
+    ridge_height = _chain_average_height(chain) * float(chain.get("saddle_height_factor", 0.35))
     ridge = np.zeros_like(east_grid, dtype=np.float32)
     for start, end in zip(polyline, polyline[1:]):
         distance = _segment_distance(east_grid, north_grid, start, end)
@@ -267,7 +298,7 @@ def _peak_height(east_grid: np.ndarray, north_grid: np.ndarray, chain: dict[str,
     angle = _chain_angle_rad(chain)
     local_e, local_n = _rotated_offsets(east_grid - center_e, north_grid - center_n, angle)
     long_radius = radius * aspect * 0.84
-    short_radius = radius * 0.74
+    short_radius = radius * 0.68
     shoulder_long = np.abs(local_e / max(1.0, long_radius * 1.38))
     shoulder_short = np.abs(local_n / max(1.0, short_radius * 1.32))
     local_long = np.abs(local_e / max(1.0, long_radius))
@@ -275,7 +306,9 @@ def _peak_height(east_grid: np.ndarray, north_grid: np.ndarray, chain: dict[str,
     shoulder = np.exp(-0.82 * (shoulder_long ** 1.42 + shoulder_short ** 1.62))
     body = np.exp(-1.42 * (local_long ** 1.58 + local_short ** 1.86))
     summit = np.exp(-3.65 * (local_long ** 2.1 + local_short ** 2.35))
-    return float(peak.get("height_m", 0.0)) * (0.36 * shoulder + 0.63 * body + 0.34 * summit)
+    profile = 0.36 * shoulder + 0.63 * body + 0.34 * summit
+    # 峰核按中心值归一:峰中心严格输出声明 height_m,不允许权重和(1.33)抬高峰顶。
+    return float(peak.get("height_m", 0.0)) * profile / 1.33
 
 
 def _link_height(east_grid: np.ndarray, north_grid: np.ndarray, link: dict[str, Any]) -> np.ndarray:

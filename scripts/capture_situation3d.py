@@ -93,14 +93,10 @@ def apply_view(root: object, view_name: str) -> None:
         root.setProperty("pitch", -24.0)
         root.setProperty("distance", 10500.0)
         return
-    # 跟随视角聚焦穿越段谷内；payload 仍来自正式配置和正式 scene_data。
-    root.setProperty("cameraMode", "跟随")
-    root.setProperty("focusX", 9000.0)
-    root.setProperty("focusY", 1080.0)
-    root.setProperty("focusZ", 0.0)
-    root.setProperty("yaw", -70.0)
-    root.setProperty("pitch", -12.0)
-    root.setProperty("distance", 3600.0)
+    # 跟随视角必须走正式入口:验证按钮真实行为(按长机角色跟踪),不允许手填相机绕过。
+    root.setFollowView()
+    if str(root.property("cameraMode")) != "跟随":
+        raise RuntimeError("setFollowView 未进入跟随模式")
 
 
 def wait_for_render(app: QApplication, wait_ms: int) -> None:

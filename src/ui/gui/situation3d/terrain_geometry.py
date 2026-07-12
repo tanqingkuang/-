@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import json
 import struct
@@ -14,7 +15,7 @@ import numpy as np
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
-    generate_terrain_field_from_file,
+    get_terrain_field,
 )
 
 # 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
@@ -199,12 +200,14 @@ class TerrainGeometry(_TerrainGeometryBase):
 
         if self._layout_file_value:
             try:
+                # 与 scene_data 共享同一进程级高度场缓存,避免 768² 场在主线程重复生成。
                 self._rebuild_from_field(
-                    generate_terrain_field_from_file(self._layout_file_value, resolution=self._resolution_value)
+                    get_terrain_field(self._layout_file_value, resolution=self._resolution_value)
                 )
                 return
-            except (OSError, ValueError, json.JSONDecodeError, TypeError):
-                # 布局文件异常时回落旧地形，避免 3D 窗口空白；配置错误仍会在测试里单独覆盖。
+            except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError, OverflowError) as error:
+                # 布局文件异常时回落旧地形，避免 3D 窗口空白;诊断进日志供排障。
+                logging.getLogger(__name__).warning("地形布局 %s 不可用,回退旧地形: %s", self._layout_file_value, error)
                 self._generation_time_ms = 0.0
                 self.generationTimeMsChanged.emit()
 
