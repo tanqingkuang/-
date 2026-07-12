@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -110,15 +111,16 @@ def default_project_root() -> Path:
     return cwd
 
 
-@dataclass
+@dataclass(frozen=True)
 class TrailPoint:
-    """仿真时间中的一个轨迹采样点。注意：用于绘制历史尾迹。"""
+    """仿真时间中的一个不可变轨迹采样点。注意：位置采用 ENU 三轴坐标。"""
 
     x: float  # 采样时刻的世界 east 坐标
     y: float  # 采样时刻的世界 north 坐标
     altitude: float  # 采样时刻高度
     time: float  # 采样仿真时刻，用于按当前尾迹窗口老化淡出
     path_distance: float = 0.0  # 从本轮尾迹起点累计的路程，裁剪后仍保留原基准
+    point_id: int = -1  # 同一尾迹 generation 内严格递增的稳定逻辑序号；手工构造时允许 -1
 
 
 @dataclass
@@ -134,7 +136,7 @@ class NodeState:
     altitude: float = 1200.0  # 高度，仅侧视图使用
     vertical_speed: float = 0.0  # 天向速度，供整体跟踪表显示
     health: str = "normal"  # 健康枚举：normal/degraded/fault/lost
-    trail: list[TrailPoint] = field(default_factory=list)  # 历史尾迹采样
+    trail: Sequence[TrailPoint] = field(default_factory=list)  # 2D/3D 共用的稳定历史尾迹序列
     cross_track_error: float | None = None  # 侧偏，None 时由表格兜底估算
     distance_to_go: float | None = None  # 待飞距，None 时由表格兜底估算
     track_pos_err_x: float = 0.0  # 航迹系前向位置误差

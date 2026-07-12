@@ -11,7 +11,7 @@ from src.algorithm.context.leaf_types import WayPointInputS
 from src.runner.sim_control import SimulationController
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 from src.ui.gui.playback_view_model import PlaybackViewModel
-from src.ui.gui.trail_view_model import prune_trail
+from src.ui.gui.trail_view_model import TrailBuffer
 from src.ui.gui.view_models import (
     WORLD_HEIGHT,
     WORLD_WIDTH,
@@ -20,26 +20,9 @@ from src.ui.gui.view_models import (
     RallyGeometryView,
     ReferenceRoute,
     Snapshot,
-    TrailPoint,
     link_direction_label,
     trail_seconds_for_duration,
 )
-
-
-def _append_trail_point(
-    trail: list[TrailPoint],
-    x: float,
-    y: float,
-    altitude: float,
-    time: float,
-) -> None:
-    """追加带单调累计路程的尾迹点。注意：裁剪首部点不会重置已有路程基准。"""
-
-    path_distance = 0.0
-    if trail:
-        previous = trail[-1]
-        path_distance = previous.path_distance + math.hypot(x - previous.x, y - previous.y)
-    trail.append(TrailPoint(x, y, altitude, time, path_distance))
 
 
 class MockSimulation:
@@ -73,8 +56,9 @@ class MockSimulation:
                 node.trail.clear()
             return
         for node in self.nodes:
-            # 切到更短时长时立即裁剪旧点，避免下一帧前仍显示超长尾迹。
-            node.trail = prune_trail(node.trail, self.time, self.trail_seconds)
+            # Mock 内部节点统一持有 TrailBuffer，缩短窗口时只从队首弹出过期点。
+            if isinstance(node.trail, TrailBuffer):
+                node.trail.expire(self.time, self.trail_seconds)
 
     def reset(self) -> Snapshot:
         """复位 MockSimulation 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -88,9 +72,9 @@ class MockSimulation:
         self.loss_until = 0.0
         # 预置三机楔形编队：1 长机 + 2 僚机，坐标为演示用初值。
         self.nodes = [
-            NodeState("A01", "leader", 140.0, 260.0, 5.2, -0.1),
-            NodeState("A02", "wing", 92.0, 318.0, 5.0, 0.0),
-            NodeState("A03", "wing", 88.0, 202.0, 5.0, 0.0),
+            NodeState("A01", "leader", 140.0, 260.0, 5.2, -0.1, trail=TrailBuffer()),
+            NodeState("A02", "wing", 92.0, 318.0, 5.0, 0.0, trail=TrailBuffer()),
+            NodeState("A03", "wing", 88.0, 202.0, 5.0, 0.0, trail=TrailBuffer()),
         ]
         self.links = [
             LinkState("A01", "A02", "duplex", 18, 0.01),
@@ -185,9 +169,13 @@ class MockSimulation:
             if self.trail_seconds <= 0.0:
                 node.trail.clear()
             else:
-                # 追加当前采样点并裁掉超过保留时长的旧点。
-                _append_trail_point(node.trail, node.x, node.y, node_altitude(index, self.time), self.time)
-                node.trail = prune_trail(node.trail, self.time, self.trail_seconds)
+                # 每架飞机只追加一个新 ENU 点，并从队首弹出时间窗外节点。
+                trail = node.trail
+                if not isinstance(trail, TrailBuffer):
+                    trail = TrailBuffer()
+                    node.trail = trail
+                trail.append_position(node.x, node.y, node_altitude(index, self.time), self.time)
+                trail.expire(self.time, self.trail_seconds)
 
         # 扰动窗口到期后自动清除，恢复正常显示。
         if self.disturbance != "无" and self.time > self.disturbance_until:
@@ -252,7 +240,7 @@ class ControllerSimulationAdapter:
         self.playback_vm = PlaybackViewModel()
         self.disturbance = "无"
         # 控制器只给瞬时位置，尾迹需由本适配器按 node_id 自行累积缓存。
-        self._trail_by_node: dict[str, list[TrailPoint]] = {}
+        self._trail_by_node: dict[str, TrailBuffer] = {}
         self.trail_seconds = trail_seconds_for_duration(0.0)
         # 记录上一帧位置与时间，用于差分估算速度（控制器速度字段不一定可靠）。
         self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
@@ -280,8 +268,8 @@ class ControllerSimulationAdapter:
         # 当前时间来自控制器快照，确保裁剪基准和后续 _convert_snapshot 一致。
         current_time = self.controller.get_snapshot().time_s
         for trail in self._trail_by_node.values():
-            # 切到更短时长时立即裁剪缓存，避免后续快照继续携带旧点。
-            trail[:] = prune_trail(trail, current_time, self.trail_seconds)
+            # 切到更短时长时只弹出队首过期点，不扫描或复制整个缓存。
+            trail.expire(current_time, self.trail_seconds)
 
     def load_config(self, path: str) -> Snapshot:
         """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
@@ -433,6 +421,9 @@ class ControllerSimulationAdapter:
 
     def close(self) -> None:
         """释放 ControllerSimulationAdapter 持有的资源。注意：关闭后不应继续调用运行接口。"""
+        # 关闭属于尾迹生命周期终点，必须丢弃全部节点队列与差分速度基准。
+        self._trail_by_node.clear()
+        self._last_xy_by_node.clear()
         self.controller.close()
 
     def _convert_snapshot(self, snapshot: ControllerSnapshot) -> Snapshot:
@@ -461,14 +452,17 @@ class ControllerSimulationAdapter:
             # 控制器自身不保存 GUI 尾迹，关闭时需要删除本地缓存防止重新开启后残留旧线。
             if self.trail_seconds <= 0.0:
                 self._trail_by_node.pop(node.node_id, None)
-                trail: list[TrailPoint] = []
+                trail = []
             else:
                 # 取出该节点尾迹缓存；仅当时间戳推进时追加新点，避免同一帧重复入栈。
-                trail = self._trail_by_node.setdefault(node.node_id, [])
-                if not trail or trail[-1].time != snapshot.time_s:
-                    _append_trail_point(trail, node.x_m, node.y_m, node.altitude_m, snapshot.time_s)
-                # 裁剪阈值跟随工具栏输入，保留同一列表对象便于后续引用稳定。
-                trail[:] = prune_trail(trail, snapshot.time_s, self.trail_seconds)
+                trail_buffer = self._trail_by_node.get(node.node_id)
+                if trail_buffer is None:
+                    trail_buffer = TrailBuffer()
+                    self._trail_by_node[node.node_id] = trail_buffer
+                trail_buffer.append_position(node.x_m, node.y_m, node.altitude_m, snapshot.time_s)
+                # 队列按时间有序，因此只需从头弹出过期点；中间历史节点永不移动。
+                trail_buffer.expire(snapshot.time_s, self.trail_seconds)
+                trail = trail_buffer.snapshot()
             nodes.append(
                 NodeState(
                     node_id=node.node_id,
@@ -480,7 +474,7 @@ class ControllerSimulationAdapter:
                     altitude=node.altitude_m,
                     vertical_speed=node.vz_mps,
                     health=node.health,
-                    trail=list(trail),
+                    trail=trail,
                     cross_track_error=node.cross_track_error_m,
                     distance_to_go=node.distance_to_go_m,
                     track_pos_err_x=node.track_pos_err_x_m,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 import json
 import struct
@@ -94,7 +95,16 @@ class Situation3DSceneDataTests(unittest.TestCase):
         trail_ribbon = payload["trailRibbons"][0]
         self.assertEqual(trail_ribbon["nodeId"], "A01")
         self.assertEqual(trail_ribbon["width"], 44.0)
-        self.assertEqual(json.loads(trail_ribbon["pathValue"]), [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]])
+        self.assertEqual(
+            json.loads(trail_ribbon["pathValue"]),
+            {
+                "op": "reset",
+                "generation": 0,
+                "firstSequence": 0,
+                "endSequence": 2,
+                "points": [[1.0, 3.0, -2.0], [4.0, 6.0, -5.0]],
+            },
+        )
         route_dash = payload["routeDashes"][0]
         self.assertEqual(route_dash["color"], "#22d3ee")
         self.assertEqual(route_dash["width"], 16.0)
@@ -423,8 +433,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         finally:
             adapter.close()
 
-    def test_trail_smoothing_is_default_on_and_only_affects_trails(self) -> None:
-        """尾迹默认平滑，但航线虚线仍使用原始采样结果。"""
+    def test_trail_payload_uses_queue_points_without_resampling_or_smoothing(self) -> None:
+        """尾迹必须逐点消费稳定队列，不能按总长度重抽样或重做整条平滑。"""
 
         snapshot = self._snapshot()
         snapshot.nodes[0].trail = [
@@ -434,15 +444,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
             TrailPoint(200.0, 100.0, 100.0, 3.0),
         ]
 
-        with patch.object(scene_data, "ENABLE_TRAIL_SMOOTHING", False):
-            raw_payload = build_scene_payload(snapshot)
-        smooth_payload = build_scene_payload(snapshot)
-
-        raw_path = json.loads(raw_payload["trailRibbons"][0]["pathValue"])
-        smooth_path = json.loads(smooth_payload["trailRibbons"][0]["pathValue"])
-
+        payload = build_scene_payload(snapshot)
+        stream = json.loads(payload["trailRibbons"][0]["pathValue"])
         self.assertEqual(
-            raw_path,
+            stream["points"],
             [
                 [0.0, 100.0, -0.0],
                 [100.0, 100.0, -0.0],
@@ -450,34 +455,80 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 [200.0, 100.0, -100.0],
             ],
         )
-        self.assertGreater(len(smooth_path), len(raw_path))
-        self.assertEqual(smooth_path[0], raw_path[0])
-        self.assertEqual(smooth_path[-1], raw_path[-1])
-        self.assertNotEqual(smooth_path, raw_path)
-        self.assertEqual(smooth_payload["routeDashes"], raw_payload["routeDashes"])
+        self.assertEqual(stream["firstSequence"], 0)
+        self.assertEqual(stream["endSequence"], 4)
+        self.assertEqual(stream["op"], "reset")
 
-    def test_trail_smoothing_can_be_disabled_by_code_flag(self) -> None:
-        """代码级开关关闭后，尾迹 pathValue 回到原始折线点。"""
+    def test_trail_append_does_not_move_existing_payload_points(self) -> None:
+        """追加队尾点后，已输出的历史坐标必须保持为新点列的稳定前缀。"""
 
         snapshot = self._snapshot()
         snapshot.nodes[0].trail = [
-            TrailPoint(0.0, 0.0, 100.0, 0.0),
-            TrailPoint(100.0, 0.0, 100.0, 1.0),
-            TrailPoint(100.0, 100.0, 100.0, 2.0),
+            TrailPoint(float(index), float(index % 3), 100.0, float(index))
+            for index in range(40)
         ]
+        before = json.loads(build_scene_payload(snapshot)["trailRibbons"][0]["pathValue"])
 
-        with patch.object(scene_data, "ENABLE_TRAIL_SMOOTHING", False):
-            payload = build_scene_payload(snapshot)
+        snapshot.nodes[0].trail.append(TrailPoint(40.0, 2.0, 100.0, 40.0))
+        after = json.loads(build_scene_payload(snapshot)["trailRibbons"][0]["pathValue"])
 
-        path = json.loads(payload["trailRibbons"][0]["pathValue"])
+        self.assertEqual(before["points"], after["points"][:-1])
+        self.assertEqual(len(after["points"]), 41)
 
+    def test_trail_payload_state_only_serializes_queue_delta_after_reset(self) -> None:
+        """窗口级游标首帧发全量，后续只发弹头数量和新增点，避免每帧扫描全部历史。"""
+
+        class StableTrail(list):
+            """为数据桥测试提供与正式 TrailSnapshot 相同的稳定游标。"""
+
+            generation = 3
+            first_sequence = 100
+            end_sequence = 104
+
+            def __init__(self, points) -> None:  # noqa: ANN001
+                """初始化点列并记录全量迭代次数。"""
+
+                super().__init__(points)
+                self.full_iteration_count = 0
+
+            def __iter__(self):  # noqa: ANN204
+                """记录全量迭代；delta 热路径不应调用本方法。"""
+
+                self.full_iteration_count += 1
+                return super().__iter__()
+
+        snapshot = self._snapshot()
+        trail = StableTrail(
+            [TrailPoint(float(index), 0.0, 100.0, float(index)) for index in range(4)]
+        )
+        snapshot.nodes[0].trail = trail
+        state = scene_data.TrailPayloadState()
+
+        initial = json.loads(
+            build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]["pathValue"]
+        )
+        reset_iterations = trail.full_iteration_count
+        trail.pop(0)
+        trail.append(TrailPoint(4.0, 0.0, 100.0, 4.0))
+        trail.first_sequence = 101
+        trail.end_sequence = 105
+        delta = json.loads(
+            build_scene_payload(snapshot, trail_state=state)["trailRibbons"][0]["pathValue"]
+        )
+
+        self.assertEqual(initial["op"], "reset")
+        self.assertEqual(len(initial["points"]), 4)
+        self.assertEqual(trail.full_iteration_count, reset_iterations)
         self.assertEqual(
-            path,
-            [
-                [0.0, 100.0, -0.0],
-                [100.0, 100.0, -0.0],
-                [100.0, 100.0, -100.0],
-            ],
+            delta,
+            {
+                "op": "delta",
+                "generation": 3,
+                "firstSequence": 101,
+                "endSequence": 105,
+                "removedCount": 1,
+                "addedPoints": [[4.0, 100.0, -0.0]],
+            },
         )
 
     def test_terrain_geometry_builds_connected_heightfield(self) -> None:
@@ -535,6 +586,218 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(index_data.size(), 12 * 4)
         self.assertLessEqual(geometry.boundsMin().x(), -32.0)
         self.assertGreaterEqual(geometry.boundsMax().x(), 120.0)
+
+    def test_trail_ribbon_stream_updates_append_and_head_eviction_incrementally(self) -> None:
+        """流式尾迹追加与弹头只改局部缓冲，不能反复清空并重建整张 mesh。"""
+
+        def stream(first: int, points: list[list[float]]) -> str:
+            return json.dumps(
+                {
+                    "generation": 7,
+                    "firstSequence": first,
+                    "endSequence": first + len(points),
+                    "points": points,
+                }
+            )
+
+        geometry = TrailRibbonGeometry()
+        points = [[float(index * 20), 100.0, float(-(index % 2) * 8)] for index in range(6)]
+        geometry.pathValue = stream(0, points)
+        rebuilds = geometry.fullRebuildCount
+        increments = geometry.incrementalUpdateCount
+        first_segment = bytes(geometry.vertexData())[: 5 * geometry.stride()]
+
+        points.append([120.0, 100.0, 0.0])
+        geometry.pathValue = stream(0, points)
+
+        self.assertEqual(geometry.fullRebuildCount, rebuilds)
+        self.assertGreater(geometry.incrementalUpdateCount, increments)
+        self.assertEqual(bytes(geometry.vertexData())[: 5 * geometry.stride()], first_segment)
+
+        # 弹出 A、追加 H 后，中间 C-D 段只允许更新渐隐 alpha，坐标和索引不能动。
+        middle_offset = 2 * 5 * geometry.stride()
+        middle_before = bytes(geometry.vertexData())
+        middle_positions_before = tuple(
+            struct.unpack_from("<fff", middle_before, middle_offset + index * geometry.stride())
+            for index in range(5)
+        )
+        middle_indices_before = bytes(geometry.indexData())[2 * 9 * 4 : 3 * 9 * 4]
+        shifted = points[1:] + [[140.0, 100.0, -8.0]]
+        geometry.pathValue = stream(1, shifted)
+
+        self.assertEqual(geometry.fullRebuildCount, rebuilds)
+        self.assertEqual(
+            tuple(
+                struct.unpack_from("<fff", bytes(geometry.vertexData()), middle_offset + index * geometry.stride())
+                for index in range(5)
+            ),
+            middle_positions_before,
+        )
+        self.assertEqual(bytes(geometry.indexData())[2 * 9 * 4 : 3 * 9 * 4], middle_indices_before)
+
+    def test_trail_ribbon_stream_reused_slot_indices_use_physical_vertex_base(self) -> None:
+        """弹头后复用非零段槽时，主体索引必须指向该槽自己的五个顶点。"""
+
+        geometry = TrailRibbonGeometry()
+        points = [[float(index * 20), 100.0, 0.0] for index in range(5)]
+        geometry.pathValue = json.dumps(
+            {"op": "reset", "generation": 4, "firstSequence": 0, "endSequence": 5, "points": points}
+        )
+        geometry.pathValue = json.dumps(
+            {
+                "op": "delta",
+                "generation": 4,
+                "firstSequence": 2,
+                "endSequence": 7,
+                "removedCount": 2,
+                "addedPoints": [[100.0, 100.0, 0.0], [120.0, 100.0, 0.0]],
+            }
+        )
+
+        # 两个回收槽按 0、1 顺序复用；检查第二个新段所在物理槽 1。
+        index_data = bytes(geometry.indexData())
+        body_indices = struct.unpack_from("<IIIIII", index_data, 1 * 9 * 4)
+        self.assertTrue(all(5 <= index <= 8 for index in body_indices), body_indices)
+
+    def test_trail_ribbon_stream_uses_deques_for_hot_path_head_eviction(self) -> None:
+        """流式点列和段槽必须使用 deque，禁止在稳态弹头时搬移整个 list。"""
+
+        geometry = TrailRibbonGeometry()
+        geometry.pathValue = json.dumps(
+            {
+                "op": "reset",
+                "generation": 8,
+                "firstSequence": 0,
+                "endSequence": 3,
+                "points": [[0.0, 100.0, 0.0], [20.0, 100.0, 0.0], [40.0, 100.0, 0.0]],
+            }
+        )
+
+        self.assertIsInstance(geometry._stream_points, deque)
+        self.assertIsInstance(geometry._stream_segment_slots, deque)
+
+    def test_trail_ribbon_delta_does_not_scan_all_points_for_bounds(self) -> None:
+        """稳态 delta 只能扩张保守包围盒，不能调用全点包围盒扫描。"""
+
+        class BoundsCountingGeometry(TrailRibbonGeometry):
+            """记录完整包围盒扫描次数。"""
+
+            def __init__(self) -> None:
+                """先初始化计数，再让基类构造空几何。"""
+
+                self.bounds_scan_count = 0
+                super().__init__()
+
+            def _apply_bounds(self, points) -> None:  # noqa: ANN001
+                """统计全量扫描并委托基类实现。"""
+
+                self.bounds_scan_count += 1
+                super()._apply_bounds(points)
+
+        geometry = BoundsCountingGeometry()
+        geometry.pathValue = json.dumps(
+            {
+                "op": "reset",
+                "generation": 9,
+                "firstSequence": 0,
+                "endSequence": 4,
+                "points": [[0.0, 100.0, 0.0], [20.0, 100.0, 0.0], [40.0, 100.0, 0.0], [60.0, 100.0, 0.0]],
+            }
+        )
+        scans = geometry.bounds_scan_count
+        geometry.pathValue = json.dumps(
+            {
+                "op": "delta",
+                "generation": 9,
+                "firstSequence": 1,
+                "endSequence": 5,
+                "removedCount": 1,
+                "addedPoints": [[80.0, 100.0, 0.0]],
+            }
+        )
+
+        self.assertEqual(geometry.bounds_scan_count, scans)
+
+    def test_trail_ribbon_stream_keeps_bounded_head_to_tail_alpha_fade(self) -> None:
+        """流式尾迹仍须队首更淡、队尾更清晰，不能为增量更新退化为整条同透明度。"""
+
+        geometry = TrailRibbonGeometry()
+        points = [[float(index * 20), 100.0, 0.0] for index in range(64)]
+        geometry.pathValue = json.dumps(
+            {"op": "reset", "generation": 5, "firstSequence": 0, "endSequence": 64, "points": points}
+        )
+
+        vertex_data = bytes(geometry.vertexData())
+        first_alpha = struct.unpack_from("<f", vertex_data, 11 * 4)[0]
+        middle_slot = 31
+        middle_alpha_offset = middle_slot * 5 * geometry.stride() + 11 * 4
+        middle_alpha = struct.unpack_from("<f", vertex_data, middle_alpha_offset)[0]
+        last_slot = len(points) - 2
+        last_alpha_offset = last_slot * 5 * geometry.stride() + 11 * 4
+        last_alpha = struct.unpack_from("<f", vertex_data, last_alpha_offset)[0]
+        self.assertLess(first_alpha, middle_alpha)
+        self.assertLess(middle_alpha, last_alpha)
+
+    def test_trail_ribbon_stream_middle_mutation_forces_bounded_rebuild(self) -> None:
+        """只有队列中段被篡改等非追加结构变化，才允许执行一次有界全重建。"""
+
+        geometry = TrailRibbonGeometry()
+        stream = {
+            "generation": 2,
+            "firstSequence": 10,
+            "endSequence": 14,
+            "points": [[0.0, 100.0, 0.0], [20.0, 100.0, 0.0], [40.0, 100.0, 0.0], [60.0, 100.0, 0.0]],
+        }
+        geometry.pathValue = json.dumps(stream)
+        rebuilds = geometry.fullRebuildCount
+
+        stream["points"][2] = [40.0, 100.0, -25.0]
+        geometry.pathValue = json.dumps(stream)
+
+        self.assertEqual(geometry.fullRebuildCount, rebuilds + 1)
+
+    def test_trail_ribbon_sharp_turn_uses_miter_limit_fallback(self) -> None:
+        """近乎掉头的折角必须退化为 bevel，边缘不能产生远离中心线的尖刺。"""
+
+        geometry = TrailRibbonGeometry()
+        geometry.widthValue = 20.0
+        geometry.pathValue = json.dumps(
+            {
+                "generation": 1,
+                "firstSequence": 0,
+                "endSequence": 3,
+                "points": [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0], [0.1, 100.0, -1.0]],
+            }
+        )
+
+        self.assertGreaterEqual(geometry.bevelJoinCount, 1)
+        vertex_data = bytes(geometry.vertexData())
+        corner_vertices = []
+        for vertex_index in (2, 3, 5, 6, 9):
+            offset = vertex_index * geometry.stride()
+            corner_vertices.append(struct.unpack_from("<fff", vertex_data, offset))
+        for x_coord, _, z_coord in corner_vertices:
+            self.assertLessEqual(((x_coord - 100.0) ** 2 + z_coord**2) ** 0.5, 20.0 + 1e-5)
+
+    def test_trail_ribbon_bevel_fills_outer_side_for_both_turn_directions(self) -> None:
+        """正反急转的 bevel 三角形都必须连接同一外侧边，不能误填内侧并留下裂口。"""
+
+        def join_indices(final_z: float) -> tuple[int, int, int]:
+            geometry = TrailRibbonGeometry()
+            geometry.pathValue = json.dumps(
+                {
+                    "op": "reset",
+                    "generation": 12,
+                    "firstSequence": 0,
+                    "endSequence": 3,
+                    "points": [[0.0, 100.0, 0.0], [100.0, 100.0, 0.0], [0.1, 100.0, final_z]],
+                }
+            )
+            # 第二段占槽1，每槽前6个索引是主体，后3个才是 bevel 填充面。
+            return struct.unpack_from("<III", bytes(geometry.indexData()), 1 * 9 * 4 + 6 * 4)
+
+        self.assertEqual(join_indices(1.0), (2, 5, 9))
+        self.assertEqual(join_indices(-1.0), (3, 6, 9))
 
     def test_route_ribbon_can_disable_trail_alpha_gradient(self) -> None:
         """验证航线虚线可关闭尾迹渐隐，避免单段 dash 内部颜色不一致。"""
