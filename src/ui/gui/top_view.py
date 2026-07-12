@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
 from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
 from src.ui.gui.theme_widgets import THEMES, Theme
+from src.ui.gui.trail_view_model import sample_trail_for_display
 from src.ui.gui.view_models import (
     FIT_VIEWPORT_RATIO,
     TOP_VIEW_ORIGIN_MARGIN,
@@ -751,8 +752,10 @@ class TopView(QGraphicsView):
             return
         base = self.theme.leader if is_leader else self.theme.wingman
         pen_width = 2.4 / self.scale_value
+        # 长尾迹先抽样再画：逐段绘制成本必须有上限，否则长航时下 GUI tick 被拖垮。
+        trail = sample_trail_for_display(node.trail)
         # 逐相邻点对连线：越旧的段透明度越低，形成淡出拖尾。
-        for previous, current in zip(node.trail, node.trail[1:]):
+        for previous, current in zip(trail, trail[1:]):
             age = max(0.0, current_time - current.time)
             # 数据源可能保留旧点，绘制端仍按当前设置再兜底裁剪一次。
             if age > self.trail_seconds:

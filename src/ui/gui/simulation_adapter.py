@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
+import threading
+from pathlib import Path
 
 from src.algorithm.context.leaf_types import WayPointInputS
 from src.runner.sim_control import SimulationController
@@ -255,6 +258,8 @@ class ControllerSimulationAdapter:
         self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
         # 已消费的事件数游标，避免重复处理历史扰动事件。
         self._processed_event_count = 0
+        # 3D 态势显示用地形文件，只由 GUI 读取，不传入控制器算法闭环。
+        self.terrain_display_file: str | None = None
         # 缓存最近一次控制器调用的返回码/消息，供 UI 记录日志与判断成败。
         self.last_result_code = "OK"
         self.last_result_message = ""
@@ -285,6 +290,9 @@ class ControllerSimulationAdapter:
         self.last_result_message = result.message
         # 仅在加载成功时重置缓存：清空旧尾迹/速度缓存，扰动复位为“无”。
         if result.code == "OK":
+            self.terrain_display_file = _terrain_display_file_from_config(path)
+            # 后台预热 3D 高度场缓存:用户打开 3D 窗口时直接命中,避免主线程卡数秒。
+            _warm_terrain_field_cache(self.terrain_display_file)
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
             playback_update = self.playback_vm.on_config_loaded(self.controller.playback_rate)
@@ -540,6 +548,7 @@ class ControllerSimulationAdapter:
             route_segments=route_segments,
             cpu_utilization=snapshot.cpu_utilization,
             rally_geometry=rally_geometry,
+            terrain_display_file=self.terrain_display_file,
         )
 
     @staticmethod
@@ -606,3 +615,54 @@ def node_altitude(index: int, time_value: float) -> float:
 
     # 基准高度 1200m，按机序错开 35m 层差，再叠加随时间起伏的正弦扰动。
     return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
+
+
+def _terrain_display_file_from_config(path: str) -> str | None:
+    """从主配置读取 3D 地形文件路径。注意：该字段只影响显示层。"""
+
+    config_path = Path(path)
+    try:
+        text = config_path.read_text(encoding="utf-8")
+        if config_path.suffix.lower() == ".json":
+            data = json.loads(text)
+        elif config_path.suffix.lower() in {".yaml", ".yml"}:
+            try:
+                import yaml
+            except ImportError:
+                return None
+            data = yaml.safe_load(text)
+        else:
+            return None
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_file = data.get("terrain_display_file")
+    if not isinstance(raw_file, str) or not raw_file.strip():
+        return None
+    display_path = Path(raw_file)
+    if not display_path.is_absolute():
+        display_path = config_path.parent / display_path
+    return str(display_path.resolve())
+
+
+def _warm_terrain_field_cache(display_file: str | None) -> None:
+    """后台线程预热高度场缓存。注意：失败静默,正式回退诊断由 scene_data 负责。"""
+
+    if not display_file:
+        return
+
+    def _worker() -> None:
+        """线程体:按正式分辨率生成一次高度场,填充进程级缓存。"""
+
+        try:
+            from src.ui.gui.situation3d import scene_data
+            from src.ui.gui.situation3d.terrain_field import get_terrain_field, load_terrain_layout
+
+            layout = load_terrain_layout(display_file)
+            get_terrain_field(display_file, resolution=scene_data._layout_resolution(layout))
+        except Exception:  # noqa: BLE001
+            # 预热只是性能优化,任何异常都不能影响配置加载流程。
+            return
+
+    threading.Thread(target=_worker, name="terrain-field-warmup", daemon=True).start()

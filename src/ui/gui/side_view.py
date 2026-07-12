@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QWidget
 
 from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.top_view import TopView
+from src.ui.gui.trail_view_model import sample_trail_for_display
 from src.ui.gui.view_models import (
     FIT_VIEWPORT_RATIO,
     VIEW_MAX_SCALE,
@@ -384,7 +385,9 @@ class SideView(QWidget):
                 continue
             is_leader = is_leader_node(node)
             base = self.theme.leader if is_leader else self.theme.wingman
-            for previous, current in zip(node.trail, node.trail[1:]):
+            # 长尾迹先抽样再画：与俯视图同口径，绘制段数有上限，避免长航时拖垮 GUI tick。
+            trail = sample_trail_for_display(node.trail)
+            for previous, current in zip(trail, trail[1:]):
                 x1 = self._map_x(self._horizontal_for_point(previous.x, previous.y))
                 x2 = self._map_x(self._horizontal_for_point(current.x, current.y))
                 if (x1 < -24 and x2 < -24) or (x1 > self.width() + 24 and x2 > self.width() + 24):
@@ -472,7 +475,8 @@ class SideView(QWidget):
             values.append(self._horizontal_for_point(route.end_x, route.end_y))
         for node in self.snapshot.nodes:
             values.append(self._horizontal_for_point(node.x, node.y))
-            for point in node.trail:
+            # 包围盒用抽样尾迹即可：长尾迹逐点求范围同样随时间线性变慢。
+            for point in sample_trail_for_display(node.trail):
                 values.append(self._horizontal_for_point(point.x, point.y))
         if not values:
             return None
@@ -488,7 +492,8 @@ class SideView(QWidget):
             values.append(route.end_altitude)
         for node in self.snapshot.nodes:
             values.append(node.altitude)
-            values.extend(point.altitude for point in node.trail)
+            # 与横向包围盒同口径，用抽样尾迹控制每帧计算量。
+            values.extend(point.altitude for point in sample_trail_for_display(node.trail))
         if not values:
             return None
         return min(values), max(values)
