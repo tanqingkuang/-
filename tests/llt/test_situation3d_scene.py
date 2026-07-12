@@ -311,6 +311,40 @@ class Situation3DSceneDataTests(unittest.TestCase):
             script_text = (project_root / script_name).read_text(encoding="utf-8")
             self.assertRegex(script_text, pattern, script_name)
 
+    def test_ready_state_single_snapshot_still_swaps_in_layout_terrain(self) -> None:
+        """复现负责人现场问题:READY 态只推一次快照(主窗口 tick 未启动),
+        后台生成完成后地形必须自动替换为山地,而不是永远停在占位小图。"""
+
+        from PySide6.QtCore import QObject
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+        self._reset_terrain_caches()
+        snapshot = self._snapshot()
+        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        window = Situation3DWindow()
+        # 关键:只调用一次 set_snapshot,模拟 READY 态没有 100ms tick 的场景。
+        window.set_snapshot(snapshot)
+        app.processEvents()
+
+        def layout_geometry_height() -> float:
+            for child in window.quick_view.rootObject().findChildren(QObject):
+                if child.metaObject().className().startswith("TerrainGeometry"):
+                    return float(child.boundsMax().y())
+            return -1.0
+
+        deadline = time.monotonic() + 60.0
+        height = layout_geometry_height()
+        while height < 2000.0 and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.05)
+            height = layout_geometry_height()
+        self.assertGreater(height, 2000.0, "READY 态下山地未自动替换占位地形")
+        payload = json.loads(window.bridge.sceneData())
+        self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
+        window.close()
+
     def test_follow_view_tracks_moving_leader_with_terrain_clearance(self) -> None:
         """谷地运动双帧测试:跟随锁定长机角色、随快照更新焦点,相机与视线保持地形净空。"""
 
