@@ -7,7 +7,13 @@ import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
-from src.ui.gui.trail_view_model import TrailViewModel, prune_trail
+from src.ui.gui.trail_view_model import (
+    MAX_TRAIL_DRAW_POINTS,
+    TRAIL_HEAD_RAW_POINTS,
+    TrailViewModel,
+    prune_trail,
+    sample_trail_for_display,
+)
 from src.ui.gui.view_models import trail_seconds_for_duration
 
 
@@ -102,6 +108,39 @@ class TrailViewModelTests(unittest.TestCase):
 
         self.assertEqual(prune_trail(trail, current_time=2.0, trail_seconds=0.0), [])
         self.assertEqual(prune_trail(trail, current_time=2.0, trail_seconds=-1.0), [])
+
+    def test_sample_trail_passthrough_when_within_limit(self) -> None:
+        """点数未超上限时原列表直接返回，不产生额外拷贝或抽样。"""
+
+        trail = [SampleTrailPoint(str(index), float(index)) for index in range(MAX_TRAIL_DRAW_POINTS)]
+
+        self.assertIs(sample_trail_for_display(trail), trail)
+
+    def test_sample_trail_bounds_length_and_keeps_head_raw(self) -> None:
+        """长尾迹抽样后长度有界，且最近的原始点全部保留(轨迹头必须贴住机体)。"""
+
+        trail = [SampleTrailPoint(str(index), float(index)) for index in range(12000)]
+
+        sampled = sample_trail_for_display(trail)
+
+        self.assertEqual(len(sampled), MAX_TRAIL_DRAW_POINTS)
+        # 头部原始点逐一保留：抽样导致的轨迹头滞后正是用户可见的"脱节"。
+        self.assertEqual(sampled[-TRAIL_HEAD_RAW_POINTS:], trail[-TRAIL_HEAD_RAW_POINTS:])
+        # 首点保留，淡出尾端不会整体缩短。
+        self.assertIs(sampled[0], trail[0])
+        # 抽样结果保持时间单调，绘制端按相邻点对连线不会出现回折线段。
+        times = [point.time for point in sampled]
+        self.assertEqual(times, sorted(times))
+
+    def test_sample_trail_clamps_tiny_limit(self) -> None:
+        """异常小的上限被夹到安全值，不抛异常也不返回超限结果。"""
+
+        trail = [SampleTrailPoint(str(index), float(index)) for index in range(100)]
+
+        sampled = sample_trail_for_display(trail, max_points=1)
+
+        self.assertLessEqual(len(sampled), 4)
+        self.assertIs(sampled[-1], trail[-1])
 
     def test_prune_trail_keeps_boundary_and_does_not_require_sorted_input(self) -> None:
         """尾迹裁剪保留恰好等于窗口的点，且不假设输入已按时间排序。"""

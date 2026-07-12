@@ -1,0 +1,175 @@
+{
+  "_comment": "定稿布局 D 修订版：按负责人手绘示意图重排。坐标为局部航线坐标系 u/v，单位 km；高度为相对高度 m。所有峰体都归属 mountain_chains，额外 saddle_links 只表示山脉链之间的低鞍部连接。",
+  "key": "d",
+  "title": "方案 D：手绘修订定稿",
+  "description": "穿越段由南北两条长条形山脉链夹住航线；避障段双峰由低鞍部相连，重规划航线先北绕峰1、经双峰鞍部向南穿过、再南绕峰2后汇回原航线。",
+  "map": {
+    "_comment": "effective_extent_km 为正式避障有效区；render_extent_km 为渲染裙边远山范围。",
+    "effective_extent_km": 32,
+    "render_extent_km": 58
+  },
+  "flight": {
+    "_comment": "原始航线为红色虚线；重规划航线按手绘蓝线走位。cruise_altitude_m=900，clearance_m=200，鞍部目标低于 700m。",
+    "cruise_altitude_m": 900,
+    "clearance_m": 200,
+    "original_route_uv": [
+      [0.0, 0.0],
+      [26.0, 0.0]
+    ],
+    "planned_route_uv": [
+      [0.0, 0.34],
+      [4.0, 0.26],
+      [8.2, 0.20],
+      [11.5, 0.30],
+      [13.5, 1.10],
+      [15.1, 2.55],
+      [16.85, 0.34],
+      [18.7, -1.54],
+      [21.3, -1.42],
+      [24.3, -0.62],
+      [26.0, 0.02]
+    ]
+  },
+  "corridor": {
+    "_comment": "分段说明用于布局层消费；段1 平原低丘，段2 峡谷穿越，段3 双峰跨鞍部避障，段4 出口开阔。",
+    "segments": [
+      {"name": "集结段", "u_start": 0.0, "u_end": 6.0, "terrain": "平原/少量 100~300m 低丘"},
+      {"name": "穿越段", "u_start": 6.0, "u_end": 12.0, "terrain": "约 2km 宽长条峡谷"},
+      {"name": "避障段", "u_start": 12.0, "u_end": 20.0, "terrain": "错位双峰与低鞍部连接"},
+      {"name": "收尾段", "u_start": 20.0, "u_end": 26.0, "terrain": "出谷开阔"}
+    ]
+  },
+  "mountain_chains": [
+    {
+      "id": "northwest_background_group",
+      "name": "西北远离航线山群",
+      "role": "background",
+      "_comment": "对应手绘图左上角远离航线的黑色山群，不参与避障。",
+      "polyline_uv": [[-1.8, 6.8], [1.2, 7.3], [4.0, 6.8]],
+      "saddle_height_factor": 0.34,
+      "ridge_width_km": 0.95,
+      "peaks": [
+        {"station": 0.08, "lateral_offset_km": 0.10, "height_m": 880, "base_radius_km": 1.65, "aspect_ratio": 1.30, "role": "background", "label": "西北远山 880m"},
+        {"station": 0.58, "lateral_offset_km": -0.05, "height_m": 1120, "base_radius_km": 1.85, "aspect_ratio": 1.42, "role": "background", "label": "西北远山 1120m"}
+      ]
+    },
+    {
+      "id": "north_branch_group",
+      "name": "北侧分叉小山群",
+      "role": "background",
+      "_comment": "对应手绘图中上方小山群，通过 saddle_links 与北侧峡谷山脉相连。",
+      "polyline_uv": [[6.5, 4.65], [8.4, 5.15], [10.2, 4.80]],
+      "saddle_height_factor": 0.36,
+      "ridge_width_km": 0.58,
+      "peaks": [
+        {"station": 0.10, "lateral_offset_km": 0.00, "height_m": 920, "base_radius_km": 1.08, "aspect_ratio": 1.55, "role": "background", "label": "北支山 920m"},
+        {"station": 0.72, "lateral_offset_km": 0.05, "height_m": 1080, "base_radius_km": 1.12, "aspect_ratio": 1.45, "role": "background", "label": "北支山 1080m"}
+      ]
+    },
+    {
+      "id": "north_canyon_chain",
+      "name": "北侧穿越山脉链",
+      "role": "valley",
+      "_comment": "手绘图中航线北侧长条形黑色轮廓，走向与航线大致平行、略斜交。",
+      "polyline_uv": [[4.8, 1.72], [7.2, 1.45], [10.0, 1.70], [12.2, 2.05]],
+      "saddle_height_factor": 0.42,
+      "ridge_width_km": 0.66,
+      "peaks": [
+        {"station": 0.08, "lateral_offset_km": 0.05, "height_m": 1380, "base_radius_km": 1.38, "aspect_ratio": 1.90, "role": "valley", "label": "北侧 1380m"},
+        {"station": 0.40, "lateral_offset_km": 0.00, "height_m": 2260, "base_radius_km": 1.30, "aspect_ratio": 2.20, "role": "valley", "label": "北侧 2260m"},
+        {"station": 0.78, "lateral_offset_km": -0.04, "height_m": 2440, "base_radius_km": 1.28, "aspect_ratio": 2.25, "role": "valley", "label": "北侧 2440m"}
+      ]
+    },
+    {
+      "id": "south_canyon_chain",
+      "name": "南侧穿越山脉链",
+      "role": "valley",
+      "_comment": "手绘图中航线南侧长条形黑色轮廓，东端通过鞍部连接到峰1南侧。",
+      "polyline_uv": [[4.2, -2.05], [7.0, -1.50], [10.2, -1.22], [12.9, -1.35], [14.9, -0.92]],
+      "saddle_height_factor": 0.40,
+      "ridge_width_km": 0.72,
+      "peaks": [
+        {"station": 0.08, "lateral_offset_km": -0.04, "height_m": 1180, "base_radius_km": 1.45, "aspect_ratio": 1.88, "role": "valley", "label": "南侧 1180m"},
+        {"station": 0.38, "lateral_offset_km": 0.00, "height_m": 2180, "base_radius_km": 1.35, "aspect_ratio": 2.15, "role": "valley", "label": "南侧 2180m"},
+        {"station": 0.70, "lateral_offset_km": 0.04, "height_m": 2360, "base_radius_km": 1.36, "aspect_ratio": 2.20, "role": "valley", "label": "南侧 2360m"},
+        {"station": 0.94, "lateral_offset_km": 0.00, "height_m": 1560, "base_radius_km": 1.32, "aspect_ratio": 1.75, "role": "valley", "label": "南端 1560m"}
+      ]
+    },
+    {
+      "id": "hazard_saddle_chain",
+      "name": "双峰低鞍部障碍链",
+      "role": "obstacle",
+      "_comment": "两座圆形障碍峰被红色原始航线穿过；中间低鞍部连接，蓝线从鞍部上方由北向南穿过。",
+      "polyline_uv": [[14.6, 0.18], [16.85, 0.34], [19.5, 0.22]],
+      "saddle_height_factor": 0.20,
+      "ridge_width_km": 0.50,
+      "peaks": [
+        {"station": 0.08, "lateral_offset_km": 0.10, "height_m": 2360, "base_radius_km": 1.02, "aspect_ratio": 1.05, "role": "obstacle", "label": "障碍峰 2360m"},
+        {"station": 0.92, "lateral_offset_km": -0.05, "height_m": 2460, "base_radius_km": 1.05, "aspect_ratio": 1.06, "role": "obstacle", "label": "障碍峰 2460m"}
+      ]
+    },
+    {
+      "id": "gather_low_hills",
+      "name": "集结段低丘链",
+      "role": "low",
+      "_comment": "集结段平原上少量 100~300m 低丘，只提供自然观感，不构成障碍。",
+      "polyline_uv": [[0.8, -0.78], [2.5, -0.55], [4.6, -0.38]],
+      "saddle_height_factor": 0.35,
+      "ridge_width_km": 0.34,
+      "peaks": [
+        {"station": 0.05, "lateral_offset_km": 0.00, "height_m": 160, "base_radius_km": 0.50, "aspect_ratio": 1.20, "role": "low", "label": "低丘 160m"},
+        {"station": 0.45, "lateral_offset_km": -0.08, "height_m": 260, "base_radius_km": 0.58, "aspect_ratio": 1.25, "role": "low", "label": "低丘 260m"},
+        {"station": 0.88, "lateral_offset_km": 0.06, "height_m": 210, "base_radius_km": 0.52, "aspect_ratio": 1.18, "role": "low", "label": "低丘 210m"}
+      ]
+    },
+    {
+      "id": "south_background_long_chain",
+      "name": "南侧远处长背景山脉链",
+      "role": "background",
+      "_comment": "对应手绘图下方较长黑色轮廓，远离航线，不参与避障。",
+      "polyline_uv": [[3.0, -7.0], [6.2, -7.8], [9.3, -7.2], [11.8, -6.1]],
+      "saddle_height_factor": 0.38,
+      "ridge_width_km": 0.88,
+      "peaks": [
+        {"station": 0.04, "lateral_offset_km": -0.04, "height_m": 760, "base_radius_km": 1.75, "aspect_ratio": 1.75, "role": "background", "label": "南远山 760m"},
+        {"station": 0.45, "lateral_offset_km": 0.05, "height_m": 980, "base_radius_km": 1.95, "aspect_ratio": 1.90, "role": "background", "label": "南远山 980m"},
+        {"station": 0.90, "lateral_offset_km": 0.00, "height_m": 860, "base_radius_km": 1.70, "aspect_ratio": 1.55, "role": "background", "label": "南远山 860m"}
+      ]
+    },
+    {
+      "id": "south_background_short_chain",
+      "name": "南侧远处短背景山脉链",
+      "role": "background",
+      "_comment": "对应手绘图下方偏右较短黑色轮廓，远离航线，不参与避障。",
+      "polyline_uv": [[14.8, -6.4], [17.2, -6.2], [19.0, -6.5]],
+      "saddle_height_factor": 0.34,
+      "ridge_width_km": 0.70,
+      "peaks": [
+        {"station": 0.20, "lateral_offset_km": 0.00, "height_m": 620, "base_radius_km": 1.15, "aspect_ratio": 1.55, "role": "background", "label": "南短山 620m"},
+        {"station": 0.78, "lateral_offset_km": -0.04, "height_m": 700, "base_radius_km": 1.20, "aspect_ratio": 1.60, "role": "background", "label": "南短山 700m"}
+      ]
+    }
+  ],
+  "saddle_links": [
+    {
+      "_comment": "手绘图左上黄色连线：北侧峡谷山脉向北分叉衔接小山群。",
+      "from_uv": [11.2, 1.95],
+      "to_uv": [8.7, 4.35],
+      "height_m": 520,
+      "ridge_width_km": 0.42,
+      "role": "saddle",
+      "kind": "branch",
+      "label": "北侧分叉鞍部"
+    },
+    {
+      "_comment": "手绘图黄色星标：峰1南侧与穿越段南侧山脉链东端相连。",
+      "from_uv": [14.9, -0.92],
+      "to_uv": [15.0, -0.42],
+      "height_m": 560,
+      "ridge_width_km": 0.46,
+      "role": "saddle",
+      "kind": "link",
+      "label": "峰1南侧鞍部"
+    }
+  ]
+}

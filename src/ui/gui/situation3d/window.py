@@ -6,7 +6,7 @@ from pathlib import Path
 
 # 显式导入 QtQuick3D，保证 PyInstaller 收集 QML 侧 QtQuick3D 运行插件。
 from PySide6 import QtQuick3D  # noqa: F401
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtQml import qmlRegisterType
 from PySide6.QtQuick import QQuickView
 from PySide6.QtQuickControls2 import QQuickStyle
@@ -61,6 +61,11 @@ class Situation3DWindow(QDialog):
         self._current_model_type = DEFAULT_AIRCRAFT_MODEL_TYPE
         self._cached_scene: tuple[Snapshot, list[ObstacleView], float] | None = None
         self.bridge.modelSelected.connect(self._on_model_selected)
+        # 高度场后台生成期间的重推定时器:单次触发,推完再按需重新武装。
+        self._terrain_refresh_timer = QTimer(self)
+        self._terrain_refresh_timer.setInterval(500)
+        self._terrain_refresh_timer.setSingleShot(True)
+        self._terrain_refresh_timer.timeout.connect(self._on_terrain_refresh)
         _register_qml_types()
         self.quick_view = QQuickView()
         self.quick_view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
@@ -115,6 +120,25 @@ class Situation3DWindow(QDialog):
             model_type=self._current_model_type,
         )
         self.bridge.set_scene_payload(payload)
+        self._schedule_terrain_refresh(payload)
+
+    def _schedule_terrain_refresh(self, payload: dict) -> None:
+        """高度场未就绪时定时重推快照。注意：READY 态主窗口 100ms 定时器未启动,
+        没有这条重推链路的话,后台生成完成的山地永远替换不进 3D 场景(显示旧占位小图)。"""
+
+        surface = payload.get("terrain", {}).get("surface", {}) if isinstance(payload, dict) else {}
+        pending = surface.get("mode") == "layout" and not surface.get("fieldReady", True)
+        if not pending or self._terrain_refresh_timer.isActive():
+            return
+        self._terrain_refresh_timer.start()
+
+    def _on_terrain_refresh(self) -> None:
+        """定时器回调:用缓存快照重推 payload,就绪后自然停止(fieldReady 翻转)。"""
+
+        if self._cached_scene is None:
+            return
+        snapshot, obstacles, clearance_m = self._cached_scene
+        self._push_scene_payload(snapshot, obstacles, clearance_m)
 
     def _show_fallback(self) -> None:
         """显示 QML 加载失败兜底信息。注意：避免窗口空白导致误判为正常。"""

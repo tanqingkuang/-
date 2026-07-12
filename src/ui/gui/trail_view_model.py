@@ -63,3 +63,27 @@ def prune_trail(trail: Iterable[Any], current_time: float, trail_seconds: float)
         return []
     # 不假设输入按时间排序，逐点按当前时间窗保留边界内采样。
     return [point for point in trail if current_time - point.time <= trail_seconds]
+
+
+# 2D 视图每帧逐段绘制尾迹，绘制段数必须有上限：长航时尾迹可积累上万点，
+# 逐点 QPen+drawLine 会把 100ms 的 GUI tick 拖到数百毫秒(表现为 3D 飞机"一卡卡")。
+MAX_TRAIL_DRAW_POINTS = 360
+# 尾迹头部保留的原始采样数：头部若参与抽样，最新绘制点会滞后机体最多数秒，
+# 表现为轨迹头与飞机脱节；保留近段原始点让轨迹头始终贴住机体。
+TRAIL_HEAD_RAW_POINTS = 48
+
+
+def sample_trail_for_display(trail: list, max_points: int = MAX_TRAIL_DRAW_POINTS) -> list:
+    """按显示上限抽样尾迹：近段保留原始点，旧段均匀抽样。注意：只供绘制端使用，不改数据缓存。"""
+
+    # 上限过小时夹到 4，保证头部保留与旧段抽样两部分都至少有 2 个点。
+    max_points = max(4, max_points)
+    if len(trail) <= max_points:
+        return trail
+    head_keep = min(TRAIL_HEAD_RAW_POINTS, max_points // 2)
+    older, head = trail[:-head_keep], trail[-head_keep:]
+    budget = max_points - head_keep
+    # 旧段按索引均匀取样并保留首点，旧段整体处于淡出区间，抽稀在视觉上无感。
+    last = len(older) - 1
+    sampled = [older[round(last * index / (budget - 1))] for index in range(budget)]
+    return sampled + head

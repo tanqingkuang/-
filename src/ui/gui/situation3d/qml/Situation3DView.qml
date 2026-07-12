@@ -31,9 +31,19 @@ Item {
     property real aircraftVisualScale: aircraftBaseScale * Math.max(1.0, distance * 0.0207 / aircraftRealWingspanM)
     property real routeDashWidthScale: nearViewWidthScale
     property real trailWidthScale: Math.min(0.17, aircraftVisualScale * aircraftUnitWingspan / 5.0 / 44.0)
+    property real terrainSpan: 20000
+    property real terrainEffectiveSpan: 20000
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
+    // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线/障碍/风险区模型。
+    property string staticContentKey: ""
+    // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
+    property string followNodeId: ""
+    // 焦点平滑只在跟随模式启用:10Hz 快照下相机不跳变;自由模式平移保持即时响应。
+    Behavior on focusX { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
+    Behavior on focusY { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
+    Behavior on focusZ { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
 
     ListModel { id: aircraftModel }
     ListModel { id: modelOptions }
@@ -41,6 +51,9 @@ Item {
     ListModel { id: routeDashModel }
     ListModel { id: routeModel }
     ListModel { id: obstacleModel }
+    ListModel { id: riskZoneModel }
+    ListModel { id: riskLineModel }
+    ListModel { id: riskBufferModel }
 
     function clampPitch(value) {
         return Math.max(-88, Math.min(-6, value))
@@ -221,15 +234,7 @@ Item {
         }
     }
 
-    function updateScene(payload, forceCamera) {
-        if (!payload || payload.length === 0) {
-            return false
-        }
-        const data = JSON.parse(payload)
-        syncAircraftStyle(data.aircraftStyle)
-        syncModelOptions(data.modelOptions || [])
-        syncAircraftModel(data.aircraft || [])
-        syncTrailModel(data.trailRibbons || [])
+    function rebuildStaticModels(data) {
         routeDashModel.clear()
         for (const item of data.routeDashes || []) {
             routeDashModel.append({
@@ -261,15 +266,76 @@ Item {
                 heightValue: item.height
             })
         }
+        riskZoneModel.clear()
+        for (const item of data.riskZones || []) {
+            riskZoneModel.append({
+                zoneId: item.id,
+                label: item.label,
+                sx: item.x,
+                sy: item.y,
+                sz: item.z,
+                radiusValue: item.radius,
+                heightValue: item.height
+            })
+        }
+        riskLineModel.clear()
+        for (const item of data.riskZoneLines || []) {
+            riskLineModel.append({
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            })
+        }
+        riskBufferModel.clear()
+        for (const item of data.riskZoneBuffers || []) {
+            riskBufferModel.append({
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            })
+        }
+    }
+
+    function updateScene(payload, forceCamera) {
+        if (!payload || payload.length === 0) {
+            return false
+        }
+        const data = JSON.parse(payload)
+        syncAircraftStyle(data.aircraftStyle)
+        syncModelOptions(data.modelOptions || [])
+        syncAircraftModel(data.aircraft || [])
+        syncTrailModel(data.trailRibbons || [])
+        if (cameraMode === "跟随") {
+            // 跟随是持续行为:每帧刷新焦点与航向,长机移动后相机不掉队。
+            applyFollowFocus()
+        }
+        // 航线/障碍/风险区是静态内容：每帧 clear+append 会销毁重建上百个几何模型,
+        // 造成周期性掉帧(飞机"一跳一跳")。签名不变时整体跳过静态模型重建。
+        const staticChanged = (data.staticKey || "") !== staticContentKey
+        if (staticChanged) {
+            staticContentKey = data.staticKey || ""
+            rebuildStaticModels(data)
+        }
         const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
         if (surface) {
             terrainSurfaceModel.visible = true
             terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
-            terrainGeometry.widthValue = surface.width
-            terrainGeometry.depthValue = surface.depth
-            terrainGeometry.amplitudeValue = surface.height
+            root.terrainSpan = Math.max(surface.width || 0, surface.depth || 0, 20000)
+            root.terrainEffectiveSpan = Math.max(surface.effectiveSpan || 0, 20000)
+            if (surface.mode === "layout") {
+                terrainGeometry.resolutionValue = surface.resolution || 641
+                terrainGeometry.layoutFile = surface.layoutFile || ""
+                // revision 含 mtime 和高度场就绪标志:原地改文件或后台生成完成都会触发重建。
+                terrainGeometry.layoutRevision = String(surface.revision || "")
+            } else {
+                terrainGeometry.layoutFile = ""
+                terrainGeometry.widthValue = surface.width
+                terrainGeometry.depthValue = surface.depth
+                terrainGeometry.amplitudeValue = surface.height
+            }
         } else {
             terrainSurfaceModel.visible = false
+            terrainGeometry.layoutFile = ""
         }
         let cameraApplied = false
         if (data.camera && (!cameraInitialized || forceCamera === true)) {
@@ -277,7 +343,7 @@ Item {
         }
         sceneTime = Number(data.time || 0).toFixed(1) + "s"
         const counts = data.counts || {}
-        sceneSummary = "飞机 " + (counts.aircraft || 0) + " / 障碍 " + (counts.obstacles || 0)
+        sceneSummary = "飞机 " + (counts.aircraft || 0) + " / 风险区 " + (counts.riskZones || 0)
         return cameraApplied
     }
 
@@ -293,26 +359,51 @@ Item {
 
     function setTopView() {
         yaw = 0
-        pitch = -89
+        pitch = -76
+        distance = Math.max(15500, terrainEffectiveSpan * 0.56)
+        focusY = Math.max(focusY, 900)
         cameraMode = "俯视"
     }
 
     function setSideView() {
         yaw = -90
         pitch = -8
+        distance = Math.max(distance, terrainEffectiveSpan * 0.56)
         cameraMode = "侧视"
     }
 
-    function setFollowView() {
-        if (aircraftModel.count > 0) {
-            const lead = aircraftModel.get(0)
-            focusX = lead.sx
-            focusY = lead.sy
-            focusZ = lead.sz
-            yaw = lead.yawDeg - 35
-            pitch = -22
-            distance = Math.max(520, distance * 0.55)
+    function leaderAircraftIndex() {
+        for (let index = 0; index < aircraftModel.count; index += 1) {
+            const role = String(aircraftModel.get(index).role || "").toLowerCase()
+            if (role.indexOf("leader") >= 0) {
+                return index
+            }
         }
+        return aircraftModel.count > 0 ? 0 : -1
+    }
+
+    function applyFollowFocus() {
+        const index = followNodeId ? findAircraftIndex(followNodeId) : -1
+        const resolved = index >= 0 ? index : leaderAircraftIndex()
+        if (resolved < 0) {
+            return
+        }
+        const lead = aircraftModel.get(resolved)
+        followNodeId = lead.nodeId
+        focusX = lead.sx
+        focusY = lead.sy
+        focusZ = lead.sz
+        // 相机语义:yaw = 机头航向 - 90 为正后方,再加 25° 侧偏形成斜后跟随;
+        // 偏移过大(历史值 -35 ≈ 侧后 55°)会把相机压进峡谷侧壁。
+        yaw = lead.yawDeg - 65
+    }
+
+    function setFollowView() {
+        // 跟随目标按长机角色选取(演示配置里第 0 项是僚机),并记录 nodeId 供逐帧跟踪。
+        followNodeId = ""
+        pitch = -18
+        distance = Math.max(720, Math.min(distance * 0.55, 1800))
+        applyFollowFocus()
         cameraMode = "跟随"
     }
 
@@ -329,14 +420,36 @@ Item {
         }
     }
 
+    Rectangle {
+        anchors.fill: parent
+        gradient: Gradient {
+            GradientStop { position: 0.0; color: "#16263c" }
+            GradientStop { position: 0.16; color: "#22405c" }
+            GradientStop { position: 0.22; color: "#3a6a8c" }
+            GradientStop { position: 0.34; color: "#2a4a66" }
+            GradientStop { position: 1.0; color: "#2e4458" }
+        }
+    }
+
     View3D {
         id: view3d
         anchors.fill: parent
         environment: SceneEnvironment {
-            backgroundMode: SceneEnvironment.Color
-            clearColor: "#101923"
+            backgroundMode: SceneEnvironment.Transparent
+            clearColor: "transparent"
             antialiasingMode: SceneEnvironment.MSAA
-            antialiasingQuality: SceneEnvironment.High
+            antialiasingQuality: SceneEnvironment.VeryHigh
+            fog: Fog {
+                enabled: true
+                // 清晨薄雾:雾色取天际亮蓝灰(比地面亮),密度减半、消隐距离推远,远景保持轮廓可辨。
+                color: "#3d5876"
+                density: 0.16
+                depthEnabled: true
+                depthNear: Math.max(3200, root.distance * 1.45)
+                depthFar: Math.max(11000, root.distance * 3.10)
+                depthCurve: 1.18
+                heightEnabled: false
+            }
         }
 
         Node {
@@ -347,27 +460,40 @@ Item {
             PerspectiveCamera {
                 id: camera
                 position: Qt.vector3d(0, 0, root.distance)
-                clipNear: 1
+                clipNear: 10
                 clipFar: 100000
+                fieldOfView: 50
             }
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-38, -52, 0)
-            // 顶点色是真实反照率,亮度回到 1 量级避免过曝成白色。
-            brightness: 1.35
+            eulerRotation: Qt.vector3d(-35, -52, 0)
+            // 清晨低角度暖阳:主方向光。反照率已重标为白天量级,亮度按"岩面高光不过曝"配平。
+            brightness: 0.62
             castsShadow: false
+            color: "#ffe9c8"
         }
 
         DirectionalLight {
-            eulerRotation: Qt.vector3d(-68, 138, 0)
-            brightness: 0.3
+            eulerRotation: Qt.vector3d(-68, 132, 0)
+            // 冷色补光负责背光坡可读性：暗部应是蓝灰可读，而不是纯黑糊成一片。
+            brightness: 0.55
             castsShadow: false
+            color: "#6db6d8"
+        }
+
+        DirectionalLight {
+            eulerRotation: Qt.vector3d(-90, 0, 0)
+            // 天空环境光:半球光的方向光近似,从正上方给全场景铺清晨天光,抬高暗部曝光。
+            brightness: 0.50
+            castsShadow: false
+            color: "#9cc2e0"
         }
 
         PointLight {
-            position: Qt.vector3d(root.focusX - 6200, root.focusY + 3600, root.focusZ + 4800)
-            brightness: 1.4
+            position: Qt.vector3d(root.focusX - 5600, root.focusY + 3820, root.focusZ + 5000)
+            brightness: 0.72
+            color: "#6fc6d8"
         }
 
         Model {
@@ -383,8 +509,88 @@ Item {
                 baseColor: "#ffffff"
                 cullMode: Material.NoCulling
                 vertexColorsEnabled: true
-                roughness: 0.94
-                specularAmount: 0.03
+                roughness: 0.96
+                specularAmount: 0.02
+                // 反照率已是白天量级,自发光只留极小底线,避免整体发灰。
+                emissiveFactor: Qt.vector3d(0.012, 0.016, 0.020)
+                // 近景细节法线:顶点间距 68m,顶点色插值在极限放大时糊成水彩;
+                // 平铺细节法线在像素级补出岩面粗糙度,曝光不受影响(P1.5)。
+                normalMap: Texture {
+                    source: "assets/terrain_detail_normal.png"
+                    tilingModeHorizontal: Texture.Repeat
+                    tilingModeVertical: Texture.Repeat
+                    scaleU: 112
+                    scaleV: 112
+                    generateMipmaps: true
+                    mipFilter: Texture.Linear
+                }
+                normalStrength: 0.48
+            }
+        }
+
+        Repeater3D {
+            model: riskZoneModel
+            delegate: Model {
+                visible: false
+                source: "#Cylinder"
+                position: Qt.vector3d(model.sx, model.sy - 20.0, model.sz)
+                scale: Qt.vector3d(model.radiusValue / 50.0, 0.020, model.radiusValue / 50.0)
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: Qt.rgba(1.0, 0.16, 0.12, 0.16)
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.32
+                    cullMode: Material.NoCulling
+                    roughness: 0.92
+                    emissiveFactor: Qt.vector3d(0.18, 0.03, 0.02)
+                }
+            }
+        }
+
+        Repeater3D {
+            model: riskLineModel
+            delegate: Model {
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    // 与主航线同一距离缩放,任何距离下风险网格都细于航线,层级不反转。
+                    widthValue: model.widthValue * root.routeDashWidthScale
+                    alphaMode: "solid"
+                }
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.95
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.66
+                    // 发光降档:风险网是提示层,不允许压过主任务航线成为画面主角。
+                    emissiveFactor: Qt.vector3d(1.05, 0.16, 0.01)
+                }
+            }
+        }
+
+        Repeater3D {
+            model: riskBufferModel
+            delegate: Model {
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue * root.routeDashWidthScale
+                    alphaMode: "solid"
+                }
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.70
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.78
+                    emissiveFactor: Qt.vector3d(0.12, 0.62, 0.68)
+                }
             }
         }
 
@@ -400,11 +606,12 @@ Item {
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.82
+                    opacity: 0.88
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.88
-                    emissiveFactor: Qt.vector3d(0.10, 0.30, 0.34)
+                    // 主任务航线辉光加强一档:风格 A 的态势层级里航线优先于风险提示。
+                    emissiveFactor: Qt.vector3d(0.18, 0.55, 0.62)
                 }
             }
         }
@@ -465,24 +672,38 @@ Item {
             }
         }
 
-        Repeater3D {
-            model: aircraftModel
-            delegate: Node {
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
-                Behavior on position {
-                    Vector3dAnimation {
-                        duration: 90
-                        easing.type: Easing.Linear
-                    }
-                }
+        Node {
+            id: aircraftGroup
 
-                RuntimeLoader {
-                    source: Qt.resolvedUrl(root.aircraftModelSource)
-                    // 资产机头朝向由 Python 策略给出偏航校正，统一转到本场景机头朝 +X 的约定。
-                    eulerRotation: Qt.vector3d(0, root.aircraftYawOffsetDeg, 0)
-                    // 近观按真实翼展 1:1 显示；相机拉远后改为恒定视角大小(翼展约占视距 2%)，避免退化成小点。
-                    scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)
+            DirectionalLight {
+                // 全编队共享一盏轮廓侧逆光:scope 限定机群子树,把机体从山体背景里分离。
+                // 正式 D3D 后端方向光上限 4 盏,禁止按机实例化(五机会到 8 盏被裁剪)。
+                scope: aircraftGroup
+                eulerRotation: Qt.vector3d(-18, 148, 0)
+                brightness: 2.4
+                castsShadow: false
+                color: "#dceeff"
+            }
+
+            Repeater3D {
+                model: aircraftModel
+                delegate: Node {
+                    position: Qt.vector3d(model.sx, model.sy, model.sz)
+                    eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
+                    Behavior on position {
+                        Vector3dAnimation {
+                            duration: 90
+                            easing.type: Easing.Linear
+                        }
+                    }
+
+                    RuntimeLoader {
+                        source: Qt.resolvedUrl(root.aircraftModelSource)
+                        // 资产机头朝向由 Python 策略给出偏航校正，统一转到本场景机头朝 +X 的约定。
+                        eulerRotation: Qt.vector3d(0, root.aircraftYawOffsetDeg, 0)
+                        // 近观按真实翼展 1:1 显示；相机拉远后改为恒定视角大小(翼展约占视距 2%)，避免退化成小点。
+                        scale: Qt.vector3d(root.aircraftVisualScale, root.aircraftVisualScale, root.aircraftVisualScale)
+                    }
                 }
             }
         }

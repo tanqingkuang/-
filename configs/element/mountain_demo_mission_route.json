@@ -1,0 +1,35 @@
+{
+  "speed_mps": 20.0,
+  "waypoints": [
+    {
+      "altitude_m": 900.0,
+      "R": 0.0,
+      "latitude_deg": 39.0,
+      "longitude_deg": 116.0
+    },
+    {
+      "altitude_m": 900.0,
+      "R": 0.0,
+      "latitude_deg": 38.9999794,
+      "longitude_deg": 116.0692629
+    },
+    {
+      "altitude_m": 900.0,
+      "R": 0.0,
+      "latitude_deg": 38.9999178,
+      "longitude_deg": 116.1385259
+    },
+    {
+      "altitude_m": 900.0,
+      "R": 0.0,
+      "latitude_deg": 38.9997716,
+      "longitude_deg": 116.2308764
+    },
+    {
+      "altitude_m": 900.0,
+      "R": 0.0,
+      "latitude_deg": 38.999614,
+      "longitude_deg": 116.3001392
+    }
+  ]
+}

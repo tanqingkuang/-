@@ -2,15 +2,30 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import math
+import os
+from functools import lru_cache
+from pathlib import Path
 from typing import Iterable
+
+import numpy as np
 
 from src.ui.gui.situation3d.aircraft_model_style import (
     DEFAULT_AIRCRAFT_MODEL_TYPE,
     AircraftModelType,
     available_model_options,
     create_aircraft_model_style,
+)
+from src.ui.gui.situation3d.terrain_field import (
+    DEFAULT_TERRAIN_RESOLUTION,
+    TerrainField,
+    peek_terrain_field,
+    risk_zones_from_layout,
+    terrain_extent_from_layout,
+    load_terrain_layout,
 )
 from src.ui.gui.view_models import (
     ObstacleView,
@@ -33,6 +48,53 @@ DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
 DEFAULT_TERRAIN_RELIEF_M = 2200.0
 
+# 3D payload 设计说明：
+# 1. QML 侧只接收 JSON 字符串，因此 payload 不能携带完整高度场大数组。
+# 2. 布局地形只把 layoutFile、resolution、中心和范围传给 TerrainGeometry。
+# 3. TerrainGeometry 在 Python/QML 类型内部生成网格，避免 JSON 序列化数十 MB 数据。
+# 4. riskZones 是语义数据，riskZoneLines/riskZoneBuffers 是为 QML 简化准备的渲染线段。
+# 5. 风险区线段保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
+# 6. 旧配置没有 terrain_display_file 时，payload 仍然走 procedural 地形路径。
+# 7. 旧路径的 surface.width/depth/height 字段保持不变，避免历史 QML 绑定失效。
+# 8. 新布局模式只影响显示层，不改变 Snapshot 的 ENU 坐标、航线和障碍语义。
+# 9. 障碍物 obstacles 仍表示避障模块二维障碍；riskZones 表示手工标记山峰风险罩面。
+# 10. 航线虚线、尾迹和风险细线都用同一几何契约：JSON 编码的 Quick3D 三元组数组。
+# 11. 红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
+# 12. 淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
+# 13. 风险罩面高度略高于峰顶，避免和地形 z-fighting。
+# 14. 缓冲虚线放在山脚高度附近，表达安全缓冲而不是禁飞实体墙。
+# 15. 布局文件读取使用 lru_cache，实时刷新快照时不会重复解析 JSON。
+# 16. 文件不可读只回退旧地形，不阻断 3D 窗口打开。
+# 17. 但 terrain_field 的单元测试会直接读取正式布局，确保验收文件本身有效。
+# 18. 相机 bounds 仍由飞机、航线和障碍推导；布局地形范围由 terrain payload 独立声明。
+# 19. 这样无地形配置时相机行为完全沿用旧场景。
+# 20. 有地形配置时 QML 的 terrainSpan 会辅助俯视/侧视按钮拉开距离。
+# 21. riskZones 计数进入 sceneSummary，便于截图时确认布局风险数据已到达 QML。
+# 22. 路径字段使用绝对路径传给 QML，避免工作目录变化导致 TerrainGeometry 找不到文件。
+# 23. `terrain_display_file` 可以由 Snapshot 或 build_scene_payload 参数传入，测试可直接覆盖。
+# 24. payload 字段名使用 QML 现有 camelCase 风格，减少绑定样板。
+# 25. 这里不做 P2 的可通行性判断；S 绕航线仅作为冻结布局参考线。
+# 26. 原始航线仍来自仿真 snapshot.route_segments，保证飞机飞行坐标语义不变。
+# 27. planned_route_uv 暂不进入正式 3D 航线，避免 P1 误导为已接避障。
+# 28. 后续 P2 接入时可把规划结果写入 route_segments，同一渲染管线即可显示。
+# 29. 颜色和材质在 QML 层控制，本文件只提供几何和数据。
+# 30. 单个风险区生成 10 条红色网格线，覆盖但不遮蔽山体细节。
+# 31. 线段 y 坐标取风险峰高度，缓冲圈 y 坐标取低值，形成上下层次。
+# 32. 通过 json.dumps separators 压缩 pathValue，降低实时 payload 字符串体积。
+# 33. 失败回退只吞 IO/JSON/值错误，普通编程错误仍由测试暴露。
+# 34. terrain payload 的 ground 字段保留给后续需要地平面或雾墙时复用。
+# 35. 这里的 Quick3D z 是 -north，所有风险线同样遵守 enu_to_quick3d。
+# 36. route dash 切分仍按空间距离，巡航 900m 地形不会影响虚线节奏。
+# 37. 旧 obstacles 与新 riskZones 可同时存在，二者分别显示为柱体和贴地风险罩面。
+# 38. scene_data 不缓存生成后的 mesh，避免和 TerrainGeometry 的重建生命周期竞争。
+# 39. 如果布局文件变更，改变路径或清理 _cached_layout 即可刷新元数据。
+# 40. P1 默认风险区由正式 JSON 手工标记，符合任务书“先由布局 JSON 驱动”的边界。
+# 41. 注释中的“显示层”均指 GUI/QML，不包含 runner、algorithm 或 environment 模块。
+# 42. 所有数值都用 float 输出，QML ListModel 不需要再做类型归一化。
+# 43. 风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
+# 44. 风险缓冲虚线 alpha 更低，避免抢过航线蓝色主视觉。
+# 45. payload 中保留 label，后续需要 3D 标注时不用再改 terrain_field。
+
 
 def build_scene_payload(
     snapshot: Snapshot,
@@ -40,6 +102,7 @@ def build_scene_payload(
     *,
     clearance_m: float = 0.0,
     model_type: AircraftModelType = DEFAULT_AIRCRAFT_MODEL_TYPE,
+    terrain_display_file: str | None = None,
 ) -> dict[str, object]:
     """把 UI 快照转换为 QML 场景数据。注意：输入仍采用 x/y/z=东/北/天。"""
 
@@ -65,8 +128,30 @@ def build_scene_payload(
     ]
     obstacle_items = [_obstacle_payload(obstacle, clearance_m) for obstacle in obstacles if obstacle.enabled]
     bounds = _scene_bounds(aircraft, route_points, obstacle_items)
-    terrain = _terrain_payload(bounds)
+    display_file = terrain_display_file or snapshot.terrain_display_file
+    terrain = _terrain_payload(bounds, display_file)
+    risk_zones = list(terrain.get("riskZones", []))
+    risk_zone_lines = list(terrain.get("riskZoneLines", []))
+    if not risk_zone_lines:
+        risk_zone_lines = [
+            line
+            for zone in risk_zones
+            for line in _risk_zone_line_payload(zone)
+        ]
+    risk_zone_buffers = list(terrain.get("riskZoneBuffers", []))
+    if not risk_zone_buffers:
+        risk_zone_buffers = [
+            dash
+            for zone in risk_zones
+            for dash in _risk_zone_buffer_payload(zone)
+        ]
+    camera_payload = _camera_payload(bounds, aircraft)
+    if terrain.get("surface", {}).get("mode") == "layout":
+        camera_payload = _layout_camera_payload(terrain["surface"])
+    # 静态内容签名：QML 据此决定是否重建航线/障碍/风险区模型，避免每帧 clear+append 造成卡顿。
+    static_key = _static_content_key(route_points, route_dashes, obstacle_items, risk_zones, risk_zone_lines, risk_zone_buffers)
     return {
+        "staticKey": static_key,
         "time": snapshot.time,
         "runState": snapshot.run_state,
         "controlReport": snapshot.control_report,
@@ -78,15 +163,29 @@ def build_scene_payload(
         "routeDashes": route_dashes,
         "obstacles": obstacle_items,
         "terrain": terrain,
-        "camera": _camera_payload(bounds, aircraft),
+        "riskZones": risk_zones,
+        "riskZoneLines": risk_zone_lines,
+        "riskZoneBuffers": risk_zone_buffers,
+        "camera": camera_payload,
         "counts": {
             "aircraft": len(aircraft),
             "trailRibbons": len(trail_ribbons),
             "routePoints": len(route_points),
             "routeDashes": len(route_dashes),
             "obstacles": len(obstacle_items),
+            "riskZones": len(risk_zones),
         },
     }
+
+
+def _static_content_key(*static_groups: list) -> str:
+    """计算静态显示内容签名。注意：内容不变时签名稳定，QML 跳过静态模型重建。"""
+
+    # 航线/障碍/风险区在一次运行中基本不变，序列化摘要的开销远小于每帧重建 QML 对象。
+    digest = hashlib.md5()
+    for group in static_groups:
+        digest.update(json.dumps(group, sort_keys=True, ensure_ascii=False).encode("utf-8"))
+    return digest.hexdigest()
 
 
 def enu_to_quick3d(east_m: float, north_m: float, up_m: float) -> dict[str, float]:
@@ -132,7 +231,7 @@ def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[st
             "nodeId": node_id,
             "color": color,
             "width": 44.0,
-            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":")),
+            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
         }
     ]
 
@@ -193,7 +292,7 @@ def _route_dash_payload(polyline: list[tuple[float, float, float]]) -> list[dict
                 {
                     "color": ROUTE_DASH_COLOR,
                     "width": ROUTE_DASH_WIDTH_M,
-                    "pathValue": json.dumps(dash_path, ensure_ascii=False, separators=(",", ":")),
+                    "pathValue": json.dumps(dash_path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
                 }
             )
         # 无论当前 dash 是否因退化被跳过，都按完整周期推进，保持虚线节奏稳定。
@@ -374,8 +473,13 @@ def _scene_bounds(
     }
 
 
-def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
+def _terrain_payload(bounds: dict[str, float], terrain_display_file: str | None = None) -> dict[str, object]:
     """生成连续高度场地形参数。注意：只影响 3D 显示背景，不改变仿真状态。"""
+
+    if terrain_display_file:
+        layout_payload = _layout_terrain_payload(terrain_display_file)
+        if layout_payload is not None:
+            return layout_payload
 
     # 地图默认保持 20km x 20km，较大的仿真范围再按实际包围盒外扩。
     span_x = max(bounds["spanX"], DEFAULT_TERRAIN_SPAN_M)
@@ -384,6 +488,7 @@ def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
     center_z = bounds["centerZ"]
     return {
         "ground": {
+            "mode": "procedural",
             "x": center_x,
             "y": -8.0,
             "z": center_z,
@@ -392,14 +497,246 @@ def _terrain_payload(bounds: dict[str, float]) -> dict[str, object]:
             "height": 16.0,
         },
         "surface": {
+            "mode": "procedural",
             "x": center_x,
             "y": 0.0,
             "z": center_z,
             "width": span_x,
             "depth": span_z,
             "height": DEFAULT_TERRAIN_RELIEF_M,
+            "layoutFile": "",
+            "resolution": 0,
         },
+        "riskZones": [],
     }
+
+
+def _layout_terrain_payload(terrain_display_file: str) -> dict[str, object] | None:
+    """生成布局地形 payload。注意：任何解析/数值/结构错误都回退旧地形并留诊断。"""
+
+    layout_path = str(Path(terrain_display_file).resolve())
+    try:
+        layout, revision = _cached_layout(layout_path)
+        extent = terrain_extent_from_layout(layout)
+        # 合法 JSON 也可能携带错误类型或非有限值,包括风险区构造在内的全部转换
+        # 都必须留在保护块内,任何一步失败都整体回退 procedural。
+        for key in ("min_east_m", "max_east_m", "min_north_m", "max_north_m"):
+            if not math.isfinite(float(extent[key])):
+                raise ValueError(f"terrain extent {key} 非有限值")
+        width = float(extent["max_east_m"]) - float(extent["min_east_m"])
+        depth = float(extent["max_north_m"]) - float(extent["min_north_m"])
+        if width <= 0.0 or depth <= 0.0:
+            raise ValueError("terrain extent 端点顺序错误或范围为零")
+        resolution = _layout_resolution(layout)
+        effective_span = float(layout.get("map", {}).get("effective_extent_km", 32.0)) * 1000.0 if isinstance(layout.get("map"), dict) else 32000.0
+        if not math.isfinite(effective_span) or effective_span <= 0.0:
+            raise ValueError("effective_extent_km 非法")
+        field = _cached_terrain_field(layout_path, resolution)
+        center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
+        center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
+        # 风险区线网和地形 mesh 使用同一高度场，避免 QML 里出现悬浮平面。
+        risk_zones = [_risk_zone_payload(zone, field) for zone in risk_zones_from_layout(layout)]
+        # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
+        risk_zone_lines = [
+            line
+            for zone in risk_zones
+            for line in _risk_zone_line_payload(zone, field)
+        ]
+        # 缓冲圈同样贴地，但 offset 更低，用来表达山脚安全边界。
+        risk_zone_buffers = [
+            dash
+            for zone in risk_zones
+            for dash in _risk_zone_buffer_payload(zone, field)
+        ]
+        payload = {
+            "ground": {
+                "mode": "layout",
+                "x": center_east,
+                "y": -10.0,
+                "z": -center_north,
+                "width": width,
+                "depth": depth,
+                "height": 20.0,
+            },
+            "surface": {
+                "mode": "layout",
+                "x": center_east,
+                "y": 0.0,
+                "z": -center_north,
+                "width": width,
+                "depth": depth,
+                "height": max([zone["height"] for zone in risk_zones] + [2600.0]),
+                "layoutFile": layout_path,
+                "resolution": resolution,
+                # revision 用字符串传递:mtime_ns 超出 QML double 精度(2^53)会丢位。
+                "revision": f"{revision}:{1 if field is not None else 0}",
+                "fieldReady": field is not None,
+                "effectiveSpan": effective_span,
+            },
+            "riskZones": risk_zones,
+            "riskZoneLines": risk_zone_lines,
+            "riskZoneBuffers": risk_zone_buffers,
+        }
+        # 末端防线:payload 里任何 NaN/Inf 都在这里拦下,而不是送进 QML JSON.parse。
+        json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        return payload
+    except (OSError, ValueError, json.JSONDecodeError, TypeError, KeyError, OverflowError) as error:
+        # 显示层坏配置不允许打断 3D 刷新:回退 procedural 地形并输出可见诊断。
+        logging.getLogger(__name__).warning("地形布局 %s 不可用,回退旧地形: %s", layout_path, error)
+        return None
+
+
+def _cached_layout(path: str) -> tuple[dict[str, object], int]:
+    """缓存布局文件内容并返回版本号。注意：文件原地修改后 mtime 变化自动失效,
+    避免同一路径重载时 extent/风险元数据与高度场混用不同版本。"""
+
+    mtime_ns = Path(path).stat().st_mtime_ns
+    return _cached_layout_versioned(path, mtime_ns), mtime_ns
+
+
+@lru_cache(maxsize=4)
+def _cached_layout_versioned(path: str, mtime_ns: int) -> dict[str, object]:
+    """按(路径,修改时间)缓存布局 JSON。注意：仅由 _cached_layout 调用。"""
+
+    return load_terrain_layout(path)
+
+
+def _layout_resolution(layout: dict[str, object]) -> int:
+    """解析布局网格分辨率。注意：SIM3D_LOW_SPEC=1 时采用低配档,供低端集显机使用。"""
+
+    detail = layout.get("detail") if isinstance(layout.get("detail"), dict) else {}
+    key = "low_spec_grid_resolution" if os.environ.get("SIM3D_LOW_SPEC") == "1" else "grid_resolution"
+    value = int(detail.get(key, DEFAULT_TERRAIN_RESOLUTION))
+    if value <= 0:
+        raise ValueError(f"{key} 必须为正整数")
+    return value
+
+
+def _cached_terrain_field(path: str, resolution: int) -> TerrainField | None:
+    """非阻塞获取共享高度场。注意：与 TerrainGeometry 共用 terrain_field 进程级缓存;
+    未就绪返回 None(风险线先按声明高度出图),就绪后 fieldReady 翻转驱动 QML 替换。"""
+
+    return peek_terrain_field(path, resolution=resolution)
+
+
+def _risk_zone_payload(zone, field: TerrainField | None = None) -> dict[str, object]:  # noqa: ANN001
+    """生成风险区显示数据。注意：中心坐标转换到 Quick3D，半径仍为米。"""
+
+    center_height = _sample_field_height(field, zone.east_m, zone.north_m) if field is not None else zone.height_m
+    # 中心高度只作为语义参考，实际罩面形状由每条风险线逐点采样决定。
+    coord = enu_to_quick3d(zone.east_m, zone.north_m, center_height + 30.0)
+    foot = enu_to_quick3d(zone.east_m, zone.north_m, center_height + 18.0)
+    return {
+        "id": zone.zone_id,
+        "label": zone.label,
+        "radius": zone.radius_m,
+        "bufferRadius": zone.buffer_radius_m,
+        "height": zone.height_m,
+        "x": coord["x"],
+        "y": coord["y"],
+        "z": coord["z"],
+        "footY": foot["y"],
+    }
+
+
+def _risk_zone_line_payload(zone: dict[str, object], field: TerrainField | None = None) -> list[dict[str, object]]:
+    """生成风险区红色细线罩面。注意：线宽显著小于航线和尾迹。"""
+
+    center_x = float(zone["x"])
+    center_z = float(zone["z"])
+    y = float(zone["y"])
+    radius = float(zone["radius"])
+    lines: list[dict[str, object]] = []
+    for ratio in (-0.66, -0.33, 0.0, 0.33, 0.66):
+        half = radius * math.sqrt(max(0.0, 1.0 - ratio * ratio))
+        offset = radius * ratio
+        for angle in (0.0, math.pi / 2.0):
+            cos_a = math.cos(angle)
+            sin_a = math.sin(angle)
+            p1 = [center_x + offset * -sin_a - half * cos_a, y, center_z + offset * cos_a - half * sin_a]
+            p2 = [center_x + offset * -sin_a + half * cos_a, y, center_z + offset * cos_a + half * sin_a]
+            path = _surface_line_path(field, p1, p2, 34.0) if field is not None else [p1, p2]
+            lines.append(
+                {
+                    "color": "#ff5a45",
+                    # 风险网格必须显著细于主航线(16m):视觉层级上任务航线优先。
+                    "width": 7.0,
+                    "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+                }
+            )
+    return lines
+
+
+def _risk_zone_buffer_payload(zone: dict[str, object], field: TerrainField | None = None) -> list[dict[str, object]]:
+    """生成风险区山脚淡青虚线缓冲轮廓。注意：用短弧段组成虚线，减少 QML 逻辑。"""
+
+    center_x = float(zone["x"])
+    center_z = float(zone["z"])
+    y = float(zone["footY"])
+    radius = float(zone["bufferRadius"])
+    dashes: list[dict[str, object]] = []
+    dash_count = 24
+    dash_angle = math.tau / dash_count * 0.55
+    for index in range(dash_count):
+        start = index * math.tau / dash_count
+        points = []
+        for sample in range(4):
+            angle = start + dash_angle * sample / 3.0
+            x = center_x + math.cos(angle) * radius
+            z = center_z - math.sin(angle) * radius
+            points.append([x, _sample_quick3d_height(field, x, z, 18.0) if field is not None else y, z])
+        dashes.append(
+            {
+                "color": "#62d9e7",
+                # 缓冲圈是最弱的提示层,比风险网格更细。
+                "width": 5.0,
+                "pathValue": json.dumps(points, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+            }
+        )
+    return dashes
+
+
+def _surface_line_path(field: TerrainField, start: list[float], end: list[float], offset_m: float) -> list[list[float]]:
+    """把水平线段披挂到地形表面。注意：输入输出均为 Quick3D 坐标。"""
+
+    samples = 18
+    points: list[list[float]] = []
+    for index in range(samples):
+        ratio = index / max(1, samples - 1)
+        # 在水平线段上均匀取样，再把每个点投到高度场上。
+        x = float(start[0]) + (float(end[0]) - float(start[0])) * ratio
+        z = float(start[2]) + (float(end[2]) - float(start[2])) * ratio
+        points.append([x, _sample_quick3d_height(field, x, z, offset_m), z])
+    return points
+
+
+def _sample_quick3d_height(field: TerrainField | None, x_m: float, z_m: float, offset_m: float) -> float:
+    """采样 Quick3D 坐标下的地形高度。注意：Quick3D z 轴为 north 取反。"""
+
+    if field is None:
+        return float(offset_m)
+    return _sample_field_height(field, float(x_m), -float(z_m)) + offset_m
+
+
+def _sample_field_height(field: TerrainField, east_m: float, north_m: float) -> float:
+    """双线性采样高度场。注意：坐标越界时夹到最近网格边界。"""
+
+    min_e = field.center_east_m - field.width_m / 2.0
+    min_n = field.center_north_m - field.depth_m / 2.0
+    u = np.clip((float(east_m) - min_e) / max(field.width_m, 1.0), 0.0, 1.0) * (field.resolution - 1)
+    v = np.clip((float(north_m) - min_n) / max(field.depth_m, 1.0), 0.0, 1.0) * (field.resolution - 1)
+    # 高度场行列方向仍是 ENU north/east，Quick3D 的 z 翻转已在调用侧处理。
+    col = int(math.floor(u))
+    row = int(math.floor(v))
+    col1 = min(col + 1, field.resolution - 1)
+    row1 = min(row + 1, field.resolution - 1)
+    tx = float(u - col)
+    ty = float(v - row)
+    h00 = float(field.heights_m[row, col])
+    h10 = float(field.heights_m[row, col1])
+    h01 = float(field.heights_m[row1, col])
+    h11 = float(field.heights_m[row1, col1])
+    return (h00 * (1.0 - tx) + h10 * tx) * (1.0 - ty) + (h01 * (1.0 - tx) + h11 * tx) * ty
 
 
 def _camera_payload(bounds: dict[str, float], aircraft: list[dict[str, object]]) -> dict[str, float]:
@@ -417,6 +754,24 @@ def _camera_payload(bounds: dict[str, float], aircraft: list[dict[str, object]])
         "distance": max(950.0, span * 1.15),
         "yaw": -38.0,
         "pitch": -34.0,
+    }
+
+
+def _layout_camera_payload(surface: dict[str, object]) -> dict[str, float]:
+    """生成布局地形相机。注意：取景按内容跨度，不按 90km 渲染裙边。"""
+
+    effective_span = float(surface.get("effectiveSpan", 32000.0))
+    # 定稿布局是"平原+走廊"的稀疏构图，大俯角远机位会让暗平原占满画面；
+    # 默认机位改为顺峡谷走廊的低角度近景，让两侧受光山坡填充画面下部（style_a 同族构图）。
+    distance = max(8200.0, effective_span * 0.30)
+    return {
+        # 焦点略偏走廊东段，主光来自西南，北山链朝南受光大坡正对相机成为画面主体。
+        "focusX": float(surface.get("x", 0.0)) + effective_span * 0.05,
+        "focusY": 900.0,
+        "focusZ": float(surface.get("z", 0.0)),
+        "distance": distance,
+        "yaw": -62.0,
+        "pitch": -20.0,
     }
 
 
