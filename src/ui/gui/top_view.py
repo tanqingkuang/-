@@ -763,19 +763,26 @@ class TopView(QGraphicsView):
             projector=lambda point: (point.x, point.y),
             semantic_key="俯视_EN",
         )
-        # 中间稳定块按八档透明度合并，首尾活动块单独画，因此调用次数恒定不随点数增长。
-        for batch in cache.render_batches(current_time=current_time, trail_seconds=self.trail_seconds):
-            color = QColor(base)
-            # 长机尾迹整体比僚机略浓。
-            color.setAlphaF((0.52 if is_leader else 0.44) * batch.opacity_factor)
-            # cosmetic 画笔在世界变换后仍保持固定像素宽度；圆角可消除急转折线的尖刺感。
-            pen = QPen(color, 2.4)
-            pen.setCosmetic(True)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            if not is_leader:
-                # 按稳定累计里程换算设备像素相位，删头和加尾都不会让旧虚线跳动。
-                pen.setDashPattern([6.0, 4.0])
-                pen.setDashOffset(batch.start_path_distance * self.scale_value / 2.4)
-            painter.setPen(pen)
-            painter.drawPath(batch.path)
+        painter.save()
+        try:
+            # drawPath 同时使用画笔和画刷；禁用前序航点/机体遗留画刷，避免开放折线首尾闭合填充。
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            # 中间稳定块按八档透明度合并，首尾活动块单独画，因此调用次数恒定不随点数增长。
+            for batch in cache.render_batches(current_time=current_time, trail_seconds=self.trail_seconds):
+                color = QColor(base)
+                # 长机尾迹整体比僚机略浓。
+                color.setAlphaF((0.52 if is_leader else 0.44) * batch.opacity_factor)
+                # cosmetic 画笔在世界变换后仍保持固定像素宽度；圆角可消除急转折线的尖刺感。
+                pen = QPen(color, 2.4)
+                pen.setCosmetic(True)
+                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+                if not is_leader:
+                    # 按稳定累计里程换算设备像素相位，删头和加尾都不会让旧虚线跳动。
+                    pen.setDashPattern([6.0, 4.0])
+                    pen.setDashOffset(batch.start_path_distance * self.scale_value / 2.4)
+                painter.setPen(pen)
+                painter.drawPath(batch.path)
+        finally:
+            # 尾迹绘制不得改变后续飞机、标签和障碍的画刷/画笔状态。
+            painter.restore()

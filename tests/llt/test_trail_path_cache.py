@@ -9,8 +9,8 @@ from unittest.mock import Mock
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QPointF
-from PySide6.QtGui import QPainterPath
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath
 from PySide6.QtWidgets import QApplication
 
 from src.ui.gui.side_view import SideView
@@ -223,6 +223,39 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
         self.assertEqual(painter.setPen.call_count, painter.drawPath.call_count)
         self.assertLessEqual(sum(call.args[0].elementCount() - 1 for call in painter.drawPath.call_args_list), 190)
 
+    def test_俯视尾迹开放路径不会继承画刷形成黑色填充面(self) -> None:
+        """批量折线必须强制禁用遗留画刷，不能把开放路径首尾闭合为黑色三角形。"""
+
+        view = TopView()
+        view.trail_seconds = 10.0
+        background = QColor("#ffffff")
+        image = QImage(220, 180, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(background)
+        points = [
+            TrailPoint(10.0, 10.0, 1200.0, 0.0, 0.0),
+            TrailPoint(110.0, 160.0, 1200.0, 1.0, 180.0),
+            TrailPoint(210.0, 10.0, 1200.0, 2.0, 360.0),
+        ]
+        inherited_brush_color = QColor("#101820")
+        painter = QPainter(image)
+        try:
+            # 模拟航点或上一架飞机留下的深色填充画刷；旧 drawPath 会把折线内部整片填黑。
+            painter.setBrush(inherited_brush_color)
+            view._draw_trail(
+                painter,
+                NodeState("A01", "leader", 210.0, 10.0, 1.0, 0.0, trail=points),
+                True,
+                2.0,
+            )
+            restored_brush = painter.brush()
+        finally:
+            painter.end()
+
+        self.assertEqual(image.pixelColor(110, 60), background)
+        self.assertNotEqual(image.pixelColor(110, 160), background)
+        self.assertEqual(restored_brush.style(), Qt.BrushStyle.SolidPattern)
+        self.assertEqual(restored_brush.color(), inherited_brush_color)
+
     def test_侧视图大量尾迹只批量绘制路径(self) -> None:
         """侧视尾迹不得再映射并逐段 drawLine。"""
 
@@ -247,6 +280,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
         view._draw_trails(painter, snapshot)
 
         painter.drawLine.assert_not_called()
+        painter.setBrush.assert_called_with(Qt.BrushStyle.NoBrush)
         self.assertLessEqual(painter.drawPath.call_count, 10)
         self.assertEqual(painter.setPen.call_count, painter.drawPath.call_count)
         self.assertLessEqual(sum(call.args[0].elementCount() - 1 for call in painter.drawPath.call_args_list), 190)

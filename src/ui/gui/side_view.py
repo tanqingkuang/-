@@ -396,6 +396,8 @@ class SideView(QWidget):
         )
         painter.scale(self.horizontal_scale, -vertical_scale)
         try:
+            # 尾迹路径只允许描边；主动清除任何调用方画刷，防止开放折线被隐式闭合填充。
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             for node in snapshot.nodes:
                 if len(node.trail) <= 1:
                     continue
