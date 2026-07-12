@@ -389,11 +389,11 @@ Item {
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#02060d" }
-            GradientStop { position: 0.16; color: "#06111b" }
-            GradientStop { position: 0.22; color: "#123448" }
-            GradientStop { position: 0.34; color: "#0b1b25" }
-            GradientStop { position: 1.0; color: "#101c26" }
+            GradientStop { position: 0.0; color: "#16263c" }
+            GradientStop { position: 0.16; color: "#22405c" }
+            GradientStop { position: 0.22; color: "#3a6a8c" }
+            GradientStop { position: 0.34; color: "#2a4a66" }
+            GradientStop { position: 1.0; color: "#2e4458" }
         }
     }
 
@@ -407,11 +407,12 @@ Item {
             antialiasingQuality: SceneEnvironment.VeryHigh
             fog: Fog {
                 enabled: true
-                color: "#081723"
-                density: 0.24
+                // 清晨薄雾:雾色取天际亮蓝灰(比地面亮),密度减半、消隐距离推远,远景保持轮廓可辨。
+                color: "#3d5876"
+                density: 0.16
                 depthEnabled: true
-                depthNear: Math.max(2800, root.distance * 1.30)
-                depthFar: Math.max(8000, root.distance * 2.28)
+                depthNear: Math.max(3200, root.distance * 1.45)
+                depthFar: Math.max(11000, root.distance * 3.10)
                 depthCurve: 1.18
                 heightEnabled: false
             }
@@ -433,18 +434,26 @@ Item {
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-35, -52, 0)
-            // 暖主光提亮受光面；正式布局比原型样张稀疏、平均海拔低，受光总量少，亮度按实测补偿。
-            brightness: 3.20
+            // 清晨低角度暖阳:主方向光。反照率已重标为白天量级,亮度按"岩面高光不过曝"配平。
+            brightness: 0.62
             castsShadow: false
-            color: "#fff0d6"
+            color: "#ffe9c8"
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 132, 0)
-            // 冷色补光负责背光坡可读性：暗部应是深蓝可读，而不是纯黑糊成一片。
-            brightness: 1.05
+            // 冷色补光负责背光坡可读性：暗部应是蓝灰可读，而不是纯黑糊成一片。
+            brightness: 0.55
             castsShadow: false
-            color: "#4faec6"
+            color: "#6db6d8"
+        }
+
+        DirectionalLight {
+            eulerRotation: Qt.vector3d(-90, 0, 0)
+            // 天空环境光:半球光的方向光近似,从正上方给全场景铺清晨天光,抬高暗部曝光。
+            brightness: 0.50
+            castsShadow: false
+            color: "#9cc2e0"
         }
 
         PointLight {
@@ -468,8 +477,8 @@ Item {
                 vertexColorsEnabled: true
                 roughness: 0.96
                 specularAmount: 0.02
-                // 自发光是全场景亮度底线：平原和深谷至少呈现深蓝灰，保证轮廓可读。
-                emissiveFactor: Qt.vector3d(0.030, 0.042, 0.056)
+                // 反照率已是白天量级,自发光只留极小底线,避免整体发灰。
+                emissiveFactor: Qt.vector3d(0.012, 0.016, 0.020)
             }
         }
 
@@ -617,6 +626,7 @@ Item {
         Repeater3D {
             model: aircraftModel
             delegate: Node {
+                id: aircraftNode
                 position: Qt.vector3d(model.sx, model.sy, model.sz)
                 eulerRotation: Qt.vector3d(0, model.yawDeg, 0)
                 Behavior on position {
@@ -624,6 +634,15 @@ Item {
                         duration: 90
                         easing.type: Easing.Linear
                     }
+                }
+
+                DirectionalLight {
+                    // 轮廓侧逆光:scope 只照本机,把机体从山体背景里分离出来,不影响地形曝光。
+                    scope: aircraftNode
+                    eulerRotation: Qt.vector3d(-18, 148, 0)
+                    brightness: 2.4
+                    castsShadow: false
+                    color: "#dceeff"
                 }
 
                 RuntimeLoader {

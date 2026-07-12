@@ -287,21 +287,25 @@ class TerrainGeometry(_TerrainGeometryBase):
 
         vertices = np.empty((rows, columns, _SURFACE_COMPONENTS), dtype=np.float32)
         vertices[:, :, 0] = x_grid
-        vertices[:, :, 1] = field.heights_m[::-1, :]
+        # local_z 的 linspace 从 +depth/2 递减,本身已完成 north→-z 翻转;
+        # 高度/法线/颜色一律按原始行序取值,再叠 [::-1] 会把地形南北镜像,
+        # 镜像面配原始法线导致朝东北的坡整体背光变黑(历史八轮"画面黑"的底层根因)。
+        vertices[:, :, 1] = field.heights_m
         vertices[:, :, 2] = z_grid
-        # y=h(east,north)、z=-north 的曲面法线为 (-dh/de, 1, +dh/dn)，_normal_grid 已按此输出；
-        # 行翻转只重排存储顺序，z 分量不得再取反，否则南北坡受光互换、朝南受光面整体变黑。
-        vertices[:, :, 3:6] = field.normals[::-1, :, :]
+        # y=h(east,north)、z=-north 的曲面法线为 (-dh/de, 1, +dh/dn)，_normal_grid 已按此输出。
+        vertices[:, :, 3:6] = field.normals
         vertices[:, :, 6] = u_grid
         vertices[:, :, 7] = v_grid
-        vertices[:, :, 8:11] = field.colors[::-1, :, :]
+        vertices[:, :, 8:11] = field.colors
         vertices[:, :, 11] = 1.0
 
         top_left = (np.arange(rows - 1, dtype=np.uint32)[:, None] * columns) + np.arange(columns - 1, dtype=np.uint32)[None, :]
         top_right = top_left + 1
         bottom_left = top_left + columns
         bottom_right = bottom_left + 1
-        indices = np.stack((top_left, bottom_left, top_right, top_right, bottom_left, bottom_right), axis=2).astype(np.uint32)
+        # 行方向 z 递减(北向),绕序必须与之匹配保持上表面为正面;
+        # 绕序反了会让双面光照按取反法线着色,整张地形呈"从背面照亮"的均匀暗色。
+        indices = np.stack((top_left, top_right, bottom_left, top_right, bottom_right, bottom_left), axis=2).astype(np.uint32)
 
         self.clear()
         self.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Triangles)
