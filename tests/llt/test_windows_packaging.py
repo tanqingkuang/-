@@ -8,7 +8,10 @@ import unittest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 FULL_RELEASE_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_full_release.ps1"
+LITE_RELEASE_SCRIPT = PROJECT_ROOT / "scripts" / "build_windows_lite_release.ps1"
 WINDOWS_EXE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "build-windows-exe.yml"
+APP_ICON_PNG = PROJECT_ROOT / "src" / "ui" / "gui" / "assets" / "app_icon.png"
+APP_ICON_ICO = PROJECT_ROOT / "src" / "ui" / "gui" / "assets" / "app_icon.ico"
 
 
 class WindowsPackagingScriptTests(unittest.TestCase):
@@ -37,6 +40,16 @@ class WindowsPackagingScriptTests(unittest.TestCase):
         self.assertIn("artifact_paths: dist/编队仿真-裁剪版.exe", workflow)
         self.assertIn("path: ${{ matrix.artifact_paths }}", workflow)
         self.assertNotIn("path: ${{ matrix.exe_path }}", workflow)
+
+    def test_release_scripts_bundle_project_application_icon(self) -> None:
+        """全量版和裁剪版 exe 都应使用并内置同一套项目图标资源。"""
+        self.assertTrue(APP_ICON_PNG.is_file())
+        self.assertTrue(APP_ICON_ICO.is_file())
+        for script_path in (FULL_RELEASE_SCRIPT, LITE_RELEASE_SCRIPT):
+            script = script_path.read_text(encoding="utf-8")
+            self.assertIn('$AppIconPath = Join-Path $ProjectRoot "src\\ui\\gui\\assets\\app_icon.ico"', script)
+            self.assertIn("--icon $AppIconPath", script)
+            self.assertIn("src/ui/gui/assets/app_icon.png;src/ui/gui/assets", script)
 
 
 if __name__ == "__main__":
