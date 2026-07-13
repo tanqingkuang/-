@@ -31,9 +31,13 @@ from src.ui.gui.view_models import (
 # 固定宽高同时供遮挡检测和实际绘制使用，禁止两处各自估算。
 NODE_CARD_WIDTH = 92.0
 NODE_CARD_HEIGHT = 58.0
-# 锚点以飞机中心为基准，使卡片左下角始终落在机体右上方。
-NODE_CARD_DX = 16.0
-NODE_CARD_DY = -14.0
+# 卡片与机体中心的固定间距；card_rect_for 据此在右上/左上/右下/左下四个方向中选锚点，
+# 保证卡片始终不覆盖属主机体，仅贴边节点会因视口适配换到其他方向展开。
+NODE_CARD_GAP_X = 16.0
+NODE_CARD_GAP_Y = 14.0
+# _draw_nodes 机体剪影任意朝向下的外接圆半径约 21px，加画笔半宽与抗锯齿余量后
+# 取整为方框边长，供遮挡检测排除真实机体覆盖范围（而非过窄的固定图标框）。
+NODE_ICON_ENVELOPE = 48.0
 
 
 class TopView(QGraphicsView):
@@ -334,12 +338,17 @@ class TopView(QGraphicsView):
 
         if self.snapshot is not self._card_snapshot:
             return
+        # 遮挡检测与实际绘制共用同一视口尺寸，保证锚点选择与离屏判定完全一致。
+        viewport_size = self.viewport().size()
         if self.cards.update_visibility(
             self._node_screen_points(),
             NODE_CARD_WIDTH,
             NODE_CARD_HEIGHT,
-            NODE_CARD_DX,
-            NODE_CARD_DY,
+            NODE_CARD_GAP_X,
+            NODE_CARD_GAP_Y,
+            icon_size=NODE_ICON_ENVELOPE,
+            viewport_w=float(viewport_size.width()),
+            viewport_h=float(viewport_size.height()),
         ):
             self.viewport().update()
 
@@ -731,16 +740,22 @@ class TopView(QGraphicsView):
             painter.drawLine(QPointF(source.x, source.y), QPointF(target.x, target.y))
 
     def _draw_node_cards(self, painter: QPainter, snapshot: Snapshot) -> None:
-        """在机体下方绘制可见信息卡片。注意：卡片矩形必须与 ViewModel 使用相同尺寸。"""
+        """在机体下方绘制可见信息卡片。注意：卡片矩形必须与 ViewModel 使用相同尺寸与锚点规则。"""
 
         if snapshot is not self._card_snapshot:
             return
+        # 与遮挡检测共用同一视口尺寸，保证绘制矩形和判定矩形（含锚点选择、离屏判定）完全一致。
+        viewport_size = self.viewport().size()
+        viewport_w = float(viewport_size.width())
+        viewport_h = float(viewport_size.height())
         points = {point.node_id: point for point in self._node_screen_points()}
         for node in snapshot.nodes:
             if not self.cards.is_card_shown(node.node_id):
                 continue
             point = points[node.node_id]
-            rect = card_rect_for(point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_DX, NODE_CARD_DY)
+            rect = card_rect_for(
+                point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_GAP_X, NODE_CARD_GAP_Y, viewport_w, viewport_h
+            )
             self._draw_node_card(painter, node, point, rect)
 
     def _draw_node_card(
@@ -762,7 +777,10 @@ class TopView(QGraphicsView):
         connector_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.setPen(connector_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawLine(QPointF(point.x, point.y), QPointF(rect.x, rect.y + rect.h))
+        # 卡片可能因贴边而展开到左上/右下/左下，引线始终连向矩形上离机体最近的角。
+        anchor_x = rect.x if abs(rect.x - point.x) <= abs(rect.x + rect.w - point.x) else rect.x + rect.w
+        anchor_y = rect.y if abs(rect.y - point.y) <= abs(rect.y + rect.h - point.y) else rect.y + rect.h
+        painter.drawLine(QPointF(point.x, point.y), QPointF(anchor_x, anchor_y))
 
         # 面板使用轻透明主题底色与弱强调色边框，对浅色和深色主题保持一致层级。
         background = QColor(self.theme.panel)
