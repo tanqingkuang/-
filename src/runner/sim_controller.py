@@ -30,7 +30,6 @@ from src.runner.sim_control_routes import (
     _build_leader_route,
     _build_rally_approach_speed,
     _build_rally_join_geometry,
-    _build_rally_route,
     _build_rally_task_init,
     _build_vel_cmd_limit,
     _leader_id_from_nodes,
@@ -701,18 +700,17 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             _blocked_wpi = _build_leader_route(config, insert_arcs=False)
             if len(_blocked_wpi) >= 2:
                 self._blocked_display_route = waypoint_inputs_to_waylines(_blocked_wpi)
-        # 集结场景额外参数：集结航线、任务配置、每机目标集结点。
-        rally_route = _build_rally_route(config)
+        # 集结场景复用任务航线首点和首段，构造任务配置及每机目标集结点。
         rally_task_init = _build_rally_task_init(config, self._algorithm_period_s, list(nodes))
         rally_approach_speed = _build_rally_approach_speed(config)
         # 集结辅助几何（盘旋圆/切入点/切出点）只依赖静态配置和已解析初始状态，init 时算一次即可，供 GUI 展示。
         self._rally_geometry = _build_rally_join_geometry(
-            list(nodes), rally_route, formation_comm_init, rally_task_init, states
+            list(nodes), leader_route, formation_comm_init, rally_task_init, states
         )
         self._formation_completed_analysis = None
         rally_leader_id = _leader_id_from_nodes(list(nodes))
         rally_layer_altitudes = self._build_rally_layer_altitudes(
-            list(nodes), rally_route, formation_comm_init, rally_task_init, rally_leader_id
+            list(nodes), leader_route, formation_comm_init, rally_task_init, rally_leader_id
         )
         # 为每个节点创建算法适配器（角色决定实体类型）。
         self._node_algorithms = {
@@ -724,7 +722,6 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 leader_route,
                 self._algorithm_period_s,
                 vel_cmd_limit,
-                rally_route=rally_route,
                 rally_cfg=rally_task_init,
                 rally_leader_id=rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed,
@@ -749,13 +746,13 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
     def _build_rally_layer_altitudes(
         self,
         nodes: list[object],
-        rally_route: list[WayPointInputS] | None,
+        route: list[WayPointInputS],
         formation_comm_init: object,
         rally_task_init: object | None,
         rally_leader_id: str,
     ) -> dict[str, float]:
         """计算集结 JOINING 前的分层高度。注意：长机在基准层，僚机按槽位顺序上下交替。"""
-        if rally_route is None or not rally_route or rally_task_init is None:
+        if not route or rally_task_init is None:
             return {}
         # separation=0 表示显式关闭高度分层，此时保持原始集结槽位高度。
         separation = max(0.0, float(getattr(rally_task_init, "altitude_separation_m", 60.0)))
@@ -786,7 +783,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         for node_id, role in roles.items():
             if role in {"rally_leader", "rally_follower"} and node_id not in rally_ids:
                 rally_ids.append(node_id)
-        base_h = rally_route[0].pos.h
+        base_h = route[0].pos.h
         multipliers = [0]
         layer = 1
         # 分层序列：0, +1, -1, +2, -2 ...，使相邻飞机尽量不在同一高度。

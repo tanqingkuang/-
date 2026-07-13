@@ -20,9 +20,9 @@
 ## `rally_demo_5_aircraft.json`
 
 - 五机分散后执行集结并进入任务航线的默认演示场景。
-- 任务航线从 `element/rally_demo_mission_route.json` 引用，主配置只保留 `route_file` 相对路径。
-- 集结长机航线从 `element/rally_demo_rally_route.json` 引用，主配置只保留 `rally_route_file` 相对路径。
-- 两个外部航线文件加载后分别展开为控制器和算法消费的 `route` 与 `rally_route`。
+- 统一航线从 `element/rally_demo_mission_route.json` 引用，主配置只保留 `route_file` 相对路径。
+- 初始有效航线来自 `route_file`；采用避障规划结果后，避障覆盖航线成为新的有效航线。
+- 当前有效航线首点是集结中心，首段确定集结方向，后续航段用于集结完成后的任务飞行。
 - 集结目标队形复用 `element/formations/wedge_5_aircraft_a01_a05.json`、`line_abreast_5_aircraft_a01_a05.json`、`double_column_5_aircraft_a01_a05.json`，A03 为集结长机。
 
 ## `element/obstacles.json`

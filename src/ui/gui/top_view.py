@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
 from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
+from src.ui.gui.node_card_view_model import CardBoardState, CardRect, ScreenPoint, card_rect_for
 from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.trail_path_cache import TrailPathCache
 from src.ui.gui.view_models import (
@@ -16,8 +17,8 @@ from src.ui.gui.view_models import (
     TOP_VIEW_ORIGIN_MARGIN,
     VIEW_MAX_SCALE,
     VIEW_MIN_SCALE,
+    NodeState,
     ObstacleView,
-    RallyGeometryView,
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
@@ -26,6 +27,14 @@ from src.ui.gui.view_models import (
     leader_node_from,
     reference_route_points,
 )
+
+# 固定宽高同时供遮挡检测和实际绘制使用，禁止两处各自估算。
+NODE_CARD_WIDTH = 92.0
+NODE_CARD_HEIGHT = 58.0
+# 锚点以飞机中心为基准，使卡片左下角始终落在机体右上方。
+NODE_CARD_DX = 16.0
+NODE_CARD_DY = -14.0
+
 
 class TopView(QGraphicsView):
     """支持平移和缩放的俯视编队视图。注意：只负责显示，不修改仿真状态。"""
@@ -39,7 +48,11 @@ class TopView(QGraphicsView):
         """初始化 TopView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
         self.snapshot: Snapshot | None = None
+        # 只有经 set_snapshot 同步过的快照才能驱动卡片，避免绕过入口后沿用陈旧遮挡状态。
+        self._card_snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
+        # 卡片覆盖与遮挡滞回由零 Qt ViewModel 维护，画布只提供屏幕坐标与渲染。
+        self.cards = CardBoardState()
         # 避障障碍（来自配置，独立于仿真快照）：加载配置后由主窗口注入，仅用于显示。
         self.obstacles: list[ObstacleView] = []
         self.obstacle_clearance = 0.0
@@ -63,6 +76,11 @@ class TopView(QGraphicsView):
         self._pan_origin: QPointF | None = None
         self._selection_origin: QPointF | None = None
         self._selection_current: QPointF | None = None
+        # 卡片遮挡低频兜底检测；视图变化和快照更新另有即时刷新。
+        self._card_visibility_timer = QTimer(self)
+        self._card_visibility_timer.setInterval(300)
+        self._card_visibility_timer.timeout.connect(self._refresh_card_visibility)
+        self.viewChanged.connect(self._refresh_card_visibility)
         self.setRenderHint(QPainter.RenderHint.Antialiasing)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setMinimumHeight(360)
@@ -93,15 +111,21 @@ class TopView(QGraphicsView):
     def set_snapshot(self, snapshot: Snapshot, *, fit_view: bool = False) -> None:
         """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
+        self._card_snapshot = snapshot
         # 节点退出后及时释放对应路径；仍在场的缓存由绘制时按队列 revision 增量同步。
         active_node_ids = {node.node_id for node in snapshot.nodes}
         for node_id in self._trail_path_caches.keys() - active_node_ids:
             del self._trail_path_caches[node_id]
+        # 退场飞机的人工覆盖和遮挡记忆不应污染其后重新入场的默认显示。
+        self.cards.sync_nodes(active_node_ids)
         # 自动居中优先；否则仅在请求 fit_view 且用户未手动调过视角时铺满。
         if self.auto_center:
             self._apply_auto_center()
         elif fit_view and not self._manual_view:
             self._fit_route_to_view()
+        # 多机快照常开低频兜底；当前坐标仍先即时检查一次。
+        self._sync_card_visibility_timer()
+        self._refresh_card_visibility()
         self.viewport().update()
 
     def resizeEvent(self, event) -> None:  # noqa: ANN001
@@ -202,7 +226,11 @@ class TopView(QGraphicsView):
         elif event.button() == Qt.MouseButton.LeftButton:
             # 松开左键即把选框区域放大铺满，再清空选框状态。
             if self._selection_is_click():
-                # 单击不改变视角，只把屏幕点反解成 ENU 坐标给上层展示经纬度。
+                # 先按屏幕像素切换卡片覆盖，再保留原有 ENU 坐标上报行为。
+                position = event.position()
+                if self.cards.handle_click(position.x(), position.y(), self._node_screen_points()) is not None:
+                    self._refresh_card_visibility()
+                    self.viewport().update()
                 point = self._viewport_to_world(event.position())
                 self.pointClicked.emit(point.x(), point.y())
             else:
@@ -272,6 +300,48 @@ class TopView(QGraphicsView):
             point.x() * self.scale_value + self.offset.x(),
             self.offset.y() - point.y() * self.scale_value,
         )
+
+    def _node_screen_points(self) -> list[ScreenPoint]:
+        """生成当前飞机的屏幕坐标。注意：拾取和遮挡检测必须共用同一视口变换。"""
+
+        if self.snapshot is None:
+            return []
+        points: list[ScreenPoint] = []
+        for node in self.snapshot.nodes:
+            viewport_point = self._world_to_viewport(QPointF(node.x, node.y))
+            points.append(
+                ScreenPoint(
+                    node.node_id,
+                    viewport_point.x(),
+                    viewport_point.y(),
+                    is_leader=is_leader_node(node),
+                )
+            )
+        return points
+
+    def _sync_card_visibility_timer(self) -> None:
+        """按快照节点数启停卡片遮挡定时器。注意：少于两架飞机时必须停止空转。"""
+
+        if self.snapshot is not None and len(self.snapshot.nodes) >= 2:
+            if not self._card_visibility_timer.isActive():
+                self._card_visibility_timer.start()
+            return
+        if self._card_visibility_timer.isActive():
+            self._card_visibility_timer.stop()
+
+    def _refresh_card_visibility(self) -> None:
+        """刷新卡片遮挡结果。注意：仅在实际可见性切换时主动请求重绘。"""
+
+        if self.snapshot is not self._card_snapshot:
+            return
+        if self.cards.update_visibility(
+            self._node_screen_points(),
+            NODE_CARD_WIDTH,
+            NODE_CARD_HEIGHT,
+            NODE_CARD_DX,
+            NODE_CARD_DY,
+        ):
+            self.viewport().update()
 
     def _draw_screen_text(self, painter: QPainter, x: float, y: float, dx: float, dy: float, text: str) -> None:
         """按屏幕坐标绘制文本。注意：避免世界 y 轴翻转导致文字倒置。"""
@@ -586,21 +656,19 @@ class TopView(QGraphicsView):
             painter.drawEllipse(QPointF(east, north), marker_radius, marker_radius)
 
     def _draw_rally_geometry(self, painter: QPainter, snapshot: Snapshot) -> None:
-        """绘制集结盘旋圆、切入点 T（三角）与松散目标点 M_i（实心圆）。
+        """绘制本地待命圆和集结盘旋圆。
 
-        注意：只在待命盘旋和集结执行阶段显示——集结完成后这些参考点已经不代表飞机当前目标，
-        常驻显示只会长期遮挡后续航段/僚机目标标记，用规范化 rally_phase 过滤及时隐藏。
-        长机/僚机分色，避免多机场景下分不清哪个圆属于哪架机；圆在屏幕上太小（缩得很远）时只画
-        圆和标记点、不画文字标签，避免多机标签互相重叠看不清。
+        注意：只在待命盘旋和集结执行阶段显示，集结完成后及时隐藏；不绘制静态切线、切入点、
+        切出点和槽位标记，避免与飞机到当前控制目标的动态虚线重复。
         """
         if not snapshot.rally_geometry:
             return
         node_by_id = {node.node_id: node for node in snapshot.nodes}
-        marker_r = 6.0 / self.scale_value
         # HOLD 后不再显示集结辅助几何，避免遮挡正常任务航线和队形目标。
         visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
 
         for geometry in snapshot.rally_geometry:
+            # 本地圆只在半径有效时绘制，兼容不含待命阶段的旧快照。
             node = node_by_id.get(geometry.node_id)
             if node is None or node.rally_phase not in visible_phases:
                 continue
@@ -618,49 +686,8 @@ class TopView(QGraphicsView):
                 local_pen.setDashPattern([3, 5])
                 painter.setPen(local_pen)
                 painter.drawEllipse(QPointF(geometry.local_center_x, geometry.local_center_y), geometry.local_radius, geometry.local_radius)
-                # 这条线是规划切线的可视化提示；真实控制仍由算法层输出指令。
-                painter.drawLine(QPointF(geometry.local_tangent_x, geometry.local_tangent_y), QPointF(geometry.entry_x, geometry.entry_y))
                 painter.setPen(circle_pen)
             painter.drawEllipse(QPointF(geometry.center_x, geometry.center_y), geometry.radius, geometry.radius)
-
-            show_labels = geometry.radius * self.scale_value > 40.0
-            self._draw_rally_marker(painter, geometry, color, marker_r, show_labels)
-
-    def _draw_rally_marker(
-        self, painter: QPainter, geometry: RallyGeometryView, color: QColor, marker_r: float, show_labels: bool
-    ) -> None:
-        """绘制单个节点的 M_i（实心圆点）和 T（空心三角）标记，视野足够大时附带文字标签。"""
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(geometry.slot_x, geometry.slot_y), marker_r, marker_r)
-        if show_labels:
-            painter.setPen(QPen(color, 1))
-            self._draw_screen_text(painter, geometry.slot_x, geometry.slot_y, 8.0, -6.0, f"{geometry.node_id} M")
-
-        triangle = QPainterPath()
-        triangle.moveTo(geometry.entry_x, geometry.entry_y + marker_r)
-        triangle.lineTo(geometry.entry_x + marker_r, geometry.entry_y - marker_r)
-        triangle.lineTo(geometry.entry_x - marker_r, geometry.entry_y - marker_r)
-        triangle.closeSubpath()
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(color, 1.5 / self.scale_value))
-        painter.drawPath(triangle)
-        if show_labels:
-            painter.setPen(QPen(color, 1))
-            self._draw_screen_text(painter, geometry.entry_x, geometry.entry_y, 8.0, -6.0, f"{geometry.node_id} T")
-
-        if geometry.local_radius > 0.0:
-            # 本地切出点用方形，集结切入点用三角，避免两个 T 点在多机场景中混淆。
-            painter.setBrush(color)
-            painter.setPen(QPen(color, 1.2 / self.scale_value))
-            painter.drawRect(
-                QRectF(
-                    geometry.local_tangent_x - marker_r,
-                    geometry.local_tangent_y - marker_r,
-                    marker_r * 2.0,
-                    marker_r * 2.0,
-                )
-            )
 
     def _draw_route_markers(self, painter: QPainter, markers: list[tuple[float, float]]) -> None:
         """绘制航点黑点。注意：仅画端点标记，不包含圆弧折线采样点。"""
@@ -703,12 +730,98 @@ class TopView(QGraphicsView):
             painter.setPen(pen)
             painter.drawLine(QPointF(source.x, source.y), QPointF(target.x, target.y))
 
+    def _draw_node_cards(self, painter: QPainter, snapshot: Snapshot) -> None:
+        """在机体下方绘制可见信息卡片。注意：卡片矩形必须与 ViewModel 使用相同尺寸。"""
+
+        if snapshot is not self._card_snapshot:
+            return
+        points = {point.node_id: point for point in self._node_screen_points()}
+        for node in snapshot.nodes:
+            if not self.cards.is_card_shown(node.node_id):
+                continue
+            point = points[node.node_id]
+            rect = card_rect_for(point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_DX, NODE_CARD_DY)
+            self._draw_node_card(painter, node, point, rect)
+
+    def _draw_node_card(
+        self,
+        painter: QPainter,
+        node: NodeState,
+        point: ScreenPoint,
+        rect: CardRect,
+    ) -> None:
+        """绘制单张飞机信息卡。注意：进入本函数后全部坐标均为固定屏幕像素。"""
+
+        painter.save()
+        painter.resetTransform()
+        # 先画短引线，卡片和随后绘制的全部机体会覆盖线端，避免压住飞机图标。
+        accent = QColor(self.theme.accent)
+        connector = QColor(accent)
+        connector.setAlphaF(0.3)
+        connector_pen = QPen(connector, 1.0)
+        connector_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(connector_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawLine(QPointF(point.x, point.y), QPointF(rect.x, rect.y + rect.h))
+
+        # 面板使用轻透明主题底色与弱强调色边框，对浅色和深色主题保持一致层级。
+        background = QColor(self.theme.panel)
+        background.setAlphaF(0.92)
+        border = QColor(accent)
+        border.setAlphaF(0.35)
+        painter.setBrush(background)
+        painter.setPen(QPen(border, 1.0))
+        card_qrect = QRectF(rect.x, rect.y, rect.w, rect.h)
+        painter.drawRoundedRect(card_qrect, 6.0, 6.0)
+
+        # 第一行用加粗强调色 ID；长机不再单独加徽标，机体颜色已足以区分角色。
+        id_font = painter.font()
+        id_font.setBold(True)
+        detail_font = painter.font()
+        if detail_font.pointSizeF() > 1.0:
+            detail_font.setPointSizeF(detail_font.pointSizeF() - 1.0)
+        elif detail_font.pixelSize() > 1:
+            detail_font.setPixelSize(detail_font.pixelSize() - 1)
+
+        painter.setFont(id_font)
+        painter.setPen(QPen(accent, 1.0))
+        id_rect = QRectF(rect.x + 7.0, rect.y + 3.0, rect.w - 14.0, 17.0)
+        id_text = painter.fontMetrics().elidedText(
+            node.node_id,
+            Qt.TextElideMode.ElideRight,
+            max(0, int(id_rect.width())),
+        )
+        painter.drawText(id_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, id_text)
+
+        # 高度和水平速度各占一行，字号比画布默认文字小 1pt。
+        painter.setFont(detail_font)
+        painter.setPen(QPen(self.theme.ink, 1.0))
+        detail_flags = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        painter.drawText(
+            QRectF(rect.x + 7.0, rect.y + 21.0, rect.w - 14.0, 16.0),
+            detail_flags,
+            f"Alt  {node.altitude:.0f} m",
+        )
+        speed = math.hypot(node.vx, node.vy)
+        painter.drawText(
+            QRectF(rect.x + 7.0, rect.y + 37.0, rect.w - 14.0, 16.0),
+            detail_flags,
+            f"Spd  {speed:.0f} m/s",
+        )
+        painter.restore()
+
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
+        # 尾迹先统一置底，避免任意节点的尾迹盖住飞机或信息卡片。
         for node in snapshot.nodes:
             is_leader = is_leader_node(node)
-            # 先画历史尾迹，再画机体，使机体压在尾迹之上。
             self._draw_trail(painter, node, is_leader, snapshot.time)
+
+        # 卡片统一画在所有机体之前，保证任意飞机都能压住卡片和短引线。
+        self._draw_node_cards(painter, snapshot)
+
+        for node in snapshot.nodes:
+            is_leader = is_leader_node(node)
             # 颜色优先级：异常>长机>僚机。
             color = self.theme.warn if node.health != "normal" else self.theme.leader if is_leader else self.theme.wingman
             painter.save()
@@ -743,9 +856,10 @@ class TopView(QGraphicsView):
             path.closeSubpath()
             painter.drawPath(path)
             painter.restore()
-            # 在机体左上方标注节点 ID（标签不随机体旋转）。
-            painter.setPen(QPen(self.theme.ink, 1))
-            self._draw_screen_text(painter, node.x, node.y, -13.0, -18.0, node.node_id)
+            # 卡片退化或人工隐藏时保留原有固定像素 ID 标签。
+            if not self.cards.is_card_shown(node.node_id):
+                painter.setPen(QPen(self.theme.ink, 1))
+                self._draw_screen_text(painter, node.x, node.y, -13.0, -18.0, node.node_id)
 
     def _draw_slot_targets(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制各机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态；长机/僚机都画，

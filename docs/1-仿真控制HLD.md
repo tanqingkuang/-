@@ -203,7 +203,8 @@ def load_config(path: str) -> CommandResult
 
 - 读取 `.yaml`、`.yml` 或 `.json` 配置。
 - 校验必填字段、节点列表、链路拓扑、航线 `route`、队形 `formation`、仿真时长、步长、算法分频、扰动配置；`step_s` 必须满足 `0 < step_s <= 0.1`，避免单个基础 tick 跨过多个固定快照边界。
-- **航线只支持经纬度**：`route` / `rally_route`（含 `route_file`/`rally_route_file` 引用）的航点必须给 `latitude_deg` + `longitude_deg`，加载期由 `route_to_internal` 统一转成内部 ENU（以首航点为 ENU 原点）；非经纬(如 ENU `x_m`/`y_m`)航线在加载期被拒绝，返回 `ERR_CONFIG_INVALID`。节点初始位置 `nodes[*]` 不受此约束；`formation.formation_files` 引用的外部队形文件使用局部航迹坐标 `x_forward_y_up_z_right`，同样不参与经纬转换。
+- **航线只支持经纬度**：`route`（含 `route_file` 引用）的航点必须给 `latitude_deg` + `longitude_deg`，加载期由 `route_to_internal` 统一转成内部 ENU（以首航点为 ENU 原点）；非经纬(如 ENU `x_m`/`y_m`)航线在加载期被拒绝，返回 `ERR_CONFIG_INVALID`。节点初始位置 `nodes[*]` 不受此约束；`formation.formation_files` 引用的外部队形文件使用局部航迹坐标 `x_forward_y_up_z_right`，同样不参与经纬转换。
+- **有效航线语义**：初始有效航线是 `route_file` 展开的 `route`；调用 `apply_avoidance_route()` 采用避障规划结果后，覆盖航线成为新的有效航线并触发模块重新初始化。集结中心、集结方向、高度分层、GUI 集结几何和集结完成后的任务飞行全部读取同一条有效航线，确保集结阶段也遵循避障结果。
 - 初始化模型、通信、算法、加扰和日志对象，但不开始推进仿真时间。
 - 成功后状态进入 `READY`，并通过 `get_snapshot()` 或订阅推送提供初始快照。
 

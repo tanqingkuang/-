@@ -558,22 +558,16 @@ class ControllerSimulationAdapter:
             self._convert_route(segment)
             for segment in snapshot.blocked_route_segments
         ]
+        # GUI 只接收实际绘制的圆参数，运行期切线不经过快照适配层。
         rally_geometry = [
             RallyGeometryView(
                 node_id=node_id,
-                slot_x=geometry.slot_east_m,
-                slot_y=geometry.slot_north_m,
                 center_x=geometry.loiter_center_east_m,
                 center_y=geometry.loiter_center_north_m,
                 radius=geometry.loiter_radius_m,
-                entry_x=geometry.entry_east_m,
-                entry_y=geometry.entry_north_m,
                 local_center_x=geometry.local_center_east_m,
                 local_center_y=geometry.local_center_north_m,
                 local_radius=geometry.local_radius_m,
-                local_tangent_x=geometry.local_tangent_east_m,
-                local_tangent_y=geometry.local_tangent_north_m,
-                fallback_used=geometry.fallback_used,
             )
             for node_id, geometry in snapshot.rally_geometry.items()
         ]

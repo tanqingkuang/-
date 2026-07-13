@@ -213,27 +213,13 @@ class LineFileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "route_file must be a non-empty string"):
             LineFileManager().load_route("base.json", "")
 
-    def test_config_loader_resolves_rally_route_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            element = root / "element"
-            element.mkdir()
-            (element / "mission.json").write_text(
-                json.dumps(geodetic_route({"speed_mps": 20.0, "waypoints": [{"x_m": 1.0, "y_m": 2.0, "altitude_m": 3.0}]})),
-                encoding="utf-8",
-            )
-            (element / "rally.json").write_text(
-                json.dumps(geodetic_route({"speed_mps": 18.0, "waypoints": [{"x_m": 4.0, "y_m": 5.0, "altitude_m": 6.0}]})),
-                encoding="utf-8",
-            )
+    def test_config_loader_rejects_removed_rally_route_fields(self) -> None:
+        """旧集结航线字段必须显式报错，避免配置被静默忽略。"""
 
-            resolved = resolve_config_references(
-                {"route_file": "element/mission.json", "rally_route_file": "element/rally.json"},
-                root / "scenario.json",
-            )
-
-        self.assertEqual(resolved["route"]["speed_mps"], 20.0)
-        self.assertEqual(resolved["rally_route"]["speed_mps"], 18.0)
+        for field in ("rally_route_file", "rally_route"):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, rf"{field}.*route_file"):
+                    resolve_config_references({field: "removed"}, "scenario.json")
 
     def test_config_loader_resolves_formation_files(self) -> None:
         """formation_files 应按主配置位置展开成内部 formations 列表。"""

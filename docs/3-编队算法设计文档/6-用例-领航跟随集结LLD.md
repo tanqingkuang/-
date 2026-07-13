@@ -1,6 +1,6 @@
 # 领航跟随集结 LLD
 
-> 对应场景：多机分散位置 → 集结航线集结 → 队形保持（mission_route）
+> 对应场景：多机分散位置 → 在统一航线首点集结 → 沿后续航段保持队形
 
 ---
 
@@ -22,7 +22,7 @@
 
 **CATCHUP 阶段过渡**：全员切出时各机在沿航迹方向的位置是分散的——最晚到达 M_i 的飞机直接切出后已向前飞出一段距离，而早到的飞机（包括掌机）刚刚从盘旋圆切出，位置可能落后。CATCHUP 阶段与 LOOSE 使用**完全相同**的位置解算（`SlotGeometry`，直接给出真实槽位位置与槽位自身速度前馈），沿航迹的加减速收敛交给下层控制律（`PidCompose` 前向 PPI 外环按真实位置误差生成速度修正）完成；CATCHUP 只是 Rally 任务状态机里独立的一个阶段门控（`_all_catchup_ok`，位置+航向双阈值），用于确认三机间距已收敛到松散队形要求后再进入 LOOSE。
 
-**长机角色切换时机**：CATCHUP 开始后掌机切换到任务航线（`mission_route`）飞行，僚机以掌机当前位置为参考动态计算各自槽位目标。LOOSE/COMPRESS/HOLD 阶段行为与领航跟随保持场景完全相同。
+**长机角色切换时机**：CATCHUP 开始后掌机沿统一 `route` 飞行，僚机以掌机当前位置为参考动态计算各自槽位目标。LOOSE/COMPRESS/HOLD 阶段行为与领航跟随保持场景完全相同。
 
 ### 2.2 四阶段集结策略
 
@@ -30,19 +30,17 @@
 
 #### 第一步：集结航线与松散目标点（初始化时自动计算）
 
-**集结航线定义两个关键点**：
+**当前有效航线定义集结和任务飞行**：
 
-- **A = `rally_route[0]`**：集结区起点，掌机在 JOINING 阶段的目标位置，也是松散队形的中心，**也应该是
-  `mission_route` 的起点**（详见"第二步"末尾"航线连续性约束"）
-- **B = `rally_route[-1]`**：集结航线文件的最后一个航点。当前实现只用到 `rally_route[0]`（A）和
-  `rally_route[1]`（A1，仅用于推导航向），**B 不参与任何计算**——早期版本文档曾把 B 当作"集结区终点/
-  `mission_route` 起点"，那是重构前"松散队形中心=rally_route 终点"旧设计遗留的错误描述，本次"M_i 自动
-  计算"重构已把中心改成 A（起点），正确的连续性约束是 `mission_route` 起点应等于 A，不是 B
+控制器初始从 `route_file` 构造有效航线；用户采用避障规划结果后，`leader_route_override` 替换配置航线并触发实体重新初始化。以下 `route` 均指实体本次初始化收到的当前有效航线，不固定等同于原始配置文件内容。
+
+- **A = `route[0]`**：集结中心，掌机在 JOINING 阶段的目标位置，也是松散队形中心。
+- **A1 = `route[1]`**：首段终点，A→A1 同时确定集结队形朝向和集结完成后的出航方向。
+- **`route[2...]`**：集结完成后继续执行的任务航点。
 
 ```text
-A  = rally_route[0]  集结区起点，也应是 mission_route 起点
-A1 = rally_route[1]  第一航段终点（用于推导航向）
-B  = rally_route[-1] 集结航线文件末端航点（不参与计算，仅供人工设计航线时参考）
+A  = route[0]  集结中心
+A1 = route[1]  第一航段终点（用于推导集结和出航方向）
 
 θ = atan2(A1_north − A_north, A1_east − A_east)  # 第一航段方向角，初始化时自动推导
 R(θ) = [[cos θ, −sin θ], [sin θ, cos θ]]          # 将体坐标偏置旋转到 ENU
@@ -222,7 +220,7 @@ Rally 任务检查：所有期望僚机同时满足 **`posErr_m < catchup_radius
 
 #### 第四步：LOOSE → COMPRESS → HOLD（松散收紧）
 
-长机沿 `mission_route` 飞，僚机跟随 `SlotGeometry` 槽位。
+长机沿统一 `route` 飞，僚机跟随 `SlotGeometry` 槽位。
 
 | 子阶段   | cmd.step | 说明                                                      |
 | -------- | -------- | --------------------------------------------------------- |
@@ -819,17 +817,17 @@ CATCHUP 现在直接复用 **6.2 节的 `SlotGeometry`**：给出真实槽位位
 
 #### 7.1.1 使用的单元子类
 
-> 本节曾描述"两个 `LeaderRoute`（rally_route + mission_route）+ RouteInterp"贯穿 RALLY 全程的旧架构，
+> 本节曾描述两条独立航线贯穿 RALLY 全程的旧架构，
 > 那是 `RallyJoinPos`（切线进圆汇合）出现之前的设计，已和当前实现不符——JOINING 阶段（step=0）现在完全
 > 由 `RallyJoinPos` 负责位置解算，不经过 TraPlan/RouteInterp；`LeaderRoute`+`RouteInterp` 只在 CATCHUP
-> 及之后（step>=1）用于沿 `cfg.route`（mission_route）飞行。以下按实际实现更正。
+> 及之后（step>=1）用于沿统一 `cfg.route` 飞行。以下按实际实现更正。
 
 | 单元 | 子类 |
 | --- | --- |
 | 收消息 Inbound | FollowerStatus（解析僚机回报） |
 | 任务编排 FormationTask | Rally（集结状态机） |
 | 汇合位置解算（仅 JOINING，step=0） | RallyJoinPos（切入盘旋圆→圆弧盘旋→切出，见第二步） |
-| 轨迹规划 TraPlan（仅 CATCHUP 及之后，step>=1 / HOLD） | LeaderRoute（`cfg.route`，即 mission_route） |
+| 轨迹规划 TraPlan（仅 CATCHUP 及之后，step>=1 / HOLD） | LeaderRoute（统一 `cfg.route`） |
 | 位置解算 PosCalc（仅 CATCHUP 及之后） | RouteInterp（复用现有） |
 | 跟踪 PosTrack | PidCompose（复用现有） |
 | 发消息 Outbound | RallyLeaderBroadcast（统一长机广播，含 slotScale/t_ref） |
@@ -841,7 +839,7 @@ CATCHUP 现在直接复用 **6.2 节的 `SlotGeometry`**：给出真实槽位位
 → 任务编排(Rally)                         ← 读 followerStates/remote → 写 cmd + slotScale
 → 按 cmd.step 分流：
     JOINING（step=0）：      汇合位置解算(RallyJoinPos)     ← 直飞切入点 T/盘旋/切出，不经 TraPlan/RouteInterp
-    CATCHUP 及之后（step>=1）/HOLD：轨迹规划(LeaderRoute) → 位置解算(RouteInterp)  ← 沿 mission_route 飞行
+    CATCHUP 及之后（step>=1）/HOLD：轨迹规划(LeaderRoute) → 位置解算(RouteInterp)  ← 沿统一 route 飞行
 → 跟踪(PidCompose)                        ← 复用，两条分支共用
 → 发消息(RallyLeaderBroadcast)            ← 广播 selfState + cmd + slotScale + t_ref/t_ref_valid
 ```
@@ -865,7 +863,7 @@ if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
     self._rally_join.step(self._rally_join_u, self._pos_calc_y)
     self._pos_track.step(self._pos_track_u, self._pos_track_y)
 else:
-    # RALLY step>=1（CATCHUP/LOOSE/COMPRESS）或 HOLD：长机沿任务航线（mission_route）飞行
+    # RALLY step>=1（CATCHUP/LOOSE/COMPRESS）或 HOLD：长机沿统一航线飞行
     self._tra_plan_mission.step(self._tra_plan_u, self._tra_plan_y)
     self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
     self._pos_track.step(self._pos_track_u, self._pos_track_y)
@@ -882,49 +880,22 @@ else:
 - 每拍 `step()` 中需将边界输入的仿真时间注入两个单元：`follower_status_u.now_s = now` 和 `rally_u.now_s = now`
 - `rallyCompleted` 不进 Context，实体直接读 `_task_y.rallyCompleted`（OutputS 每拍重写，无需 Context 中继）；`expectedFollowerIds` 在实体侧持有一份副本（从 `cfg.rally_cfg.expectedFollowerIds` 复制），供 `FormationAnalysisS` 计算时使用，不从 Rally 单元内部读取
 
-**集结航线关键点（A / A1 / B）**：
+**当前有效航线关键点**：
 
-- `A = rally_route[0].pos`：集结区起点，掌机的 JOINING 目标位置，也是松散队形中心，**也应该是
-  `mission_route` 起点**（不是 B，见下方"航线连续性约束"）
-- `A1 = rally_route[1].pos`：集结航线第一航段终点，仅用于推导航向（使多航点集结航线也能取到一个确定的航向）
-- `B = rally_route[-1].pos`：集结航线文件末端航点，**当前实现不使用它做任何计算**（早期版本文档误将其
-  当作"mission_route 起点"，是重构前"松散队形中心=rally_route 终点"旧设计的遗留错误描述，已在此更正）
+- `A = route[0].pos`：集结中心，也是掌机的 JOINING 目标位置。
+- `A1 = route[1].pos`：首段终点，用于推导集结队形朝向和切出后的任务航向。
+- `route[2...]`：后续任务航点，由 `LeaderRoute` 在 CATCHUP 及以后继续推进。
 
-掌机的 `RallyJoinPosInitS.loose_slot` 应设为 A；`mission_heading_rad` 取**第一航段方向**（A→A1），而非整条集结航线的 A→B 方向：
+掌机的 `RallyJoinPosInitS.loose_slot` 设为 A；`mission_heading_rad` 取第一航段方向：
 
 ```python
-A  = cfg.rally_route[0].pos   # cfg.rally_route: list[WayPointInputS]
-A1 = cfg.rally_route[1].pos   # 第一航段终点
+A = cfg.route[0].pos
+A1 = cfg.route[1].pos
 mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 ```
 
-> 集结航线只有两个航点（A、B 直连，当前 demo 场景即如此）时 A1 == B，上式与"A→B 方向"等价；一旦集结航线扩展为三个及以上航点，实现按**第一航段方向**定队形朝向和松散槽位旋转角，不会取整条航线的整体方向——设计多航点集结航线时需注意这一点，避免与本节公式理解偏差。
-
-**航线连续性约束（`_ConfigLoader.validate` 运行时校验，配置加载阶段）**：`mission_route` 起点应等于
-**A**（不是 B——`rally_route[-1]` 在代码里没有任何一处被引用，全局搜索为空），且集结区第一航段方向
-（A→A1）应与任务航线出航方向保持一致，确保 RALLY→CATCHUP 切换时 `RouteInterp` 目标位置不跳变、槽位
-偏置旋转轴与 CATCHUP 对准轴与任务飞行方向一致。
-
-为什么是 A 不是 B：长机 JOINING 阶段收敛的位置就在 A（`loose_slot=A`）；切出（EXITED）后沿任务航向继续
-直飞，直到全员切出才切到 CATCHUP/`RouteInterp`——这段等待期间长机已经沿 A→A1 方向飞出去一截。若
-`mission_route` 从 A 以外的另一点起飞（比如 B），`RouteInterp` 的直线投影参数会被钳在 `t>=0`，长机的
-实际位置若还没追上这个"起点"就会被拉回去等待，或者已经飞过头就会跳变；`mission_route` 从 A 起飞、且
-第一段方向与任务航向一致时，长机的投影位置天然连续，不需要额外处理。
-
-**`RallyLeaderEntity.init()` 本身仍只校验 `rally_route` 至少含两个航点，不做连续性检查**（历史版本曾有
-`dist3d(rally_end, mission_start) < 1.0` 的 init 期校验，已随本次"M_i 自动计算"重构移除）——连续性校验
-现在移到了更早的配置加载层：`sim_control_modules.py::_ConfigLoader.validate()` 在构造任何实体之前就检查
-两条：
-
-1. **位置**：`dist3d(route[0], rally_route[0])` 必须小于 1.0m；
-2. **方向**：`route` 首段方向（`route[0]→route[1]`）与 `rally_route` 首段方向（A→A1，即
-   `mission_heading_rad`）夹角必须小于 `_MAX_MISSION_RALLY_HEADING_MISMATCH_DEG`（10°）——只查位置
-   不够，位置对得上但方向差很多（比如垂直、相反）时，JOINING(EXITED，沿 rally 方向飞)→CATCHUP(沿
-   mission_route 方向飞) 切换瞬间仍会有真实的指令航向突变（实测垂直配置跳变 ~90°、相反配置 ~180°）。
-
-任一条不满足都会在 `load_config()`/`validate()` 阶段直接报错，不再是"只在文档里约定、代码不检查"。
-设计 `rally_route_file` 和 `route_file` 时最简单的做法仍是让两者直接复用同一份航线文件（`route[0]`
-和 `rally_route[0]` 自然是同一个航点，方向也自然一致；当前 `configs/rally_demo_5_aircraft.json` 即采用此做法）。
+`_ConfigLoader.validate()` 和两个集结实体都会校验航线至少包含两个航点，且首段水平长度不能退化为零。
+由于集结与任务飞行读取同一条当前有效 `route`，不再需要两条航线之间的位置和方向一致性校验。采用避障覆盖航线后，集结中心、方向、高度分层和 GUI 几何会随有效航线同步更新，这是为了避免集结阶段继续沿已判定存在障碍的原始航线飞行。
 
 ---
 
@@ -1020,7 +991,7 @@ self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED
 #### 7.2.3 初始化（init）关键点
 
 - `loose_slot`（M_i）：在 `init()` 中调用 `rally_loose_target(A, mission_heading_rad, rally_cfg.looseScale, slot)`
-  计算（`A=rally_route[0].pos`，`mission_heading_rad` 由 `rally_route_heading_rad(rally_route)` 推导第一航段
+  计算（`A=route[0].pos`，`mission_heading_rad` 由 `route_heading_rad(route)` 推导第一航段
   方向，`slot` 由 `resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)` 按目标队形
   索引查表得到），高度偏置固定为 `slot.y`（不随 `looseScale` 扩展），**不从配置字段读取**（逐节点
   `rally_target` 配置字段已移除）
@@ -1057,7 +1028,7 @@ class EntityInputS:
 @dataclass
 class EntityInitS:
     # ... 已有字段 ...
-    rally_route: list[WayPointInputS] = None  # 集结航线；至少两个航点；[0]=A（起点），[-1]=B（终点）
+    route: list[WayPointInputS] = field(default_factory=list)  # 统一航线；[0]=集结中心，首段确定集结方向
     rally_cfg: RallyTaskInitS = field(default_factory=RallyTaskInitS)  # 集结参数
     rally_approach_speed_mps: float = 20.0  # 僚机飞向 M_i 的速度
     rally_leader_id: str = ""               # 僚机回报消息的发送目标（来自节点配置 leader_id）
@@ -1067,8 +1038,7 @@ class EntityInitS:
 
 ```json
 {
-  "route_file": "element/rally_demo_rally_route.json",
-  "rally_route_file": "element/rally_demo_rally_route.json",
+  "route_file": "element/rally_demo_mission_route.json",
   "rally_cfg": {
     "loose_scale": 3.0,
     "convergence_radius_m": 30.0,
@@ -1119,9 +1089,9 @@ class EntityInitS:
 }
 ```
 
-> `route_file` 加载后展开为顶层 `route`（mission_route），`rally_route_file` 加载后展开为 `rally_route`。`route` 起点必须等于 `rally_route` 起点 A（不是终点 B——B 不参与任何计算）——此约束由航线设计保证（见 7.1.3 节），最简单的做法是将两者设为同一文件。
+> `route_file` 加载后展开为顶层配置 `route`，并作为初始有效航线；采用避障规划结果后，覆盖航线成为当前有效 `route`。当前有效 `route[0]` 是集结中心，`route[0]→route[1]` 确定集结与出航方向，后续航点用于任务飞行。
 >
-> **M_i 自动计算**：从机的松散目标点由实体 init 自动推导，无需在配置文件中逐机写死。实体读取 `rally_route[0]`（A）和 `rally_route[1]` 推导 θ，再结合 `formation.formation_files` 展开后的目标队形槽位和 `loose_scale` 计算 M_i；**已不存在逐节点 `rally_target` 配置字段**。
+> **M_i 自动计算**：从机的松散目标点由实体 init 自动推导，无需在配置文件中逐机写死。实体读取 `route[0]`（A）和 `route[1]` 推导 θ，再结合 `formation.formation_files` 展开后的目标队形槽位和 `loose_scale` 计算 M_i；**已不存在逐节点 `rally_target` 配置字段**。
 >
 > **顶层键名是 `rally_cfg`，不是 `rally`**（历史文档遗留错误，此处已更正）。`expected_follower_ids` **不是**配置字段——参与集结的僚机 ID 由 `_build_rally_task_init` 从 `nodes` 中 `role=="rally_follower"` 的节点自动收集，配置里写了也会被忽略。`target_pattern` 同理：集结只用单队形，`_build_rally_task_init` 恒将 `targetPattern` 置 0（`formPos` 第 0 行），配置里的 `target_pattern` 键当前不参与任何计算。
 >
@@ -1236,12 +1206,12 @@ if role not in {"leader", "rally_leader", "rally_follower"} and initial_leader_s
 
 `RallyLeaderEntity.init` 额外需要：
 
-- `cfg.rally_route`：从 JSON 顶层 `rally_route` 字段解析为 `RouteS`
-- `cfg.rally_cfg`：从 JSON `rally` 字段解析为 `RallyTaskInitS`
+- `cfg.route`：从 JSON 顶层统一 `route` 字段解析，前两点用于集结，完整航线用于后续任务飞行
+- `cfg.rally_cfg`：从 JSON `rally_cfg` 字段解析为 `RallyTaskInitS`
 
 `RallyFollowerEntity.init` 额外需要：
 
-- `cfg.rally_route`/`cfg.rally_cfg`：与长机共用同一份（M_i 由 `init()` 按 `rally_route[0/1]`、`formation.slots`
+- `cfg.route`/`cfg.rally_cfg`：与长机共用同一份（M_i 由 `init()` 按 `route[0/1]`、`formation.slots`
   与 `rally_cfg.looseScale` 自动推导，**不再有逐节点 `rally_target` 配置字段**，见第八节 8.2/8.3）
 - `cfg.rally_approach_speed_mps`：从 JSON `rally.approach_speed_mps` 读取
 - `cfg.rally_leader_id`：从节点配置 `leader_id` 字段读取（`str`），传给 `FollowerBroadcastInitS.leaderId`
@@ -1424,8 +1394,8 @@ def _load_demo(self, kind: str) -> None:
 实体就绪后需完整替换为正式配置：
 
 1. 将角色改为 `"rally_leader"` / `"rally_follower"` 并补全集结专属字段（参见第八节）。
-2. 补充 `rally_route` 字段，并确保顶层 `route`（mission_route）的起点等于 `rally_route` 起点 A（不是终点 B——B 不参与任何计算）——**`_ConfigLoader.validate` 会在配置加载阶段做运行时校验**（见 7.1.3 节"航线连续性约束"），位置或方向不满足都会直接报错，不再只是文档约定。最简单的做法是将 `route_file` 与 `rally_route_file` 设为同一文件（`route[0]` 自然等于 `rally_route[0]`，方向也自然一致）。
-3. 槽位偏置旋转方向（A→A1，即集结航线第一航段方向角 θ）须与任务航线方向一致，在设计 `rally_route` 时统一考虑——同样由第 2 条提到的运行时校验兜底。
+2. 配置统一 `route_file`，使其成为初始有效航线；采用避障规划结果后，以覆盖航线的 `route[0]` 作为集结中心、`route[0]→route[1]` 作为集结和出航方向，后续航点组成任务航线。
+3. 槽位偏置旋转方向使用统一航线第一航段方向角 θ，无需维护额外的一致性约束。
 
 届时 `_remote_stage` 会自动切为 RALLY，无需修改 GUI 代码。
 
