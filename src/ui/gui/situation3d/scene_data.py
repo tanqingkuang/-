@@ -961,6 +961,7 @@ def _fill_mesh_value(
     grid_segments = max(1, resolution - 1) if resolution > 1 else 191
     # 采样间距对齐地形网格量级：太粗贴不住岩脊，太细则静态 mesh 无谓膨胀。
     spacing = max(30.0, min(110.0, max(width, depth) / grid_segments))
+    # 按包围盒宽高除以间距向上取整，保证格网覆盖到轮廓边界，不留未采样的窄边。
     columns = int(math.ceil((max_x - min_x) / spacing))
     rows = int(math.ceil((max_z - min_z) / spacing))
     if (columns + 1) * (rows + 1) > _FILL_MAX_GRID_NODES:
@@ -1029,6 +1030,7 @@ def _fill_mesh_value(
                 top_right = grid_vertex(row, column + 1)
                 bottom_left = grid_vertex(row + 1, column)
                 bottom_right = grid_vertex(row + 1, column + 1)
+                # 两个三角形都按逆时针绕序排列，和地形几何保持同一朝向，避免背面剔除翻面。
                 triangles.extend((top_left, bottom_left, top_right, top_right, bottom_left, bottom_right))
                 continue
             _append_clipped_cell(
@@ -1059,6 +1061,7 @@ def _fill_boundary_cells(
 
     cells: set[tuple[int, int]] = set()
     step = spacing / 4.0
+    # 按边闭合遍历(最后一点连回第一点)，逐段沿边采样，间距细于格距才不会跳过短边穿过的格子。
     for start, end in zip(polygon, polygon[1:] + polygon[:1]):
         edge_length = math.hypot(end[0] - start[0], end[1] - start[1])
         segments = max(1, int(math.ceil(edge_length / step)))
@@ -1066,6 +1069,7 @@ def _fill_boundary_cells(
             ratio = index / segments
             x = start[0] + (end[0] - start[0]) * ratio
             z = start[1] + (end[1] - start[1]) * ratio
+            # clamp 到 [0, columns/rows-1]，防止边界上的采样点因浮点误差越界访问格子表。
             column = min(columns - 1, max(0, int((x - min_x) / spacing)))
             row = min(rows - 1, max(0, int((z - min_z) / spacing)))
             cells.add((row, column))
@@ -1150,6 +1154,8 @@ def _clip_polygon_to_rect(
         """返回与竖直边界求交的函数。"""
 
         def intersect(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+            """按线性插值求线段 a-b 与该竖直边界的交点。"""
+
             ratio = (boundary - a[0]) / (b[0] - a[0])
             return boundary, a[1] + (b[1] - a[1]) * ratio
 
@@ -1159,6 +1165,8 @@ def _clip_polygon_to_rect(
         """返回与水平边界求交的函数。"""
 
         def intersect(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+            """按线性插值求线段 a-b 与该水平边界的交点。"""
+
             ratio = (boundary - a[1]) / (b[1] - a[1])
             return a[0] + (b[0] - a[0]) * ratio, boundary
 

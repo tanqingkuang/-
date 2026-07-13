@@ -79,7 +79,8 @@ Item {
     ListModel { id: riskBufferModel }
     ListModel { id: riskFillModel }
 
-    // 4 秒周期缓慢呼吸：两段时长相等且都引用 pulseDurationMs，振幅由 boundaryPulseMin/Max 控制。
+    // 非对称呼吸：变亮 pulseDurationMs(3s)、变暗 pulseDurationMs/3(1s)，一轮共 4 秒；
+    // 振幅由 boundaryPulseMin/Max 控制，两段时长按同一个属性推导，不再各自硬编码毫秒数。
     SequentialAnimation on alertBoundaryPulse {
         loops: Animation.Infinite
         running: true

@@ -1946,5 +1946,61 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("property real trailWidthScale: aircraftVisualScale / (1800.0 / 85.0)", qml)
 
 
+class Situation3DBridgeMeshDedupTests(unittest.TestCase):
+    """验证桥接层不会在同一 staticKey 下重复下发风险区填充网格。"""
+
+    def _bridge(self):
+        """构造一个用于测试的 Situation3DBridge 实例。"""
+
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from src.ui.gui.situation3d.bridge import Situation3DBridge
+
+        return Situation3DBridge()
+
+    def test_mesh_value_only_sent_once_per_static_key(self) -> None:
+        """相同 staticKey 连续推送两次，第二次应去掉 meshValue 只保留展示无关的字段。"""
+
+        bridge = self._bridge()
+        fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        first = json.loads(bridge.sceneData())
+        self.assertIn("meshValue", first["riskZoneFills"][0])
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        second = json.loads(bridge.sceneData())
+        self.assertNotIn("meshValue", second["riskZoneFills"][0])
+        self.assertEqual(second["riskZoneFills"][0]["color"], "#ff5a45")
+
+    def test_mesh_value_resent_when_static_key_changes(self) -> None:
+        """staticKey 变化(障碍布局改变)时必须重新带上完整 meshValue，不能延续裁剪结果。"""
+
+        bridge = self._bridge()
+        fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        bridge.set_scene_payload({"staticKey": "B", "riskZoneFills": fills})
+
+        payload = json.loads(bridge.sceneData())
+        self.assertIn("meshValue", payload["riskZoneFills"][0])
+
+    def test_empty_fills_do_not_crash_and_reset_tracking(self) -> None:
+        """空填充列表(如无避障障碍)不应报错，也不能残留旧签名影响后续裁剪判断。"""
+
+        bridge = self._bridge()
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": []})
+        payload = json.loads(bridge.sceneData())
+        self.assertEqual(payload["riskZoneFills"], [])
+
+        fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        refilled = json.loads(bridge.sceneData())
+        # 上一帧是空列表时未记录“已发送过 A 的网格”，因此 staticKey 相同也要带上完整数据。
+        self.assertIn("meshValue", refilled["riskZoneFills"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

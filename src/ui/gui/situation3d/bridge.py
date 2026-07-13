@@ -17,12 +17,37 @@ class Situation3DBridge(QObject):
         """初始化 Situation3DBridge 实例，准备持有最近一次场景数据。"""
         super().__init__()
         self._scene_data = "{}"
+        # 记录上一次真正下发过完整填充网格的 staticKey；QML 只在这个签名变化的那一帧
+        # 才会重建风险区填充模型（rebuildStaticModels 由 staticChanged 门控），
+        # 后续签名不变的帧即使照常 10Hz 推送，也不需要再带上几十到几百 KB 的 meshValue。
+        self._last_fill_static_key: object = None
 
     def set_scene_payload(self, payload: dict[str, object]) -> None:
         """更新场景数据并通知 QML。注意：QML 侧负责解析 JSON 和刷新模型。"""
 
+        payload = self._strip_unchanged_fill_meshes(payload)
         self._scene_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         self.sceneDataChanged.emit(self._scene_data)
+
+    def _strip_unchanged_fill_meshes(self, payload: dict[str, object]) -> dict[str, object]:
+        """静态签名未变时去掉填充网格的 meshValue，避免重复占用逐帧推送带宽。"""
+
+        static_key = payload.get("staticKey")
+        fills = payload.get("riskZoneFills")
+        if not isinstance(fills, list) or not fills:
+            # 空列表不代表"已完整下发过"，保留原记录，避免障碍从有到无再到有时误判为已发送。
+            return payload
+        if static_key == self._last_fill_static_key:
+            # 浅拷贝 payload 本身，避免修改调用方仍持有的原始 dict；
+            # riskZoneFills 内的每个条目也各自拷贝一份，只去掉体积大的 meshValue。
+            trimmed = dict(payload)
+            trimmed["riskZoneFills"] = [
+                {key: value for key, value in item.items() if key != "meshValue"} for item in fills
+            ]
+            return trimmed
+        # 签名变化（含首次调用）：记录新签名，原样返回携带完整 meshValue 的 payload。
+        self._last_fill_static_key = static_key
+        return payload
 
     @Slot(str)
     def selectModel(self, value: str) -> None:

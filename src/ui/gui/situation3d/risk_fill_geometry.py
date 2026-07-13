@@ -32,6 +32,7 @@ class RiskFillGeometry(QQuick3DGeometry):
         """初始化空填充几何。注意：QML 未赋值前保持合法空 mesh。"""
 
         super().__init__(parent)
+        # "{}" 缺少 "v"/"t" 键，_parse_mesh 会当作空网格处理，构造期不会渲染任何三角形。
         self._mesh_value = "{}"
         self._rebuild()
 
@@ -46,6 +47,8 @@ class RiskFillGeometry(QQuick3DGeometry):
         """更新三角网数据。注意：同值赋值直接短路，避免静态帧重复上传。"""
 
         normalized = value if isinstance(value, str) else "{}"
+        # 字符串短路比对：staticKey 不变的连续快照会传回同一份 meshValue，
+        # 这里避免重复解析 JSON 和重建顶点缓冲。
         if normalized == self._mesh_value:
             return
         self._mesh_value = normalized
@@ -56,9 +59,11 @@ class RiskFillGeometry(QQuick3DGeometry):
         """按 meshValue 重建顶点与索引。注意：任何坏数据都降级为空几何。"""
 
         vertices, triangles = self._parse_mesh(self._mesh_value)
+        # clear() 先丢弃旧属性/数据，避免重建时新旧 stride 或属性表不一致导致渲染错乱。
         self.clear()
         self.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Triangles)
         self.setStride(_FILL_STRIDE)
+        # position 偏移 0，紧跟在其后的 normal 偏移 3 个 float，和 _FILL_STRIDE 的字节布局对应。
         self.addAttribute(
             QQuick3DGeometry.Attribute.Semantic.PositionSemantic,
             0,
@@ -69,6 +74,7 @@ class RiskFillGeometry(QQuick3DGeometry):
             3 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
+        # 索引固定用 32 位无符号整型，避免大范围地形三角化后顶点数超出 16 位索引上限。
         self.addAttribute(
             QQuick3DGeometry.Attribute.Semantic.IndexSemantic,
             0,
@@ -83,9 +89,11 @@ class RiskFillGeometry(QQuick3DGeometry):
         vertex_bytes = bytearray()
         for x_coord, y_coord, z_coord in vertices:
             # 法线固定向上；覆盖层贴地摆放，光照层次仍由地形本体承担。
+            # "<ffffff" 是小端 6 个 float，对应 stride 里 position(3)+normal(3) 的紧密排布。
             vertex_bytes.extend(struct.pack("<ffffff", x_coord, y_coord, z_coord, 0.0, 1.0, 0.0))
         index_bytes = bytearray()
         for index in triangles:
+            # "<I" 对应上面声明的 32 位无符号索引类型，字节序需与顶点数据保持一致。
             index_bytes.extend(struct.pack("<I", index))
         # 先设置包围盒再提交数据，保证首帧视锥裁剪拿到正确范围。
         self._apply_bounds(vertices)
@@ -103,6 +111,7 @@ class RiskFillGeometry(QQuick3DGeometry):
             return [], []
         if not isinstance(raw, dict):
             return [], []
+        # "v"/"t" 是 scene_data 一侧约定的短键名，逐帧 JSON 体积敏感，不用完整单词。
         raw_vertices = raw.get("v", [])
         raw_triangles = raw.get("t", [])
         if not isinstance(raw_vertices, list) or not isinstance(raw_triangles, list):
@@ -115,6 +124,7 @@ class RiskFillGeometry(QQuick3DGeometry):
                 point = (float(item[0]), float(item[1]), float(item[2]))
             except (TypeError, ValueError):
                 return [], []
+            # NaN/inf 一旦进入顶点缓冲会让整个几何体包围盒失效，必须提前拦截。
             if not all(math.isfinite(component) for component in point):
                 return [], []
             vertices.append(point)

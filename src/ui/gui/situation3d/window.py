@@ -125,6 +125,8 @@ class Situation3DWindow(QDialog):
             model_type=self._current_model_type,
             trail_state=self._trail_payload_state,
         )
+        # 桥接层会按 staticKey 去重风险区填充网格，这里始终传完整 payload，
+        # 裁剪逻辑集中在 bridge 一处，调用方不需要感知。
         self.bridge.set_scene_payload(payload)
         self._schedule_terrain_refresh(payload)
 
