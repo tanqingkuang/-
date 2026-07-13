@@ -4,12 +4,12 @@
     "coordinate_system": "布局坐标 u/v 单位 km；u 映射 ENU east，v 映射 ENU north；渲染层再把 north 翻转为 Quick3D z。",
     "geo_reference": "经纬度参考原点，对应 local_origin_uv_km；演示航线由该原点按 src/data/geo.py 映射到经纬度。",
     "mountain_chains": "山脉链骨架。polyline_uv 定义山脉走向，peaks 沿 station 分布，saddle_height_factor 控制连续鞍部高度。",
-    "risk_zone": "显式风险区标记。只有 risk_zone=true 的峰会进入 3D riskZones payload，P1 不做自动避障判定。",
-    "detail": "细节层噪声和网格参数。默认 641，低配可在本字段或运行时改为 384。"
+    "risk_zone": "布局回退风险区标记。场景未提供避障障碍时，risk_zone=true 的峰进入 3D riskZones；存在避障障碍时由其 enabled 状态驱动。",
+    "detail": "细节层噪声和网格参数。默认 768，低配使用 512，也可在运行时覆盖。"
   },
   "key": "mountain_demo_d",
   "title": "定稿山地态势演示布局",
-  "description": "四段式原始航线：集结低丘、2km 峡谷穿越、双障碍峰 472m 鞍部 S 绕、东北出口开阔；P1 仅显示风险区，不接避障流程。",
+  "description": "P2 山地避障演示：原始航线连接集结低丘、2km 峡谷、双障碍峰低鞍部和东北出口；采用规划航线后展示 S 形绕飞，并保留原航线的封锁标记。",
   "coordinate_system": {
     "horizontal": "u_east_v_north",
     "unit": "km",

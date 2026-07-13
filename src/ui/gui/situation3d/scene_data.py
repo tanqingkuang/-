@@ -145,7 +145,7 @@ class TrailPayloadState:
 # 6. 旧配置没有 terrain_display_file 时，payload 仍然走 procedural 地形路径。
 # 7. 旧路径的 surface.width/depth/height 字段保持不变，避免历史 QML 绑定失效。
 # 8. 新布局模式只影响显示层，不改变 Snapshot 的 ENU 坐标、航线和障碍语义。
-# 9. 障碍物 obstacles 仍表示避障模块二维障碍；riskZones 表示手工标记山峰风险罩面。
+# 9. 障碍物 obstacles 表示避障模块二维障碍；riskZones 优先由当前启用障碍生成，无避障数据时才回退布局标记。
 # 10. 航线和风险细线使用点数组；尾迹额外携带队列序号，使几何层能原子识别追加和弹头。
 # 11. 红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
 # 12. 淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
@@ -176,7 +176,7 @@ class TrailPayloadState:
 # 37. 旧 obstacles 与新 riskZones 可同时存在，二者分别显示为柱体和贴地风险罩面。
 # 38. scene_data 不缓存生成后的 mesh，避免和 TerrainGeometry 的重建生命周期竞争。
 # 39. 如果布局文件变更，改变路径或清理 _cached_layout 即可刷新元数据。
-# 40. P1 默认风险区由正式 JSON 手工标记，符合任务书“先由布局 JSON 驱动”的边界。
+# 40. P2 风险区与当前启用的真实障碍同源；旧场景未提供避障数据时继续使用正式 JSON 布局标记。
 # 41. 注释中的“显示层”均指 GUI/QML，不包含 runner、algorithm 或 environment 模块。
 # 42. 所有数值都用 float 输出，QML ListModel 不需要再做类型归一化。
 # 43. 风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
@@ -824,9 +824,11 @@ def _layout_terrain_payload(
         field = _cached_terrain_field(layout_path, resolution)
         center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
         center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
-        # 有启用避障障碍时风险罩面与实际规划数据同源；非避障场景保留布局标记的稳定回退。
-        obstacle_zones = _risk_zones_from_obstacles(obstacles, field)
-        source_zones = obstacle_zones if obstacle_zones else risk_zones_from_layout(layout)
+        obstacle_views = list(obstacles)
+        # 是否回退取决于场景有没有避障数据，而不是当前有没有启用项：
+        # 全部禁用表示用户明确要求隐藏风险区，只有空集合才代表需要兼容旧布局。
+        obstacle_zones = _risk_zones_from_obstacles(obstacle_views, field)
+        source_zones = obstacle_zones if obstacle_views else risk_zones_from_layout(layout)
         risk_zones = [_risk_zone_payload(zone, field) for zone in source_zones]
         # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
         risk_zone_lines = [

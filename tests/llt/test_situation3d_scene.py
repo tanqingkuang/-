@@ -147,7 +147,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(cleared_payload["blockedRouteDashes"], [])
 
     def test_obstacle_risk_zones_only_include_enabled_and_empty_falls_back_to_layout(self) -> None:
-        """验证风险区优先读取启用避障障碍，同时保留无避障场景的布局峰值回退。"""
+        """验证风险区只跟随启用障碍；全禁用时清空，无避障数据时才回退布局。"""
 
         enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
         disabled = ObstacleView("禁用圆", "circle", enabled=False, center_x=300.0, center_y=400.0, radius=50.0)
@@ -157,6 +157,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
         fallback = scene_data._layout_terrain_payload(str(TERRAIN_LAYOUT_PATH), [])
         assert fallback is not None
         self.assertEqual([zone["id"] for zone in fallback["riskZones"]], ["hazard_peak_west", "hazard_peak_east"])
+
+        all_disabled = scene_data._layout_terrain_payload(str(TERRAIN_LAYOUT_PATH), [disabled])
+        assert all_disabled is not None
+        self.assertEqual(all_disabled["riskZones"], [])
 
     def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
         """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
