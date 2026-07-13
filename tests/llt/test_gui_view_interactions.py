@@ -1243,6 +1243,45 @@ class GuiViewInteractionTests(unittest.TestCase):
             delta=0.01,
         )
 
+    def test_auto_center_survives_side_view_wheel_zoom(self) -> None:
+        """侧视图滚轮缩放只改变横轴倍率，不应关闭自动居中或移走编队中心。"""
+        self._load_ui_config()
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+        view = self.window.side_view
+        old_scale = view.horizontal_scale
+        altitude_span = view.altitude_max - view.altitude_min
+        event = Mock()
+        event.pixelDelta.return_value = QPointF(0.0, 0.0)
+        event.angleDelta.return_value = QPointF(0.0, 120.0)
+        event.position.return_value = QPointF(180.0, 80.0)
+
+        view.wheelEvent(event)
+        self.app.processEvents()
+
+        self.assertTrue(self.window.auto_center.isChecked())
+        self.assertTrue(self.window.top_view.auto_center)
+        self.assertTrue(self.window.side_view.auto_center)
+        self.assertGreater(view.horizontal_scale, old_scale)
+        snapshot = view.snapshot
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        active = [node for node in snapshot.nodes if node.health == "normal"]
+        center_x = sum(view._horizontal_for_point(node.x, node.y) for node in active) / len(active)
+        center_altitude = sum(node.altitude for node in active) / len(active)
+        self.assertAlmostEqual(
+            view.horizontal_offset,
+            view.width() / 2.0 - center_x * view.horizontal_scale,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(view.altitude_max - view.altitude_min, altitude_span, delta=0.01)
+        self.assertAlmostEqual(
+            (view.altitude_min + view.altitude_max) / 2.0,
+            center_altitude,
+            delta=0.01,
+        )
+        event.accept.assert_called_once_with()
+
     def test_reset_view_refits_route_and_aircraft_after_manual_view_change(self) -> None:
         self._load_ui_config(
             nodes=[
