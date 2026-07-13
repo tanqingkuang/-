@@ -184,6 +184,87 @@ class Situation3DSceneDataTests(unittest.TestCase):
         radii = [math.hypot(point[0] - 100.0, point[2] + 200.0) for point in boundary_points]
         self.assertTrue(all(abs(radius - 100.0) < 1e-6 for radius in radii))
 
+    def test_obstacle_fill_payload_matches_boundary_outline_and_hugs_terrain(self) -> None:
+        """验证危险区填充覆盖层：轮廓与边界同源、三角网合法、逐点贴合地形高度。"""
+
+        enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
+        snapshot = self._snapshot()
+        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        payload = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+
+        fills = payload["riskZoneFills"]
+        self.assertEqual(len(fills), 1)
+        self.assertEqual(fills[0]["color"], "#ff684f")
+        mesh = json.loads(fills[0]["meshValue"])
+        vertices = mesh["v"]
+        triangles = mesh["t"]
+        self.assertGreater(len(vertices), 8)
+        self.assertGreater(len(triangles), 8)
+        self.assertEqual(len(triangles) % 3, 0)
+        self.assertTrue(all(0 <= index < len(vertices) for index in triangles))
+        # 全部顶点必须落在安全区(半径 80+20)内，容差只放开厘米级坐标取整。
+        radii = [math.hypot(point[0] - 100.0, point[2] + 200.0) for point in vertices]
+        self.assertLessEqual(max(radii), 100.0 + 0.05)
+        # 三角面总面积应接近圆面积，证明内部整格与边界裁剪块共同铺满了危险区。
+        area = 0.0
+        for start in range(0, len(triangles), 3):
+            a, b, c = (vertices[triangles[start + offset]] for offset in range(3))
+            area += abs((b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])) / 2.0
+        self.assertGreater(area / (math.pi * 100.0 * 100.0), 0.9)
+        # 每个顶点高度 = 地形显示高度 + 固定抬升，既不穿地也不悬空。
+        surface = payload["terrain"]["surface"]
+        field = scene_data._cached_terrain_field(surface["layoutFile"], surface["resolution"])
+        for point in vertices[:32]:
+            expected = scene_data._terrain_surface_height(
+                surface, field, point[0], point[2], scene_data._FILL_HEIGHT_OFFSET_M
+            )
+            self.assertLess(abs(point[1] - expected), 8.0)
+
+        # 无避障数据的旧场景不生成填充；全部禁用时同样应清空。
+        self.assertEqual(build_scene_payload(snapshot)["riskZoneFills"], [])
+        disabled = ObstacleView("禁用圆", "circle", enabled=False, center_x=0.0, center_y=0.0, radius=40.0)
+        self.assertEqual(build_scene_payload(snapshot, [disabled])["riskZoneFills"], [])
+
+    def test_obstacle_fill_mesh_is_cached_and_participates_in_static_key(self) -> None:
+        """验证填充三角网走缓存复用，且进入 staticKey 参与静态重建判定。"""
+
+        enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
+        snapshot = self._snapshot()
+        first = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+        second = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+        # 同一障碍与地形版本必须复用同一份缓存字符串，避免 10Hz 快照重复三角化。
+        self.assertIs(first["riskZoneFills"][0]["meshValue"], second["riskZoneFills"][0]["meshValue"])
+        self.assertEqual(first["staticKey"], second["staticKey"])
+        # 障碍尺寸变化 → 填充变化 → staticKey 必须翻转触发 QML 静态模型重建。
+        larger = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=120.0)
+        changed = build_scene_payload(snapshot, [larger], clearance_m=20.0)
+        self.assertNotEqual(first["staticKey"], changed["staticKey"])
+
+    def test_risk_fill_geometry_uploads_valid_mesh_and_rejects_bad_input(self) -> None:
+        """验证 RiskFillGeometry 上传合法三角网，坏 JSON 与越界索引降级为空几何。"""
+
+        from src.ui.gui.situation3d.risk_fill_geometry import RiskFillGeometry
+
+        geometry = RiskFillGeometry()
+        mesh = {"v": [[0.0, 10.0, 0.0], [100.0, 12.0, 0.0], [0.0, 11.0, -100.0]], "t": [0, 1, 2]}
+        geometry.meshValue = json.dumps(mesh)
+        # 顶点布局 position(3)+normal(3)，共 24 字节一个顶点。
+        self.assertEqual(len(geometry.vertexData()), 3 * 24)
+        self.assertEqual(len(geometry.indexData()), 3 * 4)
+        bounds_min = geometry.boundsMin()
+        bounds_max = geometry.boundsMax()
+        self.assertEqual(bounds_min.x(), 0.0)
+        self.assertEqual(bounds_max.x(), 100.0)
+        self.assertLess(bounds_min.y(), 10.0)
+        self.assertGreater(bounds_max.y(), 12.0)
+
+        geometry.meshValue = "not json"
+        self.assertEqual(len(geometry.vertexData()), 0)
+        geometry.meshValue = json.dumps({"v": [[0.0, 0.0, 0.0]], "t": [0, 0, 5]})
+        self.assertEqual(len(geometry.vertexData()), 0)
+        geometry.meshValue = json.dumps({"v": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], "t": [0, 1]})
+        self.assertEqual(len(geometry.vertexData()), 0)
+
     def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
         """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
 
@@ -1750,9 +1831,24 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])", qml)
         self.assertIn("property real alertBoundaryPulse: 0.48", qml)
         self.assertIn("SequentialAnimation on alertBoundaryPulse", qml)
-        self.assertEqual(qml.count("duration: 2400"), 2)
+        # 告警呼吸周期收紧为 1 秒：500ms 变亮 + 500ms 变暗，缓动保持 InOutSine。
+        self.assertEqual(qml.count("duration: 500"), 2)
+        self.assertEqual(qml.count("duration: 2400"), 0)
+        self.assertEqual(qml.count("easing.type: Easing.InOutSine"), 2)
         self.assertIn("pulseValue: item.pulse === true", qml)
         self.assertIn("opacity: model.pulseValue ? root.alertBoundaryPulse : 0.95", qml)
+        # 危险区填充与边界共用同一呼吸源，线性映射到 0.10~0.35 的低透明度区间。
+        self.assertIn("readonly property real riskFillPulse: 0.10 + (alertBoundaryPulse - 0.48) * (0.25 / 0.44)", qml)
+        self.assertIn("ListModel { id: riskFillModel }", qml)
+        self.assertIn("data.riskZoneFills", qml)
+        self.assertIn("RiskFillGeometry", qml)
+        self.assertIn("meshValue: model.meshValue", qml)
+        self.assertIn("opacity: root.riskFillPulse", qml)
+        # 填充是贴地提示薄层，绝不能参与阴影，否则会遮挡飞机与尾迹可读性。
+        fill_block = qml[qml.index("model: riskFillModel") : qml.index("model: riskLineModel")]
+        self.assertIn("castsShadows: false", fill_block)
+        self.assertIn("receivesShadows: false", fill_block)
+        self.assertIn("alphaMode: PrincipledMaterial.Blend", fill_block)
         self.assertNotIn("model: obstacleModel", qml)
         self.assertIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
         self.assertIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)

@@ -17,6 +17,7 @@ from src.ui.gui.situation3d.aircraft_model_style import (
     AircraftModelType,
 )
 from src.ui.gui.situation3d.bridge import Situation3DBridge
+from src.ui.gui.situation3d.risk_fill_geometry import RiskFillGeometry
 from src.ui.gui.situation3d.scene_data import TrailPayloadState, build_scene_payload
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
 from src.ui.gui.situation3d.trail_ribbon_geometry import TrailRibbonGeometry
@@ -37,6 +38,7 @@ def _register_qml_types() -> None:
     qmlRegisterType(TerrainGeometry, "Simu3D", 1, 0, "TerrainGeometry")
     qmlRegisterType(TrailRibbonGeometry, "Simu3D", 1, 0, "TrailRibbonGeometry")
     qmlRegisterType(TrailTipGeometry, "Simu3D", 1, 0, "TrailTipGeometry")
+    qmlRegisterType(RiskFillGeometry, "Simu3D", 1, 0, "RiskFillGeometry")
     _QML_TYPES_REGISTERED = True
 
 

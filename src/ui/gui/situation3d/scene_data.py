@@ -182,6 +182,9 @@ class TrailPayloadState:
 # 43. 兼容风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
 # 44. 兼容风险缓冲虚线 alpha 更低，避免抢过航线蓝色主视觉。
 # 45. payload 中保留 label，后续需要 3D 标注时不用再改 terrain_field。
+# 46. riskZoneFills 是真实障碍安全区的贴地半透明填充三角网，与告警边界同轮廓同呼吸相位。
+# 47. 填充网按地形网格量级采样高度并整体抬升，QML 只动 opacity，不做逐帧几何重建。
+# 48. 填充三角化结果按(轮廓,地形版本)缓存，10Hz 快照重推时直接复用缓存字符串。
 
 
 def build_scene_payload(
@@ -248,8 +251,12 @@ def build_scene_payload(
     if obstacle_views:
         # 真实障碍只有精确边界参与呼吸；旧外接圆网格和缓冲圈都不再叠加到地形上。
         risk_zone_lines = _obstacle_boundary_payloads(obstacle_views, clearance_m, terrain.get("surface", {}))
+        # 填充覆盖层与边界同源同轮廓，QML 侧共用同一 pulse 属性保证同相位闪烁。
+        risk_zone_fills = _obstacle_fill_payloads(obstacle_views, clearance_m, terrain.get("surface", {}))
         risk_zone_buffers: list[dict[str, object]] = []
     else:
+        # 兼容布局风险峰不闪烁，也不生成填充覆盖层，维持旧场景视觉不变。
+        risk_zone_fills = []
         raw_risk_zone_lines = terrain.get("riskZoneLines")
         risk_zone_lines = list(raw_risk_zone_lines) if isinstance(raw_risk_zone_lines, list) else []
         if raw_risk_zone_lines is None:
@@ -285,6 +292,7 @@ def build_scene_payload(
         risk_zones,
         risk_zone_lines,
         risk_zone_buffers,
+        risk_zone_fills,
         terrain_risk_areas,
     )
     return {
@@ -305,6 +313,7 @@ def build_scene_payload(
         "riskZones": risk_zones,
         "riskZoneLines": risk_zone_lines,
         "riskZoneBuffers": risk_zone_buffers,
+        "riskZoneFills": risk_zone_fills,
         "terrainRiskAreas": terrain_risk_areas,
         "camera": camera_payload,
         "counts": {
@@ -849,6 +858,319 @@ def _terrain_surface_height(
         max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M))),
         max(1.0, float(surface.get("height", DEFAULT_TERRAIN_RELIEF_M))),
     ) + offset_m
+
+
+# 填充覆盖层整体抬升量：地形网格间距量级的线性插值在岩脊处误差可达十余米，
+# 抬得太低会大面积穿地，太高又会悬空；20m 在验收视距(千米级)下不可分辨。
+_FILL_HEIGHT_OFFSET_M = 20.0
+# 单个危险区填充网的节点数上限，防止巨型障碍在低配机上生成过大的静态 mesh。
+_FILL_MAX_GRID_NODES = 20000
+# 填充色与告警边界同色系，视觉上是同一个"危险区"整体。
+_RISK_FILL_COLOR = "#ff684f"
+
+
+def _obstacle_fill_payloads(
+    obstacles: list[ObstacleView], clearance_m: float, surface: object
+) -> list[dict[str, object]]:
+    """生成危险区贴地填充覆盖层。注意：轮廓与告警边界同源，QML 用同一 pulse 驱动透明度。"""
+
+    surface_data = surface if isinstance(surface, dict) else {}
+    safe_clearance = max(0.0, float(clearance_m))
+    surface_key = _fill_surface_key(surface_data)
+    fills: list[dict[str, object]] = []
+    for obstacle in obstacles:
+        if not obstacle.enabled:
+            continue
+        points = _obstacle_boundary_points(obstacle, safe_clearance)
+        if len(points) < 3:
+            continue
+        # 轮廓取整到厘米级即可稳定缓存键，重复快照不再重复三角化。
+        outline = tuple((round(float(east), 2), round(float(north), 2)) for east, north in points)
+        mesh_value = _cached_fill_mesh(outline, surface_key)
+        if not mesh_value:
+            continue
+        fills.append({"color": _RISK_FILL_COLOR, "meshValue": mesh_value})
+    return fills
+
+
+def _fill_surface_key(surface: dict[str, object]) -> tuple:
+    """提取影响填充高度的地形字段。注意：revision 含高度场就绪标志，就绪后缓存自动失效。"""
+
+    return (
+        str(surface.get("mode", "")),
+        str(surface.get("layoutFile", "")),
+        str(surface.get("revision", "")),
+        float(surface.get("x", 0.0)),
+        float(surface.get("y", 0.0)),
+        float(surface.get("z", 0.0)),
+        float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)),
+        float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)),
+        float(surface.get("height", DEFAULT_TERRAIN_RELIEF_M)),
+        int(surface.get("resolution", 0) or 0),
+    )
+
+
+@lru_cache(maxsize=32)
+def _cached_fill_mesh(outline: tuple[tuple[float, float], ...], surface_key: tuple) -> str:
+    """按(轮廓,地形版本)缓存填充三角网。注意：10Hz 重推时直接返回既有字符串。"""
+
+    mode, layout_file, _revision, x, y, z, width, depth, height, resolution = surface_key
+    surface = {
+        "mode": mode,
+        "x": x,
+        "y": y,
+        "z": z,
+        "width": width,
+        "depth": depth,
+        "height": height,
+        "resolution": resolution,
+    }
+    field = None
+    if mode == "layout" and layout_file:
+        # 高度场未就绪时先按基准面出图；revision 翻转后缓存键变化会自动重建贴地版本。
+        field = _cached_terrain_field(layout_file, resolution or DEFAULT_TERRAIN_RESOLUTION)
+    return _fill_mesh_value(outline, surface, field)
+
+
+def _fill_mesh_value(
+    outline: tuple[tuple[float, float], ...], surface: dict[str, object], field: TerrainField | None
+) -> str:
+    """把 ENU 闭合轮廓三角化成贴地填充网。注意：输出为 RiskFillGeometry 的 meshValue JSON。
+
+    做法：在轮廓包围盒上铺与地形网格同量级的规则格网，逐节点采样显示高度；
+    完全在多边形内部的格子直接出两个三角形，与边界相交的格子把多边形裁剪到
+    格子矩形后按质心扇形三角化，裁剪点高度取格子四角高度的双线性插值。
+    这样相邻格子在公共边上的高度插值一致，覆盖层不会出现裂缝。
+    """
+
+    # 与告警边界共用 Quick3D 平面坐标：x=east，z=-north。
+    polygon = [(float(east), -float(north)) for east, north in outline]
+    min_x = min(point[0] for point in polygon)
+    max_x = max(point[0] for point in polygon)
+    min_z = min(point[1] for point in polygon)
+    max_z = max(point[1] for point in polygon)
+    if max_x - min_x <= 1e-6 or max_z - min_z <= 1e-6:
+        return ""
+    width = max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)))
+    depth = max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)))
+    resolution = int(surface.get("resolution", 0) or 0)
+    grid_segments = max(1, resolution - 1) if resolution > 1 else 191
+    # 采样间距对齐地形网格量级：太粗贴不住岩脊，太细则静态 mesh 无谓膨胀。
+    spacing = max(30.0, min(110.0, max(width, depth) / grid_segments))
+    columns = int(math.ceil((max_x - min_x) / spacing))
+    rows = int(math.ceil((max_z - min_z) / spacing))
+    if (columns + 1) * (rows + 1) > _FILL_MAX_GRID_NODES:
+        # 巨型障碍按上限反推间距，保证节点数有界，宁可略粗也不能拖垮低配机。
+        scale = math.sqrt((columns + 1) * (rows + 1) / _FILL_MAX_GRID_NODES)
+        spacing *= scale
+        columns = int(math.ceil((max_x - min_x) / spacing))
+        rows = int(math.ceil((max_z - min_z) / spacing))
+
+    # 奇偶规则与地形顶点色共用同一套几何判定，覆盖层轮廓和地形红晕保持一致。
+    from src.ui.gui.situation3d.terrain_geometry import _points_inside_polygon
+
+    polygon_array = np.asarray(polygon, dtype=np.float64)
+    node_x = min_x + np.arange(columns + 1, dtype=np.float64)[None, :] * spacing
+    node_z = min_z + np.arange(rows + 1, dtype=np.float64)[:, None] * spacing
+    node_x = np.broadcast_to(node_x, (rows + 1, columns + 1))
+    node_z = np.broadcast_to(node_z, (rows + 1, columns + 1))
+    inside = _points_inside_polygon(node_x, node_z, polygon_array)
+
+    # 节点高度整表采样一次，全部三角形共享，避免每个格子重复查询高度场。
+    heights = [
+        [
+            _terrain_surface_height(surface, field, float(node_x[row, column]), float(node_z[row, column]), _FILL_HEIGHT_OFFSET_M)
+            for column in range(columns + 1)
+        ]
+        for row in range(rows + 1)
+    ]
+    boundary_cells = _fill_boundary_cells(polygon, min_x, min_z, spacing, columns, rows)
+
+    vertices: list[list[float]] = []
+    triangles: list[int] = []
+    node_index: dict[tuple[int, int], int] = {}
+
+    def grid_vertex(row: int, column: int) -> int:
+        """按需注册共享格点顶点，返回顶点索引。"""
+
+        key = (row, column)
+        cached = node_index.get(key)
+        if cached is not None:
+            return cached
+        index = len(vertices)
+        vertices.append(
+            [
+                round(float(node_x[row, column]), 2),
+                round(heights[row][column], 2),
+                round(float(node_z[row, column]), 2),
+            ]
+        )
+        node_index[key] = index
+        return index
+
+    for row in range(rows):
+        for column in range(columns):
+            corner_flags = (
+                bool(inside[row, column]),
+                bool(inside[row, column + 1]),
+                bool(inside[row + 1, column]),
+                bool(inside[row + 1, column + 1]),
+            )
+            on_boundary = (row, column) in boundary_cells or (any(corner_flags) and not all(corner_flags))
+            if not on_boundary:
+                if not all(corner_flags):
+                    continue
+                # 内部整格直接出两个三角形，顶点走共享格点表。
+                top_left = grid_vertex(row, column)
+                top_right = grid_vertex(row, column + 1)
+                bottom_left = grid_vertex(row + 1, column)
+                bottom_right = grid_vertex(row + 1, column + 1)
+                triangles.extend((top_left, bottom_left, top_right, top_right, bottom_left, bottom_right))
+                continue
+            _append_clipped_cell(
+                polygon,
+                row,
+                column,
+                min_x,
+                min_z,
+                spacing,
+                heights,
+                vertices,
+                triangles,
+            )
+    if not triangles:
+        return ""
+    return json.dumps({"v": vertices, "t": triangles}, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+def _fill_boundary_cells(
+    polygon: list[tuple[float, float]],
+    min_x: float,
+    min_z: float,
+    spacing: float,
+    columns: int,
+    rows: int,
+) -> set[tuple[int, int]]:
+    """标记被多边形边穿过的格子。注意：步进取四分之一间距，避免斜穿漏标。"""
+
+    cells: set[tuple[int, int]] = set()
+    step = spacing / 4.0
+    for start, end in zip(polygon, polygon[1:] + polygon[:1]):
+        edge_length = math.hypot(end[0] - start[0], end[1] - start[1])
+        segments = max(1, int(math.ceil(edge_length / step)))
+        for index in range(segments + 1):
+            ratio = index / segments
+            x = start[0] + (end[0] - start[0]) * ratio
+            z = start[1] + (end[1] - start[1]) * ratio
+            column = min(columns - 1, max(0, int((x - min_x) / spacing)))
+            row = min(rows - 1, max(0, int((z - min_z) / spacing)))
+            cells.add((row, column))
+    return cells
+
+
+def _append_clipped_cell(
+    polygon: list[tuple[float, float]],
+    row: int,
+    column: int,
+    min_x: float,
+    min_z: float,
+    spacing: float,
+    heights: list[list[float]],
+    vertices: list[list[float]],
+    triangles: list[int],
+) -> None:
+    """把多边形裁剪到单个格子并按质心扇形三角化。注意：高度取格子四角双线性插值。"""
+
+    cell_min_x = min_x + column * spacing
+    cell_min_z = min_z + row * spacing
+    piece = _clip_polygon_to_rect(polygon, cell_min_x, cell_min_z, cell_min_x + spacing, cell_min_z + spacing)
+    if len(piece) < 3:
+        return
+    # 面积过滤掉退化裁剪结果，避免上传零面积三角形。
+    area = 0.0
+    for (x0, z0), (x1, z1) in zip(piece, piece[1:] + piece[:1]):
+        area += x0 * z1 - x1 * z0
+    if abs(area) * 0.5 < spacing * spacing * 1e-4:
+        return
+
+    def bilinear_height(x: float, z: float) -> float:
+        """格子内部双线性高度。注意：公共边只依赖两端格点，相邻格子结果一致无裂缝。"""
+
+        tx = min(1.0, max(0.0, (x - cell_min_x) / spacing))
+        tz = min(1.0, max(0.0, (z - cell_min_z) / spacing))
+        top = heights[row][column] * (1.0 - tx) + heights[row][column + 1] * tx
+        bottom = heights[row + 1][column] * (1.0 - tx) + heights[row + 1][column + 1] * tx
+        return top * (1.0 - tz) + bottom * tz
+
+    center_x = sum(point[0] for point in piece) / len(piece)
+    center_z = sum(point[1] for point in piece) / len(piece)
+    base = len(vertices)
+    # 质心扇形对近似凸的裁剪块是精确覆盖；极端凹角只产生一格内的轻微溢色，可接受。
+    vertices.append([round(center_x, 2), round(bilinear_height(center_x, center_z), 2), round(center_z, 2)])
+    for x, z in piece:
+        vertices.append([round(x, 2), round(bilinear_height(x, z), 2), round(z, 2)])
+    for index in range(len(piece)):
+        next_index = (index + 1) % len(piece)
+        triangles.extend((base, base + 1 + index, base + 1 + next_index))
+
+
+def _clip_polygon_to_rect(
+    polygon: list[tuple[float, float]],
+    min_x: float,
+    min_z: float,
+    max_x: float,
+    max_z: float,
+) -> list[tuple[float, float]]:
+    """Sutherland-Hodgman 矩形裁剪。注意：裁剪窗口是凸矩形，多边形本身允许凹。"""
+
+    def clip_edge(
+        points: list[tuple[float, float]],
+        keep: object,
+        intersect: object,
+    ) -> list[tuple[float, float]]:
+        """对单条裁剪边执行一轮扫描。"""
+
+        result: list[tuple[float, float]] = []
+        for current, following in zip(points, points[1:] + points[:1]):
+            current_in = keep(current)
+            following_in = keep(following)
+            if current_in:
+                result.append(current)
+                if not following_in:
+                    result.append(intersect(current, following))
+            elif following_in:
+                result.append(intersect(current, following))
+        return result
+
+    def cross_x(boundary: float):
+        """返回与竖直边界求交的函数。"""
+
+        def intersect(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+            ratio = (boundary - a[0]) / (b[0] - a[0])
+            return boundary, a[1] + (b[1] - a[1]) * ratio
+
+        return intersect
+
+    def cross_z(boundary: float):
+        """返回与水平边界求交的函数。"""
+
+        def intersect(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+            ratio = (boundary - a[1]) / (b[1] - a[1])
+            return a[0] + (b[0] - a[0]) * ratio, boundary
+
+        return intersect
+
+    result = list(polygon)
+    for keep, intersect in (
+        (lambda point: point[0] >= min_x, cross_x(min_x)),
+        (lambda point: point[0] <= max_x, cross_x(max_x)),
+        (lambda point: point[1] >= min_z, cross_z(min_z)),
+        (lambda point: point[1] <= max_z, cross_z(max_z)),
+    ):
+        if not result:
+            return []
+        result = clip_edge(result, keep, intersect)
+    return result
 
 
 def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float]:
