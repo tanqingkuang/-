@@ -581,6 +581,14 @@ Item {
             clearColor: "transparent"
             antialiasingMode: SceneEnvironment.MSAA
             antialiasingQuality: SceneEnvironment.VeryHigh
+            // 屏幕空间 AO 补足峡谷、山脚和相邻岩脊之间的接触阴影，尺度按千米级地形设置。
+            aoEnabled: true
+            aoStrength: 34
+            aoDistance: 1050
+            aoSoftness: 40
+            aoDither: true
+            aoSampleRate: 4
+            aoBias: 24
             fog: Fog {
                 enabled: true
                 // 清晨薄雾:雾色取天际亮蓝灰(比地面亮),密度减半、消隐距离推远,远景保持轮廓可辨。
@@ -611,15 +619,22 @@ Item {
         DirectionalLight {
             eulerRotation: Qt.vector3d(-35, -52, 0)
             // 清晨低角度暖阳:主方向光。反照率已重标为白天量级,亮度按"岩面高光不过曝"配平。
-            brightness: 0.62
-            castsShadow: false
+            brightness: 0.72
+            castsShadow: true
+            shadowFactor: 64
+            shadowMapQuality: Light.ShadowMapQualityUltra
+            shadowMapFar: 76000
+            shadowBias: 6.0
+            softShadowQuality: Light.PCF16
+            pcfFactor: 2.0
+            use32BitShadowmap: true
             color: "#ffe9c8"
         }
 
         DirectionalLight {
             eulerRotation: Qt.vector3d(-68, 132, 0)
             // 冷色补光负责背光坡可读性：暗部应是蓝灰可读，而不是纯黑糊成一片。
-            brightness: 0.55
+            brightness: 0.42
             castsShadow: false
             color: "#6db6d8"
         }
@@ -627,14 +642,14 @@ Item {
         DirectionalLight {
             eulerRotation: Qt.vector3d(-90, 0, 0)
             // 天空环境光:半球光的方向光近似,从正上方给全场景铺清晨天光,抬高暗部曝光。
-            brightness: 0.50
+            brightness: 0.34
             castsShadow: false
             color: "#9cc2e0"
         }
 
         PointLight {
             position: Qt.vector3d(root.focusX - 5600, root.focusY + 3820, root.focusZ + 5000)
-            brightness: 0.72
+            brightness: 0.46
             color: "#6fc6d8"
         }
 
@@ -644,30 +659,39 @@ Item {
                 id: terrainGeometry
             }
             position: Qt.vector3d(0, 0, 0)
-            receivesShadows: false
-            castsShadows: false
+            receivesShadows: true
+            castsShadows: true
             materials: PrincipledMaterial {
                 // 顶点色承担海拔渐变，基色保持白色避免二次染色。
                 baseColor: "#ffffff"
+                baseColorMap: Texture {
+                    source: "assets/terrain_detail_albedo.png"
+                    tilingModeHorizontal: Texture.Repeat
+                    tilingModeVertical: Texture.Repeat
+                    scaleU: 36
+                    scaleV: 36
+                    generateMipmaps: true
+                    mipFilter: Texture.Linear
+                }
                 cullMode: Material.NoCulling
                 vertexColorsEnabled: true
                 // 近全粗糙、零镜面量消除浅绿塑料光泽；体积层次交给顶点色与法线光照。
                 roughness: 0.99
                 specularAmount: 0.0
                 // 仅保留极弱冷色底线，防止背光沟壑死黑，同时不抬亮整片地表。
-                emissiveFactor: Qt.vector3d(0.004, 0.006, 0.008)
+                emissiveFactor: Qt.vector3d(0.002, 0.003, 0.005)
                 // 近景细节法线:顶点间距 68m,顶点色插值在极限放大时糊成水彩;
                 // 平铺细节法线在像素级补出岩面粗糙度,曝光不受影响(P1.5)。
                 normalMap: Texture {
                     source: "assets/terrain_detail_normal.png"
                     tilingModeHorizontal: Texture.Repeat
                     tilingModeVertical: Texture.Repeat
-                    scaleU: 112
-                    scaleV: 112
+                    scaleU: 148
+                    scaleV: 148
                     generateMipmaps: true
                     mipFilter: Texture.Linear
                 }
-                normalStrength: 0.72
+                normalStrength: 0.92
             }
         }
 

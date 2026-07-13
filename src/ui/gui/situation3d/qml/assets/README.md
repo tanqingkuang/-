@@ -19,3 +19,6 @@
   注意:该资产机头朝 +Z,Y 向上,翼展沿 X 轴,Python 侧策略使用 +90° 偏航校正。
   模型单位翼展约 0.469,对应真实翼展约 39.9m。
   仅用于仿真验证的态势显示,QML 侧通过 `RuntimeLoader` 运行时加载。
+- `terrain_detail_normal.png`: 四方无缝的岩面切线空间法线贴图，用于补足高度网格采样间的细裂隙。
+- `terrain_detail_albedo.png`: 四方无缝的低饱和岩石反照率乘色图，只添加灰岩颗粒与暗裂隙，不覆盖顶点色的海拔分层。
+- 两张地形贴图均由 `scripts/generate_terrain_detail_normal.py` 使用固定种子生成，可重复构建；正式全量版打包脚本会显式携带二者。

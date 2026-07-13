@@ -177,6 +177,34 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual([zone.zone_id for zone in field.risk_zones], ["hazard_peak_west", "hazard_peak_east"])
         self.assertLess(field.generation_time_ms, 5000.0)
 
+    def test_display_relief_adds_bounded_rock_structure_without_changing_metric_height(self) -> None:
+        """显示层应强化岩脊沟壑，同时保留独立且未改写的米制语义高度。"""
+
+        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=257)
+        self.assertIsNotNone(field.display_heights_m)
+        self.assertIsNotNone(field.display_normals)
+        assert field.display_heights_m is not None
+        assert field.display_normals is not None
+
+        metric = field.heights_m
+        display = field.display_heights_m
+        displacement = display - metric
+        mountain_mask = metric >= 420.0
+        lowland_mask = metric <= 120.0
+        metric_residual = np.abs(metric - terrain_field_module._box_blur(metric, 3, passes=2))
+        display_residual = np.abs(display - terrain_field_module._box_blur(display, 3, passes=2))
+
+        self.assertEqual(display.shape, metric.shape)
+        self.assertEqual(field.display_normals.shape, (257, 257, 3))
+        self.assertFalse(np.shares_memory(display, metric))
+        self.assertLessEqual(float(np.max(np.abs(displacement))), 240.0)
+        self.assertLess(float(np.percentile(np.abs(displacement[lowland_mask]), 99)), 2.0)
+        self.assertGreater(float(np.percentile(np.abs(displacement[mountain_mask]), 75)), 12.0)
+        self.assertGreater(
+            float(np.percentile(display_residual[mountain_mask], 85)),
+            float(np.percentile(metric_residual[mountain_mask], 85)) * 1.22,
+        )
+
     def test_payload_uses_layout_terrain_and_risk_zone_models(self) -> None:
         """验证 terrain_display_file 会进入布局模式，并导出风险区渲染数据(覆盖正式 768 网格)。"""
 
@@ -380,22 +408,24 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 # 末端防线:payload 必须可被 QML JSON.parse 消费,不含 NaN/Inf。
                 json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
-    def test_release_scripts_bundle_detail_normal_texture(self) -> None:
-        """验证细节法线贴图存在且以 --add-data 形式进入双平台打包参数(注释不算数)。"""
+    def test_release_scripts_bundle_terrain_detail_textures(self) -> None:
+        """验证岩面法线与反照率贴图存在，并以 --add-data 形式进入双平台打包参数。"""
 
         import re
 
         project_root = Path(__file__).resolve().parents[2]
-        texture = project_root / "src" / "ui" / "gui" / "situation3d" / "qml" / "assets" / "terrain_detail_normal.png"
-        self.assertTrue(texture.is_file())
-        self.assertGreater(texture.stat().st_size, 0)
-        # 必须是真实的 --add-data 参数:源为该 PNG、目标为 QML 同级 assets 目录。
-        pattern = re.compile(
-            r'--add-data\s+"src/ui/gui/situation3d/qml/assets/terrain_detail_normal\.png[;:]src/ui/gui/situation3d/qml/assets"'
-        )
-        for script_name in ("scripts/build_windows_full_release.ps1", "scripts/build_macos_full_release.sh"):
-            script_text = (project_root / script_name).read_text(encoding="utf-8")
-            self.assertRegex(script_text, pattern, script_name)
+        asset_dir = project_root / "src" / "ui" / "gui" / "situation3d" / "qml" / "assets"
+        for texture_name in ("terrain_detail_normal.png", "terrain_detail_albedo.png"):
+            texture = asset_dir / texture_name
+            self.assertTrue(texture.is_file(), texture_name)
+            self.assertGreater(texture.stat().st_size, 0, texture_name)
+            # 必须是真实的 --add-data 参数:源为该 PNG、目标为 QML 同级 assets 目录。
+            pattern = re.compile(
+                rf'--add-data\s+"src/ui/gui/situation3d/qml/assets/{re.escape(texture_name)}[;:]src/ui/gui/situation3d/qml/assets"'
+            )
+            for script_name in ("scripts/build_windows_full_release.ps1", "scripts/build_macos_full_release.sh"):
+                script_text = (project_root / script_name).read_text(encoding="utf-8")
+                self.assertRegex(script_text, pattern, f"{script_name}: {texture_name}")
 
     def test_ready_state_single_snapshot_still_swaps_in_layout_terrain(self) -> None:
         """复现负责人现场问题:READY 态只推一次快照(主窗口 tick 未启动),
@@ -1062,7 +1092,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
             for offset in range(0, len(vertex_data), geometry.stride())
         ]
 
-        self.assertEqual(geometry.stride(), 48)
+        self.assertEqual(geometry.stride(), 72)
         self.assertGreater(geometry.vertexData().size(), 0)
         self.assertGreater(geometry.indexData().size(), 0)
         self.assertLessEqual(geometry.boundsMin().y(), 0.0)
@@ -1080,7 +1110,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         samples = []
         for offset in range(0, len(vertex_data), geometry.stride()):
             height = struct.unpack_from("<f", vertex_data, offset + 4)[0]
-            linear = np.array(struct.unpack_from("<fff", vertex_data, offset + 32), dtype=np.float64)
+            linear = np.array(struct.unpack_from("<fff", vertex_data, offset + 56), dtype=np.float64)
             color = np.where(
                 linear <= 0.0031308,
                 linear * 12.92,
@@ -1108,7 +1138,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
         layout_vertex_size = geometry.vertexData().size()
 
-        self.assertEqual(geometry.stride(), 48)
+        self.assertEqual(geometry.stride(), 72)
         self.assertEqual(layout_vertex_size, 128 * 128 * geometry.stride())
         self.assertGreater(geometry.indexData().size(), 0)
         self.assertGreater(geometry.generationTimeMs, 0.0)
@@ -1117,6 +1147,31 @@ class Situation3DSceneDataTests(unittest.TestCase):
         geometry.layoutFile = ""
         geometry.widthValue = DEFAULT_TERRAIN_SPAN_M
         self.assertNotEqual(geometry.vertexData().size(), layout_vertex_size)
+
+    def test_layout_geometry_uses_display_relief_and_complete_tangent_basis(self) -> None:
+        """正式地形网格应消费显示高度，并提供法线贴图所需的正交切线基。"""
+
+        field = terrain_field_module.get_terrain_field(TERRAIN_LAYOUT_PATH, resolution=128)
+        assert field.display_heights_m is not None
+        geometry = TerrainGeometry()
+        geometry.resolutionValue = 128
+        geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
+        displacement = np.abs(field.display_heights_m - field.heights_m)
+        vertex_index = int(np.argmax(displacement))
+        values = struct.unpack_from("<18f", bytes(geometry.vertexData()), vertex_index * geometry.stride())
+
+        normal = np.array(values[3:6])
+        tangent = np.array(values[8:11])
+        binormal = np.array(values[11:14])
+        self.assertEqual(geometry.stride(), 72)
+        self.assertAlmostEqual(values[1], float(field.display_heights_m.reshape(-1)[vertex_index]), places=3)
+        self.assertGreater(float(displacement.reshape(-1)[vertex_index]), 1.0)
+        self.assertAlmostEqual(float(np.linalg.norm(normal)), 1.0, places=4)
+        self.assertAlmostEqual(float(np.linalg.norm(tangent)), 1.0, places=4)
+        self.assertAlmostEqual(float(np.linalg.norm(binormal)), 1.0, places=4)
+        self.assertAlmostEqual(float(np.dot(normal, tangent)), 0.0, places=4)
+        self.assertAlmostEqual(float(np.dot(normal, binormal)), 0.0, places=4)
+        self.assertAlmostEqual(float(np.dot(tangent, binormal)), 0.0, places=4)
 
     def test_trail_ribbon_geometry_builds_single_continuous_mesh(self) -> None:
         """验证尾迹 ribbon 使用一张连续三角带，而不是离散点或分段圆柱。"""
@@ -1539,9 +1594,21 @@ class Situation3DSceneDataTests(unittest.TestCase):
         terrain_block = qml[qml.index("id: terrainSurfaceModel") : qml.index("Repeater3D", qml.index("id: terrainSurfaceModel"))]
         self.assertIn("roughness: 0.99", terrain_block)
         self.assertIn("specularAmount: 0.0", terrain_block)
-        self.assertIn("normalStrength: 0.72", terrain_block)
-        self.assertIn("emissiveFactor: Qt.vector3d(0.004, 0.006, 0.008)", terrain_block)
+        self.assertIn("normalStrength: 0.92", terrain_block)
+        self.assertIn("scaleU: 148", terrain_block)
+        self.assertIn("scaleV: 148", terrain_block)
+        self.assertIn("emissiveFactor: Qt.vector3d(0.002, 0.003, 0.005)", terrain_block)
         self.assertIn('source: "assets/terrain_detail_normal.png"', terrain_block)
+        self.assertIn('source: "assets/terrain_detail_albedo.png"', terrain_block)
+        self.assertIn("receivesShadows: true", terrain_block)
+        self.assertIn("castsShadows: true", terrain_block)
+
+        environment_block = qml[qml.index("environment: SceneEnvironment") : qml.index("Node {", qml.index("environment: SceneEnvironment"))]
+        key_light_block = qml[qml.index("DirectionalLight {") : qml.index("DirectionalLight {", qml.index("DirectionalLight {") + 1)]
+        self.assertIn("aoEnabled: true", environment_block)
+        self.assertIn("aoStrength:", environment_block)
+        self.assertIn("castsShadow: true", key_light_block)
+        self.assertIn("shadowMapQuality: Light.ShadowMapQualityUltra", key_light_block)
 
     def test_aircraft_model_stays_recognizable_but_distance_visible(self) -> None:
         """飞机应按真实尺寸渲染无人机模型，并随相机距离自适应缩放以免缩远后消失。"""
