@@ -10,6 +10,7 @@ import time
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 from PySide6.QtGui import QVector3D
 
 from src.ui.gui.situation3d import scene_data
@@ -232,6 +233,43 @@ class Situation3DSceneDataTests(unittest.TestCase):
         for zone in field.risk_zones:
             measured = scene_data._sample_field_height(field, zone.east_m, zone.north_m)
             self.assertLess(abs(measured - zone.height_m) / zone.height_m, 0.12)
+
+    def test_layout_terrain_palette_is_dark_layered_and_low_saturation(self) -> None:
+        """验证正式布局地形呈深绿灰、岩石灰与冷暖坡面层次，而非浅绿塑料色。"""
+
+        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=257)
+        linear = np.clip(field.colors.astype(np.float64), 0.0, 1.0)
+        colors = np.where(
+            linear <= 0.0031308,
+            linear * 12.92,
+            1.055 * np.power(linear, 1.0 / 2.4) - 0.055,
+        )
+        luminance_weights = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
+        heights = field.heights_m
+
+        valley_colors = colors[heights <= 180.0]
+        mid_colors = colors[(heights > 700.0) & (heights <= 1800.0)]
+        high_colors = colors[heights > 1800.0]
+        self.assertGreater(len(mid_colors), 200)
+        self.assertGreater(len(high_colors), 40)
+        self.assertLess(float((valley_colors @ luminance_weights).mean()), 0.29)
+        self.assertLess(float((valley_colors[:, 1] - valley_colors[:, 0]).mean()), 0.07)
+        self.assertLess(float((mid_colors.max(axis=1) - mid_colors.min(axis=1)).mean()), 0.09)
+        self.assertLess(float((mid_colors @ luminance_weights).mean()), 0.33)
+
+        high_luminance = high_colors @ luminance_weights
+        lit_high = high_colors[high_luminance >= np.percentile(high_luminance, 75)]
+        self.assertGreaterEqual(float(lit_high[:, 0].mean()), float(lit_high[:, 2].mean()))
+        self.assertLess(float(lit_high[:, 1].mean() - lit_high[:, 0].mean()), 0.045)
+
+        slope = np.sqrt(np.maximum(0.0, 1.0 / np.square(np.maximum(field.normals[:, :, 1], 1e-6)) - 1.0))
+        steep_mid = colors[(heights > 700.0) & (slope > 0.35)]
+        steep_luminance = steep_mid @ luminance_weights
+        shadow = steep_mid[steep_luminance <= np.percentile(steep_luminance, 25)]
+        light = steep_mid[steep_luminance >= np.percentile(steep_luminance, 75)]
+        self.assertGreater(float(shadow[:, 2].mean() - shadow[:, 0].mean()), 0.03)
+        self.assertGreater(float(np.percentile(steep_luminance, 75) - np.percentile(steep_luminance, 25)), 0.09)
+        self.assertGreater(float((light @ luminance_weights).mean()), float((shadow @ luminance_weights).mean()) + 0.09)
 
     def test_route_corridor_keeps_cruise_clearance(self) -> None:
         """验证走廊段(进入风险链前)地形满足 巡航900m-净空200m;风险段封锁属 P2 演示语义。"""
@@ -1031,6 +1069,35 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreater(geometry.boundsMax().y(), 760.0)
         self.assertGreater(max(y_values) - min(y_values), 450.0)
 
+    def test_procedural_terrain_fallback_uses_matching_rock_palette(self) -> None:
+        """验证无布局占位地形也使用低饱和深色岩土地貌，避免加载切换时闪回浅绿色。"""
+
+        geometry = TerrainGeometry()
+        geometry.widthValue = DEFAULT_TERRAIN_SPAN_M
+        geometry.depthValue = DEFAULT_TERRAIN_SPAN_M
+        geometry.amplitudeValue = 760.0
+        vertex_data = bytes(geometry.vertexData())
+        samples = []
+        for offset in range(0, len(vertex_data), geometry.stride()):
+            height = struct.unpack_from("<f", vertex_data, offset + 4)[0]
+            linear = np.array(struct.unpack_from("<fff", vertex_data, offset + 32), dtype=np.float64)
+            color = np.where(
+                linear <= 0.0031308,
+                linear * 12.92,
+                1.055 * np.power(linear, 1.0 / 2.4) - 0.055,
+            )
+            samples.append((height, color))
+
+        low = np.array([color for height, color in samples if height <= 120.0])
+        high = np.array([color for height, color in samples if height >= 560.0])
+        luminance_weights = np.array([0.2126, 0.7152, 0.0722], dtype=np.float64)
+        self.assertGreater(len(low), 100)
+        self.assertGreater(len(high), 20)
+        self.assertLess(float((low @ luminance_weights).mean()), 0.28)
+        self.assertLess(float((low[:, 1] - low[:, 0]).mean()), 0.075)
+        self.assertLess(float((high.max(axis=1) - high.min(axis=1)).mean()), 0.10)
+        self.assertGreater(float((high @ luminance_weights).mean()), float((low @ luminance_weights).mean()) + 0.10)
+
     def test_terrain_geometry_consumes_layout_file_and_keeps_fallback(self) -> None:
         """验证 TerrainGeometry 有布局时使用新高度场，无布局时仍回退旧行为。"""
 
@@ -1464,6 +1531,17 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("function syncTrailModel", qml)
         self.assertNotIn("trailModel.clear()", qml)
         self.assertNotIn("data.trailPoints", qml)
+
+    def test_terrain_material_is_matte_with_visible_micro_relief(self) -> None:
+        """验证正式地形材质消除塑料高光，并保留足够强的近景岩面细节。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+        terrain_block = qml[qml.index("id: terrainSurfaceModel") : qml.index("Repeater3D", qml.index("id: terrainSurfaceModel"))]
+        self.assertIn("roughness: 0.99", terrain_block)
+        self.assertIn("specularAmount: 0.0", terrain_block)
+        self.assertIn("normalStrength: 0.72", terrain_block)
+        self.assertIn("emissiveFactor: Qt.vector3d(0.004, 0.006, 0.008)", terrain_block)
+        self.assertIn('source: "assets/terrain_detail_normal.png"', terrain_block)
 
     def test_aircraft_model_stays_recognizable_but_distance_visible(self) -> None:
         """飞机应按真实尺寸渲染无人机模型，并随相机距离自适应缩放以免缩远后消失。"""
