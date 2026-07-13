@@ -41,7 +41,7 @@ from src.algorithm.entity.leader_follower_rally import (
     fill_output,
     loiter_speed_bounds,
     rally_loose_target,
-    rally_route_heading_rad,
+    route_heading_rad,
     resolve_formation_slot,
 )
 
@@ -51,15 +51,15 @@ class RallyFollowerEntity(EntityBase):
 
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 RallyFollowerEntity。"""
-        if not cfg.rally_route or len(cfg.rally_route) < 2:
-            raise ValueError("RallyFollowerEntity: rally_route 至少需要两个航点")
+        if len(cfg.route) < 2:
+            raise ValueError("RallyFollowerEntity: route 至少需要两个航点")
         rally_cfg = cfg.rally_cfg
         if not isinstance(rally_cfg, RallyTaskInitS):
             raise ValueError("RallyFollowerEntity: rally_cfg must be RallyTaskInitS")
 
-        # 从集结航线第一航段计算任务航向，再按目标队形槽位算本机松散目标点
-        _A = cfg.rally_route[0].pos
-        _heading = rally_route_heading_rad(cfg.rally_route)
+        # 从统一航线第一航段计算集结航向，再按目标队形槽位算本机松散目标点。
+        _A = cfg.route[0].pos
+        _heading = route_heading_rad(cfg.route)
         _slot = resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)
         if _slot is None:
             raise ValueError(

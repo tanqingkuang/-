@@ -4,7 +4,6 @@
   "playback_rate": 1.0,
   "seed": 1,
   "route_file": "element/rally_demo_mission_route.json",
-  "rally_route_file": "element/rally_demo_rally_route.json",
   "rally_cfg": {
     "loose_scale": 3.0,
     "convergence_radius_m": 30.0,

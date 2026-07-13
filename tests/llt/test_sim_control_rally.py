@@ -18,7 +18,6 @@ from src.runner.sim_control import (
     RallyPlanGeometryState,
     SimulationController,
     _build_formation_comm_init,
-    _build_rally_route,
     _build_rally_task_init,
 )
 
@@ -35,19 +34,11 @@ def _rally_config() -> dict[str, object]:
         "algorithm_decimation": 1,
         "playback_rate": 1.0,
         "route": {
-            # route（mission_route）起点必须等于 rally_route 起点 A=(0,0)（见 sim_control_modules.py
-            # 的连续性校验），不是旧版语义里的 rally_route 终点。
+            # 统一航线首点是集结中心，首段确定集结方向，后续航段用于编队任务飞行。
             "speed_mps": 20.0,
             "waypoints": [
                 {"x_m": 0.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
                 {"x_m": 200.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
-            ],
-        },
-        "rally_route": {
-            "speed_mps": 20.0,
-            "waypoints": [
-                {"x_m": 0.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
-                {"x_m": 100.0, "y_m": 0.0, "altitude_m": 500.0, "R": 0.0},
             ],
         },
         "rally_cfg": {
@@ -127,18 +118,6 @@ def _snapshot_node_phases(controller: SimulationController) -> dict[str, str]:
 
 class SimControlRallyTests(unittest.TestCase):
     """验证控制器对集结场景的配置解析、实体装配和快照透传。"""
-
-    def test_build_rally_route_from_waypoints(self) -> None:
-        """验证 rally_route.waypoints 被解析为连续航段。"""
-
-        route = _build_rally_route(_rally_config())
-
-        self.assertIsNotNone(route)
-        assert route is not None
-        self.assertEqual(len(route), 2)
-        self.assertAlmostEqual(route[0].pos.east, 0.0)
-        self.assertAlmostEqual(route[1].pos.east, 100.0)
-        self.assertAlmostEqual(route[0].vdCmd, 20.0)
 
     def test_build_rally_task_init_collects_expected_followers_and_period(self) -> None:
         """验证 rally_cfg 生成 RallyTaskInitS，并按角色收集期望僚机。"""
@@ -482,14 +461,12 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertIsNotNone(task_init)
         self.assertFalse(hasattr(task_init, "last_arrival_threshold_s"))
 
-    def test_validate_rejects_rally_leader_without_rally_route(self) -> None:
-        """rally_leader 角色缺少 rally_route 时 validate() 应拒绝配置。"""
+    def test_validate_accepts_rally_roles_with_route_only(self) -> None:
+        """集结场景只提供统一 route 时应通过配置校验。"""
         from src.runner.sim_control import _ConfigLoader
 
         config = _rally_config()
-        del config["rally_route"]  # type: ignore[misc]
-        with self.assertRaises(ValueError, msg="rally_route is required"):
-            _ConfigLoader().validate(config)
+        _ConfigLoader().validate(config)
 
     def test_validate_rejects_rally_leader_without_route(self) -> None:
         """rally_leader 角色缺少任务 route 时 validate() 应拒绝配置。"""
@@ -498,27 +475,6 @@ class SimControlRallyTests(unittest.TestCase):
         config = _rally_config()
         del config["route"]  # type: ignore[misc]
         with self.assertRaises(ValueError, msg="route is required"):
-            _ConfigLoader().validate(config)
-
-    def test_validate_rejects_mission_route_start_far_from_rally_route_start(self) -> None:
-        """route（mission_route）起点必须等于 rally_route 起点 A；相距过远时 validate() 应拒绝配置。"""
-        from src.runner.sim_control import _ConfigLoader
-
-        config = _rally_config()
-        config["route"]["waypoints"][0]["x_m"] = 9999.0  # type: ignore[index]
-        with self.assertRaises(ValueError, msg="route start must equal rally_route start A"):
-            _ConfigLoader().validate(config)
-
-    def test_validate_rejects_mission_route_first_segment_direction_mismatch(self) -> None:
-        """route（mission_route）首段方向必须与 rally_route 首段方向（任务航向）大致一致；
-        起点位置对得上但方向差得多（如垂直）时 validate() 也应拒绝配置。"""
-        from src.runner.sim_control import _ConfigLoader
-
-        config = _rally_config()
-        # 起点仍是 (0,0)（跟 rally_route 起点 A 对得上），但第二个航点改成正北，
-        # 首段方向从正东变成正北，跟 rally_route 的正东方向差 90°。
-        config["route"]["waypoints"][1] = {"x_m": 0.0, "y_m": 200.0, "altitude_m": 500.0, "R": 0.0}  # type: ignore[index]
-        with self.assertRaises(ValueError, msg="route first-segment direction must match rally_route's"):
             _ConfigLoader().validate(config)
 
     def test_validate_rejects_loiter_radius_too_small_for_capture_window(self) -> None:

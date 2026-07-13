@@ -1757,22 +1757,18 @@ class NodeAlgorithmResetTests(unittest.TestCase):
             dt_s=0.02,
             targetPattern=0,
         )
-        rally_route = [
+        route = [
             WayPointInputS(idx=0, pos=P(east=0.0, north=0.0, h=500.0), vdCmd=20.0),
             WayPointInputS(idx=1, pos=P(east=100.0, north=0.0, h=500.0), vdCmd=20.0),
-        ]
-        mission_route = [
-            WayPointInputS(idx=0, pos=P(east=100.0, north=0.0, h=500.0), vdCmd=20.0),
-            WayPointInputS(idx=1, pos=P(east=200.0, north=0.0, h=500.0), vdCmd=20.0),
+            WayPointInputS(idx=2, pos=P(east=200.0, north=0.0, h=500.0), vdCmd=20.0),
         ]
         node = _NodeAlgorithm(
             node_id="R01",
             role="rally_leader",
             comm_init=self._make_comm_init(),
             initial_leader_state=None,
-            leader_route=mission_route,
+            leader_route=route,
             control_period_s=0.02,
-            rally_route=rally_route,
             rally_cfg=rally_cfg,
         )
 

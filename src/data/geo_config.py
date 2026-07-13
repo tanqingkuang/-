@@ -91,7 +91,7 @@ def route_to_internal(route: dict[str, object], origin: GeoOrigin | None = None)
             "route waypoints must be geodetic (latitude_deg + longitude_deg); "
             "ENU x_m/y_m routes are no longer supported"
         )
-    # 按约定使用基础航线第一个航点作为 origin；上层可为 rally_route 传入同一 origin。
+    # 按约定使用统一航线第一个航点作为 origin。
     route_origin = origin or GeoOrigin(_read_float(waypoints[0], _LAT_KEYS), _read_float(waypoints[0], _LON_KEYS))
     converted_waypoints: list[object] = []
     for index, raw in enumerate(waypoints):

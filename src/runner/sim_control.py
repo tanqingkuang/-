@@ -28,7 +28,6 @@ from src.runner.sim_control_routes import (
     _build_formation_slots,
     _build_leader_route,
     _build_rally_approach_speed,
-    _build_rally_route,
     _build_rally_task_init,
     _build_vel_cmd_limit,
     _default_formation_slots,

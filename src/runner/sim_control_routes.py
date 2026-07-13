@@ -20,7 +20,7 @@ from src.algorithm.context.leaf_types import (
 )
 from src.algorithm.entity.leader_follower_rally import (
     rally_loose_target,
-    rally_route_heading_rad,
+    route_heading_rad,
     resolve_formation_slot,
 )
 from src.algorithm.entity.types import VelCmdLimitS
@@ -485,34 +485,6 @@ def _build_vel_cmd_limit(config: dict[str, object] | None = None) -> VelCmdLimit
     return limit
 
 
-def _build_rally_route(config: dict[str, object] | None = None, *, insert_arcs: bool = True) -> list[WayPointInputS] | None:
-    """从配置 rally_route 段生成集结长机航线。注意：键不存在时返回 None。"""
-    route_config = (config or {}).get("rally_route")
-    if route_config is None:
-        return None
-    if not isinstance(route_config, dict):
-        raise ValueError("rally_route must be an object")
-    waypoints = route_config.get("waypoints")
-    if waypoints is not None:
-        return _wpi_from_waypoints(waypoints, route_config, insert_arcs=insert_arcs)
-    segments = route_config.get("segments", route_config.get("lines"))
-    if segments is None:
-        wl = _wayline_from_config(route_config, 0, "rally_route")
-        return [
-            WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd),
-            WayPointInputS(idx=1, pos=wl.end.pos, vdCmd=wl.start.vdCmd),
-        ]
-    if not isinstance(segments, list) or not segments:
-        raise ValueError("rally_route.segments must be a non-empty list")
-    wpi_list: list[WayPointInputS] = []
-    for index, segment in enumerate(segments):
-        wl = _wayline_from_config(segment, index, f"rally_route.segments[{index}]", route_config)
-        if index == 0:
-            wpi_list.append(WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd))
-        wpi_list.append(WayPointInputS(idx=index + 1, pos=wl.end.pos, vdCmd=wl.start.vdCmd))
-    return wpi_list
-
-
 def _build_rally_task_init(
     config: dict[str, object] | None,
     algorithm_period_s: float,
@@ -549,7 +521,7 @@ def _build_rally_task_init(
 
 def _build_rally_join_geometry(
     nodes: list[object],
-    rally_route: list[WayPointInputS] | None,
+    route: list[WayPointInputS],
     formation_comm_init: FormCommInitS,
     rally_task_init: RallyTaskInitS | None,
     initial_states: dict[str, AircraftState],
@@ -557,16 +529,16 @@ def _build_rally_join_geometry(
     """按静态配置预计算各集结节点的盘旋圆、切入点 T、切出点 M_i，仅供 GUI 辅助展示。
 
     注意：只依赖配置和模型已解析的初始状态（不依赖仿真推进后的运行时状态），几何公式复用
-    RallyJoinPos 的实际实现（`rally_route_heading_rad`/`rally_loose_target`/`_ccw_entry_tangent`），
+    RallyJoinPos 的实际实现（`route_heading_rad`/`rally_loose_target`/`_ccw_entry_tangent`），
     避免和算法行为分叉。切入点 T 的起点取自 initial_states（模型对 x_m/y_m 缺省时按节点序号错位
     摆放的解析结果），不能直接读原始配置的 x_m/y_m——配置省略该字段时二者默认值不同，直接读配置
     会用错误的起点算出错误的 T。集结长机不依赖队形/槽位，即使 targetPattern 在 formPat 中找不到
     （只有 rally_follower 才需要它），长机自己的圆和切出点仍应正常给出。
     """
-    if rally_route is None or rally_task_init is None or len(rally_route) < 2:
+    if rally_task_init is None or len(route) < 2:
         return {}
-    heading = rally_route_heading_rad(rally_route)
-    a = rally_route[0].pos
+    heading = route_heading_rad(route)
+    a = route[0].pos
     radius = rally_task_init.loiter_radius_m
 
     geometry: dict[str, RallyPlanGeometryState] = {}
