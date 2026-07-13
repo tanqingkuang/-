@@ -123,6 +123,7 @@ class SideView(QWidget):
             self._draw_grid(painter)
         if self.snapshot:
             if self.snapshot.nodes:
+                self._draw_blocked_route(painter)
                 self._draw_reference(painter)
             self._draw_trails(painter, self.snapshot)
             self._draw_nodes(painter, self.snapshot)
@@ -362,6 +363,23 @@ class SideView(QWidget):
                 QPointF(self._map_x(end_x), self._map_y(route.end_altitude)),
             )
 
+    def _draw_blocked_route(self, painter: QPainter) -> None:
+        """绘制被封锁航线的高度剖面。注意：先画红线以突出当前采用航线。"""
+
+        routes = self._blocked_route_segments()
+        if not routes:
+            return
+        pen = QPen(QColor("#ff5a45"), 2)
+        pen.setDashPattern([6, 5])
+        painter.setPen(pen)
+        for route in routes:
+            start_x = self._horizontal_for_point(route.start_x, route.start_y)
+            end_x = self._horizontal_for_point(route.end_x, route.end_y)
+            painter.drawLine(
+                QPointF(self._map_x(start_x), self._map_y(route.start_altitude)),
+                QPointF(self._map_x(end_x), self._map_y(route.end_altitude)),
+            )
+
     def _route_segments(self) -> list[ReferenceRoute]:
         """返回侧视图需要绘制的航段列表。注意：锁定时只画当前航段。"""
         if self.snapshot is None:
@@ -373,6 +391,11 @@ class SideView(QWidget):
         if self.snapshot.route is not None:
             return [self.snapshot.route]
         return []
+
+    def _blocked_route_segments(self) -> list[ReferenceRoute]:
+        """返回被封锁的原始航段。注意：侧视图不为缺失数据生成兜底航线。"""
+
+        return self.snapshot.blocked_route_segments if self.snapshot else []
 
     def _draw_trails(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 trails 画面元素。注意：只做渲染，不修改仿真状态。"""

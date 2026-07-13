@@ -1,0 +1,506 @@
+[
+  {
+    "id": "T01",
+    "type": "polygon",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 38.9773165,
+        "longitude_deg": 116.0551641
+      },
+      {
+        "latitude_deg": 38.9779228,
+        "longitude_deg": 116.0637708
+      },
+      {
+        "latitude_deg": 38.9797536,
+        "longitude_deg": 116.0661197
+      },
+      {
+        "latitude_deg": 38.9809717,
+        "longitude_deg": 116.0715978
+      },
+      {
+        "latitude_deg": 38.9828033,
+        "longitude_deg": 116.0723821
+      },
+      {
+        "latitude_deg": 38.9809677,
+        "longitude_deg": 116.0778572
+      },
+      {
+        "latitude_deg": 38.9809645,
+        "longitude_deg": 116.0825517
+      },
+      {
+        "latitude_deg": 38.9797414,
+        "longitude_deg": 116.0848975
+      },
+      {
+        "latitude_deg": 38.980351,
+        "longitude_deg": 116.0864631
+      },
+      {
+        "latitude_deg": 38.9791278,
+        "longitude_deg": 116.0888088
+      },
+      {
+        "latitude_deg": 38.9803468,
+        "longitude_deg": 116.09194
+      },
+      {
+        "latitude_deg": 38.9809524,
+        "longitude_deg": 116.0982002
+      },
+      {
+        "latitude_deg": 38.9803383,
+        "longitude_deg": 116.1021114
+      },
+      {
+        "latitude_deg": 38.9815583,
+        "longitude_deg": 116.103678
+      },
+      {
+        "latitude_deg": 38.9827747,
+        "longitude_deg": 116.1091569
+      },
+      {
+        "latitude_deg": 38.9821557,
+        "longitude_deg": 116.1177628
+      },
+      {
+        "latitude_deg": 38.9809327,
+        "longitude_deg": 116.1193256
+      },
+      {
+        "latitude_deg": 38.9815376,
+        "longitude_deg": 116.1248036
+      },
+      {
+        "latitude_deg": 38.9803137,
+        "longitude_deg": 116.1271487
+      },
+      {
+        "latitude_deg": 38.9803049,
+        "longitude_deg": 116.1349729
+      },
+      {
+        "latitude_deg": 38.9815198,
+        "longitude_deg": 116.1404522
+      },
+      {
+        "latitude_deg": 38.9809082,
+        "longitude_deg": 116.1412334
+      },
+      {
+        "latitude_deg": 38.9851641,
+        "longitude_deg": 116.1561088
+      },
+      {
+        "latitude_deg": 38.983932,
+        "longitude_deg": 116.1639307
+      },
+      {
+        "latitude_deg": 38.984536,
+        "longitude_deg": 116.1686269
+      },
+      {
+        "latitude_deg": 38.9863635,
+        "longitude_deg": 116.1717612
+      },
+      {
+        "latitude_deg": 38.98636,
+        "longitude_deg": 116.1741086
+      },
+      {
+        "latitude_deg": 38.9900159,
+        "longitude_deg": 116.1795952
+      },
+      {
+        "latitude_deg": 38.9912361,
+        "longitude_deg": 116.1803809
+      },
+      {
+        "latitude_deg": 38.9930694,
+        "longitude_deg": 116.179603
+      },
+      {
+        "latitude_deg": 38.9949051,
+        "longitude_deg": 116.1772599
+      },
+      {
+        "latitude_deg": 38.9955285,
+        "longitude_deg": 116.168653
+      },
+      {
+        "latitude_deg": 38.9967533,
+        "longitude_deg": 116.1663081
+      },
+      {
+        "latitude_deg": 38.9949321,
+        "longitude_deg": 116.158478
+      },
+      {
+        "latitude_deg": 38.995548,
+        "longitude_deg": 116.1545665
+      },
+      {
+        "latitude_deg": 38.9949394,
+        "longitude_deg": 116.153
+      },
+      {
+        "latitude_deg": 38.9967785,
+        "longitude_deg": 116.1475257
+      },
+      {
+        "latitude_deg": 38.99679,
+        "longitude_deg": 116.1381346
+      },
+      {
+        "latitude_deg": 38.9974017,
+        "longitude_deg": 116.1373532
+      },
+      {
+        "latitude_deg": 38.9931474,
+        "longitude_deg": 116.1185635
+      },
+      {
+        "latitude_deg": 38.9937612,
+        "longitude_deg": 116.1154343
+      },
+      {
+        "latitude_deg": 38.9931536,
+        "longitude_deg": 116.1123031
+      },
+      {
+        "latitude_deg": 38.9937672,
+        "longitude_deg": 116.1091738
+      },
+      {
+        "latitude_deg": 38.9949901,
+        "longitude_deg": 116.1076105
+      },
+      {
+        "latitude_deg": 38.9943829,
+        "longitude_deg": 116.1036967
+      },
+      {
+        "latitude_deg": 38.9950003,
+        "longitude_deg": 116.0958718
+      },
+      {
+        "latitude_deg": 38.9943928,
+        "longitude_deg": 116.0919582
+      },
+      {
+        "latitude_deg": 38.9931726,
+        "longitude_deg": 116.0903915
+      },
+      {
+        "latitude_deg": 38.9937857,
+        "longitude_deg": 116.087262
+      },
+      {
+        "latitude_deg": 38.9913474,
+        "longitude_deg": 116.0809987
+      },
+      {
+        "latitude_deg": 38.9907389,
+        "longitude_deg": 116.0778679
+      },
+      {
+        "latitude_deg": 38.9913501,
+        "longitude_deg": 116.077086
+      },
+      {
+        "latitude_deg": 38.9882996,
+        "longitude_deg": 116.0723877
+      },
+      {
+        "latitude_deg": 38.9883006,
+        "longitude_deg": 116.0708227
+      },
+      {
+        "latitude_deg": 38.9864689,
+        "longitude_deg": 116.0700384
+      },
+      {
+        "latitude_deg": 38.9883059,
+        "longitude_deg": 116.0614326
+      },
+      {
+        "latitude_deg": 38.9883079,
+        "longitude_deg": 116.0575201
+      },
+      {
+        "latitude_deg": 38.985259,
+        "longitude_deg": 116.0473455
+      },
+      {
+        "latitude_deg": 38.9840385,
+        "longitude_deg": 116.0449974
+      },
+      {
+        "latitude_deg": 38.980985,
+        "longitude_deg": 116.0449954
+      },
+      {
+        "latitude_deg": 38.977929,
+        "longitude_deg": 116.0512526
+      },
+      {
+        "latitude_deg": 38.9779275,
+        "longitude_deg": 116.0543822
+      }
+    ],
+    "height_m": 2380.4,
+    "label": "地形障碍 T01 峰值2380m"
+  },
+  {
+    "id": "T02",
+    "type": "polygon",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 38.9954468,
+        "longitude_deg": 116.2179557
+      },
+      {
+        "latitude_deg": 38.9960472,
+        "longitude_deg": 116.2234357
+      },
+      {
+        "latitude_deg": 38.9984808,
+        "longitude_deg": 116.2281391
+      },
+      {
+        "latitude_deg": 38.9984778,
+        "longitude_deg": 116.2297043
+      },
+      {
+        "latitude_deg": 39.0003068,
+        "longitude_deg": 116.2312755
+      },
+      {
+        "latitude_deg": 39.0027495,
+        "longitude_deg": 116.2312835
+      },
+      {
+        "latitude_deg": 39.0076518,
+        "longitude_deg": 116.2226895
+      },
+      {
+        "latitude_deg": 39.0076592,
+        "longitude_deg": 116.2187759
+      },
+      {
+        "latitude_deg": 39.0064466,
+        "longitude_deg": 116.2140759
+      },
+      {
+        "latitude_deg": 39.0021788,
+        "longitude_deg": 116.2101498
+      },
+      {
+        "latitude_deg": 39.0009574,
+        "longitude_deg": 116.2101461
+      },
+      {
+        "latitude_deg": 38.9966755,
+        "longitude_deg": 116.2140465
+      },
+      {
+        "latitude_deg": 38.996059,
+        "longitude_deg": 116.217175
+      }
+    ],
+    "height_m": 2461.5,
+    "label": "地形障碍 T02 峰值2462m"
+  },
+  {
+    "id": "T03",
+    "type": "polygon",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 38.996743,
+        "longitude_deg": 116.1733515
+      },
+      {
+        "latitude_deg": 38.9997834,
+        "longitude_deg": 116.1819678
+      },
+      {
+        "latitude_deg": 39.001613,
+        "longitude_deg": 116.1835378
+      },
+      {
+        "latitude_deg": 39.0052784,
+        "longitude_deg": 116.1827646
+      },
+      {
+        "latitude_deg": 39.0089581,
+        "longitude_deg": 116.1725985
+      },
+      {
+        "latitude_deg": 39.0065244,
+        "longitude_deg": 116.166331
+      },
+      {
+        "latitude_deg": 39.0028646,
+        "longitude_deg": 116.1631917
+      },
+      {
+        "latitude_deg": 38.9991983,
+        "longitude_deg": 116.1647485
+      },
+      {
+        "latitude_deg": 38.9979735,
+        "longitude_deg": 116.1670935
+      },
+      {
+        "latitude_deg": 38.9973549,
+        "longitude_deg": 116.1725703
+      }
+    ],
+    "height_m": 2358.7,
+    "label": "地形障碍 T03 峰值2359m"
+  },
+  {
+    "id": "T04",
+    "type": "polygon",
+    "enabled": true,
+    "points": [
+      {
+        "latitude_deg": 39.0053889,
+        "longitude_deg": 116.0872762
+      },
+      {
+        "latitude_deg": 39.0059972,
+        "longitude_deg": 116.0904078
+      },
+      {
+        "latitude_deg": 39.0053853,
+        "longitude_deg": 116.0919724
+      },
+      {
+        "latitude_deg": 39.0066048,
+        "longitude_deg": 116.0943221
+      },
+      {
+        "latitude_deg": 39.0078189,
+        "longitude_deg": 116.1029336
+      },
+      {
+        "latitude_deg": 39.0090382,
+        "longitude_deg": 116.1052836
+      },
+      {
+        "latitude_deg": 39.009027,
+        "longitude_deg": 116.1170246
+      },
+      {
+        "latitude_deg": 39.0078033,
+        "longitude_deg": 116.1193707
+      },
+      {
+        "latitude_deg": 39.0084022,
+        "longitude_deg": 116.1303299
+      },
+      {
+        "latitude_deg": 39.009621,
+        "longitude_deg": 116.1326803
+      },
+      {
+        "latitude_deg": 39.0108313,
+        "longitude_deg": 116.1420757
+      },
+      {
+        "latitude_deg": 39.0144896,
+        "longitude_deg": 116.1467797
+      },
+      {
+        "latitude_deg": 39.0150964,
+        "longitude_deg": 116.1499122
+      },
+      {
+        "latitude_deg": 39.0175381,
+        "longitude_deg": 116.1507002
+      },
+      {
+        "latitude_deg": 39.0187655,
+        "longitude_deg": 116.1460057
+      },
+      {
+        "latitude_deg": 39.021214,
+        "longitude_deg": 116.1413136
+      },
+      {
+        "latitude_deg": 39.023678,
+        "longitude_deg": 116.122529
+      },
+      {
+        "latitude_deg": 39.0230761,
+        "longitude_deg": 116.1139162
+      },
+      {
+        "latitude_deg": 39.0212477,
+        "longitude_deg": 116.1099989
+      },
+      {
+        "latitude_deg": 39.0200328,
+        "longitude_deg": 116.1029513
+      },
+      {
+        "latitude_deg": 39.0212639,
+        "longitude_deg": 116.0912101
+      },
+      {
+        "latitude_deg": 39.0188323,
+        "longitude_deg": 116.0755502
+      },
+      {
+        "latitude_deg": 39.0200557,
+        "longitude_deg": 116.0724201
+      },
+      {
+        "latitude_deg": 39.0206701,
+        "longitude_deg": 116.0661578
+      },
+      {
+        "latitude_deg": 39.0194566,
+        "longitude_deg": 116.0504997
+      },
+      {
+        "latitude_deg": 39.015794,
+        "longitude_deg": 116.0465831
+      },
+      {
+        "latitude_deg": 39.0121292,
+        "longitude_deg": 116.0481462
+      },
+      {
+        "latitude_deg": 39.0109069,
+        "longitude_deg": 116.0504936
+      },
+      {
+        "latitude_deg": 39.0096833,
+        "longitude_deg": 116.0551892
+      },
+      {
+        "latitude_deg": 39.0096781,
+        "longitude_deg": 116.0653648
+      },
+      {
+        "latitude_deg": 39.006618,
+        "longitude_deg": 116.0763199
+      },
+      {
+        "latitude_deg": 39.0060002,
+        "longitude_deg": 116.0864943
+      }
+    ],
+    "height_m": 2459.1,
+    "label": "地形障碍 T04 峰值2459m"
+  }
+]

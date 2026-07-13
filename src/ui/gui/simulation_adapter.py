@@ -516,6 +516,11 @@ class ControllerSimulationAdapter:
         ]
         if not route_segments and route is not None:
             route_segments = [route]
+        # 被封锁航线只来自控制器显式快照，不能回退当前航段以免伪造封锁语义。
+        blocked_route_segments = [
+            self._convert_route(segment)
+            for segment in snapshot.blocked_route_segments
+        ]
         rally_geometry = [
             RallyGeometryView(
                 node_id=node_id,
@@ -546,6 +551,7 @@ class ControllerSimulationAdapter:
             links=links,
             route=route,
             route_segments=route_segments,
+            blocked_route_segments=blocked_route_segments,
             cpu_utilization=snapshot.cpu_utilization,
             rally_geometry=rally_geometry,
             terrain_display_file=self.terrain_display_file,

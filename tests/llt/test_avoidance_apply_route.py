@@ -61,6 +61,17 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
         self.assertEqual(self.controller.clear_avoidance_route().code, "OK")
         self.assertEqual(_route_end(self.controller), ORIGINAL_END)
 
+    def test_override_exposes_and_clears_blocked_original_route(self) -> None:
+        """采用覆盖航线后保留原配置航线快照，清除时不能残留封锁航段。"""
+
+        self.assertEqual(self.controller.apply_avoidance_route(_sample_route()).code, "OK")
+        blocked = self.controller.get_snapshot().blocked_route_segments
+        self.assertTrue(blocked)
+        self.assertAlmostEqual(blocked[-1].end_x_m, ORIGINAL_END[0], places=2)
+        self.assertAlmostEqual(blocked[-1].end_y_m, ORIGINAL_END[1], places=2)
+        self.assertEqual(self.controller.clear_avoidance_route().code, "OK")
+        self.assertEqual(self.controller.get_snapshot().blocked_route_segments, [])
+
     def test_reload_config_clears_override(self) -> None:
         self.controller.apply_avoidance_route(_sample_route())
         self.assertEqual(self.controller.load_config(CONFIG).code, "OK")

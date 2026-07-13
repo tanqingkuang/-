@@ -39,6 +39,8 @@ from src.ui.gui.main_window import (
     run_gui,
 )
 from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, is_major_grid_line, trail_seconds_for_duration
+from src.ui.gui.side_view import SideView
+from src.ui.gui.top_view import TopView
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -75,6 +77,31 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertIsNone(self.window._stage_fullscreen_dialog)
         self.assertEqual(self.window.main_layout.indexOf(self.window.stage), 1)
         self.assertEqual(self.window.fullscreen_button.text(), "⛶")
+
+    def test_views_read_blocked_route_segments_from_snapshot(self) -> None:
+        """验证俯视图和侧视图只读取快照中的封锁航段，空列表保持为空。"""
+
+        snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[],
+            links=[],
+        )
+        top_view = TopView.__new__(TopView)
+        side_view = SideView.__new__(SideView)
+        top_view.snapshot = snapshot
+        side_view.snapshot = snapshot
+        self.assertEqual(top_view._blocked_route_segments(), [])
+        self.assertEqual(side_view._blocked_route_segments(), [])
+
+        blocked = ReferenceRoute(0.0, 0.0, 100.0, 80.0, 0.0, 100.0)
+        snapshot.blocked_route_segments = [blocked]
+        self.assertEqual(top_view._blocked_route_segments(), [blocked])
+        self.assertEqual(side_view._blocked_route_segments(), [blocked])
 
     def test_top_status_bar_moves_to_sidebar_and_help_menu(self) -> None:
         root_layout = self.window.centralWidget().layout()

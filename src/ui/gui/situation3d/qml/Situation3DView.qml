@@ -50,6 +50,8 @@ Item {
     ListModel { id: trailModel }
     ListModel { id: routeDashModel }
     ListModel { id: routeModel }
+    ListModel { id: blockedRouteDashModel }
+    ListModel { id: blockedRouteModel }
     ListModel { id: obstacleModel }
     ListModel { id: riskZoneModel }
     ListModel { id: riskLineModel }
@@ -246,6 +248,24 @@ Item {
         routeModel.clear()
         for (const item of data.routePoints || []) {
             routeModel.append({
+                color: item.color,
+                sx: item.x,
+                sy: item.y,
+                sz: item.z,
+                size: item.size
+            })
+        }
+        blockedRouteDashModel.clear()
+        for (const item of data.blockedRouteDashes || []) {
+            blockedRouteDashModel.append({
+                color: item.color,
+                widthValue: item.width,
+                pathValue: item.pathValue
+            })
+        }
+        blockedRouteModel.clear()
+        for (const item of data.blockedRoutePoints || []) {
+            blockedRouteModel.append({
                 color: item.color,
                 sx: item.x,
                 sy: item.y,
@@ -625,6 +645,40 @@ Item {
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     emissiveFactor: Qt.vector3d(0.10, 0.42, 0.52)
+                }
+            }
+        }
+
+        Repeater3D {
+            model: blockedRouteDashModel
+            delegate: Model {
+                geometry: TrailRibbonGeometry {
+                    pathValue: model.pathValue
+                    widthValue: model.widthValue * root.routeDashWidthScale
+                    alphaMode: "solid"
+                }
+                castsShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    opacity: 0.88
+                    cullMode: Material.NoCulling
+                    vertexColorsEnabled: true
+                    roughness: 0.88
+                    emissiveFactor: Qt.vector3d(0.62, 0.14, 0.10)
+                }
+            }
+        }
+
+        Repeater3D {
+            model: blockedRouteModel
+            delegate: Model {
+                source: "#Sphere"
+                position: Qt.vector3d(model.sx, model.sy, model.sz)
+                scale: Qt.vector3d(model.size / 100.0, model.size / 100.0, model.size / 100.0)
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    emissiveFactor: Qt.vector3d(0.62, 0.14, 0.10)
                 }
             }
         }
