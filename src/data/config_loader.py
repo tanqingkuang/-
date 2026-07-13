@@ -21,7 +21,6 @@ def resolve_config_references(config: dict[str, object], config_path: str | Path
 
     支持字段：
     - 顶层 route_file：指向完整 route 对象。
-    - 顶层 rally_route_file：指向完整 rally_route 对象。
     - formation.formation_files：指向一个或多个单队形对象。
     - avoidance.obstacles_file：指向障碍数组，或包含 obstacles 字段的对象。
     相对路径均按主配置文件所在目录解析。
@@ -29,6 +28,11 @@ def resolve_config_references(config: dict[str, object], config_path: str | Path
     base_path = Path(config_path)
     resolved = copy.deepcopy(config)
     route_origin = None
+
+    # 旧字段不能静默忽略，否则场景会在未知集结点上运行。
+    for removed_field in ("rally_route_file", "rally_route"):
+        if removed_field in resolved:
+            raise ValueError(f"{removed_field} 已移除，请统一使用 route_file")
 
     _resolve_formation_files(resolved, base_path)
 
@@ -40,16 +44,6 @@ def resolve_config_references(config: dict[str, object], config_path: str | Path
     if isinstance(route, dict):
         # 外部航线可使用经纬高；进入控制器前统一展开为内部 ENU。
         resolved["route"], route_origin = route_to_internal(route)
-
-    rally_route_file = resolved.get("rally_route_file")
-    if rally_route_file is not None:
-        # 集结航线复用同一航线文件管理器，避免后续客户格式适配重复实现。
-        resolved["rally_route"] = _LINE_FILE_MANAGER.load_route(base_path, rally_route_file)
-    rally_route = resolved.get("rally_route")
-    if isinstance(rally_route, dict):
-        # 集结航线和任务航线共享同一个 origin；无任务航线时才退回自身首点。
-        resolved["rally_route"], rally_origin = route_to_internal(rally_route, route_origin)
-        route_origin = route_origin or rally_origin
 
     avoidance = resolved.get("avoidance")
     if isinstance(avoidance, dict):
@@ -111,4 +105,3 @@ def _resolve_formation_file_path(config_path: Path, formation_file: object, inde
         # 主配置位置是唯一稳定参照点，避免 GUI 和 CLI 从不同 cwd 启动时解析出不同文件。
         formation_path = config_path.parent / formation_path
     return formation_path
-

@@ -40,7 +40,7 @@ from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOut
 from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
-from src.algorithm.entity.leader_follower_rally import fill_output, loiter_speed_bounds, rally_route_heading_rad
+from src.algorithm.entity.leader_follower_rally import fill_output, loiter_speed_bounds, route_heading_rad
 
 _LEADER_L1_DISTANCE_M = 0.0  # 关闭L1前瞻，直接按航段投影解算目标航迹。大侧偏限角保护已由横侧向变限幅(1.2)接管。
 _LEADER_FF_LEAD_TIME_S = 0.5
@@ -51,20 +51,18 @@ class RallyLeaderEntity(EntityBase):
 
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 RallyLeaderEntity。"""
-        if not cfg.rally_route or len(cfg.rally_route) < 2:
-            raise ValueError("RallyLeaderEntity: rally_route 至少需要两个航点")
-        if not cfg.route:
-            raise ValueError("RallyLeaderEntity: route (mission_route) is required")
+        if len(cfg.route) < 2:
+            raise ValueError("RallyLeaderEntity: route 至少需要两个航点")
         rally_cfg = cfg.rally_cfg
         if not isinstance(rally_cfg, RallyTaskInitS):
             raise ValueError("RallyLeaderEntity: rally_cfg must be RallyTaskInitS")
 
-        # A = 集结区起点（掌机松散目标）；heading 取第一航段方向，支持多航点集结航线
-        route_start = cfg.rally_route[0].pos
+        # A = 统一航线起点（掌机松散目标）；heading 取第一航段方向。
+        route_start = cfg.route[0].pos
         rally_start = PosInEarthS(route_start.east, route_start.north, route_start.h)
         if cfg.rally_layer_altitude_m is not None:
             rally_start.h = cfg.rally_layer_altitude_m
-        _heading = rally_route_heading_rad(cfg.rally_route)
+        _heading = route_heading_rad(cfg.route)
 
         self.cxt = FormContextS()
         self._remote = RemoteCmdS()
