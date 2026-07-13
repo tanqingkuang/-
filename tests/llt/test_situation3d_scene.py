@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from pathlib import Path
 import json
+import math
 import struct
 import time
 import unittest
@@ -172,9 +173,16 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         snapshot = self._snapshot()
         snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
-        obstacle_payload = build_scene_payload(snapshot, [enabled])
-        self.assertEqual(obstacle_payload["riskZoneLines"], [])
+        obstacle_payload = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+        self.assertEqual(len(obstacle_payload["riskZoneLines"]), 1)
         self.assertEqual(obstacle_payload["riskZoneBuffers"], [])
+        boundary = obstacle_payload["riskZoneLines"][0]
+        self.assertTrue(boundary["pulse"])
+        boundary_points = json.loads(boundary["pathValue"])
+        self.assertGreater(len(boundary_points), 24)
+        self.assertEqual(boundary_points[0], boundary_points[-1])
+        radii = [math.hypot(point[0] - 100.0, point[2] + 200.0) for point in boundary_points]
+        self.assertTrue(all(abs(radius - 100.0) < 1e-6 for radius in radii))
 
     def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
         """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
@@ -189,6 +197,21 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreater(float(field.heights_m.max()), 2000.0)
         self.assertEqual([zone.zone_id for zone in field.risk_zones], ["hazard_peak_west", "hazard_peak_east"])
         self.assertLess(field.generation_time_ms, 5000.0)
+
+    def test_obstacle_boundary_samples_rendered_terrain_surface(self) -> None:
+        """验证告警边界贴合显示沟脊，而不是埋在未增强的米制地形里。"""
+
+        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=128)
+        assert field.display_heights_m is not None
+        displacement = np.abs(field.display_heights_m - field.heights_m)
+        row, column = np.unravel_index(int(np.argmax(displacement)), displacement.shape)
+        east = field.center_east_m - field.width_m / 2.0 + field.width_m * column / (field.resolution - 1)
+        north = field.center_north_m - field.depth_m / 2.0 + field.depth_m * row / (field.resolution - 1)
+
+        measured = scene_data._terrain_surface_height({"mode": "layout"}, field, east, -north, 34.0)
+
+        self.assertAlmostEqual(measured, float(field.display_heights_m[row, column]) + 34.0, places=5)
+        self.assertGreater(abs(measured - (float(field.heights_m[row, column]) + 34.0)), 5.0)
 
     def test_display_relief_adds_bounded_rock_structure_without_changing_metric_height(self) -> None:
         """显示层应强化岩脊沟壑，同时保留独立且未改写的米制语义高度。"""
@@ -243,6 +266,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreater(len(payload["riskZoneBuffers"]), 0)
         # 风险网格必须细于主航线(16m),保持任务航线的视觉层级优先。
         self.assertEqual(payload["riskZoneLines"][0]["width"], 7.0)
+        self.assertFalse(payload["riskZoneLines"][0]["pulse"])
         self.assertLess(payload["riskZoneBuffers"][0]["width"], 7.0)
         risk_line_points = json.loads(payload["riskZoneLines"][0]["pathValue"])
         self.assertGreater(len(risk_line_points), 2)
@@ -1724,6 +1748,11 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("data.riskZoneLines", qml)
         self.assertIn("data.riskZoneBuffers", qml)
         self.assertIn("terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])", qml)
+        self.assertIn("property real alertBoundaryPulse: 0.48", qml)
+        self.assertIn("SequentialAnimation on alertBoundaryPulse", qml)
+        self.assertEqual(qml.count("duration: 2400"), 2)
+        self.assertIn("pulseValue: item.pulse === true", qml)
+        self.assertIn("opacity: model.pulseValue ? root.alertBoundaryPulse : 0.95", qml)
         self.assertNotIn("model: obstacleModel", qml)
         self.assertIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
         self.assertIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)
@@ -1744,6 +1773,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         qml = QML_VIEW_PATH.read_text(encoding="utf-8")
         terrain_block = qml[qml.index("id: terrainSurfaceModel") : qml.index("Repeater3D", qml.index("id: terrainSurfaceModel"))]
         self.assertIn("roughness: 0.99", terrain_block)
+        self.assertNotIn("alertBoundaryPulse", terrain_block)
         self.assertIn("specularAmount: 0.0", terrain_block)
         self.assertIn("normalStrength: 0.92", terrain_block)
         self.assertIn("scaleU: 148", terrain_block)

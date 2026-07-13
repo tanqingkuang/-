@@ -45,6 +45,8 @@ Item {
     readonly property int presentationQueueCapacity: 2
     // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线与风险区模型。
     property string staticContentKey: ""
+    // 地形顶点色保持静态；只有真实障碍的闭合告警边界在低频改变透明度。
+    property real alertBoundaryPulse: 0.48
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
     property string followNodeId: ""
     // 跟随焦点与飞机共用唯一展示时钟，避免两套动画时长不同导致飞机相对镜头周期性抖动。
@@ -63,6 +65,23 @@ Item {
     ListModel { id: blockedRouteModel }
     ListModel { id: riskLineModel }
     ListModel { id: riskBufferModel }
+
+    SequentialAnimation on alertBoundaryPulse {
+        loops: Animation.Infinite
+        running: true
+        NumberAnimation {
+            from: 0.48
+            to: 0.92
+            duration: 2400
+            easing.type: Easing.InOutSine
+        }
+        NumberAnimation {
+            from: 0.92
+            to: 0.48
+            duration: 2400
+            easing.type: Easing.InOutSine
+        }
+    }
 
     NumberAnimation {
         id: presentationMotion
@@ -383,7 +402,8 @@ Item {
             riskLineModel.append({
                 color: item.color,
                 widthValue: item.width,
-                pathValue: item.pathValue
+                pathValue: item.pathValue,
+                pulseValue: item.pulse === true
             })
         }
         riskBufferModel.clear()
@@ -693,7 +713,8 @@ Item {
                 materials: PrincipledMaterial {
                     baseColor: model.color
                     alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.95
+                    // 兼容网格保持静态；真实告警边界才跟随低频呼吸值。
+                    opacity: model.pulseValue ? root.alertBoundaryPulse : 0.95
                     cullMode: Material.NoCulling
                     vertexColorsEnabled: true
                     roughness: 0.66

@@ -140,8 +140,8 @@ class TrailPayloadState:
 # 1. QML 侧只接收 JSON 字符串，因此 payload 不能携带完整高度场大数组。
 # 2. 布局地形只把 layoutFile、resolution、中心和范围传给 TerrainGeometry。
 # 3. TerrainGeometry 在 Python/QML 类型内部生成网格，避免 JSON 序列化数十 MB 数据。
-# 4. riskZones 是语义数据；riskZoneLines/riskZoneBuffers 只服务无障碍库旧场景的兼容提示。
-# 5. 兼容风险线保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
+# 4. riskZones 是语义数据；riskZoneLines 同时承载真实障碍边界和无障碍库旧场景的兼容提示。
+# 5. 风险线保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
 # 6. 旧配置没有 terrain_display_file 时，payload 仍然走 procedural 地形路径。
 # 7. 旧路径的 surface.width/depth/height 字段保持不变，避免历史 QML 绑定失效。
 # 8. 新布局模式只影响显示层，不改变 Snapshot 的 ENU 坐标、航线和障碍语义。
@@ -245,22 +245,27 @@ def build_scene_payload(
     display_file = terrain_display_file or snapshot.terrain_display_file
     terrain = _terrain_payload(bounds, display_file, obstacle_views)
     risk_zones = list(terrain.get("riskZones", []))
-    raw_risk_zone_lines = terrain.get("riskZoneLines")
-    risk_zone_lines = list(raw_risk_zone_lines) if isinstance(raw_risk_zone_lines, list) else []
-    if raw_risk_zone_lines is None:
-        risk_zone_lines = [
-            line
-            for zone in risk_zones
-            for line in _risk_zone_line_payload(zone)
-        ]
-    raw_risk_zone_buffers = terrain.get("riskZoneBuffers")
-    risk_zone_buffers = list(raw_risk_zone_buffers) if isinstance(raw_risk_zone_buffers, list) else []
-    if raw_risk_zone_buffers is None:
-        risk_zone_buffers = [
-            dash
-            for zone in risk_zones
-            for dash in _risk_zone_buffer_payload(zone)
-        ]
+    if obstacle_views:
+        # 真实障碍只有精确边界参与呼吸；旧外接圆网格和缓冲圈都不再叠加到地形上。
+        risk_zone_lines = _obstacle_boundary_payloads(obstacle_views, clearance_m, terrain.get("surface", {}))
+        risk_zone_buffers: list[dict[str, object]] = []
+    else:
+        raw_risk_zone_lines = terrain.get("riskZoneLines")
+        risk_zone_lines = list(raw_risk_zone_lines) if isinstance(raw_risk_zone_lines, list) else []
+        if raw_risk_zone_lines is None:
+            risk_zone_lines = [
+                line
+                for zone in risk_zones
+                for line in _risk_zone_line_payload(zone)
+            ]
+        raw_risk_zone_buffers = terrain.get("riskZoneBuffers")
+        risk_zone_buffers = list(raw_risk_zone_buffers) if isinstance(raw_risk_zone_buffers, list) else []
+        if raw_risk_zone_buffers is None:
+            risk_zone_buffers = [
+                dash
+                for zone in risk_zones
+                for dash in _risk_zone_buffer_payload(zone)
+            ]
     terrain_risk_areas = _terrain_risk_area_payloads(
         obstacle_views,
         clearance_m,
@@ -727,6 +732,125 @@ def _terrain_risk_area_payloads(
     return areas
 
 
+def _obstacle_boundary_payloads(
+    obstacles: list[ObstacleView], clearance_m: float, surface: object
+) -> list[dict[str, object]]:
+    """生成贴地的障碍告警边界。注意：只有真实且启用的障碍边界携带呼吸标志。"""
+
+    surface_data = surface if isinstance(surface, dict) else {}
+    field: TerrainField | None = None
+    if surface_data.get("mode") == "layout":
+        layout_file = str(surface_data.get("layoutFile", ""))
+        resolution = int(surface_data.get("resolution", DEFAULT_TERRAIN_RESOLUTION))
+        if layout_file:
+            # 高度场未就绪时先用基准面；fieldReady 翻转会改变 staticKey 并自动换成贴地路径。
+            field = _cached_terrain_field(layout_file, resolution)
+
+    safe_clearance = max(0.0, float(clearance_m))
+    boundaries: list[dict[str, object]] = []
+    for obstacle in obstacles:
+        if not obstacle.enabled:
+            continue
+        horizontal_points = _obstacle_boundary_points(obstacle, safe_clearance)
+        if len(horizontal_points) < 3:
+            continue
+        # 一条障碍只生成一个闭合 ribbon；动画只改材质透明度，不触碰地形顶点色。
+        path = _terrain_boundary_path(horizontal_points, surface_data, field)
+        boundaries.append(
+            {
+                "color": "#ff684f",
+                "width": 7.0,
+                "pulse": True,
+                "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+            }
+        )
+    return boundaries
+
+
+def _obstacle_boundary_points(obstacle: ObstacleView, clearance_m: float) -> list[tuple[float, float]]:
+    """返回障碍安全区的水平边界。注意：坐标仍为 ENU east/north，末点暂不闭合。"""
+
+    if obstacle.kind == "circle":
+        radius = max(1.0, float(obstacle.radius) + clearance_m)
+        # 圆周按周长自适应采样，同时保留最低 48 段，近看不会呈现明显多边形折角。
+        segment_count = max(48, min(160, int(math.ceil(math.tau * radius / 80.0))))
+        return [
+            (
+                float(obstacle.center_x) + radius * math.cos(index * math.tau / segment_count),
+                float(obstacle.center_y) + radius * math.sin(index * math.tau / segment_count),
+            )
+            for index in range(segment_count)
+        ]
+
+    vertices = list(obstacle.vertices) if obstacle.vertices else _obstacle_corner_points(obstacle)
+    if len(vertices) >= 2 and math.dist(vertices[0], vertices[-1]) <= 1e-6:
+        # 配置允许显式重复首点；先去重再交给圆角外扩，避免产生零长边。
+        vertices.pop()
+    if len(vertices) < 3 or clearance_m <= 0.0:
+        return vertices
+
+    # 与俯视避障预览复用同一圆角 Minkowski 外扩，确保 2D/3D 告警边界语义一致。
+    from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
+
+    return _rounded_inflated_polygon_points(vertices, clearance_m)
+
+
+def _terrain_boundary_path(
+    boundary: list[tuple[float, float]], surface: dict[str, object], field: TerrainField | None
+) -> list[list[float]]:
+    """把 ENU 闭合轮廓逐点披挂到地形表面。注意：输出转换为 Quick3D x/y/z。"""
+
+    width = max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)))
+    depth = max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)))
+    resolution = int(surface.get("resolution", 0))
+    grid_segments = max(1, resolution - 1) if resolution > 1 else 191
+    # 采样步长略小于地形网格，轮廓跨过陡坡时不会悬空或切入山体。
+    sample_spacing = max(24.0, min(110.0, max(width, depth) / grid_segments * 0.75))
+    path: list[list[float]] = []
+    for start, end in zip(boundary, boundary[1:] + boundary[:1]):
+        edge_length = math.dist(start, end)
+        segments = max(1, int(math.ceil(edge_length / sample_spacing)))
+        # 每条边不重复写末点；全部边完成后统一追加首点，保持 ribbon 闭合且无零长中间段。
+        for index in range(segments):
+            ratio = index / segments
+            east = start[0] + (end[0] - start[0]) * ratio
+            north = start[1] + (end[1] - start[1]) * ratio
+            x = float(east)
+            z = -float(north)
+            y = _terrain_surface_height(surface, field, x, z, 34.0)
+            path.append([x, y, z])
+    if path:
+        path.append(list(path[0]))
+    return path
+
+
+def _terrain_surface_height(
+    surface: dict[str, object], field: TerrainField | None, x_m: float, z_m: float, offset_m: float
+) -> float:
+    """采样风险边界的世界高度。注意：边界始终悬浮少量距离以规避地形 z-fighting。"""
+
+    if field is not None:
+        # 正式地形显示可能叠加受限岩脊位移；边界必须采样显示面，不能埋进仅显示层的沟脊里。
+        return _sample_field_display_height(field, x_m, -z_m) + offset_m
+    surface_y = float(surface.get("y", 0.0))
+    if surface.get("mode") != "procedural":
+        # 布局高度场异步生成期间只显示低位占位线；下一次静态刷新会替换成真实高度。
+        return surface_y + offset_m
+
+    # procedural 地形使用与 TerrainGeometry 完全相同的标量高度函数，避免另造近似曲面。
+    from src.ui.gui.situation3d.terrain_geometry import _height_value
+
+    local_x = x_m - float(surface.get("x", 0.0))
+    local_z = z_m - float(surface.get("z", 0.0))
+    return surface_y + _height_value(
+        local_x,
+        local_z,
+        max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M))),
+        max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M))),
+        max(1.0, float(surface.get("height", DEFAULT_TERRAIN_RELIEF_M))),
+    ) + offset_m
+
+
 def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float]:
     """计算障碍的 ENU 包围盒。注意：polygon/rect 共用此结果做 3D 近似。"""
 
@@ -1027,6 +1151,7 @@ def _risk_zone_line_payload(zone: dict[str, object], field: TerrainField | None 
                     "color": "#ff5a45",
                     # 风险网格必须显著细于主航线(16m):视觉层级上任务航线优先。
                     "width": 7.0,
+                    "pulse": False,
                     "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
                 }
             )
@@ -1087,10 +1212,27 @@ def _sample_quick3d_height(field: TerrainField | None, x_m: float, z_m: float, o
 def _sample_field_height(field: TerrainField, east_m: float, north_m: float) -> float:
     """双线性采样高度场。注意：坐标越界时夹到最近网格边界。"""
 
+    return _sample_height_values(field, field.heights_m, east_m, north_m)
+
+
+def _sample_field_display_height(field: TerrainField, east_m: float, north_m: float) -> float:
+    """双线性采样渲染高度。注意：没有显示增强网格时回退真实米制高度。"""
+
+    heights = field.display_heights_m if field.display_heights_m is not None else field.heights_m
+    return _sample_height_values(field, heights, east_m, north_m)
+
+
+def _sample_height_values(
+    field: TerrainField, heights: np.ndarray, east_m: float, north_m: float
+) -> float:
+    """在指定高度数组上做双线性采样。注意：数组必须与 field.resolution 同尺寸。"""
+
     min_e = field.center_east_m - field.width_m / 2.0
     min_n = field.center_north_m - field.depth_m / 2.0
-    u = np.clip((float(east_m) - min_e) / max(field.width_m, 1.0), 0.0, 1.0) * (field.resolution - 1)
-    v = np.clip((float(north_m) - min_n) / max(field.depth_m, 1.0), 0.0, 1.0) * (field.resolution - 1)
+    # 这是逐点热路径，使用标量夹取可避免为每个轮廓点进入两次 NumPy ufunc。
+    grid_limit = float(field.resolution - 1)
+    u = max(0.0, min(grid_limit, (float(east_m) - min_e) / max(field.width_m, 1.0) * grid_limit))
+    v = max(0.0, min(grid_limit, (float(north_m) - min_n) / max(field.depth_m, 1.0) * grid_limit))
     # 高度场行列方向仍是 ENU north/east，Quick3D 的 z 翻转已在调用侧处理。
     col = int(math.floor(u))
     row = int(math.floor(v))
@@ -1098,10 +1240,10 @@ def _sample_field_height(field: TerrainField, east_m: float, north_m: float) -> 
     row1 = min(row + 1, field.resolution - 1)
     tx = float(u - col)
     ty = float(v - row)
-    h00 = float(field.heights_m[row, col])
-    h10 = float(field.heights_m[row, col1])
-    h01 = float(field.heights_m[row1, col])
-    h11 = float(field.heights_m[row1, col1])
+    h00 = float(heights[row, col])
+    h10 = float(heights[row, col1])
+    h01 = float(heights[row1, col])
+    h11 = float(heights[row1, col1])
     return (h00 * (1.0 - tx) + h10 * tx) * (1.0 - ty) + (h01 * (1.0 - tx) + h11 * tx) * ty
 
 
