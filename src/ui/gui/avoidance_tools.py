@@ -364,9 +364,10 @@ def _rounded_inflated_polygon_points(
 ) -> list[tuple[float, float]]:
     """返回用于 GUI 显示的多边形圆角外扩折线点，与后端 inside() 的圆角膨胀语义一致。
 
-    每条边沿外法线平移 inflate，相邻边在凸顶点用半径 = inflate 的圆弧衔接，圆弧离散成折
-    线点。这样角部是圆角（等价 Minkowski 和），而不像 _inflated_polygon_vertices 的 miter
-    尖角向外凸出。inflate<=0 或退化时回退到原始顶点/径向兜底。
+    每条边沿外法线平移 inflate，相邻边在凸顶点用半径 = inflate 的圆弧衔接，凹顶点则连接
+    两条偏移边的交点。这样凸角是圆角（等价 Minkowski 和），而不像
+    _inflated_polygon_vertices 的 miter 尖角向外凸出。inflate<=0 或退化时回退到原始顶点/
+    径向兜底。
     """
     if inflate <= 0.0 or len(vertices) < 3:
         return list(vertices)
@@ -392,18 +393,45 @@ def _rounded_inflated_polygon_points(
 
     count = len(vertices)
     points: list[tuple[float, float]] = []
-    for index in range(count):
-        start = vertices[index]
-        end = vertices[(index + 1) % count]
-        nx, ny = normals[index]
-        # 当前边沿外法线整体平移 inflate，两端点构成一段偏移直段。
-        points.append((start[0] + nx * inflate, start[1] + ny * inflate))
-        points.append((end[0] + nx * inflate, end[1] + ny * inflate))
-        # 在顶点 end 处，用半径 inflate 的圆弧把本边外法线转到下一条边外法线。
-        next_nx, next_ny = normals[(index + 1) % count]
-        angle_from = math.atan2(ny, nx)
-        sweep = math.atan2(next_ny, next_nx) - angle_from
-        # 归一到与绕序一致的方向，保证圆弧只走多边形外侧那段。
+    for index, vertex in enumerate(vertices):
+        # 每个顶点同时查看入边和出边，避免把单边法线变化一律误判成凸角圆弧。
+        previous_index = (index - 1) % count
+        previous_vertex = vertices[previous_index]
+        next_vertex = vertices[(index + 1) % count]
+        previous_normal = normals[previous_index]
+        next_normal = normals[index]
+        incoming = (vertex[0] - previous_vertex[0], vertex[1] - previous_vertex[1])
+        outgoing = (next_vertex[0] - vertex[0], next_vertex[1] - vertex[1])
+        turn_cross = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+
+        if turn_cross * signed_area < -1e-9:
+            # 凹角不属于 Minkowski 外扩的圆角部分。两条偏移边应在交点处形成凹折角；
+            # 若仍按绕序补圆弧，会走过约 270°，在界面上形成无业务含义的虚线圆圈。
+            previous_offset = (
+                vertex[0] + previous_normal[0] * inflate,
+                vertex[1] + previous_normal[1] * inflate,
+            )
+            next_offset = (
+                vertex[0] + next_normal[0] * inflate,
+                vertex[1] + next_normal[1] * inflate,
+            )
+            # 直线交点参数沿入边方向求解；凹角已保证两方向不平行，分母不会退化为零。
+            denominator = incoming[0] * outgoing[1] - incoming[1] * outgoing[0]
+            delta_x = next_offset[0] - previous_offset[0]
+            delta_y = next_offset[1] - previous_offset[1]
+            # 只保留一个交点，后续多边形描边会自动连接相邻偏移直段。
+            along_incoming = (delta_x * outgoing[1] - delta_y * outgoing[0]) / denominator
+            points.append(
+                (
+                    previous_offset[0] + incoming[0] * along_incoming,
+                    previous_offset[1] + incoming[1] * along_incoming,
+                )
+            )
+            continue
+
+        angle_from = math.atan2(previous_normal[1], previous_normal[0])
+        sweep = math.atan2(next_normal[1], next_normal[0]) - angle_from
+        # 凸角沿多边形绕序补外侧短圆弧；共线顶点自然退化为一个点。
         if signed_area > 0.0:
             while sweep < 0.0:
                 sweep += 2.0 * math.pi
@@ -411,9 +439,9 @@ def _rounded_inflated_polygon_points(
             while sweep > 0.0:
                 sweep -= 2.0 * math.pi
         steps = max(1, int(corner_segments * abs(sweep) / (math.pi / 2.0)))
-        for step in range(1, steps):
+        for step in range(steps + 1):
             angle = angle_from + sweep * (step / steps)
-            points.append((end[0] + math.cos(angle) * inflate, end[1] + math.sin(angle) * inflate))
+            points.append((vertex[0] + math.cos(angle) * inflate, vertex[1] + math.sin(angle) * inflate))
     return points
 
 

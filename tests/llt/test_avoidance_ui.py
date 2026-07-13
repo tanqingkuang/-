@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import xml.etree.ElementTree as ET
 from decimal import Decimal
@@ -25,6 +26,7 @@ from src.data.geo import GeoOrigin
 from src.data.geo_config import route_to_internal
 from tests.llt._geo_route import geodetic_config, geodetic_route
 from src.runner.sim_control import _build_leader_route
+from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
 from src.ui.gui.main_window import (
     MainWindow,
     ReferenceRoute,
@@ -151,6 +153,27 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
         self.assertLess(inflated[0][0], vertices[0][0])
         self.assertGreater(inflated[2][0], vertices[2][0])
         self.assertGreater(inflated[3][1], vertices[3][1])
+
+    def test_polygon_clearance_display_does_not_draw_circle_at_concave_corner(self) -> None:
+        vertices = [
+            (0.0, 0.0),
+            (100.0, 0.0),
+            (100.0, 50.0),
+            (50.0, 50.0),
+            (50.0, 100.0),
+            (0.0, 100.0),
+        ]
+
+        for winding in (vertices, list(reversed(vertices))):
+            with self.subTest(clockwise=winding is not vertices):
+                inflated = _rounded_inflated_polygon_points(winding, 10.0)
+
+                points_near_concave_corner = [
+                    point for point in inflated if math.hypot(point[0] - 50.0, point[1] - 50.0) <= 15.0
+                ]
+                self.assertEqual(len(points_near_concave_corner), 1)
+                self.assertAlmostEqual(points_near_concave_corner[0][0], 60.0)
+                self.assertAlmostEqual(points_near_concave_corner[0][1], 60.0)
 
     def test_missing_avoidance_returns_none(self) -> None:
         self.assertIsNone(parse_avoidance_params(self._write({"route": {"waypoints": []}})))
