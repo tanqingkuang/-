@@ -88,7 +88,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
         self._formation_names: list[str] = []  # 各队形名字（供界面下拉框显示，索引=队形序号）
         self._formation_index: int = 0  # 当前/初始队形索引，供界面下拉框预选
-        self._rally_geometry: dict[str, object] = {}  # RallyPlanGeometryState 按 node_id 索引，供 GUI 展示盘旋圆/关键点
+        self._rally_geometry: dict[str, object] = {}  # RallyPlanGeometryState 按 node_id 索引，供 GUI 展示两个盘旋圆。
         # 控制输出缓存按节点 ID 存放，模型 tick 前后都能生成一致快照。
         self._current_controls: dict[str, AccelerationCommand] = {}
         self._control_diagnostics: dict[str, PosTrackDiagS] = {}
@@ -703,7 +703,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # 集结场景复用任务航线首点和首段，构造任务配置及每机目标集结点。
         rally_task_init = _build_rally_task_init(config, self._algorithm_period_s, list(nodes))
         rally_approach_speed = _build_rally_approach_speed(config)
-        # 集结辅助几何（盘旋圆/切入点/切出点）只依赖静态配置和已解析初始状态，init 时算一次即可，供 GUI 展示。
+        # 集结辅助几何只保留两个盘旋圆，init 时按当前生效航线和已解析初始状态计算。
         self._rally_geometry = _build_rally_join_geometry(
             list(nodes), leader_route, formation_comm_init, rally_task_init, states
         )
