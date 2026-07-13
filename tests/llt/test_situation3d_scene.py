@@ -547,6 +547,69 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(str(root.property("followNodeId")), "")
         window.close()
 
+    def test_follow_focus_matches_leader_during_qml_interpolation(self) -> None:
+        """跟随焦点必须与长机共用展示时钟，不能在快照间相对前后抖动。"""
+
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+
+        def moving_snapshot(time_s: float, east_m: float) -> Snapshot:
+            """构造沿东向匀速运动的单长机快照。"""
+
+            return Snapshot(
+                time=time_s,
+                duration=100.0,
+                step=0.1,
+                run_state="RUNNING",
+                control_report="保持",
+                disturbance="无",
+                nodes=[NodeState("A01", "leader", east_m, 0.0, 20.0, 0.0, altitude=900.0)],
+                links=[],
+                route_segments=[],
+            )
+
+        def process_until(predicate, timeout_s: float = 1.0) -> None:  # noqa: ANN001
+            """轮询 Qt 事件直至动画进入指定状态。"""
+
+            deadline = time.monotonic() + timeout_s
+            while not predicate() and time.monotonic() < deadline:
+                app.processEvents()
+                time.sleep(0.002)
+            app.processEvents()
+
+        window = Situation3DWindow()
+        try:
+            window.show()
+            window.set_snapshot(moving_snapshot(1.0, 100.0))
+            root = window.quick_view.rootObject()
+            process_until(lambda: float(root.property("presentationProgress")) >= 0.999)
+            root.setFollowView()
+            process_until(lambda: abs(float(root.property("focusX")) - 100.0) < 0.5)
+
+            window.set_snapshot(moving_snapshot(2.0, 300.0))
+            errors = []
+            deadline = time.monotonic() + 1.0
+            while float(root.property("presentationProgress")) < 0.999 and time.monotonic() < deadline:
+                app.processEvents()
+                progress = float(root.property("presentationProgress"))
+                if 0.05 <= progress <= 0.95:
+                    aircraft = root.currentAircraftPositions().toVariant()["A01"]
+                    errors.append(
+                        max(
+                            abs(float(root.property("focusX")) - aircraft["x"]),
+                            abs(float(root.property("focusY")) - aircraft["y"]),
+                            abs(float(root.property("focusZ")) - aircraft["z"]),
+                        )
+                    )
+                time.sleep(0.002)
+
+            self.assertGreater(len(errors), 3)
+            self.assertLess(max(errors), 0.5)
+        finally:
+            window.close()
+
     def test_aircraft_and_trail_tip_remain_coincident_during_qml_interpolation(self) -> None:
         """真实 QML 补间中途，飞机展示位置与可见尾迹末端必须逐帧重合。"""
 
