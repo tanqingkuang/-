@@ -9,6 +9,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 $DevSupportDir = Join-Path (Join-Path $ProjectRoot "dist") $AppName
 $LiteHook = Join-Path $ProjectRoot "scripts\pyinstaller_hooks\set_lite_feature_profile.py"
+$AppIconPath = Join-Path $ProjectRoot "src\ui\gui\assets\app_icon.ico"
 
 & $Python -m pip install --upgrade pip
 & $Python -m pip install -r requirements-gui.txt
@@ -20,9 +21,11 @@ Remove-Item -LiteralPath $DevSupportDir -Recurse -Force -ErrorAction SilentlyCon
     --windowed `
     --onefile `
     --name $AppName `
+    --icon $AppIconPath `
     --paths $ProjectRoot `
     --workpath (Join-Path $ProjectRoot "build\lite-release") `
     --runtime-hook $LiteHook `
+    --add-data "src/ui/gui/assets/app_icon.png;src/ui/gui/assets" `
     --hidden-import src.ui.gui.features.disabled.control_monitor `
     --hidden-import src.ui.gui.features.disabled.data_analysis `
     --hidden-import src.ui.gui.features.disabled.situation3d `

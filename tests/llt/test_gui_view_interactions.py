@@ -69,6 +69,10 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.window.close()
         self.app.processEvents()
 
+    def test_main_window_uses_project_application_icon(self) -> None:
+        """主窗口标题栏应显示项目图标，而不是 Qt 默认图标。"""
+        self.assertFalse(self.window.windowIcon().isNull())
+
     def test_stage_fullscreen_reparents_only_realtime_display(self) -> None:
         self.window._enter_stage_fullscreen()
         self.app.processEvents()
@@ -1731,6 +1735,18 @@ class GuiViewInteractionTests(unittest.TestCase):
             def __init__(self, argv: list[str]) -> None:
                 self.argv = argv
 
+            def setWindowIcon(self, icon) -> None:  # noqa: ANN001, N802
+                """记录应用图标设置，并验证加载到的项目图标有效。"""
+                self.icon = icon
+                self.assert_icon_is_valid(icon)
+                calls.append("setWindowIcon")
+
+            @staticmethod
+            def assert_icon_is_valid(icon) -> None:  # noqa: ANN001
+                """确保正式启动入口没有传入空图标。"""
+                if icon.isNull():
+                    raise AssertionError("应用图标不能为空")
+
             def exec(self) -> int:
                 calls.append("exec")
                 return 7
@@ -1751,7 +1767,7 @@ class GuiViewInteractionTests(unittest.TestCase):
             exit_code = run_gui(["--smoke"])
 
         self.assertEqual(exit_code, 7)
-        self.assertEqual(calls, ["showMaximized", "exec"])
+        self.assertEqual(calls, ["setWindowIcon", "showMaximized", "exec"])
 
     def test_unloaded_window_does_not_draw_reference_route(self) -> None:
         route_color = self.window.theme.route.name()

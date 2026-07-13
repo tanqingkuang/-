@@ -22,6 +22,7 @@ def _ensure_project_root_on_path() -> None:
 _ensure_project_root_on_path()
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QHBoxLayout, QMainWindow, QPushButton, QWidget
 
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
@@ -77,6 +78,9 @@ from src.data.geo import GeoOrigin
 from src.algorithm.context.leaf_types import WayPointInputS
 
 
+APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
+
+
 class MainWindow(
     MainWindowLayoutMixin,
     MainWindowAvoidanceMixin,
@@ -104,6 +108,8 @@ class MainWindow(
             state_path = Path(config_state_path)
             self.config_state_path = state_path if state_path.is_absolute() else self.project_root / state_path
         self.current_config_path: Path | None = None
+        # 主窗口显式加载项目图标，避免源码调试时回退到 Qt 默认标题栏图标。
+        self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.setWindowTitle("编队仿真")
         self.resize(1440, 900)
         self.setMinimumSize(1280, 780)
@@ -157,6 +163,8 @@ def run_gui(argv: list[str] | None = None) -> int:
 
     # 创建 Qt 应用、最大化显示主窗口并进入事件循环；返回值作为进程退出码。
     app = QApplication(argv or [])
+    # 应用级图标同时覆盖主窗口之外的日志、分析和态势子窗口。
+    app.setWindowIcon(QIcon(str(APP_ICON_PATH)))
     window = MainWindow()
     window.showMaximized()
     return app.exec()

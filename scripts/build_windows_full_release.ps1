@@ -10,6 +10,7 @@ Set-Location $ProjectRoot
 $DistDir = Join-Path $ProjectRoot "dist"
 $DevSupportDir = Join-Path (Join-Path $ProjectRoot "dist") $AppName
 $FullHook = Join-Path $ProjectRoot "scripts\pyinstaller_hooks\set_full_feature_profile.py"
+$AppIconPath = Join-Path $ProjectRoot "src\ui\gui\assets\app_icon.ico"
 $AircraftModelSourceDir = Join-Path $ProjectRoot "src\ui\gui\situation3d\qml\assets"
 
 & $Python -m pip install --upgrade pip
@@ -26,12 +27,14 @@ $RenderersDir = Join-Path $PySideRoot "plugins\renderers"
     --windowed `
     --onefile `
     --name $AppName `
+    --icon $AppIconPath `
     --paths $ProjectRoot `
     --workpath (Join-Path $ProjectRoot "build\full-release") `
     --runtime-hook $FullHook `
     --hidden-import src.ui.gui.features.full.control_monitor `
     --hidden-import src.ui.gui.features.full.data_analysis `
     --hidden-import src.ui.gui.features.full.situation3d `
+    --add-data "src/ui/gui/assets/app_icon.png;src/ui/gui/assets" `
     --add-data "src/ui/gui/situation3d/qml/Situation3DView.qml;src/ui/gui/situation3d/qml" `
     --add-data "src/ui/gui/situation3d/qml/assets/terrain_detail_normal.png;src/ui/gui/situation3d/qml/assets" `
     --add-data "src/ui/gui/situation3d/qml/assets/terrain_detail_albedo.png;src/ui/gui/situation3d/qml/assets" `
