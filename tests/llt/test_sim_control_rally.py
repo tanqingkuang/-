@@ -184,8 +184,16 @@ class SimControlRallyTests(unittest.TestCase):
                 self.assertIsInstance(geometry, RallyPlanGeometryState)
                 self.assertGreater(geometry.local_radius_m, 0.0)
                 self.assertGreater(geometry.rally_radius_m, 0.0)
-                self.assertTrue(math.isfinite(geometry.local_tangent_east_m))
-                self.assertTrue(math.isfinite(geometry.rally_tangent_north_m))
+                for removed_field in (
+                    "local_tangent_east_m",
+                    "local_tangent_north_m",
+                    "rally_tangent_east_m",
+                    "rally_tangent_north_m",
+                    "slot_east_m",
+                    "slot_north_m",
+                    "fallback_used",
+                ):
+                    self.assertFalse(hasattr(geometry, removed_field))
 
     def test_start_rally_command_requires_loaded_running_or_paused_standby(self) -> None:
         """验证开始集结命令只允许在已开始运行后的本地待命盘旋阶段触发。"""

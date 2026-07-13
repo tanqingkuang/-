@@ -202,20 +202,16 @@ def reference_route_points(route: ReferenceRoute, step_deg: float = 6.0) -> list
 
 @dataclass
 class RallyGeometryView:
-    """单个集结节点的本地圆、集结圆与关键点。注意：按配置预计算，运行期可刷新同一字段。"""
+    """单个集结节点的本地圆和集结圆。注意：按配置预计算，运行期可刷新同一字段。"""
 
     node_id: str
     center_x: float  # 盘旋圆圆心，east
     center_y: float  # north
     radius: float  # 盘旋圆半径
-    entry_x: float  # 切入点 T，east
-    entry_y: float  # north
+    # 本地待命圆独立于集结圆，二者都只用于界面辅助显示。
     local_center_x: float = 0.0  # 本地待命盘旋圆圆心，east
     local_center_y: float = 0.0  # 本地待命盘旋圆圆心，north
     local_radius: float = 0.0  # 本地待命盘旋圆半径
-    local_tangent_x: float = 0.0  # 本地圆切出点，east
-    local_tangent_y: float = 0.0  # 本地圆切出点，north
-    fallback_used: bool = False  # True 表示切线几何退化为直飞兜底
 
 
 @dataclass

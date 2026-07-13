@@ -24,7 +24,6 @@ from src.algorithm.entity.leader_follower_rally import (
     resolve_formation_slot,
 )
 from src.algorithm.entity.types import VelCmdLimitS
-from src.algorithm.units.algo.pos_calc.rally_join_pos import _ccw_entry_tangent
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.environment.model import AircraftState, node_id_from_config
 from src.runner.sim_control_constants import (
@@ -526,13 +525,12 @@ def _build_rally_join_geometry(
     rally_task_init: RallyTaskInitS | None,
     initial_states: dict[str, AircraftState],
 ) -> dict[str, RallyPlanGeometryState]:
-    """按静态配置预计算各集结节点的盘旋圆、切入点 T、切出点 M_i，仅供 GUI 辅助展示。
+    """按静态配置预计算各集结节点的本地待命圆和集结圆，仅供 GUI 辅助展示。
 
-    注意：只依赖配置和模型已解析的初始状态（不依赖仿真推进后的运行时状态），几何公式复用
-    RallyJoinPos 的实际实现（`route_heading_rad`/`rally_loose_target`/`_ccw_entry_tangent`），
-    避免和算法行为分叉。切入点 T 的起点取自 initial_states（模型对 x_m/y_m 缺省时按节点序号错位
-    摆放的解析结果），不能直接读原始配置的 x_m/y_m——配置省略该字段时二者默认值不同，直接读配置
-    会用错误的起点算出错误的 T。集结长机不依赖队形/槽位，即使 targetPattern 在 formPat 中找不到
+    注意：只依赖配置和模型已解析的初始状态（不依赖仿真推进后的运行时状态），圆心公式复用
+    `route_heading_rad`/`rally_loose_target`，避免和算法行为分叉。本地圆起点取自 initial_states
+    （模型对 x_m/y_m 缺省时按节点序号错位摆放的解析结果），不能直接读原始配置的 x_m/y_m。
+    集结长机不依赖队形/槽位，即使 targetPattern 在 formPat 中找不到
     （只有 rally_follower 才需要它），长机自己的圆和切出点仍应正常给出。
     """
     if rally_task_init is None or len(route) < 2:
@@ -557,6 +555,7 @@ def _build_rally_join_geometry(
             if slot is None:
                 continue
             slot_pos = rally_loose_target(a, heading, rally_task_init.looseScale, slot)
+        # 槽位点仅用于反推集结圆圆心，不再作为静态预览数据向 GUI 输出。
         # 集结圆沿任务航向左侧偏 R，保证 M_i 处的 CCW 切线与任务航向一致。
         center_e = slot_pos.east - radius * math.sin(heading)
         center_n = slot_pos.north + radius * math.cos(heading)
@@ -568,11 +567,7 @@ def _build_rally_join_geometry(
         # 本地待命圆同样放在当前航向左侧 R 处，使初始点处切线延续飞机当前航向。
         local_center_e = start_e - radius * math.sin(start_heading)
         local_center_n = start_n + radius * math.cos(start_heading)
-        # 当前版本的运行控制由 RallyJoinPos 从当前位置再求切入点；预览提前给出同口径切点。
-        tangent = _ccw_entry_tangent(start_e, start_n, center_e, center_n, radius)
-        fallback_used = tangent is None
-        # 起点落在目标圆内/圆上时没有切线，沿用旧直飞 M_i 的可视化兜底。
-        entry_e, entry_n = (tangent[0], tangent[1]) if tangent is not None else (slot_pos.east, slot_pos.north)
+        # 快照只保留两个显示圆；实际切点由 RallyJoinPos 按运行期状态计算。
         geometry[node_id] = RallyPlanGeometryState(
             node_id=node_id,
             local_center_east_m=local_center_e,
@@ -581,13 +576,6 @@ def _build_rally_join_geometry(
             rally_center_east_m=center_e,
             rally_center_north_m=center_n,
             rally_radius_m=radius,
-            local_tangent_east_m=start_e,
-            local_tangent_north_m=start_n,
-            rally_tangent_east_m=entry_e,
-            rally_tangent_north_m=entry_n,
-            slot_east_m=slot_pos.east,
-            slot_north_m=slot_pos.north,
-            fallback_used=fallback_used,
         )
     return geometry
 

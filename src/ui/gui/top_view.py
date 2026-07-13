@@ -585,10 +585,10 @@ class TopView(QGraphicsView):
             painter.drawEllipse(QPointF(east, north), marker_radius, marker_radius)
 
     def _draw_rally_geometry(self, painter: QPainter, snapshot: Snapshot) -> None:
-        """绘制本地待命圆、集结盘旋圆和两圆之间的规划切线。
+        """绘制本地待命圆和集结盘旋圆。
 
-        注意：只在待命盘旋和集结执行阶段显示，集结完成后及时隐藏；不绘制切入点、切出点和槽位
-        标记，避免多机场景中图形与标签重叠，只保留能表达飞行路径的线条。
+        注意：只在待命盘旋和集结执行阶段显示，集结完成后及时隐藏；不绘制静态切线、切入点、
+        切出点和槽位标记，避免与飞机到当前控制目标的动态虚线重复。
         """
         if not snapshot.rally_geometry:
             return
@@ -597,6 +597,7 @@ class TopView(QGraphicsView):
         visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
 
         for geometry in snapshot.rally_geometry:
+            # 本地圆只在半径有效时绘制，兼容不含待命阶段的旧快照。
             node = node_by_id.get(geometry.node_id)
             if node is None or node.rally_phase not in visible_phases:
                 continue
@@ -614,8 +615,6 @@ class TopView(QGraphicsView):
                 local_pen.setDashPattern([3, 5])
                 painter.setPen(local_pen)
                 painter.drawEllipse(QPointF(geometry.local_center_x, geometry.local_center_y), geometry.local_radius, geometry.local_radius)
-                # 这条线是规划切线的可视化提示；真实控制仍由算法层输出指令。
-                painter.drawLine(QPointF(geometry.local_tangent_x, geometry.local_tangent_y), QPointF(geometry.entry_x, geometry.entry_y))
                 painter.setPen(circle_pen)
             painter.drawEllipse(QPointF(geometry.center_x, geometry.center_y), geometry.radius, geometry.radius)
 
