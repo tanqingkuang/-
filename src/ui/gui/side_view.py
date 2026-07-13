@@ -151,8 +151,12 @@ class SideView(QWidget):
         self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, self.horizontal_scale * factor))
         self.horizontal_offset = event.position().x() - before_x * self.horizontal_scale
         self._manual_horizontal_view = True
+        if self.auto_center:
+            # 自动居中开启时，滚轮只调整横轴缩放，水平和高度中心仍由自动居中维护。
+            self._apply_auto_center()
+        else:
+            self.top_view.manualViewChanged.emit()
         self.update()
-        self.top_view.manualViewChanged.emit()
         event.accept()
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
