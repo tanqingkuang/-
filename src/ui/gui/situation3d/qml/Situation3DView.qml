@@ -47,10 +47,12 @@ Item {
     property string staticContentKey: ""
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
     property string followNodeId: ""
-    // 焦点平滑只在跟随启用时生效:10Hz 快照下相机不跳变;手动平移保持即时响应。
-    Behavior on focusX { enabled: root.followEnabled; NumberAnimation { duration: 110 } }
-    Behavior on focusY { enabled: root.followEnabled; NumberAnimation { duration: 110 } }
-    Behavior on focusZ { enabled: root.followEnabled; NumberAnimation { duration: 110 } }
+    // 跟随焦点与飞机共用唯一展示时钟，避免两套动画时长不同导致飞机相对镜头周期性抖动。
+    onPresentationProgressChanged: {
+        if (followEnabled) {
+            applyFollowFocus()
+        }
+    }
 
     ListModel { id: aircraftModel }
     ListModel { id: modelOptions }
@@ -532,9 +534,13 @@ Item {
         }
         const lead = aircraftModel.get(resolved)
         followNodeId = lead.nodeId
-        focusX = lead.sx
-        focusY = lead.sy
-        focusZ = lead.sz
+        const position = presentationPosition(
+            lead.fromX, lead.fromY, lead.fromZ,
+            lead.sx, lead.sy, lead.sz
+        )
+        focusX = position.x
+        focusY = position.y
+        focusZ = position.z
     }
 
     function setFollowView() {
