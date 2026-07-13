@@ -374,7 +374,8 @@ class EntityBoundaryTypesTests(unittest.TestCase):
         """验证扩展字段默认值可供旧实体和集结实体同时使用。"""
 
         init = EntityInitS()
-        self.assertIsNone(init.rally_route)
+        self.assertEqual(init.route, [])
+        self.assertFalse(hasattr(init, "rally_route"))
         self.assertIsNone(init.rally_cfg)
         self.assertEqual(init.rally_approach_speed_mps, 20.0)
         self.assertEqual(init.rally_leader_id, "")
@@ -1647,7 +1648,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
                 rally_approach_speed_mps=20.0,
@@ -1687,7 +1688,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1723,7 +1724,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
                 rally_layer_altitude_m=560.0,
@@ -1761,7 +1762,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1812,7 +1813,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1838,7 +1839,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1870,7 +1871,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
                 commInit=_comm_init(),
-                rally_route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
                 rally_leader_id="R01",
             )
@@ -1897,8 +1898,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
                 commInit=_comm_init(),
-                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
-                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                route=_route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",), dt_s=0.1),
             )
         )
@@ -1935,8 +1935,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
                 commInit=_comm_init(),
-                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
-                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                route=_route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
             )
         )
@@ -1964,8 +1963,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
                 commInit=_comm_init(),
-                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
-                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                route=_route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
             )
         )
@@ -1997,8 +1995,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
                 commInit=_comm_init(),
-                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
-                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                route=_route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
             )
         )
@@ -2027,8 +2024,7 @@ class RallyEntityTests(unittest.TestCase):
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
                 commInit=_comm_init(),
-                route=_route((100.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
-                rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
+                route=_route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
                 rally_cfg=_rally_cfg(expected=("R02",)),
             )
         )
@@ -2066,27 +2062,25 @@ class RallyEntityTests(unittest.TestCase):
                     selfInit=FormSelfInitS("R01"),
                     commInit=_comm_init(),
                     route=[],  # 空列表，不是 None，守卫应捕获
-                    rally_route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
                     rally_cfg=_rally_cfg(expected=()),
                 )
             )
 
-    def test_rally_route_heading_rejects_horizontally_degenerate_first_segment(self) -> None:
+    def test_route_heading_rejects_horizontally_degenerate_first_segment(self) -> None:
         """回归用例：A/A1 水平坐标重合（仅高度不同也算）时必须显式报错，不能静默按 atan2(0,0) 退化为正东。"""
-        from src.algorithm.entity.leader_follower_rally import rally_route_heading_rad
+        from src.algorithm.entity.leader_follower_rally import route_heading_rad
 
         with self.assertRaises(ValueError):
-            rally_route_heading_rad(_route((0.0, 0.0, 500.0), (0.0, 0.0, 520.0)))
+            route_heading_rad(_route((0.0, 0.0, 500.0), (0.0, 0.0, 520.0)))
 
-    def test_rally_leader_init_rejects_horizontally_degenerate_rally_route(self) -> None:
-        """验证长机 init 时也会拒绝水平退化的 rally_route 第一航段，而不是算出错误航向静默通过。"""
+    def test_rally_leader_init_rejects_horizontally_degenerate_route(self) -> None:
+        """验证长机 init 时拒绝水平退化的统一 route 第一航段。"""
         with self.assertRaises(ValueError):
             RallyLeaderEntity().init(
                 EntityInitS(
                     selfInit=FormSelfInitS("R01"),
                     commInit=_comm_init(),
-                    route=_route((0.0, 0.0, 500.0), (100.0, 0.0, 500.0)),
-                    rally_route=_route((0.0, 0.0, 500.0), (0.0, 0.0, 520.0)),
+                    route=_route((0.0, 0.0, 500.0), (0.0, 0.0, 520.0)),
                     rally_cfg=_rally_cfg(expected=()),
                 )
             )

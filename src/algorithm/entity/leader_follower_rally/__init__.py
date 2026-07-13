@@ -44,8 +44,8 @@ def loiter_speed_bounds(vel_cmd_limit: VelCmdLimitS) -> tuple[float, float]:
     return loiter_min, loiter_max
 
 
-def rally_route_heading_rad(route: list[WayPointInputS]) -> float:
-    """按集结航线第一航段（A→A1）计算任务航向。注意：调用方需保证 route 至少含两个航点。"""
+def route_heading_rad(route: list[WayPointInputS]) -> float:
+    """按统一航线第一航段（A→A1）计算集结航向。注意：调用方需保证 route 至少含两个航点。"""
     a = route[0].pos
     a1 = route[1].pos
     d_e = a1.east - a.east
@@ -53,8 +53,8 @@ def rally_route_heading_rad(route: list[WayPointInputS]) -> float:
     if math.hypot(d_e, d_n) < _MIN_FIRST_SEGMENT_HORIZ_M:
         # atan2(0, 0) 静默返回 0（正东），会悄悄算出错误的 M_i/盘旋圆而不报错——必须显式拒绝。
         raise ValueError(
-            "rally_route 第一航段水平长度退化为零（A/A1 水平坐标重合，仅高度不同也算）："
-            "无法据此推导任务航向，请检查 rally_route 前两个航点"
+            "route 第一航段水平长度退化为零（A/A1 水平坐标重合，仅高度不同也算）："
+            "无法据此推导集结航向，请检查 route 前两个航点"
         )
     return math.atan2(d_n, d_e)
 

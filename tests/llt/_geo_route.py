@@ -40,10 +40,9 @@ def geodetic_route(route: dict) -> dict:
 
 
 def geodetic_config(config: dict) -> dict:
-    """把配置里的 route / rally_route 的 ENU 航线转成经纬航线。注意：不改动 nodes/formation/obstacles。"""
+    """把配置里的 route ENU 航线转成经纬航线。注意：不改动 nodes/formation/obstacles。"""
     converted = dict(config)
-    for key in ("route", "rally_route"):
-        route = converted.get(key)
-        if isinstance(route, dict):
-            converted[key] = geodetic_route(route)
+    route = converted.get("route")
+    if isinstance(route, dict):
+        converted["route"] = geodetic_route(route)
     return converted

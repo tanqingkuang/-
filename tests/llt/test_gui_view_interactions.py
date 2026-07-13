@@ -38,7 +38,13 @@ from src.ui.gui.main_window import (
     default_project_root,
     run_gui,
 )
-from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, is_major_grid_line, trail_seconds_for_duration
+from src.ui.gui.view_models import (
+    ObstacleView,
+    PLAYBACK_RATE_SLIDER_MAX,
+    RallyGeometryView,
+    is_major_grid_line,
+    trail_seconds_for_duration,
+)
 from src.ui.gui.node_card_view_model import card_rect_for
 from src.ui.gui.side_view import SideView
 from src.ui.gui.top_view import NODE_CARD_GAP_X, NODE_CARD_GAP_Y, NODE_CARD_HEIGHT, NODE_CARD_WIDTH, TopView
@@ -1341,6 +1347,42 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual(wingman_pens[0].capStyle(), Qt.PenCapStyle.RoundCap)
         self.assertEqual(wingman_pens[0].joinStyle(), Qt.PenJoinStyle.RoundJoin)
 
+    def test_top_view_rally_geometry_draws_only_circles_without_static_line_or_markers(self) -> None:
+        """集结辅助几何只绘制两个盘旋圆，不绘制静态线、点标记及标签。"""
+
+        view = self.window.top_view
+        snapshot = Snapshot(
+            time=1.0,
+            duration=10.0,
+            step=0.1,
+            run_state="RUNNING",
+            control_report="集结",
+            disturbance="无",
+            nodes=[NodeState("A01", "rally_leader", 0.0, 0.0, 20.0, 0.0, rally_phase="RALLY_TRANSIT")],
+            links=[],
+            rally_geometry=[
+                RallyGeometryView(
+                    node_id="A01",
+                    center_x=100.0,
+                    center_y=50.0,
+                    radius=50.0,
+                    local_center_x=0.0,
+                    local_center_y=50.0,
+                    local_radius=50.0,
+                )
+            ],
+        )
+        painter = Mock()
+
+        with patch.object(view, "_draw_screen_text") as draw_screen_text:
+            view._draw_rally_geometry(painter, snapshot)
+
+        self.assertEqual(painter.drawEllipse.call_count, 2)
+        painter.drawLine.assert_not_called()
+        painter.drawRect.assert_not_called()
+        painter.drawPath.assert_not_called()
+        draw_screen_text.assert_not_called()
+
     def test_top_view_wingman_dash_offset_stays_stable_after_oldest_trail_point_is_pruned(self) -> None:
         view = self.window.top_view
         view.trail_seconds = 10.0
@@ -1569,8 +1611,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertFalse(self.window.reset_button.isEnabled())
         self.assertTrue(all(not button.isEnabled() for button in self.window.disturbance_buttons))
 
-    def test_adapter_preserves_rally_plan_geometry_fields(self) -> None:
-        """验证 GUI 适配层完整保留本地圆和集结圆几何字段。"""
+    def test_adapter_preserves_only_visible_rally_circle_geometry_fields(self) -> None:
+        """验证 GUI 适配层只保留本地待命圆和集结圆字段。"""
 
         adapter = ControllerSimulationAdapter()
         self.addCleanup(adapter.close)
@@ -1591,13 +1633,6 @@ class GuiViewInteractionTests(unittest.TestCase):
                     rally_center_east_m=4.0,
                     rally_center_north_m=5.0,
                     rally_radius_m=6.0,
-                    local_tangent_east_m=7.0,
-                    local_tangent_north_m=8.0,
-                    rally_tangent_east_m=9.0,
-                    rally_tangent_north_m=10.0,
-                    slot_east_m=11.0,
-                    slot_north_m=12.0,
-                    fallback_used=True,
                 )
             },
         )
@@ -1606,10 +1641,9 @@ class GuiViewInteractionTests(unittest.TestCase):
         geometry = converted.rally_geometry[0]
 
         self.assertEqual(geometry.local_center_x, 1.0)
-        self.assertEqual(geometry.local_tangent_y, 8.0)
-        self.assertEqual(geometry.entry_x, 9.0)
-        self.assertEqual(geometry.slot_y, 12.0)
-        self.assertTrue(geometry.fallback_used)
+        self.assertEqual(geometry.center_x, 4.0)
+        for removed_field in ("entry_x", "entry_y", "local_tangent_x", "local_tangent_y", "fallback_used"):
+            self.assertFalse(hasattr(geometry, removed_field))
 
     def test_run_gui_opens_main_window_maximized(self) -> None:
         """验证正式启动入口默认以最大化方式显示主窗口。"""

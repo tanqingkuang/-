@@ -20,12 +20,11 @@ from src.algorithm.context.leaf_types import (
     WayLineS,
     WayPointInputS,
     copy_motion,
-    dist3d,
 )
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
 from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
-from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds, rally_route_heading_rad
+from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds, route_heading_rad
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
@@ -42,7 +41,6 @@ from src.environment.model import AccelerationCommand, AircraftState, ModelItera
 from src.runner.sim_control_constants import (
     _DEFAULT_ALGORITHM_DECIMATION,
     _LOG_SAMPLE_PERIOD_S,
-    _MAX_MISSION_RALLY_HEADING_MISMATCH_DEG,
     _MAX_PLAYBACK_RATE,
     _MIN_PLAYBACK_RATE,
 )
@@ -50,7 +48,6 @@ from src.runner.sim_control_routes import (
     _build_formation_comm_init,
     _build_leader_route,
     _build_rally_approach_speed,
-    _build_rally_route,
     _build_rally_task_init,
     _build_vel_cmd_limit,
     _motion_from_aircraft_state,
@@ -125,45 +122,21 @@ class _ConfigLoader:
             raise ValueError("links must be a list")
         # 集结角色必填字段前置校验：早于深层构造函数，以便给出明确报错而非 AttributeError。
         node_list: list[dict] = [n for n in (nodes or []) if isinstance(n, dict)]
-        has_rally_leader = any(str(n.get("role") or "") == "rally_leader" for n in node_list)
-        has_rally_role = has_rally_leader or any(
-            str(n.get("role") or "") == "rally_follower" for n in node_list
+        has_rally_role = any(
+            str(n.get("role") or "") in {"rally_leader", "rally_follower"} for n in node_list
         )
         if has_rally_role and config.get("rally_cfg") is None:
             raise ValueError("rally_cfg is required when any node has a rally role")
-        if has_rally_leader:
-            if config.get("rally_route") is None:
-                raise ValueError("rally_route is required for rally_leader role")
-            if config.get("route") is None:
-                raise ValueError("route is required for rally_leader role")
+        if has_rally_role and config.get("route") is None:
+            raise ValueError("route is required when any node has a rally role")
         # 复用构造函数做深层校验：航线、编队/通信、模型配置任一非法都会在此抛错。
         # validate 不保留这些构造结果，只利用构造函数的类型和取值检查。
         # 这样可以避免校验逻辑和实际初始化逻辑分叉。
         leader_route = _build_leader_route(config)
-        rally_route = _build_rally_route(config)
-        # mission_route（route）起点必须等于 rally_route 起点 A：长机 JOINING 收敛在 A，切出后沿任务
-        # 航向继续飞一段才切到 CATCHUP/RouteInterp，若 mission_route 从别的点起飞，RouteInterp 的直线
-        # 投影会被钳在 t>=0，导致长机被拉回等待或切换瞬间跳变（见 LLD 7.1.3 节"航线连续性约束"）。
-        if has_rally_leader and leader_route and rally_route and dist3d(leader_route[0].pos, rally_route[0].pos) >= 1.0:
-            raise ValueError(
-                "route（mission_route）起点必须等于 rally_route 起点 A（相距 >= 1.0m）："
-                "RALLY→CATCHUP 切换时 RouteInterp 目标位置会跳变或把长机拉回去等待一个不存在的起点"
-            )
-        # 起点位置对得上还不够：JOINING(EXITED) 阶段沿 rally_route 首段方向（mission_heading_rad）直飞，
-        # 一旦切到 CATCHUP 就改为沿 route 首段方向飞（RouteInterp）——两个方向差得越多，切换瞬间的指令
-        # 航向突变就越大，实测方向垂直/相反时能到 ~90°/~180° 的真实跳变，只查位置查不出这种配置错误。
-        if has_rally_leader and leader_route and rally_route and len(leader_route) >= 2 and len(rally_route) >= 2:
-            mission_heading = rally_route_heading_rad(leader_route)
-            rally_heading = rally_route_heading_rad(rally_route)
-            heading_diff_rad = abs(math.atan2(
-                math.sin(mission_heading - rally_heading), math.cos(mission_heading - rally_heading)
-            ))
-            if heading_diff_rad >= math.radians(_MAX_MISSION_RALLY_HEADING_MISMATCH_DEG):
-                raise ValueError(
-                    "route（mission_route）首段方向与 rally_route 首段方向（A→A1，即任务航向）相差 "
-                    f"{math.degrees(heading_diff_rad):.1f}°，超过 {_MAX_MISSION_RALLY_HEADING_MISMATCH_DEG:.0f}° 上限："
-                    "JOINING→CATCHUP 切换瞬间会产生真实的指令航向突变"
-                )
+        if has_rally_role:
+            if len(leader_route) < 2:
+                raise ValueError("route 至少需要两个航点才能确定集结中心和航向")
+            route_heading_rad(leader_route)
         _build_formation_comm_init(list(nodes or []), list(links or []), config)
         vel_cmd_limit = _build_vel_cmd_limit(config)
         step_s_v = float(config.get("step_s", 0.005))
@@ -202,7 +175,6 @@ class _NodeAlgorithm:
         leader_route: list[WayPointInputS] | None,
         control_period_s: float,
         vel_cmd_limit: VelCmdLimitS | None = None,
-        rally_route: list[WayPointInputS] | None = None,
         rally_cfg: object | None = None,
         rally_leader_id: str = "",
         rally_approach_speed_mps: float = 20.0,
@@ -240,7 +212,6 @@ class _NodeAlgorithm:
                 route=leader_route or [],
                 control_period_s=control_period_s,
                 velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
-                rally_route=rally_route,
                 rally_cfg=rally_cfg,
                 rally_leader_id=rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed_mps,

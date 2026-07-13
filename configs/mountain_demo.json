@@ -4,7 +4,6 @@
   "playback_rate": 1.0,
   "seed": 1,
   "route_file": "element/mountain_demo_mission_route.json",
-  "rally_route_file": "element/mountain_demo_rally_route.json",
   "avoidance": {
     "enabled": true,
     "allow_arc": true,

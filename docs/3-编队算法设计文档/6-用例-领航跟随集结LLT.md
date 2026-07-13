@@ -220,7 +220,7 @@ def _rally_cfg(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_entity_input_contains_now_s_default_zero` | `EntityInputS().now_s == 0.0` |
-| `test_entity_boundary_defaults_include_rally_fields` | `EntityInitS` 含 `rally_route: list[WayPointInputS] \| None`（不再有 `rally_target`，M_i 由 init 按 `rally_route`+队形槽位自动推导）、`rally_cfg/rally_approach_speed_mps/rally_leader_id`，默认值符合 LLD（`rally_leader_id=""` 为默认值，`RallyFollowerEntity.init` 须将其注入 `FollowerBroadcastInitS.leaderId`） |
+| `test_entity_boundary_defaults_include_rally_fields` | `EntityInitS.route` 默认空列表且不再含 `rally_route`；M_i 由 init 按统一 `route` 前两点和队形槽位自动推导，`rally_cfg/rally_approach_speed_mps/rally_leader_id` 默认值符合 LLD（`rally_leader_id=""` 为默认值） |
 | `test_entity_output_contains_optional_formation_analysis` | `EntityOutputS().formationAnalysis is None` |
 | `test_existing_hold_entities_accept_extended_boundary_types` | 现有 `LeaderEntity/FollowerEntity` 使用扩展后的 `EntityInputS/OutputS` 构造并 step 不抛异常 |
 
@@ -400,8 +400,8 @@ def _rally_cfg(
 | `test_rally_leader_completes_and_outputs_formation_analysis_once` | 长机汇合子状态置 `EXITED` 后推进多帧，COMPRESS 正常完成分析 `formationAnalysis` 只在首帧非 None，其余帧为 None，字段值（`posErrMax_m/posErrRms_m/inPositionCount/totalCount`）与僚机回报一致 |
 | `test_rally_leader_none_resets_join_and_completion_latches` | 长机处于 `HOLD` 且已 `EXITED`/`_rally_completed=True` 时收到 `remote=NONE`，`RallyJoinPos` 复位回 `FLYING`，`_rally_completed` 复位为 `False` |
 | `test_rally_leader_init_rejects_empty_route_list` | `route=[]`（空列表而非 `None`）时 `init()` 显式抛 `ValueError`，不应因空列表索引抛 `IndexError` |
-| `test_rally_route_heading_rejects_horizontally_degenerate_first_segment` | 回归用例：`rally_route_heading_rad()` 遇到 A/A1 水平坐标重合（仅高度不同也算）时显式抛 `ValueError`，不静默按 `atan2(0,0)` 退化为正东 |
-| `test_rally_leader_init_rejects_horizontally_degenerate_rally_route` | 长机 `init()` 同样拒绝水平退化的 `rally_route` 第一航段，而不是算出错误航向静默通过 |
+| `test_route_heading_rejects_horizontally_degenerate_first_segment` | 回归用例：`route_heading_rad()` 遇到 A/A1 水平坐标重合（仅高度不同也算）时显式抛 `ValueError`，不静默按 `atan2(0,0)` 退化为正东 |
+| `test_rally_leader_init_rejects_horizontally_degenerate_route` | 长机 `init()` 同样拒绝水平退化的统一 `route` 第一航段，而不是算出错误航向静默通过 |
 
 ---
 
@@ -410,13 +410,12 @@ def _rally_cfg(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_repository_rally_demo_5_aircraft_config_loads` | `configs/rally_demo_5_aircraft.json` 存在且能被 `sim_control.load_config()` 正常解析，旧三机 `configs/rally_demo.json` 不再保留 |
-| `test_config_loader_accepts_rally_route_waypoints` | 配置中的 `rally_route.waypoints` 被解析为 `list[WayPointInputS]`，并注入所有集结节点（长机与僚机共用同一份）的 `EntityInitS.rally_route` |
+| `test_config_loader_rejects_removed_rally_route_fields` | 配置出现已移除的独立集结航线字段时明确报错，并提示统一使用 `route_file` |
 | `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `RallyLeaderEntity`，`role="rally_follower"` 创建 `RallyFollowerEntity` |
 | `test_legacy_roles_still_select_hold_entities` | `leader/wingman` 角色仍创建现有 hold 实体，保持既有场景兼容 |
 | `test_rally_config_builds_expected_follower_ids` | `rally.expected_follower_ids` 注入 `RallyTaskInitS.expectedFollowerIds` |
-| `test_rally_leader_requires_rally_route` | `rally_leader` 缺少 `rally_route` 时配置校验失败；`rally_follower` 不再需要单独的 `rally_target` 字段（该字段已移除，M_i 由 init 自动推导） |
-| `test_validate_rejects_mission_route_start_far_from_rally_route_start` | `route`（mission_route）起点与 `rally_route` 起点 A 相距 >= 1.0m 时 `validate()` 拒绝配置 |
-| `test_validate_rejects_mission_route_first_segment_direction_mismatch` | `route` 首段方向与 `rally_route` 首段方向（任务航向）夹角 >= 10° 时 `validate()` 拒绝配置，即便起点位置本身对得上 |
+| `test_validate_accepts_rally_roles_with_route_only` | 集结角色只配置统一 `route` 时通过校验，首点作为集结中心、首段作为集结方向 |
+| `test_validate_rejects_rally_leader_without_route` | 集结角色缺少统一 `route` 时配置校验失败 |
 | `test_validate_rejects_loiter_radius_too_small_for_capture_window` | `validate()` 在配置加载阶段就调用 `validate_capture_geometry()`（与 `RallyJoinPos.init()` 复用同一份逻辑），`loiter_radius_m` 太小时直接拒绝，不必等到实体构造才失败 |
 | `test_rally_remote_defaults_to_rally_until_completion` | 集结场景运行时 `_NodeAlgorithm.step` 下发 `RemoteCmdS(FormStageE.RALLY)` |
 | `test_hold_scene_remote_remains_hold` | 非集结场景仍下发 `RemoteCmdS(FormStageE.HOLD)` |
