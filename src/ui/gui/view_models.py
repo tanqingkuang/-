@@ -205,8 +205,6 @@ class RallyGeometryView:
     """单个集结节点的本地圆、集结圆与关键点。注意：按配置预计算，运行期可刷新同一字段。"""
 
     node_id: str
-    slot_x: float  # 松散目标点 M_i（盘旋圆上的切出点），east
-    slot_y: float  # north
     center_x: float  # 盘旋圆圆心，east
     center_y: float  # north
     radius: float  # 盘旋圆半径

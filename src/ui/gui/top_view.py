@@ -17,7 +17,6 @@ from src.ui.gui.view_models import (
     VIEW_MAX_SCALE,
     VIEW_MIN_SCALE,
     ObstacleView,
-    RallyGeometryView,
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
@@ -586,17 +585,14 @@ class TopView(QGraphicsView):
             painter.drawEllipse(QPointF(east, north), marker_radius, marker_radius)
 
     def _draw_rally_geometry(self, painter: QPainter, snapshot: Snapshot) -> None:
-        """绘制集结盘旋圆、切入点 T（三角）与松散目标点 M_i（实心圆）。
+        """绘制本地待命圆、集结盘旋圆和两圆之间的规划切线。
 
-        注意：只在待命盘旋和集结执行阶段显示——集结完成后这些参考点已经不代表飞机当前目标，
-        常驻显示只会长期遮挡后续航段/僚机目标标记，用规范化 rally_phase 过滤及时隐藏。
-        长机/僚机分色，避免多机场景下分不清哪个圆属于哪架机；圆在屏幕上太小（缩得很远）时只画
-        圆和标记点、不画文字标签，避免多机标签互相重叠看不清。
+        注意：只在待命盘旋和集结执行阶段显示，集结完成后及时隐藏；不绘制切入点、切出点和槽位
+        标记，避免多机场景中图形与标签重叠，只保留能表达飞行路径的线条。
         """
         if not snapshot.rally_geometry:
             return
         node_by_id = {node.node_id: node for node in snapshot.nodes}
-        marker_r = 6.0 / self.scale_value
         # HOLD 后不再显示集结辅助几何，避免遮挡正常任务航线和队形目标。
         visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
 
@@ -622,45 +618,6 @@ class TopView(QGraphicsView):
                 painter.drawLine(QPointF(geometry.local_tangent_x, geometry.local_tangent_y), QPointF(geometry.entry_x, geometry.entry_y))
                 painter.setPen(circle_pen)
             painter.drawEllipse(QPointF(geometry.center_x, geometry.center_y), geometry.radius, geometry.radius)
-
-            show_labels = geometry.radius * self.scale_value > 40.0
-            self._draw_rally_marker(painter, geometry, color, marker_r, show_labels)
-
-    def _draw_rally_marker(
-        self, painter: QPainter, geometry: RallyGeometryView, color: QColor, marker_r: float, show_labels: bool
-    ) -> None:
-        """绘制单个节点的 M_i（实心圆点）和 T（空心三角）标记，视野足够大时附带文字标签。"""
-        painter.setBrush(color)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(geometry.slot_x, geometry.slot_y), marker_r, marker_r)
-        if show_labels:
-            painter.setPen(QPen(color, 1))
-            self._draw_screen_text(painter, geometry.slot_x, geometry.slot_y, 8.0, -6.0, f"{geometry.node_id} M")
-
-        triangle = QPainterPath()
-        triangle.moveTo(geometry.entry_x, geometry.entry_y + marker_r)
-        triangle.lineTo(geometry.entry_x + marker_r, geometry.entry_y - marker_r)
-        triangle.lineTo(geometry.entry_x - marker_r, geometry.entry_y - marker_r)
-        triangle.closeSubpath()
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(color, 1.5 / self.scale_value))
-        painter.drawPath(triangle)
-        if show_labels:
-            painter.setPen(QPen(color, 1))
-            self._draw_screen_text(painter, geometry.entry_x, geometry.entry_y, 8.0, -6.0, f"{geometry.node_id} T")
-
-        if geometry.local_radius > 0.0:
-            # 本地切出点用方形，集结切入点用三角，避免两个 T 点在多机场景中混淆。
-            painter.setBrush(color)
-            painter.setPen(QPen(color, 1.2 / self.scale_value))
-            painter.drawRect(
-                QRectF(
-                    geometry.local_tangent_x - marker_r,
-                    geometry.local_tangent_y - marker_r,
-                    marker_r * 2.0,
-                    marker_r * 2.0,
-                )
-            )
 
     def _draw_route_markers(self, painter: QPainter, markers: list[tuple[float, float]]) -> None:
         """绘制航点黑点。注意：仅画端点标记，不包含圆弧折线采样点。"""

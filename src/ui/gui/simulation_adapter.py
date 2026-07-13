@@ -561,8 +561,6 @@ class ControllerSimulationAdapter:
         rally_geometry = [
             RallyGeometryView(
                 node_id=node_id,
-                slot_x=geometry.slot_east_m,
-                slot_y=geometry.slot_north_m,
                 center_x=geometry.loiter_center_east_m,
                 center_y=geometry.loiter_center_north_m,
                 radius=geometry.loiter_radius_m,
