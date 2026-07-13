@@ -18,9 +18,9 @@ from src.ui.gui.situation3d.terrain_field import (
     peek_terrain_field,
 )
 
-# 顶点布局使用 48 字节：position(3) + normal(3) + uv(2) + color(4)。
+# 顶点布局使用 72 字节：position(3) + normal(3) + uv(2) + tangent(3) + binormal(3) + color(4)。
 _FLOAT_SIZE = 4
-_SURFACE_COMPONENTS = 12
+_SURFACE_COMPONENTS = 18
 _SURFACE_STRIDE = _SURFACE_COMPONENTS * _FLOAT_SIZE
 # 192 格在 20km 地图下约 104m 一个采样点，最小丘陵也有 20 个以上采样跨度。
 _SURFACE_COLUMNS = 192
@@ -279,10 +279,21 @@ class TerrainGeometry(_TerrainGeometryBase):
             6 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
+        # 显式切线基让 PrincipledMaterial 的岩面法线贴图在 D3D/Metal/OpenGL 后端一致生效。
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.TangentSemantic,
+            8 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.BinormalSemantic,
+            11 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
         # 顶点色按高度渐变，配合材质 vertexColorsEnabled 表达海拔层次。
         self.addAttribute(
             QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
-            8 * _FLOAT_SIZE,
+            14 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
         # 索引属性指向独立 indexData，减少重复顶点上传。
@@ -309,19 +320,31 @@ class TerrainGeometry(_TerrainGeometryBase):
         u_grid = np.linspace(0.0, 1.0, columns, dtype=np.float32)[None, :].repeat(rows, axis=0)
         v_grid = np.linspace(0.0, 1.0, rows, dtype=np.float32)[:, None].repeat(columns, axis=1)
 
+        display_heights = field.display_heights_m if field.display_heights_m is not None else field.heights_m
+        display_normals = field.display_normals if field.display_normals is not None else field.normals
         vertices = np.empty((rows, columns, _SURFACE_COMPONENTS), dtype=np.float32)
         vertices[:, :, 0] = x_grid
         # local_z 的 linspace 从 +depth/2 递减,本身已完成 north→-z 翻转;
         # 高度/法线/颜色一律按原始行序取值,再叠 [::-1] 会把地形南北镜像,
         # 镜像面配原始法线导致朝东北的坡整体背光变黑(历史八轮"画面黑"的底层根因)。
-        vertices[:, :, 1] = field.heights_m
+        vertices[:, :, 1] = display_heights
         vertices[:, :, 2] = z_grid
         # y=h(east,north)、z=-north 的曲面法线为 (-dh/de, 1, +dh/dn)，_normal_grid 已按此输出。
-        vertices[:, :, 3:6] = field.normals
+        vertices[:, :, 3:6] = display_normals
         vertices[:, :, 6] = u_grid
         vertices[:, :, 7] = v_grid
-        vertices[:, :, 8:11] = field.colors
-        vertices[:, :, 11] = 1.0
+        # u 沿 +x，v 沿 -z；先从法线恢复 x 坡度，再用叉乘构造严格正交的副切线。
+        normal_y = np.maximum(display_normals[:, :, 1], 1e-6)
+        gradient_x = -display_normals[:, :, 0] / normal_y
+        tangent_length = np.sqrt(1.0 + gradient_x * gradient_x)
+        tangents = np.dstack((1.0 / tangent_length, gradient_x / tangent_length, np.zeros_like(gradient_x))).astype(np.float32)
+        binormals = np.cross(display_normals, tangents)
+        binormal_length = np.maximum(np.linalg.norm(binormals, axis=2, keepdims=True), 1e-6)
+        binormals = (binormals / binormal_length).astype(np.float32)
+        vertices[:, :, 8:11] = tangents
+        vertices[:, :, 11:14] = binormals
+        vertices[:, :, 14:17] = field.colors
+        vertices[:, :, 17] = 1.0
 
         top_left = (np.arange(rows - 1, dtype=np.uint32)[:, None] * columns) + np.arange(columns - 1, dtype=np.uint32)[None, :]
         top_right = top_left + 1
@@ -350,8 +373,18 @@ class TerrainGeometry(_TerrainGeometryBase):
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
         self.addAttribute(
-            QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
+            QQuick3DGeometry.Attribute.Semantic.TangentSemantic,
             8 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.BinormalSemantic,
+            11 * _FLOAT_SIZE,
+            QQuick3DGeometry.Attribute.ComponentType.F32Type,
+        )
+        self.addAttribute(
+            QQuick3DGeometry.Attribute.Semantic.ColorSemantic,
+            14 * _FLOAT_SIZE,
             QQuick3DGeometry.Attribute.ComponentType.F32Type,
         )
         self.addAttribute(
@@ -360,14 +393,14 @@ class TerrainGeometry(_TerrainGeometryBase):
             QQuick3DGeometry.Attribute.ComponentType.U32Type,
         )
         self.setBounds(
-            QVector3D(-field.width_m / 2.0, min(0.0, float(np.min(field.heights_m)) - 4.0), -field.depth_m / 2.0),
-            QVector3D(field.width_m / 2.0, float(np.max(field.heights_m)) + 16.0, field.depth_m / 2.0),
+            QVector3D(-field.width_m / 2.0, min(0.0, float(np.min(display_heights)) - 4.0), -field.depth_m / 2.0),
+            QVector3D(field.width_m / 2.0, float(np.max(display_heights)) + 16.0, field.depth_m / 2.0),
         )
         self.setVertexData(QByteArray(vertices.reshape(-1, _SURFACE_COMPONENTS).tobytes()))
         self.setIndexData(QByteArray(indices.reshape(-1).tobytes()))
         self._width_value = field.width_m
         self._depth_value = field.depth_m
-        self._amplitude_value = float(np.max(field.heights_m))
+        self._amplitude_value = float(np.max(display_heights))
         self._generation_time_ms = field.generation_time_ms
         self.generationTimeMsChanged.emit()
         self.update()
@@ -408,18 +441,34 @@ class TerrainGeometry(_TerrainGeometryBase):
         gradient_z = (heights[grid_row + 1][grid_column] - heights[grid_row - 1][grid_column]) / (2.0 * step_z)
         # 高度场 y=f(x,z) 的上法线是 (-df/dx, 1, -df/dz)。
         length = math.sqrt(gradient_x * gradient_x + 1.0 + gradient_z * gradient_z)
+        normal_x = -gradient_x / length
+        normal_y = 1.0 / length
+        normal_z = -gradient_z / length
+        tangent_length = math.sqrt(1.0 + gradient_x * gradient_x)
+        tangent_x = 1.0 / tangent_length
+        tangent_y = gradient_x / tangent_length
+        # 占位地形的 v 沿 +z，T×N 形成与纹理坐标一致的副切线。
+        binormal_x = tangent_y * normal_z
+        binormal_y = -tangent_x * normal_z
+        binormal_z = tangent_x * normal_y - tangent_y * normal_x
         red, green, blue = _height_color(y, self._amplitude_value)
         vertices.extend(
             struct.pack(
-                "<ffffffffffff",
+                "<ffffffffffffffffff",
                 x,
                 y,
                 z,
-                -gradient_x / length,
-                1.0 / length,
-                -gradient_z / length,
+                normal_x,
+                normal_y,
+                normal_z,
                 u_coord,
                 v_coord,
+                tangent_x,
+                tangent_y,
+                0.0,
+                binormal_x,
+                binormal_y,
+                binormal_z,
                 red,
                 green,
                 blue,

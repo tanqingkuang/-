@@ -72,6 +72,22 @@ _SRGB_SNOW = np.array([0.845, 0.855, 0.825], dtype=np.float32)
 # 38. 布局字段缺失时采用保守默认值，便于局部测试最小布局。
 # 39. 但正式配置仍应保留字段说明和显式 risk_zone，便于总设计师审阅。
 # 40. 高度场生成无外部 IO，除读取布局文件外没有运行期副作用。
+# 41. heights_m 始终保存布局米制语义，禁止被材质或修形流程覆盖。
+# 42. display_heights_m 是纯显示副本，航线净空与障碍提取不得读取它。
+# 43. 低于 120m 的低地显示位移严格为零，保护航迹走廊的平面关系。
+# 44. 山区显示位移硬限制为正负 220m，避免视觉细节重画整体轮廓。
+# 45. 中尺度滤波半径按米换算，不允许分辨率变化改变岩脊物理尺度。
+# 46. 峰肩修形只作用于当前峰占主导的网格，避免误切相邻山脉链。
+# 47. 径向岩脊采用两组互质近似频率，减少规则星芒和重复沟槽。
+# 48. 峰体相位只从稳定 id 派生，禁止使用进程随机 hash 破坏截图复现。
+# 49. 相邻峰重叠区域按影响权重平均，不能直接累加成异常高墙。
+# 50. 显示法线和顶点色都从显示高度重算，保证几何与明暗一致。
+# 51. 米制法线继续保留在 normals，便于既有数据回归不受显示层影响。
+# 52. 岩石反照率贴图只乘细裂隙，不承担海拔颜色与风险语义。
+# 53. 切线空间法线贴图由 terrain_geometry 的完整 TBN 顶点基驱动。
+# 54. 自阴影与屏幕空间 AO 在 QML 层启用，不烘焙进任何语义数组。
+# 55. 低配网格复用同一物理尺度算法，只减少采样点，不切换视觉规则。
+# 56. 所有显示增强保持向量化，正式 768 网格仍由后台线程一次生成。
 
 
 @dataclass(frozen=True)
@@ -89,7 +105,7 @@ class TerrainRiskZone:
 
 @dataclass(frozen=True)
 class TerrainField:
-    """高度场网格数据。注意：positions 的 x/z 已转换到 Quick3D 局部坐标。"""
+    """高度场网格数据。注意：米制语义高度与显示细节高度彼此隔离。"""
 
     resolution: int
     center_east_m: float
@@ -101,6 +117,8 @@ class TerrainField:
     colors: np.ndarray
     risk_zones: tuple[TerrainRiskZone, ...]
     generation_time_ms: float
+    display_heights_m: np.ndarray | None = None
+    display_normals: np.ndarray | None = None
 
 
 def load_terrain_layout(path: str | Path) -> dict[str, Any]:
@@ -199,9 +217,12 @@ def generate_terrain_field(layout: dict[str, Any], *, resolution: int = DEFAULT_
     if not np.isfinite(heights).all():
         # 坏配置(如零范围 extent)可能算出 NaN 高度,必须在出口拦截由上层回退。
         raise ValueError("高度场包含非有限值,布局配置非法")
-    # 法线必须在最终高度处理后计算，否则烘焙光照会偏软。
+    # 米制法线跟随语义高度，供数据回归和潜在净空诊断；显示层另建受控岩脊高度，
+    # 两张数组互不共享内存，避免为了视觉效果改写航线/避障采样依据。
     normals = _normal_grid(heights, float(east[1] - east[0]), float(north[1] - north[0]))
-    colors = _color_grid(heights, normals, east_grid, north_grid, extent)
+    display_heights = _display_relief(heights, detail, east_grid, north_grid, layout)
+    display_normals = _normal_grid(display_heights, float(east[1] - east[0]), float(north[1] - north[0]))
+    colors = _color_grid(display_heights, display_normals, east_grid, north_grid, extent)
     generation_time_ms = (time.perf_counter() - started) * 1000.0
     return TerrainField(
         resolution=safe_resolution,
@@ -214,6 +235,8 @@ def generate_terrain_field(layout: dict[str, Any], *, resolution: int = DEFAULT_
         colors=colors,
         risk_zones=tuple(risk_zones_from_layout(layout)),
         generation_time_ms=generation_time_ms,
+        display_heights_m=display_heights,
+        display_normals=display_normals,
     )
 
 
@@ -396,6 +419,130 @@ def _detail_noise(east_grid: np.ndarray, north_grid: np.ndarray, layout: dict[st
     return rolling.astype(np.float32)
 
 
+def _display_relief(
+    heights: np.ndarray,
+    detail: np.ndarray,
+    east_grid: np.ndarray,
+    north_grid: np.ndarray,
+    layout: dict[str, Any],
+) -> np.ndarray:
+    """生成受控的显示层岩脊沟壑。注意：不得回写米制语义高度。"""
+
+    step_e = abs(float(east_grid[0, 1] - east_grid[0, 0]))
+    step_n = abs(float(north_grid[1, 0] - north_grid[0, 0]))
+    sample_step = max(1.0, (step_e + step_n) * 0.5)
+    # 半径按物理米制换算，保证 384/641/768 网格看到同尺度的坡面结构。
+    mid_radius = max(1, int(round(360.0 / sample_step)))
+    broad_radius = max(mid_radius + 1, int(round(840.0 / sample_step)))
+    mid_reference = _box_blur(heights, mid_radius, passes=2)
+    broad_reference = _box_blur(heights, broad_radius, passes=1)
+    detail_reference = _box_blur(detail, mid_radius, passes=1)
+    mid_landform = heights - mid_reference
+    broad_landform = heights - broad_reference
+    fractured_detail = detail - detail_reference
+
+    slope = _slope_grid(heights, east_grid, north_grid)
+    mountain_mask = _smoothstep((heights - 120.0) / 620.0)
+    # 平缓山脊仍保留一半强化量，陡坡则完整表现岩壁；低于 120m 的航迹低地严格不动。
+    wall_weight = 0.52 + 0.48 * _smoothstep((slope - 0.06) / 0.72)
+    summit_guard = 1.0 - 0.22 * _smoothstep((heights - 2240.0) / 560.0)
+    displacement = (
+        0.48 * mid_landform
+        + 0.16 * broad_landform
+        + 0.28 * fractured_detail
+    ) * mountain_mask * wall_weight * summit_guard
+    displacement += _peak_rock_relief(heights, east_grid, north_grid, layout) * mountain_mask
+    # 沟槽略深于凸脊，使峡谷在斜俯视角下形成清晰暗线，同时限制总位移保护原轮廓。
+    displacement = np.where(displacement < 0.0, displacement * 1.10, displacement)
+    displacement = np.clip(displacement, -220.0, 220.0).astype(np.float32)
+    display = np.maximum(0.0, heights + displacement).astype(np.float32)
+    if not np.isfinite(display).all():
+        raise ValueError("显示层高度包含非有限值")
+    return display
+
+
+def _peak_rock_relief(
+    heights: np.ndarray,
+    east_grid: np.ndarray,
+    north_grid: np.ndarray,
+    layout: dict[str, Any],
+) -> np.ndarray:
+    """沿既有峰体生成径向岩脊和窄沟。注意：只提供显示位移，不改变峰心平面位置。"""
+
+    relief_sum = np.zeros_like(east_grid, dtype=np.float32)
+    weight_sum = np.zeros_like(east_grid, dtype=np.float32)
+    chains = layout.get("mountain_chains")
+    if not isinstance(chains, list):
+        return relief_sum
+    for chain in chains:
+        if not isinstance(chain, dict):
+            continue
+        chain_angle = _chain_angle_rad(chain)
+        for peak in chain.get("peaks", []):
+            if not isinstance(peak, dict):
+                continue
+            height_m = float(peak.get("height_m", 0.0))
+            if height_m < 420.0:
+                continue
+            center_u, center_v = _peak_center_uv(chain, peak)
+            radius = max(1.0, float(peak.get("base_radius_km", 1.0)) * 1000.0)
+            aspect = max(0.35, float(peak.get("aspect_ratio", 1.3)))
+            local_e, local_n = _rotated_offsets(
+                east_grid - center_u * 1000.0,
+                north_grid - center_v * 1000.0,
+                chain_angle,
+            )
+            radial_x = local_e / (radius * aspect * 0.98)
+            radial_y = local_n / (radius * 0.78)
+            radial = np.sqrt(radial_x * radial_x + radial_y * radial_y)
+            angle = np.arctan2(radial_y, radial_x)
+
+            # 用尖锥剖面仅修正主导峰的圆钝峰肩：中心/峰高/山脚均不平移，过渡限制在既有峰体内。
+            shoulder_long = np.abs(local_e / (radius * aspect * 0.84 * 1.38))
+            shoulder_short = np.abs(local_n / (radius * 0.68 * 1.32))
+            local_long = np.abs(local_e / (radius * aspect * 0.84))
+            local_short = np.abs(local_n / (radius * 0.68))
+            current_profile = (
+                0.36 * np.exp(-0.82 * (shoulder_long ** 1.42 + shoulder_short ** 1.62))
+                + 0.63 * np.exp(-1.42 * (local_long ** 1.58 + local_short ** 1.86))
+                + 0.34 * np.exp(-3.65 * (local_long ** 2.1 + local_short ** 2.35))
+            ) / 1.33
+            target_profile = np.maximum(0.0, 1.0 - (radial / 1.35) ** 0.82)
+            current_surface = height_m * current_profile
+            dominance = _smoothstep((current_surface / np.maximum(heights, 1.0) - 0.58) / 0.32)
+            profile_fade = 1.0 - _smoothstep((radial - 1.10) / 0.48)
+            profile_correction = 0.68 * height_m * (target_profile - current_profile) * dominance * profile_fade
+
+            peak_id = str(peak.get("id", "peak"))
+            stable_code = sum((index + 1) * ord(char) for index, char in enumerate(peak_id))
+            phase = (stable_code % 6283) / 1000.0
+            rib_count = 7 + stable_code % 4
+            secondary_count = 13 + stable_code % 6
+            angular_warp = 0.38 * np.sin(angle * 3.0 + phase) + 0.18 * np.sin(angle * 5.0 - phase * 0.7)
+            primary = np.cos(angle * rib_count + angular_warp + radial * 2.1 + phase)
+            secondary = np.cos(angle * secondary_count - angular_warp * 0.7 - radial * 3.4 - phase * 0.4)
+            # 有符号幂把凸脊收窄；负半区稍加权形成更清晰的下切沟槽。
+            primary_ribs = np.sign(primary) * np.abs(primary) ** 1.75
+            secondary_ribs = np.sign(secondary) * np.abs(secondary) ** 2.15
+            rib_pattern = 0.72 * primary_ribs + 0.28 * secondary_ribs
+            rib_pattern = np.where(rib_pattern < 0.0, rib_pattern * 1.18, rib_pattern)
+
+            inner_fade = _smoothstep((radial - 0.015) / 0.11)
+            outer_fade = 1.0 - _smoothstep((radial - 1.08) / 0.72)
+            peak_weight = np.exp(-0.62 * radial ** 2.4) * outer_fade
+            amplitude = min(185.0, max(46.0, height_m * 0.074))
+            # 轻微抬峰、削肩把圆顶收成岩峰；量级小于沟脊总位移上限。
+            summit_uplift = 0.48 * amplitude * (1.0 - _smoothstep(radial / 0.30))
+            shoulder_cut = -0.28 * amplitude * _smoothstep((radial - 0.24) / 0.28) * (
+                1.0 - _smoothstep((radial - 0.92) / 0.54)
+            )
+            candidate = amplitude * rib_pattern * inner_fade + summit_uplift + shoulder_cut + profile_correction
+            relief_sum += candidate.astype(np.float32) * peak_weight.astype(np.float32)
+            weight_sum += peak_weight.astype(np.float32)
+    # 相邻峰重叠处取加权平均，避免简单相加制造超高接缝。
+    return (relief_sum / np.maximum(weight_sum, 1.0)).astype(np.float32)
+
+
 def _normal_grid(heights: np.ndarray, step_east_m: float, step_north_m: float) -> np.ndarray:
     """计算高度场法线。注意：法线数组顺序为 x/y/z，对应 Quick3D 坐标。"""
 
@@ -426,6 +573,13 @@ def _color_grid(
     # 坡度低通后只决定岩石分布；实际法线仍保留高频沟脊并交给 QML 光照。
     slope_low = _box_blur(slope, 5, passes=2)
     curvature_ao = _curvature_ao_grid(heights, east_grid, north_grid, slope)
+    # 中尺度局部起伏直接来自显示高度：凸脊提亮、凹沟压暗，形成参考图中的岩壁切面。
+    local_landform = heights - _box_blur(heights, 3, passes=2)
+    mountain_samples = np.abs(local_landform[heights > 240.0])
+    landform_scale = float(np.percentile(mountain_samples, 86)) if mountain_samples.size else 1.0
+    landform_scale = max(landform_scale, 1.0)
+    ridge_light = _smoothstep((local_landform - landform_scale * 0.08) / (landform_scale * 1.12))
+    gully_shadow = _smoothstep((-local_landform - landform_scale * 0.06) / (landform_scale * 0.94))
     # AO 反相近似凸脊，让岩石灰同时跟随海拔、山脊和陡坡，而不是只画水平色带。
     ridge_source = _box_blur(np.clip(1.0 - curvature_ao, 0.0, 1.0), 6, passes=2)
     elevation_rock = _smoothstep((height_band - 0.18) / 0.38)
@@ -443,7 +597,7 @@ def _color_grid(
     vegetation = valley * (1.0 - _smoothstep((height_low - 0.12) / 0.32)[..., None]) + shoulder * _smoothstep((height_low - 0.12) / 0.32)[..., None]
     rock_dark = _lerp_color((0.195, 0.215, 0.220), (0.325, 0.330, 0.315), _smoothstep((height_low - 0.24) / 0.44))
     # 只在最高脊线给少量暖灰，不使用雪白色，避免山顶变成摄影雪山。
-    rock_light = _lerp_color((0.325, 0.330, 0.315), (0.555, 0.520, 0.465), summit_weight)
+    rock_light = _lerp_color((0.325, 0.330, 0.315), (0.515, 0.505, 0.475), summit_weight)
     rock = rock_dark * (1.0 - summit_weight[..., None]) + rock_light * summit_weight[..., None]
     # 岩石权重只替换坡面反照率，不改高度和法线，因此不会改变山体轮廓或避障语义。
     mixed = vegetation * (1.0 - rock_weight[..., None]) + rock * rock_weight[..., None]
@@ -480,11 +634,24 @@ def _color_grid(
     ridge_shadow = np.clip(1.02 - slope[..., None] * 0.12, 0.72, 1.04)
     ao = 0.58 + 0.42 * curvature_ao[..., None]
     color = mixed * temperature * relief * ridge_shadow * ao
+    structure_weight = _smoothstep((height_band - 0.07) / 0.28) * (0.32 + 0.68 * rock_weight)
+    geomorphic_contrast = 1.0 + structure_weight * (0.23 * ridge_light - 0.38 * gully_shadow)
+    color *= geomorphic_contrast[..., None]
+    color += (
+        np.array([0.075, 0.064, 0.048], dtype=np.float32)
+        * (ridge_light * structure_weight)[..., None]
+    )
+    # 160m 等高暗线只落在山坡，保持数字孪生感并帮助读出陡坡，不覆盖低地航迹区。
+    contour_period_m = 160.0
+    contour_wave = 1.0 - np.abs(np.sin(np.pi * heights / contour_period_m))
+    contour_line = contour_wave ** 4.5
+    contour_weight = contour_line * _smoothstep((heights - 240.0) / 720.0) * (0.30 + 0.70 * _smoothstep(slope / 0.75))
+    color *= (1.0 - 0.15 * contour_weight)[..., None]
     # 冷灰蓝环境底线只补最暗面，不把整个地形提亮成雾灰色。
     shadow_amount = (1.0 - lambert[..., None]) * (0.22 + 0.28 * rock_channel)
     color += np.array([0.060, 0.082, 0.115], dtype=np.float32) * shadow_amount
     highlight = _smoothstep((lambert - 0.60) / 0.34)[..., None] * _smoothstep((height_band - 0.46) / 0.22)[..., None]
-    color += np.array([0.090, 0.066, 0.030], dtype=np.float32) * highlight
+    color += np.array([0.072, 0.058, 0.034], dtype=np.float32) * highlight
     color *= 1.0 - 0.10 * far_mix
     color = np.maximum(color, np.array([0.065, 0.085, 0.110], dtype=np.float32))
     color = np.minimum(color, np.array([0.68, 0.66, 0.62], dtype=np.float32))
