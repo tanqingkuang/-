@@ -262,6 +262,7 @@ class Snapshot:
     cpu_utilization: float = 0.0
     rally_geometry: list[RallyGeometryView] = field(default_factory=list)
     terrain_display_file: str | None = None  # 3D 态势显示用地形布局文件；不参与仿真语义
+    blocked_route_segments: list[ReferenceRoute] = field(default_factory=list)  # 被封锁的原始参考航线；仅避障覆盖生效时非空
 
 
 def is_leader_node(node: NodeState) -> bool:

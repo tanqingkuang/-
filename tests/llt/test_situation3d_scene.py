@@ -130,6 +130,34 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
 
+    def test_payload_contains_blocked_route_with_red_color(self) -> None:
+        """验证封锁航线拥有独立红色 payload，空数据不产生残留模型。"""
+
+        snapshot = self._snapshot()
+        snapshot.blocked_route_segments = [ReferenceRoute(-30.0, 0.0, 90.0, 0.0, 80.0, 110.0)]
+        payload = build_scene_payload(snapshot)
+        self.assertTrue(payload["blockedRoutePoints"])
+        self.assertTrue(payload["blockedRouteDashes"])
+        self.assertTrue(all(item["color"] == "#ff5a45" for item in payload["blockedRoutePoints"]))
+        self.assertTrue(all(item["color"] == "#ff5a45" for item in payload["blockedRouteDashes"]))
+
+        snapshot.blocked_route_segments = []
+        cleared_payload = build_scene_payload(snapshot)
+        self.assertEqual(cleared_payload["blockedRoutePoints"], [])
+        self.assertEqual(cleared_payload["blockedRouteDashes"], [])
+
+    def test_obstacle_risk_zones_only_include_enabled_and_empty_falls_back_to_layout(self) -> None:
+        """验证风险区优先读取启用避障障碍，同时保留无避障场景的布局峰值回退。"""
+
+        enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
+        disabled = ObstacleView("禁用圆", "circle", enabled=False, center_x=300.0, center_y=400.0, radius=50.0)
+        zones = scene_data._risk_zones_from_obstacles([enabled, disabled], None)
+        self.assertEqual([zone.zone_id for zone in zones], ["启用圆"])
+
+        fallback = scene_data._layout_terrain_payload(str(TERRAIN_LAYOUT_PATH), [])
+        assert fallback is not None
+        self.assertEqual([zone["id"] for zone in fallback["riskZones"]], ["hazard_peak_west", "hazard_peak_east"])
+
     def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
         """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
 

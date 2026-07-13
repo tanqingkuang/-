@@ -238,6 +238,7 @@ class TopView(QGraphicsView):
             # 绘制顺序：航线在底，链路其次，节点最上，保证遮挡关系正确。
             # 有预览时只显示绿色预览线和预览黑点，避免与 committed 航线形成两根线。
             if self.snapshot.nodes and self.preview_route_polyline is None:
+                self._draw_blocked_route(painter)
                 self._draw_route(painter)
             self._draw_rally_geometry(painter, self.snapshot)
             if self.show_links:
@@ -562,6 +563,28 @@ class TopView(QGraphicsView):
             [(routes[0].start_x, routes[0].start_y)] + [(route.end_x, route.end_y) for route in routes],
         )
 
+    def _draw_blocked_route(self, painter: QPainter) -> None:
+        """绘制已封锁的原始航线。注意：红色虚线先画，避免遮挡当前采用航线。"""
+
+        routes = self._blocked_route_segments()
+        if not routes:
+            return
+        blocked_color = QColor("#ff5a45")
+        pen = QPen(blocked_color, 1.2 / self.scale_value)
+        pen.setDashPattern([6, 5])
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        for route in routes:
+            points = reference_route_points(route)
+            for start, end in zip(points, points[1:]):
+                painter.drawLine(QPointF(start[0], start[1]), QPointF(end[0], end[1]))
+        painter.setBrush(blocked_color)
+        painter.setPen(Qt.PenStyle.NoPen)
+        marker_radius = 4.5 / self.scale_value
+        markers = [(routes[0].start_x, routes[0].start_y)] + [(route.end_x, route.end_y) for route in routes]
+        for east, north in markers:
+            painter.drawEllipse(QPointF(east, north), marker_radius, marker_radius)
+
     def _draw_rally_geometry(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制集结盘旋圆、切入点 T（三角）与松散目标点 M_i（实心圆）。
 
@@ -658,6 +681,11 @@ class TopView(QGraphicsView):
         if self.snapshot.route is not None:
             return [self.snapshot.route]
         return []
+
+    def _blocked_route_segments(self) -> list[ReferenceRoute]:
+        """返回被封锁的原始航段。注意：无快照时不显示任何封锁标记。"""
+
+        return self.snapshot.blocked_route_segments if self.snapshot else []
 
     def _draw_links(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 links 画面元素。注意：只做渲染，不修改仿真状态。"""

@@ -167,6 +167,7 @@ class SimulationSnapshot:
     cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。
     rally_analysis: object | None = None  # FormationAnalysisS；集结完成首帧非 None，控制器锁存
     rally_geometry: dict[str, RallyPlanGeometryState] = field(default_factory=dict)  # 按 node_id 索引，非集结场景为空字典
+    blocked_route_segments: list[RouteState] = field(default_factory=list)  # 被封锁的原始航线(仅避障覆盖生效时非空)。
 
 
 @dataclass(frozen=True)

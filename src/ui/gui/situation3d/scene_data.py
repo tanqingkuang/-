@@ -22,6 +22,7 @@ from src.ui.gui.situation3d.aircraft_model_style import (
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
+    TerrainRiskZone,
     peek_terrain_field,
     risk_zones_from_layout,
     terrain_extent_from_layout,
@@ -40,6 +41,7 @@ ROUTE_DASH_GAP_M = 90.0
 MAX_ROUTE_DASHES_PER_SEGMENT = 96
 ROUTE_DASH_WIDTH_M = 16.0
 ROUTE_DASH_COLOR = "#22d3ee"
+BLOCKED_ROUTE_DASH_COLOR = "#ff5a45"
 DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
 DEFAULT_TERRAIN_RELIEF_M = 2200.0
@@ -160,9 +162,9 @@ class TrailPayloadState:
 # 23. `terrain_display_file` 可以由 Snapshot 或 build_scene_payload 参数传入，测试可直接覆盖。
 # 24. payload 字段名使用 QML 现有 camelCase 风格，减少绑定样板。
 # 25. 这里不做 P2 的可通行性判断；S 绕航线仅作为冻结布局参考线。
-# 26. 原始航线仍来自仿真 snapshot.route_segments，保证飞机飞行坐标语义不变。
-# 27. planned_route_uv 暂不进入正式 3D 航线，避免 P1 误导为已接避障。
-# 28. 后续 P2 接入时可把规划结果写入 route_segments，同一渲染管线即可显示。
+# 26. 当前生效航线来自 snapshot.route_segments，保证飞机飞行坐标语义不变。
+# 27. 采用避障航线后，当前航线仍走 route_segments，保持既有渲染管线不变。
+# 28. 被替代的配置航线走 blocked_route_segments，以红色虚线保留封锁状态。
 # 29. 颜色和材质在 QML 层控制，本文件只提供几何和数据。
 # 30. 单个风险区生成 10 条红色网格线，覆盖但不遮蔽山体细节。
 # 31. 线段 y 坐标取风险峰高度，缓冲圈 y 坐标取低值，形成上下层次。
@@ -193,6 +195,7 @@ def build_scene_payload(
 ) -> dict[str, object]:
     """把 UI 快照转换为 QML 场景数据。注意：输入仍采用 x/y/z=东/北/天。"""
 
+    obstacle_views = list(obstacles)
     if trail_state is not None:
         # 一次 build 对应一条 QML 展示消息，固化进度由消息顺序而非仿真时间差驱动。
         trail_state.begin_frame()
@@ -224,10 +227,23 @@ def build_scene_payload(
         for polyline in route_polylines
         for dash in _route_dash_payload(polyline)
     ]
-    obstacle_items = [_obstacle_payload(obstacle, clearance_m) for obstacle in obstacles if obstacle.enabled]
-    bounds = _scene_bounds(aircraft, route_points, obstacle_items)
+    blocked_route_segments = _blocked_route_segments(snapshot)
+    blocked_route_polylines = [_route_polyline(segment) for segment in blocked_route_segments]
+    blocked_route_points = [
+        point
+        for polyline in blocked_route_polylines
+        for point in _route_payload(polyline, color=BLOCKED_ROUTE_DASH_COLOR)
+    ]
+    blocked_route_dashes = [
+        dash
+        for polyline in blocked_route_polylines
+        for dash in _route_dash_payload(polyline, color=BLOCKED_ROUTE_DASH_COLOR)
+    ]
+    obstacle_items = [_obstacle_payload(obstacle, clearance_m) for obstacle in obstacle_views if obstacle.enabled]
+    # 相机包围盒同时纳入封锁航线，避免覆盖路线偏移较大时红线落到初始视野外。
+    bounds = _scene_bounds(aircraft, route_points + blocked_route_points, obstacle_items)
     display_file = terrain_display_file or snapshot.terrain_display_file
-    terrain = _terrain_payload(bounds, display_file)
+    terrain = _terrain_payload(bounds, display_file, obstacle_views)
     risk_zones = list(terrain.get("riskZones", []))
     risk_zone_lines = list(terrain.get("riskZoneLines", []))
     if not risk_zone_lines:
@@ -247,7 +263,7 @@ def build_scene_payload(
     if terrain.get("surface", {}).get("mode") == "layout":
         camera_payload = _layout_camera_payload(terrain["surface"])
     # 静态内容签名：QML 据此决定是否重建航线/障碍/风险区模型，避免每帧 clear+append 造成卡顿。
-    static_key = _static_content_key(route_points, route_dashes, obstacle_items, risk_zones, risk_zone_lines, risk_zone_buffers)
+    static_key = _static_content_key(route_points, route_dashes, blocked_route_points, blocked_route_dashes, obstacle_items, risk_zones, risk_zone_lines, risk_zone_buffers)
     return {
         "staticKey": static_key,
         "time": snapshot.time,
@@ -259,6 +275,8 @@ def build_scene_payload(
         "modelOptions": available_model_options(),
         "routePoints": route_points,
         "routeDashes": route_dashes,
+        "blockedRoutePoints": blocked_route_points,
+        "blockedRouteDashes": blocked_route_dashes,
         "obstacles": obstacle_items,
         "terrain": terrain,
         "riskZones": risk_zones,
@@ -270,6 +288,8 @@ def build_scene_payload(
             "trailRibbons": len(trail_ribbons),
             "routePoints": len(route_points),
             "routeDashes": len(route_dashes),
+            "blockedRoutePoints": len(blocked_route_points),
+            "blockedRouteDashes": len(blocked_route_dashes),
             "obstacles": len(obstacle_items),
             "riskZones": len(risk_zones),
         },
@@ -465,13 +485,13 @@ def _trail_quick3d_point(point: object) -> list[float]:
     return [coord["x"], coord["y"], coord["z"]]
 
 
-def _route_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:
+def _route_payload(polyline: list[tuple[float, float, float]], *, color: str = ROUTE_DASH_COLOR) -> list[dict[str, object]]:
     """生成航线采样点显示数据。注意：圆弧按现有二维视图采样口径展开。"""
 
-    return [{"color": ROUTE_DASH_COLOR, "size": 9.0, "x": x, "y": y, "z": z} for x, y, z in polyline]
+    return [{"color": color, "size": 9.0, "x": x, "y": y, "z": z} for x, y, z in polyline]
 
 
-def _route_dash_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:
+def _route_dash_payload(polyline: list[tuple[float, float, float]], *, color: str = ROUTE_DASH_COLOR) -> list[dict[str, object]]:
     """生成 3D 航线虚线段。注意：每段 dash 复用 ribbon 几何，宽度比尾迹更细。"""
 
     if len(polyline) < 2:
@@ -492,7 +512,7 @@ def _route_dash_payload(polyline: list[tuple[float, float, float]]) -> list[dict
             # 每段 dash 独立成一个 ribbon，材质层保持连续线宽，段间空隙由模型缺失形成。
             dashes.append(
                 {
-                    "color": ROUTE_DASH_COLOR,
+                    "color": color,
                     "width": ROUTE_DASH_WIDTH_M,
                     "pathValue": json.dumps(dash_path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
                 }
@@ -524,6 +544,14 @@ def _route_segments(snapshot: Snapshot) -> list[ReferenceRoute]:
     if snapshot.route is not None:
         return [snapshot.route]
     return []
+
+
+def _blocked_route_segments(snapshot: Snapshot) -> list[ReferenceRoute]:
+    """返回被封锁的原始航段。注意：缺失时保持空列表，不回退当前航线。"""
+
+    # 和 _route_segments 不同：这里没有"至少显示一条"的兜底语义，
+    # 没有被封锁的航线就应该什么都不画，否则会在非避障场景里凭空多出一条红线。
+    return list(snapshot.blocked_route_segments)
 
 
 def _route_polyline(route: ReferenceRoute) -> list[tuple[float, float, float]]:
@@ -637,6 +665,62 @@ def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float
     return obstacle.min_x, obstacle.max_x, obstacle.min_y, obstacle.max_y
 
 
+def _obstacle_corner_points(obstacle: ObstacleView) -> list[tuple[float, float]]:
+    """把非多边形障碍近似为顶点集合。注意：统一后续风险区的质心和半径计算。"""
+
+    if obstacle.kind == "circle":
+        # 圆没有原生顶点；用八边形近似换取和 polygon/rect 共用同一套质心+最大半径公式，
+        # 不必为圆再写一条独立的风险区分支。
+        return [
+            (
+                obstacle.center_x + obstacle.radius * math.cos(index * math.tau / 8.0),
+                obstacle.center_y + obstacle.radius * math.sin(index * math.tau / 8.0),
+            )
+            for index in range(8)
+        ]
+    # 矩形/旋转矩形按四角近似，和上面的圆形分支殊途同归，供下面统一取质心与半径。
+    return [
+        (obstacle.min_x, obstacle.min_y),
+        (obstacle.max_x, obstacle.min_y),
+        (obstacle.max_x, obstacle.max_y),
+        (obstacle.min_x, obstacle.max_y),
+    ]
+
+
+def _risk_zones_from_obstacles(
+    obstacles: Iterable[ObstacleView], field: TerrainField | None
+) -> list[TerrainRiskZone]:
+    """从当前生效的避障障碍集合生成风险区。注意：只处理已启用障碍，替代布局手工标记。"""
+
+    zones: list[TerrainRiskZone] = []
+    for obstacle in obstacles:
+        # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
+        if not obstacle.enabled:
+            continue
+        vertices = obstacle.vertices if obstacle.kind == "polygon" else _obstacle_corner_points(obstacle)
+        if not vertices:
+            continue
+        center_x = sum(point[0] for point in vertices) / len(vertices)
+        center_y = sum(point[1] for point in vertices) / len(vertices)
+        # 外接圆半径而不是等效面积半径：宁可罩面略大一点覆盖整个障碍，也不要出现罩面切穿山体的情况。
+        radius_m = max(math.hypot(x - center_x, y - center_y) for x, y in vertices)
+        # 高度直接采样真实高度场，而不是信任障碍元数据里的 height_m——地形是唯一事实来源。
+        height_m = _sample_field_height(field, center_x, center_y) if field is not None else 0.0
+        zones.append(
+            TerrainRiskZone(
+                zone_id=obstacle.obstacle_id,
+                label=obstacle.obstacle_id,
+                east_m=center_x,
+                north_m=center_y,
+                radius_m=max(1.0, radius_m),
+                height_m=height_m,
+                # 缓冲圈固定比风险圈外扩 25%，和布局手工标记的量级保持一致，不需要额外配置项。
+                buffer_radius_m=max(1.0, radius_m) * 1.25,
+            )
+        )
+    return zones
+
+
 def _scene_bounds(
     aircraft: list[dict[str, object]],
     route_points: list[dict[str, object]],
@@ -675,11 +759,13 @@ def _scene_bounds(
     }
 
 
-def _terrain_payload(bounds: dict[str, float], terrain_display_file: str | None = None) -> dict[str, object]:
+def _terrain_payload(
+    bounds: dict[str, float], terrain_display_file: str | None = None, obstacles: Iterable[ObstacleView] = ()
+) -> dict[str, object]:
     """生成连续高度场地形参数。注意：只影响 3D 显示背景，不改变仿真状态。"""
 
     if terrain_display_file:
-        layout_payload = _layout_terrain_payload(terrain_display_file)
+        layout_payload = _layout_terrain_payload(terrain_display_file, obstacles)
         if layout_payload is not None:
             return layout_payload
 
@@ -713,7 +799,9 @@ def _terrain_payload(bounds: dict[str, float], terrain_display_file: str | None 
     }
 
 
-def _layout_terrain_payload(terrain_display_file: str) -> dict[str, object] | None:
+def _layout_terrain_payload(
+    terrain_display_file: str, obstacles: Iterable[ObstacleView] = ()
+) -> dict[str, object] | None:
     """生成布局地形 payload。注意：任何解析/数值/结构错误都回退旧地形并留诊断。"""
 
     layout_path = str(Path(terrain_display_file).resolve())
@@ -736,8 +824,10 @@ def _layout_terrain_payload(terrain_display_file: str) -> dict[str, object] | No
         field = _cached_terrain_field(layout_path, resolution)
         center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
         center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
-        # 风险区线网和地形 mesh 使用同一高度场，避免 QML 里出现悬浮平面。
-        risk_zones = [_risk_zone_payload(zone, field) for zone in risk_zones_from_layout(layout)]
+        # 有启用避障障碍时风险罩面与实际规划数据同源；非避障场景保留布局标记的稳定回退。
+        obstacle_zones = _risk_zones_from_obstacles(obstacles, field)
+        source_zones = obstacle_zones if obstacle_zones else risk_zones_from_layout(layout)
+        risk_zones = [_risk_zone_payload(zone, field) for zone in source_zones]
         # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
         risk_zone_lines = [
             line

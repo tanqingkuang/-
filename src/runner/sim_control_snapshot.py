@@ -20,6 +20,7 @@ class SimulationControllerSnapshotMixin:
         health_map = self._disturbance.read_health()
         route = self._make_route_snapshot()
         route_segments = self._make_route_segment_snapshots()
+        blocked_route_segments = self._make_blocked_route_segment_snapshots()
         nodes: list[NodeState] = []
         rally_phases = (
             {}
@@ -84,6 +85,7 @@ class SimulationControllerSnapshotMixin:
             links=links,
             route=route,
             route_segments=route_segments,
+            blocked_route_segments=blocked_route_segments,
             cpu_utilization=self._cpu_utilization,
             rally_analysis=self._formation_completed_analysis,
             rally_geometry=self._rally_geometry,
@@ -148,6 +150,16 @@ class SimulationControllerSnapshotMixin:
         if not display_route:
             return []
         return [_route_state_from_wayline(line) for line in display_route]
+
+    def _make_blocked_route_segment_snapshots(self) -> list[RouteState]:
+        """生成被封锁的原始航线快照。注意：仅在避障覆盖航线生效时非空。"""
+
+        # getattr 兜底只是双重保险：__init__/_init_modules_unlocked 已保证该属性总被赋值，
+        # 这里不应该真的触发默认值分支，出现了反而说明初始化顺序被破坏。
+        blocked_route = getattr(self, "_blocked_display_route", None)
+        if not blocked_route:
+            return []
+        return [_route_state_from_wayline(line) for line in blocked_route]
 
     @staticmethod
     def _cross_track_error(state: AircraftState, route: RouteState | None) -> float | None:

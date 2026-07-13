@@ -5,6 +5,18 @@
   "seed": 1,
   "route_file": "element/mountain_demo_mission_route.json",
   "rally_route_file": "element/mountain_demo_rally_route.json",
+  "avoidance": {
+    "enabled": true,
+    "allow_arc": true,
+    "turn_radius_m": 250.0,
+    "leg_length_margin_m": 80.0,
+    "clearance_m": 200.0,
+    "simplify_clearance_m": 200.0,
+    "turn_switch_penalty_m": 40.0,
+    "turn_angle_weight_m": 20.0,
+    "grid": {"resolution_m": 40.0, "margin_m": 1200.0},
+    "obstacles_file": "element/mountain_demo_obstacles.json"
+  },
   "terrain_display_file": "element/terrain_mountain_demo.json",
   "rally_cfg": {
     "loose_scale": 3.0,

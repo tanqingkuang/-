@@ -83,6 +83,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._configured_links: list[_ConfiguredLink] = []
         self._leader_route: list[WayPointInputS] | None = None
         self._display_route: list[WayLineS] | None = None  # 显示用航线(WayLineS)，仅供 GUI 画航段
+        self._blocked_display_route: list[WayLineS] | None = None  # 避障覆盖时保留的原配置航线，供 GUI 标示封锁状态。
         # 避障”采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
         self._leader_route_override: list[WayPointInputS] | None = None
         self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
@@ -692,6 +693,14 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         else:
             _display_wpi = _build_leader_route(config, insert_arcs=False)
         self._display_route = waypoint_inputs_to_waylines(_display_wpi) if len(_display_wpi) >= 2 else None
+        # 覆盖航线生效时，原配置航线仍需作为已封锁参考线对外展示；重建时先清空避免 reset 后残留。
+        self._blocked_display_route = None
+        if self._leader_route_override is not None:
+            # 用同一个 config 重新按"配置原始航线"规则生成一份，不复用 leader_route——
+            # override 生效后 leader_route 已经是替换后的规划航线，不能再当作"原始航线"用。
+            _blocked_wpi = _build_leader_route(config, insert_arcs=False)
+            if len(_blocked_wpi) >= 2:
+                self._blocked_display_route = waypoint_inputs_to_waylines(_blocked_wpi)
         # 集结场景额外参数：集结航线、任务配置、每机目标集结点。
         rally_route = _build_rally_route(config)
         rally_task_init = _build_rally_task_init(config, self._algorithm_period_s, list(nodes))
