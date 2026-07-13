@@ -323,6 +323,33 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertEqual(snapshot.run_state, "FINISHED")
         self.assertEqual(snapshot.control_report, "集结")
         self.assertNotEqual(set(phases.values()), {"LOCAL_LOITER"})
+        for node_id, algorithm in controller._node_algorithms.items():
+            join = algorithm._entity._rally_join
+            self.assertIsNotNone(join._standby_center_e, msg=node_id)
+            self.assertIsNotNone(join._standby_center_n, msg=node_id)
+        self.assertEqual(
+            controller._node_algorithms["R02"]._entity._rally_join._transit_phase,
+            "ARC_TO_TANGENT",
+        )
+
+    def test_start_rally_before_first_tick_primes_standby_geometry(self) -> None:
+        """验证启动后立即集结时先建立待命圆，不退回旧的当前点到集结圆切线。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            # 模拟已经启动/暂停但后台首拍尚未执行的确定性边界。
+            controller._run_state = "PAUSED"
+
+            result = controller.start_rally()
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(controller._tick_index, 0)
+            for node_id, algorithm in controller._node_algorithms.items():
+                join = algorithm._entity._rally_join
+                self.assertIsNotNone(join._standby_center_e, msg=node_id)
+                self.assertIsNotNone(join._standby_center_n, msg=node_id)
 
     def test_rally_scenario_supports_runtime_formation_switch_entry(self) -> None:
         """验证集结场景复用现有队形重构入口，运行期切换 rally_leader 的目标队形索引。"""
@@ -471,6 +498,54 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertEqual(phases["R02"], "RALLY_TRANSIT")
             self.assertEqual(phases["R03"], "RALLY_TRANSIT")
             self.assertTrue(any(msg.topic == "formation.leader" for msg in inbox))
+
+    def test_start_rally_plans_each_aircraft_from_its_own_standby_circle(self) -> None:
+        """验证各机独立规划公切线，并在转移期间保持原集结分层高度。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            controller.step(1)
+            standby_altitudes = {
+                node.node_id: node.cmd_pos_h_m
+                for node in controller.get_snapshot().nodes
+            }
+
+            self.assertEqual(controller.start_rally().code, "OK")
+            # 僚机需等待长机广播经现有通信链路送达，4 拍后再核对全队规划结果。
+            self.assertEqual(controller.step(4).code, "OK")
+            joining_snapshot = controller.get_snapshot()
+
+            for node_id, algorithm in controller._node_algorithms.items():
+                entity = algorithm._entity
+                join = entity._rally_join
+                center_distance = math.hypot(
+                    join._loiter_center_e - join._standby_center_e,
+                    join._loiter_center_n - join._standby_center_n,
+                )
+                if center_distance <= 0.5:
+                    self.assertEqual(join.state, "LOITERING", msg=node_id)
+                    continue
+                self.assertEqual(join.state, "FLYING", msg=node_id)
+                self.assertEqual(join._transit_phase, "ARC_TO_TANGENT", msg=node_id)
+                self.assertAlmostEqual(
+                    math.hypot(
+                        entity.cxt.selfCmd.pos.east - join._standby_center_e,
+                        entity.cxt.selfCmd.pos.north - join._standby_center_n,
+                    ),
+                    join._loiter_radius,
+                )
+
+            joining_altitudes = {
+                node.node_id: node.cmd_pos_h_m
+                for node in joining_snapshot.nodes
+            }
+            self.assertEqual(joining_altitudes, standby_altitudes)
+            self.assertTrue(all(
+                node.rally_phase in {"RALLY_TRANSIT", "RALLY_LOITER"}
+                for node in joining_snapshot.nodes
+            ))
 
     def test_snapshot_exposes_latched_rally_analysis(self) -> None:
         """验证控制器快照透传集结完成后锁存的编队分析。"""
