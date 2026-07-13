@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from unittest.mock import patch
 
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
@@ -1148,6 +1149,237 @@ class RallyLoiterSpeedBoundsTests(unittest.TestCase):
 
 class RallyPosCalcTests(unittest.TestCase):
     """验证集结专用位置解算单元。"""
+
+    def _make_standby_join_for_transit(self) -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+        """构造两个分离等半径圆，并把飞机放在待命圆顶部等待切出。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(1000.0, 0.0, 560.0),
+            approach_speed_mps=20.0,
+            slow_radius_m=100.0,
+            arrival_radius_m=20.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+            mission_speed_mps=20.0,
+            control_period_s=0.05,
+            standby_altitude_m=560.0,
+        ))
+        output = PosCalcOutputS(selfCmd=MotionProfS())
+        enter_state = _motion(
+            east=0.0,
+            north=0.0,
+            h=560.0,
+            v_east=20.0,
+            vd=20.0,
+            v_psi=0.0,
+        )
+        join.step(RallyJoinPosInputS(selfState=enter_state, standby=True), output)
+        transit_state = _motion(
+            east=0.0,
+            north=400.0,
+            h=560.0,
+            v_east=-20.0,
+            vd=20.0,
+            v_psi=math.pi,
+        )
+        return join, transit_state, output
+
+    def test_rally_join_pos_waits_for_local_tangent_before_flying_line(self) -> None:
+        """验证开始集结后先沿待命圆飞向切出点，不从当前位置直接追集结圆。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+
+        join.step(
+            RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0),
+            output,
+        )
+
+        assert output.selfCmd is not None
+        self.assertEqual(join.state, RALLY_STATE_FLYING)
+        self.assertAlmostEqual(output.selfCmd.pos.east, 0.0)
+        self.assertAlmostEqual(output.selfCmd.pos.north, 400.0)
+        self.assertAlmostEqual(output.selfCmd.v.vEast, -20.0)
+        self.assertAlmostEqual(output.selfCmd.v.vNorth, 0.0, places=6)
+        self.assertAlmostEqual(output.selfCmd.v.dVPsi, 0.1)
+
+    def test_rally_join_pos_arc_to_tangent_eta_includes_local_arc_and_tangent(self) -> None:
+        """验证待命圆切出阶段 ETA 包含剩余圆弧与公切线，供全队同步使用。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+
+        join.step(
+            RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0),
+            output,
+        )
+
+        expected_eta = 10.0 + math.pi * 200.0 / 20.0 + 1000.0 / 20.0
+        self.assertAlmostEqual(join.eta_s, expected_eta)
+
+    def test_rally_join_pos_same_circle_enters_loitering_directly(self) -> None:
+        """验证待命圆与集结圆重合时直接继续盘旋，不退化为直飞 M_i。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(0.0, 0.0, 560.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=20.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+            mission_speed_mps=20.0,
+            control_period_s=0.05,
+            standby_altitude_m=560.0,
+        ))
+        output = PosCalcOutputS(selfCmd=MotionProfS())
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
+                standby=True,
+            ),
+            output,
+        )
+        same_circle_state = _motion(
+            east=0.0,
+            north=400.0,
+            h=560.0,
+            v_east=-20.0,
+            vd=20.0,
+            v_psi=math.pi,
+        )
+
+        join.step(
+            RallyJoinPosInputS(selfState=same_circle_state, standby=False, t_now=5.0),
+            output,
+        )
+
+        assert output.selfCmd is not None
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+        self.assertIsNone(join._local_exit_point)
+        self.assertAlmostEqual(output.selfCmd.pos.east, 0.0)
+        self.assertAlmostEqual(output.selfCmd.pos.north, 400.0)
+        self.assertAlmostEqual(output.selfCmd.v.dVPsi, 14.0 / 200.0)
+
+    def test_rally_join_pos_common_tangent_is_tangent_and_locked(self) -> None:
+        """验证两圆切点同时相切，且规划后不会随实时位置重新计算。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+
+        assert join._local_exit_point is not None
+        assert join._entry_point is not None
+        local_exit = join._local_exit_point
+        rally_entry = join._entry_point
+        line_e = rally_entry.east - local_exit.east
+        line_n = rally_entry.north - local_exit.north
+        local_radius_e = local_exit.east - join._standby_center_e
+        local_radius_n = local_exit.north - join._standby_center_n
+        rally_radius_e = rally_entry.east - join._loiter_center_e
+        rally_radius_n = rally_entry.north - join._loiter_center_n
+        self.assertAlmostEqual(math.hypot(local_radius_e, local_radius_n), 200.0)
+        self.assertAlmostEqual(math.hypot(rally_radius_e, rally_radius_n), 200.0)
+        self.assertAlmostEqual(line_e * local_radius_e + line_n * local_radius_n, 0.0)
+        self.assertAlmostEqual(line_e * rally_radius_e + line_n * rally_radius_n, 0.0)
+        locked = (local_exit.east, local_exit.north, rally_entry.east, rally_entry.north)
+
+        state.pos.east += 50.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.1), output)
+
+        assert join._local_exit_point is not None
+        assert join._entry_point is not None
+        self.assertEqual(locked, (
+            join._local_exit_point.east,
+            join._local_exit_point.north,
+            join._entry_point.east,
+            join._entry_point.north,
+        ))
+
+    def test_rally_join_pos_ten_degree_window_switches_to_locked_tangent(self) -> None:
+        """验证进入待命圆切出点 10° 窗口后，同一拍切换到锁存公切线。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+        theta = math.radians(-95.0)
+        state.pos.east = join._standby_center_e + 200.0 * math.cos(theta)
+        state.pos.north = join._standby_center_n + 200.0 * math.sin(theta)
+        state.v.vPsi = theta + math.pi / 2.0
+
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.1), output)
+
+        assert output.selfCmd is not None
+        assert join._entry_point is not None
+        self.assertEqual(join._transit_phase, "LINE_TO_RALLY_ENTRY")
+        self.assertAlmostEqual(output.selfCmd.pos.east, join._entry_point.east)
+        self.assertAlmostEqual(output.selfCmd.pos.north, join._entry_point.north)
+        heading_jump = abs(math.atan2(
+            math.sin(output.selfCmd.v.vPsi - state.v.vPsi),
+            math.cos(output.selfCmd.v.vPsi - state.v.vPsi),
+        ))
+        self.assertLessEqual(heading_jump, math.radians(10.0))
+
+    def test_rally_join_pos_crossing_local_tangent_does_not_wait_another_lap(self) -> None:
+        """验证离散步进跨过切出点时仍立即转直线，不因漏过角度窗口多绕一圈。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+
+        before_exit = math.radians(-105.0)
+        state.pos.east = join._standby_center_e + 200.0 * math.cos(before_exit)
+        state.pos.north = join._standby_center_n + 200.0 * math.sin(before_exit)
+        state.v.vPsi = before_exit + math.pi / 2.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.1), output)
+        self.assertEqual(join._transit_phase, "ARC_TO_TANGENT")
+
+        after_exit = math.radians(-75.0)
+        state.pos.east = join._standby_center_e + 200.0 * math.cos(after_exit)
+        state.pos.north = join._standby_center_n + 200.0 * math.sin(after_exit)
+        state.v.vPsi = after_exit + math.pi / 2.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.2), output)
+
+        assert output.selfCmd is not None
+        assert join._entry_point is not None
+        self.assertEqual(join._transit_phase, "LINE_TO_RALLY_ENTRY")
+        self.assertAlmostEqual(output.selfCmd.pos.east, join._entry_point.east)
+        self.assertAlmostEqual(output.selfCmd.pos.north, join._entry_point.north)
+
+    def test_rally_join_pos_common_tangent_failure_uses_locked_point_to_circle_tangent(self) -> None:
+        """验证两圆公切线无解时只在开始集结一拍计算当前点到集结圆切线。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+        with patch(
+            "src.algorithm.units.algo.pos_calc.rally_join_pos.common_tangent",
+            return_value=None,
+        ):
+            join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+        assert join._entry_point is not None
+        entry = (join._entry_point.east, join._entry_point.north)
+        self.assertEqual(join._transit_phase, "LINE_TO_RALLY_ENTRY")
+        self.assertIsNone(join._local_exit_point)
+
+        state.pos.east += 100.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.1), output)
+
+        assert join._entry_point is not None
+        self.assertEqual(entry, (join._entry_point.east, join._entry_point.north))
+
+    def test_rally_join_pos_reset_clears_locked_transit_plan(self) -> None:
+        """验证 reset 清除公切线计划，下一轮开始集结时能够重新规划。"""
+
+        join, state, output = self._make_standby_join_for_transit()
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+        self.assertIsNotNone(join._local_exit_point)
+        self.assertIsNotNone(join._entry_point)
+
+        join.reset()
+
+        self.assertIsNone(join._transit_phase)
+        self.assertIsNone(join._local_exit_point)
+        self.assertIsNone(join._entry_point)
+        self.assertEqual(join._tangent_length_m, 0.0)
+        self.assertIsNone(join._last_local_remaining_angle)
 
     def test_rally_join_pos_standby_outputs_ccw_local_loiter_command(self) -> None:
         """验证 STANDBY 是 RallyJoinPos 内部状态，输出本地圆盘旋目标。"""
