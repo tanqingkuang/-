@@ -651,10 +651,11 @@ Item {
                 baseColor: "#ffffff"
                 cullMode: Material.NoCulling
                 vertexColorsEnabled: true
-                roughness: 0.96
-                specularAmount: 0.02
-                // 反照率已是白天量级,自发光只留极小底线,避免整体发灰。
-                emissiveFactor: Qt.vector3d(0.012, 0.016, 0.020)
+                // 近全粗糙、零镜面量消除浅绿塑料光泽；体积层次交给顶点色与法线光照。
+                roughness: 0.99
+                specularAmount: 0.0
+                // 仅保留极弱冷色底线，防止背光沟壑死黑，同时不抬亮整片地表。
+                emissiveFactor: Qt.vector3d(0.004, 0.006, 0.008)
                 // 近景细节法线:顶点间距 68m,顶点色插值在极限放大时糊成水彩;
                 // 平铺细节法线在像素级补出岩面粗糙度,曝光不受影响(P1.5)。
                 normalMap: Texture {
@@ -666,7 +667,7 @@ Item {
                     generateMipmaps: true
                     mipFilter: Texture.Linear
                 }
-                normalStrength: 0.48
+                normalStrength: 0.72
             }
         }
 

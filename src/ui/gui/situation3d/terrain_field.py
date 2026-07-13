@@ -414,86 +414,81 @@ def _color_grid(
     north_grid: np.ndarray,
     extent: dict[str, float],
 ) -> np.ndarray:
-    """预计算原型 style A 顶点色。注意：逐项照抄原型并输出线性 RGB。"""
+    """预计算低饱和数字孪生地形顶点色。注意：输出线性 RGB 供正式材质接收。"""
 
-    # 原型以 3040m 归一化高度；正式布局保留该常量，确保色阶和样张一致。
+    # 3040m 是高度场软上限；颜色分层使用固定米制基准，避免同一布局因采样分辨率变色。
     h = np.clip(heights / 3040.0, 0.0, 1.0)
-    # 颜色权重必须低通，不能直接追随细碎高度噪声。
+    # 颜色权重必须低通，不能直接追随细碎高度噪声，否则远景会重新出现斑驳卡通块。
     height_low = _box_blur(h, 7, passes=3)
+    # 峰顶色带只做轻度低通，避免重度模糊把狭窄山脊的真实海拔完全抹掉。
+    height_band = _box_blur(h, 2, passes=1)
     slope = _slope_grid(heights, east_grid, north_grid)
-    # 坡度低通后只决定岩石区域，实际几何法线仍保留高频细节。
-    slope_low = _box_blur(slope, 8, passes=3)
+    # 坡度低通后只决定岩石分布；实际法线仍保留高频沟脊并交给 QML 光照。
+    slope_low = _box_blur(slope, 5, passes=2)
     curvature_ao = _curvature_ao_grid(heights, east_grid, north_grid, slope)
-    # ridge_source 来自 AO 的反相，用来把山脊区域推向岩石色。
-    ridge_source = _box_blur(np.clip(1.0 - curvature_ao, 0.0, 1.0), 10, passes=3)
-    # 岩面触发海拔下调、过渡加宽:峰顶到山肩露出灰白岩色,与植被绿拉开色彩层次。
-    elevation_rock = _smoothstep((height_low - 0.42) / 0.30)
-    ridge_rock = _smoothstep((ridge_source - 0.12) / 0.24) * _smoothstep((height_low - 0.34) / 0.28)
-    wall_rock = _smoothstep((slope_low - 0.34) / 0.50) * _smoothstep((height_low - 0.38) / 0.30)
-    rock_weight = np.clip(0.66 * elevation_rock + 0.26 * ridge_rock + 0.22 * wall_rock, 0.0, 1.0)
-    # 原型先模糊再 smoothstep，岩石边界才不会出现噪点碎斑。
-    rock_weight = _box_blur(rock_weight, 14, passes=2)
-    rock_weight = _smoothstep((rock_weight - 0.10) / 0.82)
-    snow_weight = _smoothstep((height_low - 0.86) / 0.12)
-    snow_weight = _box_blur(snow_weight, 8, passes=2)
-    # 反照率重标定为白天真实量级(清晨阴天航拍基准):此前调色板是夜景量级
-    # (平原线性反照率 ~0.008),灯光再亮也出不来白天曝光。
-    vegetation = _lerp_color((0.230, 0.285, 0.235), (0.420, 0.455, 0.300), _smoothstep(height_low / 0.42))
-    alpine = _lerp_color((0.400, 0.435, 0.290), (0.500, 0.490, 0.380), _smoothstep((height_low - 0.30) / 0.36))
-    # 山腰植被只保留为暗橄榄底色，高处继续过渡到岩灰。
-    vegetation = vegetation * (1.0 - _smoothstep((height_low - 0.28) / 0.36)[..., None]) + alpine * _smoothstep((height_low - 0.28) / 0.36)[..., None]
-    rock_dark = _lerp_color((0.430, 0.430, 0.415), (0.610, 0.610, 0.585), _smoothstep((height_low - 0.52) / 0.30))
-    rock_light = _lerp_color((0.610, 0.610, 0.585), (0.790, 0.795, 0.770), _smoothstep((height_low - 0.76) / 0.18))
-    rock = rock_dark * (1.0 - snow_weight[..., None]) + rock_light * snow_weight[..., None]
+    # AO 反相近似凸脊，让岩石灰同时跟随海拔、山脊和陡坡，而不是只画水平色带。
+    ridge_source = _box_blur(np.clip(1.0 - curvature_ao, 0.0, 1.0), 6, passes=2)
+    elevation_rock = _smoothstep((height_band - 0.18) / 0.38)
+    ridge_rock = _smoothstep((ridge_source - 0.02) / 0.14) * _smoothstep((height_band - 0.10) / 0.32)
+    wall_rock = _smoothstep((slope_low - 0.18) / 0.42) * _smoothstep((height_band - 0.08) / 0.32)
+    rock_weight = np.clip(0.52 * elevation_rock + 0.34 * ridge_rock + 0.38 * wall_rock, 0.0, 1.0)
+    # 先模糊再 smoothstep，让灰绿到岩灰的过渡保持大片连续坡面。
+    rock_weight = _box_blur(rock_weight, 6, passes=1)
+    rock_weight = _smoothstep((rock_weight - 0.04) / 0.64)
+    summit_weight = _box_blur(_smoothstep((height_band - 0.50) / 0.18), 4, passes=1)
+
+    # 所有调色值均为低饱和 sRGB：低处深绿灰，山腰灰绿，岩面中性偏冷。
+    valley = _lerp_color((0.105, 0.145, 0.150), (0.155, 0.195, 0.180), _smoothstep(height_low / 0.20))
+    shoulder = _lerp_color((0.155, 0.195, 0.180), (0.245, 0.265, 0.240), _smoothstep((height_low - 0.16) / 0.34))
+    vegetation = valley * (1.0 - _smoothstep((height_low - 0.12) / 0.32)[..., None]) + shoulder * _smoothstep((height_low - 0.12) / 0.32)[..., None]
+    rock_dark = _lerp_color((0.195, 0.215, 0.220), (0.325, 0.330, 0.315), _smoothstep((height_low - 0.24) / 0.44))
+    # 只在最高脊线给少量暖灰，不使用雪白色，避免山顶变成摄影雪山。
+    rock_light = _lerp_color((0.325, 0.330, 0.315), (0.555, 0.520, 0.465), summit_weight)
+    rock = rock_dark * (1.0 - summit_weight[..., None]) + rock_light * summit_weight[..., None]
+    # 岩石权重只替换坡面反照率，不改高度和法线，因此不会改变山体轮廓或避障语义。
     mixed = vegetation * (1.0 - rock_weight[..., None]) + rock * rock_weight[..., None]
+    # 空气透视以地图中心为距离原点，避免配置平移后远景蓝化方向偏移。
     center_e = (float(extent["min_east_m"]) + float(extent["max_east_m"])) / 2.0
     center_n = (float(extent["min_north_m"]) + float(extent["max_north_m"])) / 2.0
     x_grid = east_grid - center_e
     z_grid = north_grid - center_n
     half_extent = min(float(extent["max_east_m"] - extent["min_east_m"]), float(extent["max_north_m"] - extent["min_north_m"])) / 2.0
+    # 25km 基准让同一配色在不同地图范围下保持相近的远近层次比例。
     distance_scale = max(half_extent / 25000.0, 1e-6)
     far_distance = np.sqrt(x_grid * x_grid + z_grid * z_grid)
-    # 远景蓝化在顶点色里完成，QML 不再叠额外雾光层。
+    # 远景轻微蓝化，但不再推向明亮青灰，防止整块地表被雾洗成浅绿色。
     far_mix = _smoothstep((far_distance - 8800.0 * distance_scale) / (12800.0 * distance_scale))[..., None]
-    # 远景蓝化目标色同步提亮到清晨薄雾量级,且混合强度减弱,远山保留自身颜色。
-    far_blue = np.array([0.300, 0.365, 0.430], dtype=np.float32)
-    mixed = mixed * (1.0 - far_mix * 0.52) + far_blue * (far_mix * 0.52)
+    far_blue = np.array([0.125, 0.155, 0.185], dtype=np.float32)
+    mixed = mixed * (1.0 - far_mix * 0.42) + far_blue * (far_mix * 0.42)
     edge_distance = half_extent - np.maximum(np.abs(x_grid), np.abs(z_grid))
-    # 边缘可见性把地形边界推向天际雾色，配合深度雾避免露出裁切硬边。
+    # 边缘仍融入天际雾，但使用深蓝灰而不是高亮蓝绿。
     edge_visibility = _smoothstep(edge_distance / (18000.0 * distance_scale))[..., None]
-    mixed = mixed * edge_visibility + np.array([0.280, 0.340, 0.405], dtype=np.float32) * (1.0 - edge_visibility)
+    mixed = mixed * edge_visibility + np.array([0.145, 0.175, 0.205], dtype=np.float32) * (1.0 - edge_visibility)
     light_dir = np.array([-0.58, 0.66, 0.48], dtype=np.float32)
     light_dir /= np.linalg.norm(light_dir)
-    # 光照方向同原型，暖光和冷影都烘焙进顶点色。
+    # 同一坡向关系烘焙柔和暖光/冷影，QML 法线光再补充近景细节。
     lambert = np.clip(np.sum(normals * light_dir, axis=-1), 0.0, 1.0)
     rock_channel = rock_weight[..., None]
-    warm_light = np.array([1.06, 1.00, 0.88], dtype=np.float32)
-    neutral_light = np.array([0.82, 0.88, 0.74], dtype=np.float32)
-    cool_shadow = np.array([0.42, 0.56, 0.74], dtype=np.float32)
-    veg_temperature = cool_shadow * 0.20 + neutral_light * 0.80
-    rock_temperature = cool_shadow * (1.0 - lambert[..., None]) + warm_light * lambert[..., None]
-    temperature = veg_temperature * (1.0 - rock_channel) + rock_temperature * rock_channel
-    # 清晨阴天曝光基准(负责人 2026-07-12 定调):relief 底线抬高,背光坡保留可读细节而不是沉黑。
-    veg_relief = 1.00 + 0.30 * (lambert[..., None] ** 0.82)
-    rock_relief = 0.62 + 1.02 * (lambert[..., None] ** 0.78)
-    # 植被 relief 小、岩石 relief 大，峰体才有冷硬层次。
+    warm_light = np.array([1.10, 1.02, 0.90], dtype=np.float32)
+    cool_shadow = np.array([0.72, 0.84, 1.08], dtype=np.float32)
+    temperature = cool_shadow * (1.0 - lambert[..., None]) + warm_light * lambert[..., None]
+    # 受光岩面比深绿灰低地拥有更大明暗跨度，突出山脊、陡坡和峡谷体积。
+    veg_relief = 0.48 + 1.08 * (lambert[..., None] ** 0.82)
+    # 岩面扩大光照动态范围，但后续仍用冷灰底线保护背光坡细节。
+    rock_relief = 0.34 + 1.68 * (lambert[..., None] ** 0.76)
     relief = veg_relief * (1.0 - rock_channel) + rock_relief * rock_channel
-    ridge_shadow = np.clip(1.05 - slope[..., None] * 0.090, 0.80, 1.12)
-    # AO 只保留六成强度:沟壑仍然更暗,但暗部细节不再被完全吃掉。
-    ao = 0.40 + 0.60 * curvature_ao[..., None]
+    ridge_shadow = np.clip(1.02 - slope[..., None] * 0.12, 0.72, 1.04)
+    ao = 0.58 + 0.42 * curvature_ao[..., None]
     color = mixed * temperature * relief * ridge_shadow * ao
-    # AO 二次混合亮蓝灰底色，暗部呈清晨阴影的蓝灰而非黑色。
-    color = color * ao + np.array([0.160, 0.200, 0.245], dtype=np.float32) * (1.0 - ao)
-    highlight = _smoothstep((lambert - 0.62) / 0.34)[..., None] * _smoothstep((height_low - 0.68) / 0.24)[..., None]
-    color += np.array([0.045, 0.048, 0.045], dtype=np.float32) * highlight
-    # 远景压暗大幅减弱:空气透视交给雾效体现,顶点色不再重复叠一层暗化。
-    color *= 1.10 - 0.08 * far_mix
-    # 对比拉伸按白天反照率重标定:暗部底线约 sRGB 0.17,上限收在 0.88 以下防过曝。
-    color = np.maximum(color, np.array([0.175, 0.205, 0.235], dtype=np.float32))
-    color = np.clip((color - 0.060) * 1.10 + 0.096, 0.0, 1.0)
-    color = np.maximum(color, np.array([0.165, 0.195, 0.225], dtype=np.float32))
-    color = np.minimum(color, np.array([0.88, 0.88, 0.86], dtype=np.float32))
-    # 原型最后上传线性 RGB，正式 QML 地形材质也按素色接收器处理。
+    # 冷灰蓝环境底线只补最暗面，不把整个地形提亮成雾灰色。
+    shadow_amount = (1.0 - lambert[..., None]) * (0.22 + 0.28 * rock_channel)
+    color += np.array([0.060, 0.082, 0.115], dtype=np.float32) * shadow_amount
+    highlight = _smoothstep((lambert - 0.60) / 0.34)[..., None] * _smoothstep((height_band - 0.46) / 0.22)[..., None]
+    color += np.array([0.090, 0.066, 0.030], dtype=np.float32) * highlight
+    color *= 1.0 - 0.10 * far_mix
+    color = np.maximum(color, np.array([0.065, 0.085, 0.110], dtype=np.float32))
+    color = np.minimum(color, np.array([0.68, 0.66, 0.62], dtype=np.float32))
+    # 上传前转线性 RGB；QML 基色保持白色，避免再次染色破坏冷暖坡向关系。
     return _srgb_to_linear(np.clip(color, 0.0, 1.0)).astype(np.float32)
 
 
