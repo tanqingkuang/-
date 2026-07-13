@@ -39,8 +39,9 @@ from src.ui.gui.main_window import (
     run_gui,
 )
 from src.ui.gui.view_models import ObstacleView, PLAYBACK_RATE_SLIDER_MAX, is_major_grid_line, trail_seconds_for_duration
+from src.ui.gui.node_card_view_model import card_rect_for
 from src.ui.gui.side_view import SideView
-from src.ui.gui.top_view import TopView
+from src.ui.gui.top_view import NODE_CARD_GAP_X, NODE_CARD_GAP_Y, NODE_CARD_HEIGHT, NODE_CARD_WIDTH, TopView
 
 
 class GuiViewInteractionTests(unittest.TestCase):
@@ -102,6 +103,76 @@ class GuiViewInteractionTests(unittest.TestCase):
         snapshot.blocked_route_segments = [blocked]
         self.assertEqual(top_view._blocked_route_segments(), [blocked])
         self.assertEqual(side_view._blocked_route_segments(), [blocked])
+
+    def test_node_card_switches_anchor_near_viewport_edge_in_real_top_view(self) -> None:
+        """在真实 TopView 渲染路径上复现评审场景一：贴边节点的卡片不得覆盖属主机体。
+
+        固定 scale/offset（不用 fit_view 自动铺满）以精确控制屏幕坐标，
+        使节点落在 640x420 视口的 (620, 30) 附近，与评审给出的最小复现一致。
+        """
+
+        top_view = TopView()
+        top_view.resize(640, 420)
+        top_view.scale_value = 1.0
+        top_view.offset = QPointF(620.0, 30.0)
+        snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[NodeState("A01", "leader", 0.0, 0.0, 60.0, 0.0)],
+            links=[],
+        )
+        top_view.set_snapshot(snapshot, fit_view=False)
+        self.app.processEvents()
+
+        point = next(p for p in top_view._node_screen_points() if p.node_id == "A01")
+        self.assertAlmostEqual(point.x, 620.0)
+        self.assertAlmostEqual(point.y, 30.0)
+        self.assertTrue(top_view.cards.is_card_shown("A01"))
+
+        rect = card_rect_for(
+            point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_GAP_X, NODE_CARD_GAP_Y, 640.0, 420.0
+        )
+        contains_owner = rect.x <= point.x <= rect.x + rect.w and rect.y <= point.y <= rect.y + rect.h
+        self.assertFalse(contains_owner, "贴边节点的卡片矩形不得覆盖属主飞机本体")
+        self.assertGreaterEqual(rect.x, 0.0)
+        self.assertGreaterEqual(rect.y, 0.0)
+        self.assertLessEqual(rect.x + rect.w, 640.0)
+        self.assertLessEqual(rect.y + rect.h, 420.0)
+
+        top_view.close()
+
+    def test_node_card_hidden_and_not_blocking_when_owner_leaves_viewport(self) -> None:
+        """在真实 TopView 渲染路径上复现评审场景二：离屏节点不产生孤立卡片、不挡屏内卡片。"""
+
+        top_view = TopView()
+        top_view.resize(640, 420)
+        top_view.scale_value = 1.0
+        # 偏移使 A01 落在视口左侧之外 (-120, 210)，A02 留在屏内。
+        top_view.offset = QPointF(0.0, 0.0)
+        snapshot = Snapshot(
+            time=0.0,
+            duration=1.0,
+            step=0.1,
+            run_state="READY",
+            control_report="待命",
+            disturbance="无",
+            nodes=[
+                NodeState("A01", "wingman", -120.0, -210.0, 60.0, 0.0),
+                NodeState("A02", "leader", 40.0, -210.0, 60.0, 0.0),
+            ],
+            links=[],
+        )
+        top_view.set_snapshot(snapshot, fit_view=False)
+        self.app.processEvents()
+
+        self.assertFalse(top_view.cards.is_card_shown("A01"))
+        self.assertTrue(top_view.cards.is_card_shown("A02"))
+
+        top_view.close()
 
     def test_top_status_bar_moves_to_sidebar_and_help_menu(self) -> None:
         root_layout = self.window.centralWidget().layout()

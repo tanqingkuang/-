@@ -6,7 +6,14 @@ import ast
 import unittest
 from pathlib import Path
 
-from src.ui.gui.node_card_view_model import CardBoardState, CardRect, ScreenPoint, card_rect_for, pick_node
+from src.ui.gui.node_card_view_model import (
+    CardBoardState,
+    CardRect,
+    ScreenPoint,
+    card_rect_for,
+    is_point_on_screen,
+    pick_node,
+)
 
 
 class NodeCardViewModelTests(unittest.TestCase):
@@ -48,35 +55,57 @@ class NodeCardViewModelTests(unittest.TestCase):
         self.assertIsNone(pick_node(0.0, 0.0, points))
 
     def test_card_rect_uses_right_upper_anchor_and_margin(self) -> None:
-        """卡片固定挂在飞机右上方，恢复边距按候选卡片外扩计算。"""
+        """卡片默认挂在飞机右上方，恢复边距按候选卡片外扩计算。"""
 
-        rect = card_rect_for(ScreenPoint("A", 100.0, 200.0), 92.0, 58.0, 16.0, -14.0)
+        rect = card_rect_for(ScreenPoint("A", 100.0, 200.0), 92.0, 58.0, 16.0, 14.0)
 
         self.assertEqual(rect, CardRect(116.0, 128.0, 92.0, 58.0))
         self.assertFalse(rect.overlaps(CardRect(217.0, 128.0, 20.0, 20.0)))
         self.assertTrue(rect.overlaps(CardRect(217.0, 128.0, 20.0, 20.0), margin=10.0))
 
-    def test_card_rect_clamps_to_viewport_when_anchor_would_overflow(self) -> None:
-        """节点贴近视口边缘时卡片矩形被夹紧，不会被裁出可视区域。
+    def test_card_rect_without_viewport_stays_at_default_right_upper_anchor(self) -> None:
+        """未提供视口尺寸时保持默认右上锚点，不做任何裁剪或方向切换。"""
 
-        复现评审场景：640x420 视口内节点位于右上角附近，默认右上锚点会让卡片
-        顶部越出视口上边界；传入视口尺寸后卡片必须整体落在 [0, w] x [0, h] 内。
+        rect = card_rect_for(ScreenPoint("A", 620.0, 30.0), 92.0, 58.0, 16.0, 14.0)
+
+        self.assertEqual(rect, CardRect(636.0, -42.0, 92.0, 58.0))
+
+    def test_card_rect_switches_anchor_direction_instead_of_covering_owner(self) -> None:
+        """节点贴近视口边缘时改选另一方向的锚点，卡片始终不覆盖属主机体。
+
+        复现评审场景一：640x420 视口内节点位于 (620, 30)。默认右上锚点会让卡片
+        顶部越出视口上边界；旧版“整体夹紧”会把卡片强行拉回视口内、直接盖住
+        节点本身。修复后应改选左上/右下/左下中第一个完整落入视口的方向，
+        卡片矩形绝不可包含节点中心。
         """
 
         point = ScreenPoint("A", 620.0, 30.0)
-        rect = card_rect_for(point, 92.0, 58.0, 16.0, -14.0, viewport_w=640.0, viewport_h=420.0)
+        rect = card_rect_for(point, 92.0, 58.0, 16.0, 14.0, viewport_w=640.0, viewport_h=420.0)
 
+        self.assertEqual(rect, CardRect(512.0, 44.0, 92.0, 58.0))
+        contains_owner = rect.x <= point.x <= rect.x + rect.w and rect.y <= point.y <= rect.y + rect.h
+        self.assertFalse(contains_owner, "卡片矩形不得包含节点中心，否则会覆盖属主飞机")
         self.assertGreaterEqual(rect.x, 0.0)
         self.assertGreaterEqual(rect.y, 0.0)
         self.assertLessEqual(rect.x + rect.w, 640.0)
         self.assertLessEqual(rect.y + rect.h, 420.0)
 
-    def test_card_rect_without_viewport_stays_unclamped(self) -> None:
-        """未提供视口尺寸时保持旧有右上锚点行为，避免影响未接入夹紧的调用方。"""
+    def test_card_rect_falls_back_to_best_overlap_when_no_anchor_fully_fits(self) -> None:
+        """四个锚点都放不下视口时选相交面积最大的一个，卡片仍不覆盖属主机体。"""
 
-        rect = card_rect_for(ScreenPoint("A", 620.0, 30.0), 92.0, 58.0, 16.0, -14.0)
+        point = ScreenPoint("A", 5.0, 5.0)
+        rect = card_rect_for(point, 92.0, 58.0, 16.0, 14.0, viewport_w=60.0, viewport_h=40.0)
 
-        self.assertEqual(rect, CardRect(636.0, -42.0, 92.0, 58.0))
+        contains_owner = rect.x <= point.x <= rect.x + rect.w and rect.y <= point.y <= rect.y + rect.h
+        self.assertFalse(contains_owner)
+
+    def test_is_point_on_screen_matches_viewport_bounds(self) -> None:
+        """离屏判定只看节点中心是否落在视口矩形内。"""
+
+        self.assertTrue(is_point_on_screen(0.0, 0.0, 640.0, 420.0))
+        self.assertTrue(is_point_on_screen(640.0, 420.0, 640.0, 420.0))
+        self.assertFalse(is_point_on_screen(-120.0, 210.0, 640.0, 420.0))
+        self.assertFalse(is_point_on_screen(320.0, -1.0, 640.0, 420.0))
 
     def test_handle_click_cycles_auto_and_manual_overrides(self) -> None:
         """单击按当前实际可见性设置反向覆盖，再次单击清除覆盖。"""
@@ -174,14 +203,59 @@ class NodeCardViewModelTests(unittest.TestCase):
         self.assertFalse(state.is_card_shown("L01"))
 
     def test_sync_nodes_removes_departed_visibility_and_overrides(self) -> None:
-        """节点退场时同时清理其人工覆盖和遮挡滞回记录。"""
+        """节点退场时同时清理其人工覆盖、遮挡滞回记录与离屏记忆。"""
 
-        state = CardBoardState(overrides={"A": True, "B": False}, visible={"A": False, "B": True})
+        state = CardBoardState(
+            overrides={"A": True, "B": False},
+            visible={"A": False, "B": True},
+            on_screen={"A": False, "B": True},
+        )
 
         self.assertTrue(state.sync_nodes({"B"}))
         self.assertEqual(state.overrides, {"B": False})
         self.assertEqual(state.visible, {"B": True})
+        self.assertEqual(state.on_screen, {"B": True})
         self.assertFalse(state.sync_nodes({"B"}))
+
+    def test_off_screen_node_never_shows_card_regardless_of_override(self) -> None:
+        """节点完全离屏时不生成卡片，pinned_show 也不能凭空显示悬浮卡片。
+
+        复现评审场景二：节点位于 (-120, 210)，640x420 视口下已完全离屏。
+        """
+
+        state = CardBoardState()
+        points = [ScreenPoint("A", -120.0, 210.0)]
+
+        # 首次检测即离屏：默认全显的初始假设被推翻，视为一次可见性变化。
+        self.assertTrue(
+            state.update_visibility(points, 92.0, 58.0, viewport_w=640.0, viewport_h=420.0)
+        )
+        self.assertFalse(state.is_card_shown("A"))
+
+        # 用户此前把它设为强制显示，飞机离屏后同样不应出现悬浮卡片。
+        state.overrides["A"] = True
+        state.update_visibility(points, 92.0, 58.0, viewport_w=640.0, viewport_h=420.0)
+        self.assertFalse(state.is_card_shown("A"))
+
+    def test_off_screen_pinned_card_does_not_block_on_screen_auto_card(self) -> None:
+        """离屏节点即使被强制显示，也不能参与贪心占位挡住屏内自动卡片。
+
+        复现评审场景二的后半段：多机时孤立的离屏卡片矩形会落在视口内，
+        若仍参与占位会错误地遮挡屏内其它节点的自动卡片。
+        """
+
+        state = CardBoardState(overrides={"OFFSCREEN": True})
+        # OFFSCREEN 强制显示时若被夹紧到画布内，会在 (0, 138) 附近产生孤立卡片，
+        # 与其重叠的屏内节点用同一片区域验证是否被错误阻挡。
+        points = [
+            ScreenPoint("OFFSCREEN", -120.0, 210.0),
+            ScreenPoint("ONSCREEN", 40.0, 210.0, is_leader=True),
+        ]
+
+        state.update_visibility(points, 92.0, 58.0, viewport_w=640.0, viewport_h=420.0)
+
+        self.assertFalse(state.is_card_shown("OFFSCREEN"))
+        self.assertTrue(state.is_card_shown("ONSCREEN"))
 
 
 if __name__ == "__main__":
