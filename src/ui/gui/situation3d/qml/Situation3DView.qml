@@ -16,6 +16,7 @@ Item {
     property real focusY: 600
     property real focusZ: 0
     property string cameraMode: "自由"
+    property bool followEnabled: false
     property string sceneTime: "0.0s"
     property string sceneSummary: "等待快照"
     property int sceneApplyCount: 0
@@ -46,10 +47,10 @@ Item {
     property string staticContentKey: ""
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
     property string followNodeId: ""
-    // 焦点平滑只在跟随模式启用:10Hz 快照下相机不跳变;自由模式平移保持即时响应。
-    Behavior on focusX { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
-    Behavior on focusY { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
-    Behavior on focusZ { enabled: root.cameraMode === "跟随"; NumberAnimation { duration: 110 } }
+    // 焦点平滑只在跟随启用时生效:10Hz 快照下相机不跳变;手动平移保持即时响应。
+    Behavior on focusX { enabled: root.followEnabled; NumberAnimation { duration: 110 } }
+    Behavior on focusY { enabled: root.followEnabled; NumberAnimation { duration: 110 } }
+    Behavior on focusZ { enabled: root.followEnabled; NumberAnimation { duration: 110 } }
 
     ListModel { id: aircraftModel }
     ListModel { id: modelOptions }
@@ -86,13 +87,13 @@ Item {
     }
 
     function applyGroundPan(dx, dy) {
+        followEnabled = false
         const scale = distance / 1800.0
         const yawRadians = yaw * Math.PI / 180.0
         const cosYaw = Math.cos(yawRadians)
         const sinYaw = Math.sin(yawRadians)
         focusX += (-dx * cosYaw - dy * sinYaw) * scale
         focusZ += (dx * sinYaw - dy * cosYaw) * scale
-        cameraMode = "自由"
     }
 
     function applyPayloadCamera(camera) {
@@ -442,8 +443,8 @@ Item {
             // 空帧没有动画 onFinished 信号；异步续取可排空后继消息，并避免连续空帧同步递归。
             Qt.callLater(function() { root.consumePendingSceneUpdate() })
         }
-        if (cameraMode === "跟随") {
-            // 跟随是持续行为:每帧刷新焦点与航向,长机移动后相机不掉队。
+        if (followEnabled) {
+            // 跟随是持续行为:每帧刷新焦点,长机移动后画面中心不掉队。
             applyFollowFocus()
         }
         // 航线/障碍/风险区是静态内容：每帧 clear+append 会销毁重建上百个几何模型,
@@ -486,6 +487,8 @@ Item {
 
     function resetCamera() {
         cameraMode = "自由"
+        followEnabled = false
+        followNodeId = ""
         if (typeof sceneBridge !== "undefined") {
             const payload = sceneBridge.sceneData()
             if (payload && payload.length > 0) {
@@ -502,15 +505,12 @@ Item {
     function setTopView() {
         yaw = 0
         pitch = -76
-        distance = Math.max(15500, terrainEffectiveSpan * 0.56)
-        focusY = Math.max(focusY, 900)
         cameraMode = "俯视"
     }
 
     function setSideView() {
         yaw = -90
         pitch = -8
-        distance = Math.max(distance, terrainEffectiveSpan * 0.56)
         cameraMode = "侧视"
     }
 
@@ -535,18 +535,18 @@ Item {
         focusX = lead.sx
         focusY = lead.sy
         focusZ = lead.sz
-        // 相机语义:yaw = 机头航向 - 90 为正后方,再加 25° 侧偏形成斜后跟随;
-        // 偏移过大(历史值 -35 ≈ 侧后 55°)会把相机压进峡谷侧壁。
-        yaw = lead.yawDeg - 65
     }
 
     function setFollowView() {
+        if (followEnabled) {
+            followEnabled = false
+            followNodeId = ""
+            return
+        }
         // 跟随目标按长机角色选取(演示配置里第 0 项是僚机),并记录 nodeId 供逐帧跟踪。
         followNodeId = ""
-        pitch = -18
-        distance = Math.max(720, Math.min(distance * 0.55, 1800))
+        followEnabled = true
         applyFollowFocus()
-        cameraMode = "跟随"
     }
 
     Component.onCompleted: {
@@ -923,7 +923,6 @@ Item {
         onWheel: function(wheel) {
             const factor = wheel.angleDelta.y > 0 ? 0.88 : 1.14
             root.distance = Math.max(220, Math.min(50000, root.distance * factor))
-            root.cameraMode = "自由"
             wheel.accepted = true
         }
     }
@@ -953,7 +952,7 @@ Item {
             }
 
             Text {
-                text: root.sceneSummary + " / 视角 " + root.cameraMode
+                text: root.sceneSummary + " / 视角 " + root.cameraMode + (root.followEnabled ? " · 跟随中" : "")
                 color: "#94a3b8"
                 font.pixelSize: 12
             }
@@ -1026,7 +1025,7 @@ Item {
                 ControlButton { label: "重置"; onClicked: root.resetCamera() }
                 ControlButton { label: "俯视"; onClicked: root.setTopView() }
                 ControlButton { label: "侧视"; onClicked: root.setSideView() }
-                ControlButton { label: "跟随"; onClicked: root.setFollowView() }
+                ControlButton { label: "跟随"; active: root.followEnabled; onClicked: root.setFollowView() }
             }
         }
     }
@@ -1034,17 +1033,18 @@ Item {
     component ControlButton: Rectangle {
         id: button
         property string label: ""
+        property bool active: false
         signal clicked()
         width: 48
         height: 30
         radius: 6
-        color: mouseArea.containsMouse ? "#14b8a6" : "#0f1720"
-        border.color: mouseArea.containsMouse ? "#14b8a6" : "#2a3644"
+        color: button.active || mouseArea.containsMouse ? "#14b8a6" : "#0f1720"
+        border.color: button.active || mouseArea.containsMouse ? "#14b8a6" : "#2a3644"
 
         Text {
             anchors.centerIn: parent
             text: button.label
-            color: mouseArea.containsMouse ? "#071318" : "#e7edf4"
+            color: button.active || mouseArea.containsMouse ? "#071318" : "#e7edf4"
             font.pixelSize: 12
             font.bold: true
         }

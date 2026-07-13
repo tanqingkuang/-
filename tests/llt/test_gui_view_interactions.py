@@ -234,6 +234,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         root_object.setProperty("yaw", 12.0)
         root_object.setProperty("pitch", -20.0)
         root_object.setProperty("distance", 3456.0)
+        root_object.setProperty("followEnabled", True)
+        root_object.setProperty("followNodeId", "A01")
         self.window._update_snapshot(self.window.sim.snapshot())
         self.app.processEvents()
 
@@ -246,6 +248,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertAlmostEqual(float(root_object.property("yaw")), scene_data["camera"]["yaw"])
         self.assertAlmostEqual(float(root_object.property("pitch")), scene_data["camera"]["pitch"])
         self.assertAlmostEqual(float(root_object.property("distance")), scene_data["camera"]["distance"])
+        self.assertFalse(bool(root_object.property("followEnabled")))
+        self.assertEqual(str(root_object.property("followNodeId")), "")
 
         self.window.situation3d_action.trigger()
         self.app.processEvents()

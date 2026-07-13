@@ -393,8 +393,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
         window.close()
 
-    def test_follow_view_tracks_moving_leader_with_terrain_clearance(self) -> None:
-        """谷地运动双帧测试:跟随锁定长机角色、随快照更新焦点,相机与视线保持地形净空。"""
+    def test_follow_view_only_tracks_moving_leader_focus(self) -> None:
+        """谷地运动双帧测试:跟随只接管焦点,并与旋转、缩放状态相互独立。"""
 
         from PySide6.QtWidgets import QApplication
         from src.ui.gui.situation3d.window import Situation3DWindow
@@ -426,7 +426,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         root.setFollowView()
         app.processEvents()
         self.assertEqual(str(root.property("followNodeId")), "A03")
-        self.assertEqual(str(root.property("cameraMode")), "跟随")
+        self.assertTrue(bool(root.property("followEnabled")))
 
         # 第二帧:长机沿峡谷东移,焦点必须跟上(Behavior 平滑,轮询等待收敛)。
         window.set_snapshot(canyon_snapshot(9600.0))
@@ -436,26 +436,46 @@ class Situation3DSceneDataTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertLess(abs(float(root.property("focusX")) - 9600.0), 5.0)
 
-        # 相机与视线净空:按跟随构图公式还原相机点,采样正式地形验证离地。
-        import math as pymath
+        # 跟随不再规定斜后方构图,旧视线净空公式已无固定前提;这里只锁定三轴解耦语义。
+        distance = 2345.0
+        root.setProperty("distance", distance)
+        root.setTopView()
+        app.processEvents()
+        self.assertTrue(bool(root.property("followEnabled")))
+        self.assertEqual(str(root.property("cameraMode")), "俯视")
+        self.assertAlmostEqual(float(root.property("yaw")), 0.0)
+        self.assertAlmostEqual(float(root.property("pitch")), -76.0)
+        self.assertAlmostEqual(float(root.property("distance")), distance)
 
-        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=257)
-        focus = (float(root.property("focusX")), float(root.property("focusY")), float(root.property("focusZ")))
-        yaw = pymath.radians(float(root.property("yaw")))
-        pitch = pymath.radians(float(root.property("pitch")))
+        # 缩放只改变 distance,逐帧刷新焦点时仍保持跟随。
+        root.setProperty("distance", 1800.0)
+        window.set_snapshot(canyon_snapshot(9800.0))
+        app.processEvents()
+        self.assertTrue(bool(root.property("followEnabled")))
+        self.assertEqual(str(root.property("cameraMode")), "俯视")
+
+        root.applyCameraDrag(20.0, 0.0, 100.0)
+        self.assertTrue(bool(root.property("followEnabled")))
+        self.assertEqual(str(root.property("cameraMode")), "自由")
+
         distance = float(root.property("distance"))
-        horizontal = distance * pymath.cos(pitch)
-        camera = (
-            focus[0] + horizontal * pymath.sin(yaw),
-            focus[1] - distance * pymath.sin(pitch),
-            focus[2] + horizontal * pymath.cos(yaw),
-        )
-        for ratio in (0.0, 0.25, 0.5, 0.75, 1.0):
-            x = camera[0] + (focus[0] - camera[0]) * ratio
-            y = camera[1] + (focus[1] - camera[1]) * ratio
-            z = camera[2] + (focus[2] - camera[2]) * ratio
-            ground = scene_data._sample_field_height(field, x, -z)
-            self.assertGreater(y, ground + 50.0, f"视线采样点 {ratio} 距地不足")
+        root.setSideView()
+        self.assertTrue(bool(root.property("followEnabled")))
+        self.assertEqual(str(root.property("cameraMode")), "侧视")
+        self.assertAlmostEqual(float(root.property("yaw")), -90.0)
+        self.assertAlmostEqual(float(root.property("pitch")), -8.0)
+        self.assertAlmostEqual(float(root.property("distance")), distance)
+
+        root.setTopView()
+        root.applyGroundPan(20.0, 0.0)
+        self.assertFalse(bool(root.property("followEnabled")))
+        self.assertEqual(str(root.property("cameraMode")), "俯视")
+
+        root.setFollowView()
+        self.assertTrue(bool(root.property("followEnabled")))
+        root.setFollowView()
+        self.assertFalse(bool(root.property("followEnabled")))
+        self.assertEqual(str(root.property("followNodeId")), "")
         window.close()
 
     def test_aircraft_and_trail_tip_remain_coincident_during_qml_interpolation(self) -> None:
