@@ -185,8 +185,12 @@ class TopView(QGraphicsView):
         )
         self._manual_view = True
         self.viewport().update()
-        self.viewChanged.emit()
-        self.manualViewChanged.emit()
+        if self.auto_center:
+            # 自动居中开启时，滚轮只表达“调整缩放比例”，中心仍由自动居中维护。
+            self._apply_auto_center()
+        else:
+            self.viewChanged.emit()
+            self.manualViewChanged.emit()
         event.accept()
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001

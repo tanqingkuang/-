@@ -108,6 +108,7 @@ def card_rect_for(
         return candidates[0]
 
     def fits_fully(rect: CardRect) -> bool:
+        """判断候选卡片是否完整位于当前视口内。"""
         return 0.0 <= rect.x and 0.0 <= rect.y and rect.x + rect.w <= viewport_w and rect.y + rect.h <= viewport_h
 
     for candidate in candidates:
@@ -115,6 +116,7 @@ def card_rect_for(
             return candidate
 
     def overlap_area(rect: CardRect) -> float:
+        """计算候选卡片与当前视口的重叠面积。"""
         overlap_w = max(0.0, min(rect.x + rect.w, viewport_w) - max(rect.x, 0.0))
         overlap_h = max(0.0, min(rect.y + rect.h, viewport_h) - max(rect.y, 0.0))
         return overlap_w * overlap_h
@@ -193,6 +195,7 @@ class CardBoardState:
 
         # 视口未知时一律视为在屏，兼容旧调用方；仅在提供尺寸时才做离屏判定。
         def on_screen(point: ScreenPoint) -> bool:
+            """判断节点是否应按当前视口尺寸参与卡片布局。"""
             if viewport_w is None or viewport_h is None:
                 return True
             return is_point_on_screen(point.x, point.y, viewport_w, viewport_h)
