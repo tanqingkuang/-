@@ -198,7 +198,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(field.display_normals.shape, (257, 257, 3))
         self.assertFalse(np.shares_memory(display, metric))
         self.assertLessEqual(float(np.max(np.abs(displacement))), 240.0)
-        self.assertLess(float(np.percentile(np.abs(displacement[lowland_mask]), 99)), 2.0)
+        self.assertTrue(bool(np.any(lowland_mask)))
+        np.testing.assert_array_equal(display[lowland_mask], metric[lowland_mask])
         self.assertGreater(float(np.percentile(np.abs(displacement[mountain_mask]), 75)), 12.0)
         self.assertGreater(
             float(np.percentile(display_residual[mountain_mask], 85)),
@@ -1098,6 +1099,36 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLessEqual(geometry.boundsMin().y(), 0.0)
         self.assertGreater(geometry.boundsMax().y(), 760.0)
         self.assertGreater(max(y_values) - min(y_values), 450.0)
+
+    def test_procedural_terrain_tangent_basis_follows_uv_directions(self) -> None:
+        """占位地形的切线与副切线应分别跟随纹理坐标 u/v 的正方向。"""
+
+        geometry = TerrainGeometry()
+        vertices = np.frombuffer(bytes(geometry.vertexData()), dtype="<f4").reshape(-1, 18)
+        column_count = int(np.unique(vertices[:, 6]).size)
+        row_count = int(np.unique(vertices[:, 7]).size)
+        self.assertEqual(row_count * column_count, len(vertices))
+        grid = vertices.reshape(row_count, column_count, 18)
+
+        interior = grid[1:-1, 1:-1]
+        slope = np.linalg.norm(interior[:, :, (3, 5)], axis=2)
+        row, column = np.unravel_index(int(np.argmax(slope)), slope.shape)
+        normal = interior[row, column, 3:6].astype(np.float64)
+        tangent = interior[row, column, 8:11].astype(np.float64)
+        binormal = interior[row, column, 11:14].astype(np.float64)
+        du = (grid[1:-1, 2:, :3] - grid[1:-1, :-2, :3])[row, column].astype(np.float64)
+        dv = (grid[2:, 1:-1, :3] - grid[:-2, 1:-1, :3])[row, column].astype(np.float64)
+        du /= np.linalg.norm(du)
+        dv /= np.linalg.norm(dv)
+
+        self.assertAlmostEqual(float(np.linalg.norm(normal)), 1.0, places=4)
+        self.assertAlmostEqual(float(np.linalg.norm(tangent)), 1.0, places=4)
+        self.assertAlmostEqual(float(np.linalg.norm(binormal)), 1.0, places=4)
+        self.assertAlmostEqual(float(np.dot(normal, tangent)), 0.0, places=4)
+        self.assertAlmostEqual(float(np.dot(normal, binormal)), 0.0, places=4)
+        self.assertAlmostEqual(float(np.dot(tangent, binormal)), 0.0, places=4)
+        self.assertGreater(float(np.dot(du, tangent)), 0.99)
+        self.assertGreater(float(np.dot(dv, binormal)), 0.95)
 
     def test_procedural_terrain_fallback_uses_matching_rock_palette(self) -> None:
         """验证无布局占位地形也使用低饱和深色岩土地貌，避免加载切换时闪回浅绿色。"""
