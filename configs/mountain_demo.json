@@ -1,5 +1,5 @@
 {
-  "duration_s": 1200.0,
+  "duration_s": 1500.0,
   "step_s": 0.005,
   "playback_rate": 1.0,
   "seed": 1,
@@ -9,8 +9,8 @@
     "allow_arc": true,
     "turn_radius_m": 250.0,
     "leg_length_margin_m": 80.0,
-    "clearance_m": 200.0,
-    "simplify_clearance_m": 200.0,
+    "clearance_m": 250.0,
+    "simplify_clearance_m": 250.0,
     "turn_switch_penalty_m": 40.0,
     "turn_angle_weight_m": 20.0,
     "grid": {"resolution_m": 40.0, "margin_m": 1200.0},
