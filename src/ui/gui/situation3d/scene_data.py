@@ -549,6 +549,8 @@ def _route_segments(snapshot: Snapshot) -> list[ReferenceRoute]:
 def _blocked_route_segments(snapshot: Snapshot) -> list[ReferenceRoute]:
     """返回被封锁的原始航段。注意：缺失时保持空列表，不回退当前航线。"""
 
+    # 和 _route_segments 不同：这里没有"至少显示一条"的兜底语义，
+    # 没有被封锁的航线就应该什么都不画，否则会在非避障场景里凭空多出一条红线。
     return list(snapshot.blocked_route_segments)
 
 
@@ -667,6 +669,8 @@ def _obstacle_corner_points(obstacle: ObstacleView) -> list[tuple[float, float]]
     """把非多边形障碍近似为顶点集合。注意：统一后续风险区的质心和半径计算。"""
 
     if obstacle.kind == "circle":
+        # 圆没有原生顶点；用八边形近似换取和 polygon/rect 共用同一套质心+最大半径公式，
+        # 不必为圆再写一条独立的风险区分支。
         return [
             (
                 obstacle.center_x + obstacle.radius * math.cos(index * math.tau / 8.0),
@@ -674,6 +678,7 @@ def _obstacle_corner_points(obstacle: ObstacleView) -> list[tuple[float, float]]
             )
             for index in range(8)
         ]
+    # 矩形/旋转矩形按四角近似，和上面的圆形分支殊途同归，供下面统一取质心与半径。
     return [
         (obstacle.min_x, obstacle.min_y),
         (obstacle.max_x, obstacle.min_y),
@@ -689,6 +694,7 @@ def _risk_zones_from_obstacles(
 
     zones: list[TerrainRiskZone] = []
     for obstacle in obstacles:
+        # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
         if not obstacle.enabled:
             continue
         vertices = obstacle.vertices if obstacle.kind == "polygon" else _obstacle_corner_points(obstacle)
@@ -696,7 +702,9 @@ def _risk_zones_from_obstacles(
             continue
         center_x = sum(point[0] for point in vertices) / len(vertices)
         center_y = sum(point[1] for point in vertices) / len(vertices)
+        # 外接圆半径而不是等效面积半径：宁可罩面略大一点覆盖整个障碍，也不要出现罩面切穿山体的情况。
         radius_m = max(math.hypot(x - center_x, y - center_y) for x, y in vertices)
+        # 高度直接采样真实高度场，而不是信任障碍元数据里的 height_m——地形是唯一事实来源。
         height_m = _sample_field_height(field, center_x, center_y) if field is not None else 0.0
         zones.append(
             TerrainRiskZone(
@@ -706,6 +714,7 @@ def _risk_zones_from_obstacles(
                 north_m=center_y,
                 radius_m=max(1.0, radius_m),
                 height_m=height_m,
+                # 缓冲圈固定比风险圈外扩 25%，和布局手工标记的量级保持一致，不需要额外配置项。
                 buffer_radius_m=max(1.0, radius_m) * 1.25,
             )
         )

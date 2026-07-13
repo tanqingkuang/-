@@ -696,6 +696,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # 覆盖航线生效时，原配置航线仍需作为已封锁参考线对外展示；重建时先清空避免 reset 后残留。
         self._blocked_display_route = None
         if self._leader_route_override is not None:
+            # 用同一个 config 重新按"配置原始航线"规则生成一份，不复用 leader_route——
+            # override 生效后 leader_route 已经是替换后的规划航线，不能再当作"原始航线"用。
             _blocked_wpi = _build_leader_route(config, insert_arcs=False)
             if len(_blocked_wpi) >= 2:
                 self._blocked_display_route = waypoint_inputs_to_waylines(_blocked_wpi)
