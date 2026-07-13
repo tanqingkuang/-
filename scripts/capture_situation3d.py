@@ -16,9 +16,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from PySide6.QtCore import QEventLoop, QTimer
 from PySide6.QtWidgets import QApplication
 
+from src.ui.gui.avoidance_tools import parse_avoidance_config
 from src.ui.gui.simulation_adapter import ControllerSimulationAdapter
 from src.ui.gui.situation3d.window import Situation3DWindow
-from src.ui.gui.view_models import Snapshot, default_project_root
+from src.ui.gui.view_models import ObstacleView, Snapshot, default_project_root
 
 
 CAPTURE_WIDTH_PX = 1600
@@ -110,13 +111,21 @@ def wait_for_render(app: QApplication, wait_ms: int) -> None:
     app.processEvents()
 
 
-def capture_view(snapshot: Snapshot, view_name: str, output_path: Path, wait_ms: int) -> None:
-    """创建真实窗口、推送正式快照并保存抓图。注意：失败时抛出异常供 CI/人工发现。"""
+def capture_view(
+    snapshot: Snapshot,
+    view_name: str,
+    output_path: Path,
+    wait_ms: int,
+    *,
+    obstacles: list[ObstacleView] | None = None,
+    clearance_m: float = 0.0,
+) -> None:
+    """创建真实窗口、推送正式快照并保存抓图。注意：障碍参数与主窗口保持同一链路。"""
 
     app = QApplication.instance() or QApplication(sys.argv)
     window = Situation3DWindow()
     window.resize(CAPTURE_WIDTH_PX, CAPTURE_HEIGHT_PX)
-    window.set_snapshot(snapshot)
+    window.set_snapshot(snapshot, obstacles=obstacles, clearance_m=clearance_m)
     window.show()
     window.raise_()
     window.activateWindow()
@@ -205,6 +214,7 @@ def _run_child(args: argparse.Namespace, output_path: Path) -> int:
     configure_environment(str(args.backend))
     config_path = resolve_project_path(args.config)
     adapter, snapshot = load_snapshot(config_path)
+    obstacles, clearance_m = parse_avoidance_config(str(config_path))
     try:
         if snapshot.terrain_display_file:
             # 抓图脚本没有 10Hz 刷新循环,必须阻塞等高度场就绪,否则截到占位地形。
@@ -213,7 +223,14 @@ def _run_child(args: argparse.Namespace, output_path: Path) -> int:
 
             layout = load_terrain_layout(snapshot.terrain_display_file)
             get_terrain_field(snapshot.terrain_display_file, resolution=scene_data._layout_resolution(layout))
-        capture_view(snapshot, args.view, output_path, int(args.wait_ms))
+        capture_view(
+            snapshot,
+            args.view,
+            output_path,
+            int(args.wait_ms),
+            obstacles=obstacles,
+            clearance_m=clearance_m,
+        )
     finally:
         adapter.close()
     print(f"{output_path.resolve()}  {output_path.stat().st_size / 1024.0:.1f} KB", flush=True)

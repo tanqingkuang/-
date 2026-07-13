@@ -140,17 +140,17 @@ class TrailPayloadState:
 # 1. QML 侧只接收 JSON 字符串，因此 payload 不能携带完整高度场大数组。
 # 2. 布局地形只把 layoutFile、resolution、中心和范围传给 TerrainGeometry。
 # 3. TerrainGeometry 在 Python/QML 类型内部生成网格，避免 JSON 序列化数十 MB 数据。
-# 4. riskZones 是语义数据，riskZoneLines/riskZoneBuffers 是为 QML 简化准备的渲染线段。
-# 5. 风险区线段保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
+# 4. riskZones 是语义数据；riskZoneLines/riskZoneBuffers 只服务无障碍库旧场景的兼容提示。
+# 5. 兼容风险线保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
 # 6. 旧配置没有 terrain_display_file 时，payload 仍然走 procedural 地形路径。
 # 7. 旧路径的 surface.width/depth/height 字段保持不变，避免历史 QML 绑定失效。
 # 8. 新布局模式只影响显示层，不改变 Snapshot 的 ENU 坐标、航线和障碍语义。
 # 9. 障碍物 obstacles 表示避障模块二维障碍；riskZones 优先由当前启用障碍生成，无避障数据时才回退布局标记。
 # 10. 航线和风险细线使用点数组；尾迹额外携带队列序号，使几何层能原子识别追加和弹头。
-# 11. 红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
-# 12. 淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
-# 13. 风险罩面高度略高于峰顶，避免和地形 z-fighting。
-# 14. 缓冲虚线放在山脚高度附近，表达安全缓冲而不是禁飞实体墙。
+# 11. 兼容红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
+# 12. 兼容淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
+# 13. 真实障碍转换成地形局部坐标，供 TerrainGeometry 直接混入顶点色。
+# 14. 圆形并入安全间距，多边形保留边界与 clearance，由几何层做圆角膨胀。
 # 15. 布局文件读取使用 lru_cache，实时刷新快照时不会重复解析 JSON。
 # 16. 文件不可读只回退旧地形，不阻断 3D 窗口打开。
 # 17. 但 terrain_field 的单元测试会直接读取正式布局，确保验收文件本身有效。
@@ -165,22 +165,22 @@ class TrailPayloadState:
 # 26. 当前生效航线来自 snapshot.route_segments，保证飞机飞行坐标语义不变。
 # 27. 采用避障航线后，当前航线仍走 route_segments，保持既有渲染管线不变。
 # 28. 被替代的配置航线走 blocked_route_segments，以红色虚线保留封锁状态。
-# 29. 颜色和材质在 QML 层控制，本文件只提供几何和数据。
-# 30. 单个风险区生成 10 条红色网格线，覆盖但不遮蔽山体细节。
-# 31. 线段 y 坐标取风险峰高度，缓冲圈 y 坐标取低值，形成上下层次。
+# 29. 基础材质仍由 QML 控制，障碍风险色由 Python 地形几何按本文件提供的范围混合。
+# 30. 只有布局回退风险区生成 10 条红色网格线，覆盖但不遮蔽山体细节。
+# 31. 兼容线段 y 坐标取风险峰高度，缓冲圈 y 坐标取低值，形成上下层次。
 # 32. 通过 json.dumps separators 压缩 pathValue，降低实时 payload 字符串体积。
 # 33. 失败回退只吞 IO/JSON/值错误，普通编程错误仍由测试暴露。
 # 34. terrain payload 的 ground 字段保留给后续需要地平面或雾墙时复用。
 # 35. 这里的 Quick3D z 是 -north，所有风险线同样遵守 enu_to_quick3d。
 # 36. route dash 切分仍按空间距离，巡航 900m 地形不会影响虚线节奏。
-# 37. 旧 obstacles 与新 riskZones 可同时存在，二者分别显示为柱体和贴地风险罩面。
+# 37. obstacles 仍保留兼容 payload 与相机包围盒用途，但 QML 不再把它们渲染成柱体或方盒。
 # 38. scene_data 不缓存生成后的 mesh，避免和 TerrainGeometry 的重建生命周期竞争。
 # 39. 如果布局文件变更，改变路径或清理 _cached_layout 即可刷新元数据。
 # 40. P2 风险区与当前启用的真实障碍同源；旧场景未提供避障数据时继续使用正式 JSON 布局标记。
 # 41. 注释中的“显示层”均指 GUI/QML，不包含 runner、algorithm 或 environment 模块。
 # 42. 所有数值都用 float 输出，QML ListModel 不需要再做类型归一化。
-# 43. 风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
-# 44. 风险缓冲虚线 alpha 更低，避免抢过航线蓝色主视觉。
+# 43. 兼容风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
+# 44. 兼容风险缓冲虚线 alpha 更低，避免抢过航线蓝色主视觉。
 # 45. payload 中保留 label，后续需要 3D 标注时不用再改 terrain_field。
 
 
@@ -245,25 +245,43 @@ def build_scene_payload(
     display_file = terrain_display_file or snapshot.terrain_display_file
     terrain = _terrain_payload(bounds, display_file, obstacle_views)
     risk_zones = list(terrain.get("riskZones", []))
-    risk_zone_lines = list(terrain.get("riskZoneLines", []))
-    if not risk_zone_lines:
+    raw_risk_zone_lines = terrain.get("riskZoneLines")
+    risk_zone_lines = list(raw_risk_zone_lines) if isinstance(raw_risk_zone_lines, list) else []
+    if raw_risk_zone_lines is None:
         risk_zone_lines = [
             line
             for zone in risk_zones
             for line in _risk_zone_line_payload(zone)
         ]
-    risk_zone_buffers = list(terrain.get("riskZoneBuffers", []))
-    if not risk_zone_buffers:
+    raw_risk_zone_buffers = terrain.get("riskZoneBuffers")
+    risk_zone_buffers = list(raw_risk_zone_buffers) if isinstance(raw_risk_zone_buffers, list) else []
+    if raw_risk_zone_buffers is None:
         risk_zone_buffers = [
             dash
             for zone in risk_zones
             for dash in _risk_zone_buffer_payload(zone)
         ]
+    terrain_risk_areas = _terrain_risk_area_payloads(
+        obstacle_views,
+        clearance_m,
+        terrain.get("surface", {}),
+        risk_zones,
+    )
     camera_payload = _camera_payload(bounds, aircraft)
     if terrain.get("surface", {}).get("mode") == "layout":
         camera_payload = _layout_camera_payload(terrain["surface"])
     # 静态内容签名：QML 据此决定是否重建航线/障碍/风险区模型，避免每帧 clear+append 造成卡顿。
-    static_key = _static_content_key(route_points, route_dashes, blocked_route_points, blocked_route_dashes, obstacle_items, risk_zones, risk_zone_lines, risk_zone_buffers)
+    static_key = _static_content_key(
+        route_points,
+        route_dashes,
+        blocked_route_points,
+        blocked_route_dashes,
+        obstacle_items,
+        risk_zones,
+        risk_zone_lines,
+        risk_zone_buffers,
+        terrain_risk_areas,
+    )
     return {
         "staticKey": static_key,
         "time": snapshot.time,
@@ -282,6 +300,7 @@ def build_scene_payload(
         "riskZones": risk_zones,
         "riskZoneLines": risk_zone_lines,
         "riskZoneBuffers": risk_zone_buffers,
+        "terrainRiskAreas": terrain_risk_areas,
         "camera": camera_payload,
         "counts": {
             "aircraft": len(aircraft),
@@ -623,7 +642,7 @@ def _interpolate_polyline(
 
 
 def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, object]:
-    """生成障碍/风险区显示数据。注意：二维障碍在 3D 中按无限高柱体近似显示。"""
+    """生成障碍兼容与相机包围盒数据。注意：QML 不再把这些尺寸直接渲染成实体柱体。"""
 
     # 安全间距在显示层膨胀半径/包围盒，便于和避障预览里的风险边界对应。
     safe_clearance = max(0.0, float(clearance_m))
@@ -653,6 +672,59 @@ def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, o
         "height": column_height_m,
         **coord,
     }
+
+
+def _terrain_risk_area_payloads(
+    obstacles: list[ObstacleView],
+    clearance_m: float,
+    surface: object,
+    fallback_zones: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """生成地形顶点着色范围。注意：坐标转为地形模型局部坐标，复杂多边形保留真实轮廓。"""
+
+    surface_data = surface if isinstance(surface, dict) else {}
+    origin_x = float(surface_data.get("x", 0.0))
+    origin_z = float(surface_data.get("z", 0.0))
+    safe_clearance = max(0.0, float(clearance_m))
+    areas: list[dict[str, object]] = []
+    for obstacle in obstacles:
+        if not obstacle.enabled:
+            continue
+        if obstacle.kind == "circle":
+            # 圆形直接把规划安全间距并入半径，着色边界与旧柱体表达的膨胀范围一致。
+            areas.append(
+                {
+                    "id": obstacle.obstacle_id,
+                    "kind": "circle",
+                    "center": [obstacle.center_x - origin_x, -obstacle.center_y - origin_z],
+                    "radius": max(1.0, obstacle.radius + safe_clearance),
+                }
+            )
+            continue
+        vertices = obstacle.vertices if obstacle.vertices else _obstacle_corner_points(obstacle)
+        # 多边形不转外接圆或包围盒；地形几何层按边界距离完成圆角膨胀。
+        areas.append(
+            {
+                "id": obstacle.obstacle_id,
+                "kind": "polygon",
+                "points": [[east - origin_x, -north - origin_z] for east, north in vertices],
+                "clearance": safe_clearance,
+            }
+        )
+
+    if obstacles:
+        # 配置存在但全部禁用表示用户明确隐藏障碍，不能回退布局里的旧风险峰。
+        return areas
+    for zone in fallback_zones:
+        areas.append(
+            {
+                "id": str(zone.get("id", "风险区")),
+                "kind": "circle",
+                "center": [float(zone.get("x", 0.0)) - origin_x, float(zone.get("z", 0.0)) - origin_z],
+                "radius": max(1.0, float(zone.get("radius", 1.0))),
+            }
+        )
+    return areas
 
 
 def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float]:
@@ -830,18 +902,18 @@ def _layout_terrain_payload(
         obstacle_zones = _risk_zones_from_obstacles(obstacle_views, field)
         source_zones = obstacle_zones if obstacle_views else risk_zones_from_layout(layout)
         risk_zones = [_risk_zone_payload(zone, field) for zone in source_zones]
-        # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
-        risk_zone_lines = [
-            line
-            for zone in risk_zones
-            for line in _risk_zone_line_payload(zone, field)
-        ]
-        # 缓冲圈同样贴地，但 offset 更低，用来表达山脚安全边界。
-        risk_zone_buffers = [
-            dash
-            for zone in risk_zones
-            for dash in _risk_zone_buffer_payload(zone, field)
-        ]
+        # 真实障碍已经由精确轮廓的地形着色表达，不再叠加外接圆线网；
+        # 只有旧场景缺少障碍库时才保留布局风险峰的兼容提示。
+        risk_zone_lines = (
+            []
+            if obstacle_views
+            else [line for zone in risk_zones for line in _risk_zone_line_payload(zone, field)]
+        )
+        risk_zone_buffers = (
+            []
+            if obstacle_views
+            else [dash for zone in risk_zones for dash in _risk_zone_buffer_payload(zone, field)]
+        )
         payload = {
             "ground": {
                 "mode": "layout",

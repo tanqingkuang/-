@@ -43,7 +43,7 @@ Item {
     // 正常 100ms 数据帧与 90ms 展示补间不会积压；容量 2 只保护偶发提前到帧。
     property var pendingSceneUpdates: []
     readonly property int presentationQueueCapacity: 2
-    // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线/障碍/风险区模型。
+    // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线与风险区模型。
     property string staticContentKey: ""
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
     property string followNodeId: ""
@@ -61,8 +61,6 @@ Item {
     ListModel { id: routeModel }
     ListModel { id: blockedRouteDashModel }
     ListModel { id: blockedRouteModel }
-    ListModel { id: obstacleModel }
-    ListModel { id: riskZoneModel }
     ListModel { id: riskLineModel }
     ListModel { id: riskBufferModel }
 
@@ -380,31 +378,6 @@ Item {
                 size: item.size
             })
         }
-        obstacleModel.clear()
-        for (const item of data.obstacles || []) {
-            obstacleModel.append({
-                kind: item.kind,
-                obstacleId: item.id,
-                sx: item.x,
-                sy: item.y,
-                sz: item.z,
-                widthValue: item.width,
-                depthValue: item.depth,
-                heightValue: item.height
-            })
-        }
-        riskZoneModel.clear()
-        for (const item of data.riskZones || []) {
-            riskZoneModel.append({
-                zoneId: item.id,
-                label: item.label,
-                sx: item.x,
-                sy: item.y,
-                sz: item.z,
-                radiusValue: item.radius,
-                heightValue: item.height
-            })
-        }
         riskLineModel.clear()
         for (const item of data.riskZoneLines || []) {
             riskLineModel.append({
@@ -449,7 +422,7 @@ Item {
             // 跟随是持续行为:每帧刷新焦点,长机移动后画面中心不掉队。
             applyFollowFocus()
         }
-        // 航线/障碍/风险区是静态内容：每帧 clear+append 会销毁重建上百个几何模型,
+        // 航线/风险区是静态内容：每帧 clear+append 会销毁重建上百个几何模型,
         // 造成周期性掉帧(飞机"一跳一跳")。签名不变时整体跳过静态模型重建。
         const staticChanged = (data.staticKey || "") !== staticContentKey
         if (staticChanged) {
@@ -473,9 +446,14 @@ Item {
                 terrainGeometry.depthValue = surface.depth
                 terrainGeometry.amplitudeValue = surface.height
             }
+            if (staticChanged) {
+                // 障碍只改变地形顶点色，不再创建遮挡飞机和尾迹的红色柱体或方盒。
+                terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])
+            }
         } else {
             terrainSurfaceModel.visible = false
             terrainGeometry.layoutFile = ""
+            terrainGeometry.riskAreasValue = "[]"
         }
         let cameraApplied = false
         if (data.camera && (!cameraInitialized || forceCamera === true)) {
@@ -702,26 +680,6 @@ Item {
         }
 
         Repeater3D {
-            model: riskZoneModel
-            delegate: Model {
-                visible: false
-                source: "#Cylinder"
-                position: Qt.vector3d(model.sx, model.sy - 20.0, model.sz)
-                scale: Qt.vector3d(model.radiusValue / 50.0, 0.020, model.radiusValue / 50.0)
-                castsShadows: false
-                receivesShadows: false
-                materials: PrincipledMaterial {
-                    baseColor: Qt.rgba(1.0, 0.16, 0.12, 0.16)
-                    alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.32
-                    cullMode: Material.NoCulling
-                    roughness: 0.92
-                    emissiveFactor: Qt.vector3d(0.18, 0.03, 0.02)
-                }
-            }
-        }
-
-        Repeater3D {
             model: riskLineModel
             delegate: Model {
                 geometry: TrailRibbonGeometry {
@@ -879,22 +837,6 @@ Item {
                     }
                     castsShadows: false
                     materials: [trailMaterial]
-                }
-            }
-        }
-
-        Repeater3D {
-            model: obstacleModel
-            delegate: Model {
-                source: model.kind === "circle" ? "#Cylinder" : "#Cube"
-                position: Qt.vector3d(model.sx, model.sy, model.sz)
-                scale: Qt.vector3d(model.widthValue / 100.0, model.heightValue / 100.0, model.depthValue / 100.0)
-                receivesShadows: true
-                materials: PrincipledMaterial {
-                    baseColor: Qt.rgba(0.97, 0.45, 0.45, 0.20)
-                    alphaMode: PrincipledMaterial.Blend
-                    opacity: 0.58
-                    roughness: 0.78
                 }
             }
         }

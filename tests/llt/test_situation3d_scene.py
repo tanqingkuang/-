@@ -131,6 +131,13 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
 
+        surface = payload["terrain"]["surface"]
+        risk_area = payload["terrainRiskAreas"][0]
+        self.assertEqual(risk_area["id"], "OBS1")
+        self.assertEqual(risk_area["kind"], "circle")
+        self.assertEqual(risk_area["radius"], 30.0)
+        self.assertEqual(risk_area["center"], [80.0 - surface["x"], -70.0 - surface["z"]])
+
     def test_payload_contains_blocked_route_with_red_color(self) -> None:
         """验证封锁航线拥有独立红色 payload，空数据不产生残留模型。"""
 
@@ -162,6 +169,12 @@ class Situation3DSceneDataTests(unittest.TestCase):
         all_disabled = scene_data._layout_terrain_payload(str(TERRAIN_LAYOUT_PATH), [disabled])
         assert all_disabled is not None
         self.assertEqual(all_disabled["riskZones"], [])
+
+        snapshot = self._snapshot()
+        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        obstacle_payload = build_scene_payload(snapshot, [enabled])
+        self.assertEqual(obstacle_payload["riskZoneLines"], [])
+        self.assertEqual(obstacle_payload["riskZoneBuffers"], [])
 
     def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
         """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
@@ -1222,6 +1235,48 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLess(float((high.max(axis=1) - high.min(axis=1)).mean()), 0.10)
         self.assertGreater(float((high @ luminance_weights).mean()), float((low @ luminance_weights).mean()) + 0.10)
 
+    def test_terrain_geometry_tints_exact_polygon_without_coloring_its_bounding_box(self) -> None:
+        """验证贴地风险色遵循多边形本体，不退化成外接圆或轴对齐包围盒。"""
+
+        baseline = TerrainGeometry()
+        baseline.widthValue = 400.0
+        baseline.depthValue = 400.0
+        tinted = TerrainGeometry()
+        tinted.widthValue = 400.0
+        tinted.depthValue = 400.0
+        tinted.riskAreasValue = json.dumps(
+            [
+                {
+                    "id": "三角障碍",
+                    "kind": "polygon",
+                    "points": [[0.0, 0.0], [100.0, 0.0], [0.0, 100.0]],
+                    "clearance": 0.0,
+                }
+            ],
+            ensure_ascii=False,
+        )
+
+        baseline_vertices = np.frombuffer(bytes(baseline.vertexData()), dtype="<f4").reshape(-1, 18)
+        tinted_vertices = np.frombuffer(bytes(tinted.vertexData()), dtype="<f4").reshape(-1, 18)
+
+        def nearest_index(east: float, quick_z: float) -> int:
+            """返回最靠近目标平面坐标的网格顶点下标。"""
+
+            distance_sq = (tinted_vertices[:, 0] - east) ** 2 + (tinted_vertices[:, 2] - quick_z) ** 2
+            return int(np.argmin(distance_sq))
+
+        inside_index = nearest_index(20.0, 20.0)
+        outside_index = nearest_index(80.0, 80.0)
+        self.assertGreater(
+            float(np.linalg.norm(tinted_vertices[inside_index, 14:17] - baseline_vertices[inside_index, 14:17])),
+            0.01,
+        )
+        np.testing.assert_allclose(
+            tinted_vertices[outside_index, 14:17],
+            baseline_vertices[outside_index, 14:17],
+            atol=1e-6,
+        )
+
     def test_terrain_geometry_consumes_layout_file_and_keeps_fallback(self) -> None:
         """验证 TerrainGeometry 有布局时使用新高度场，无布局时仍回退旧行为。"""
 
@@ -1664,10 +1719,12 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("1800m 是默认自由视角量级", qml)
         self.assertIn("Math.max(0.25, Math.min(1.0, distance / 1800.0))", qml)
         self.assertIn("ListModel { id: routeDashModel }", qml)
-        self.assertIn("ListModel { id: riskZoneModel }", qml)
-        self.assertIn("data.riskZones", qml)
+        self.assertNotIn("ListModel { id: riskZoneModel }", qml)
+        self.assertNotIn("data.riskZones", qml)
         self.assertIn("data.riskZoneLines", qml)
         self.assertIn("data.riskZoneBuffers", qml)
+        self.assertIn("terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])", qml)
+        self.assertNotIn("model: obstacleModel", qml)
         self.assertIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
         self.assertIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)
         self.assertIn("data.routeDashes", qml)
