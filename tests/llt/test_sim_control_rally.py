@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS
+from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS, PosInEarthS, WayPointInputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 from tests.llt._geo_route import geodetic_config
@@ -165,6 +165,35 @@ class SimControlRallyTests(unittest.TestCase):
             assert snapshot.route is not None
             self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=3)
             self.assertAlmostEqual(snapshot.route.end_x_m, 200.0, places=3)
+
+    def test_apply_avoidance_route_rebuilds_all_rally_geometry_from_override(self) -> None:
+        """验证采用避障航线后，全部集结实体与界面几何同步使用覆盖航线。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+            override = [
+                WayPointInputS(idx=0, pos=PosInEarthS(east=100.0, north=200.0, h=500.0), vdCmd=20.0),
+                WayPointInputS(idx=1, pos=PosInEarthS(east=100.0, north=400.0, h=500.0), vdCmd=20.0),
+            ]
+
+            result = controller.apply_avoidance_route(override)
+            snapshot = controller.get_snapshot()
+
+            self.assertEqual(result.code, "OK")
+            self.assertIsNotNone(snapshot.route)
+            assert snapshot.route is not None
+            self.assertAlmostEqual(snapshot.route.start_x_m, 100.0)
+            self.assertAlmostEqual(snapshot.route.start_y_m, 200.0)
+            self.assertAlmostEqual(snapshot.route.end_x_m, 100.0)
+            self.assertAlmostEqual(snapshot.route.end_y_m, 400.0)
+            for node_id, algorithm in controller._node_algorithms.items():
+                rally_join = algorithm._entity._rally_join
+                geometry = snapshot.rally_geometry[node_id]
+                self.assertAlmostEqual(rally_join._mission_heading, math.pi / 2.0)
+                self.assertAlmostEqual(geometry.rally_center_east_m, rally_join._loiter_center_e)
+                self.assertAlmostEqual(geometry.rally_center_north_m, rally_join._loiter_center_n)
 
     def test_rally_snapshot_ready_hides_phase_and_exposes_plan_geometry(self) -> None:
         """验证 READY 阶段只暴露几何预览，不把算法待命盘旋阶段写入节点状态。"""
