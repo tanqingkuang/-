@@ -254,8 +254,12 @@ def build_scene_payload(
         # 填充覆盖层与边界同源同轮廓，QML 侧共用同一 pulse 属性保证同相位闪烁。
         risk_zone_fills = _obstacle_fill_payloads(obstacle_views, clearance_m, terrain.get("surface", {}))
         risk_zone_buffers: list[dict[str, object]] = []
+        # 填充层的呼吸最低值就是静态基色：不再额外烘焙地形顶点色，避免同一区域红两次、
+        # 也让呼吸参数归零时才能真正做到"没有红色"。
+        terrain_risk_areas: list[dict[str, object]] = []
     else:
-        # 兼容布局风险峰不闪烁，也不生成填充覆盖层，维持旧场景视觉不变。
+        # 兼容布局风险峰不闪烁，也不生成填充覆盖层；这类旧场景没有呼吸层承接静态基色，
+        # 因此仍烘焙地形顶点色，维持旧场景视觉不变。
         risk_zone_fills = []
         raw_risk_zone_lines = terrain.get("riskZoneLines")
         risk_zone_lines = list(raw_risk_zone_lines) if isinstance(raw_risk_zone_lines, list) else []
@@ -273,12 +277,12 @@ def build_scene_payload(
                 for zone in risk_zones
                 for dash in _risk_zone_buffer_payload(zone)
             ]
-    terrain_risk_areas = _terrain_risk_area_payloads(
-        obstacle_views,
-        clearance_m,
-        terrain.get("surface", {}),
-        risk_zones,
-    )
+        terrain_risk_areas = _terrain_risk_area_payloads(
+            obstacle_views,
+            clearance_m,
+            terrain.get("surface", {}),
+            risk_zones,
+        )
     camera_payload = _camera_payload(bounds, aircraft)
     if terrain.get("surface", {}).get("mode") == "layout":
         camera_payload = _layout_camera_payload(terrain["surface"])

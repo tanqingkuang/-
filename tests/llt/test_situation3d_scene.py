@@ -132,12 +132,11 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
 
-        surface = payload["terrain"]["surface"]
-        risk_area = payload["terrainRiskAreas"][0]
-        self.assertEqual(risk_area["id"], "OBS1")
-        self.assertEqual(risk_area["kind"], "circle")
-        self.assertEqual(risk_area["radius"], 30.0)
-        self.assertEqual(risk_area["center"], [80.0 - surface["x"], -70.0 - surface["z"]])
+        # 真实障碍不再烘焙地形顶点色：静态基色改由填充层的呼吸最低值承担，
+        # 否则同一区域会被"烘焙红"和"呼吸红"重复叠加，且呼吸参数归零也无法真正消除红色。
+        self.assertEqual(payload["terrainRiskAreas"], [])
+        self.assertEqual(len(payload["riskZoneFills"]), 1)
+        self.assertIn("meshValue", payload["riskZoneFills"][0])
 
     def test_payload_contains_blocked_route_with_red_color(self) -> None:
         """验证封锁航线拥有独立红色 payload，空数据不产生残留模型。"""
@@ -1829,16 +1828,31 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("data.riskZoneLines", qml)
         self.assertIn("data.riskZoneBuffers", qml)
         self.assertIn("terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])", qml)
-        self.assertIn("property real alertBoundaryPulse: 0.48", qml)
+        self.assertIn("readonly property real boundaryPulseMin: 0.4", qml)
+        self.assertIn("readonly property real boundaryPulseMax: 0.8", qml)
+        self.assertIn("readonly property real fillPulseMin: 0.0", qml)
+        self.assertIn("readonly property real fillPulseMax: 0.1", qml)
+        self.assertIn("readonly property int pulseDurationMs: 3000", qml)
+        self.assertIn("property real alertBoundaryPulse: boundaryPulseMin", qml)
         self.assertIn("SequentialAnimation on alertBoundaryPulse", qml)
-        # 告警呼吸周期收紧为 1 秒：500ms 变亮 + 500ms 变暗，缓动保持 InOutSine。
-        self.assertEqual(qml.count("duration: 500"), 2)
+        # 最终版呼吸节奏是非对称的：变亮 pulseDurationMs(3s)、变暗 pulseDurationMs/3(1s)，
+        # 一轮共 4 秒，缓动仍是 InOutSine。
+        self.assertIn("duration: root.pulseDurationMs\n", qml)
+        self.assertIn("duration: root.pulseDurationMs / 3", qml)
         self.assertEqual(qml.count("duration: 2400"), 0)
+        self.assertEqual(qml.count("duration: 500"), 0)
         self.assertEqual(qml.count("easing.type: Easing.InOutSine"), 2)
         self.assertIn("pulseValue: item.pulse === true", qml)
         self.assertIn("opacity: model.pulseValue ? root.alertBoundaryPulse : 0.95", qml)
-        # 危险区填充与边界共用同一呼吸源，线性映射到 0.10~0.35 的低透明度区间。
-        self.assertIn("readonly property real riskFillPulse: 0.10 + (alertBoundaryPulse - 0.48) * (0.25 / 0.44)", qml)
+        # 危险区填充与边界共用同一呼吸源，按 fillPulseMin/Max 线性映射，振幅收窄、不再硬编码魔法数字；
+        # min===max 时比例项按 0 处理，避免呼吸振幅归零时除零得到 NaN。
+        self.assertIn(
+            "readonly property real riskFillPulse: fillPulseMin +\n"
+            "        (boundaryPulseMax === boundaryPulseMin ? 0.0 :\n"
+            "            (alertBoundaryPulse - boundaryPulseMin) / (boundaryPulseMax - boundaryPulseMin)) *\n"
+            "        (fillPulseMax - fillPulseMin)",
+            qml,
+        )
         self.assertIn("ListModel { id: riskFillModel }", qml)
         self.assertIn("data.riskZoneFills", qml)
         self.assertIn("RiskFillGeometry", qml)

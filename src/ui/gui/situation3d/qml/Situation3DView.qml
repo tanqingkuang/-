@@ -45,10 +45,20 @@ Item {
     readonly property int presentationQueueCapacity: 2
     // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线与风险区模型。
     property string staticContentKey: ""
+    // 呼吸动画调参入口：改这四个命名属性即可，不要在别处硬编码同源数字。
+    readonly property real boundaryPulseMin: 0.4
+    readonly property real boundaryPulseMax: 0.8
+    readonly property real fillPulseMin: 0.0
+    readonly property real fillPulseMax: 0.1
+    readonly property int pulseDurationMs: 3000
     // 地形顶点色保持静态；真实障碍的闭合告警边界与贴地填充共用这一个呼吸值。
-    property real alertBoundaryPulse: 0.48
-    // 填充层把同一呼吸值线性映射到 0.10~0.35，保证与边界同相位闪烁但不遮挡地形细节。
-    readonly property real riskFillPulse: 0.10 + (alertBoundaryPulse - 0.48) * (0.25 / 0.44)
+    property real alertBoundaryPulse: boundaryPulseMin
+    // 填充层把同一呼吸值线性映射到 fillPulseMin~fillPulseMax，同相位且不刺眼。
+    // boundaryPulseMax 等于 boundaryPulseMin 时振幅为零，比例项按 0 处理，避免除零得到 NaN。
+    readonly property real riskFillPulse: fillPulseMin +
+        (boundaryPulseMax === boundaryPulseMin ? 0.0 :
+            (alertBoundaryPulse - boundaryPulseMin) / (boundaryPulseMax - boundaryPulseMin)) *
+        (fillPulseMax - fillPulseMin)
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
     property string followNodeId: ""
     // 跟随焦点与飞机共用唯一展示时钟，避免两套动画时长不同导致飞机相对镜头周期性抖动。
@@ -69,20 +79,20 @@ Item {
     ListModel { id: riskBufferModel }
     ListModel { id: riskFillModel }
 
-    // 1 秒周期呼吸：500ms 变亮 + 500ms 变暗，危险提示节奏明显但不刺眼。
+    // 4 秒周期缓慢呼吸：两段时长相等且都引用 pulseDurationMs，振幅由 boundaryPulseMin/Max 控制。
     SequentialAnimation on alertBoundaryPulse {
         loops: Animation.Infinite
         running: true
         NumberAnimation {
-            from: 0.48
-            to: 0.92
-            duration: 500
+            from: root.boundaryPulseMin
+            to: root.boundaryPulseMax
+            duration: root.pulseDurationMs
             easing.type: Easing.InOutSine
         }
         NumberAnimation {
-            from: 0.92
-            to: 0.48
-            duration: 500
+            from: root.boundaryPulseMax
+            to: root.boundaryPulseMin
+            duration: root.pulseDurationMs / 3
             easing.type: Easing.InOutSine
         }
     }
