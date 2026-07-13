@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QWidget
 
 from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.top_view import TopView
-from src.ui.gui.trail_view_model import sample_trail_for_display
+from src.ui.gui.trail_path_cache import TrailPathCache
 from src.ui.gui.view_models import (
     FIT_VIEWPORT_RATIO,
     VIEW_MAX_SCALE,
@@ -46,6 +46,8 @@ class SideView(QWidget):
         self.theme = THEMES["light"]
         self.show_grid = True
         self.trail_seconds = 0.0
+        # 路径保存“横轴投影距离、高度”逻辑坐标，屏幕平移缩放不会使缓存失效。
+        self._trail_path_caches: dict[str, TrailPathCache] = {}
         self.segment_locked = True
         self.auto_center = False
         self.view_angle_deg = 0.0
@@ -69,6 +71,7 @@ class SideView(QWidget):
     def set_snapshot(self, snapshot: Snapshot) -> None:
         """设置用于绘制的快照。注意：只更新显示缓存，不推进仿真。"""
         self.snapshot = snapshot
+        self._sync_trail_path_caches(snapshot)
         if self.auto_center:
             self._apply_auto_center()
         elif not self._manual_horizontal_view:
@@ -90,6 +93,8 @@ class SideView(QWidget):
         """设置是否锁定当前航段。注意：无当前航段时内部会退回手动视角投影。"""
         self.segment_locked = locked
         self._manual_horizontal_view = False
+        if self.snapshot is not None:
+            self._sync_trail_path_caches(self.snapshot)
         self._fit_horizontal_view()
         self.update()
 
@@ -98,6 +103,8 @@ class SideView(QWidget):
         self.view_angle_deg = angle_deg % 360.0
         if not self._locked_route():
             self._manual_horizontal_view = False
+            if self.snapshot is not None:
+                self._sync_trail_path_caches(self.snapshot)
             self._fit_horizontal_view()
         self.update()
 
@@ -401,28 +408,87 @@ class SideView(QWidget):
         """绘制 trails 画面元素。注意：只做渲染，不修改仿真状态。"""
         if self.trail_seconds <= 0.0:
             return
-        # 尾迹按当前横轴投影后再裁剪屏幕范围，减少不可见线段绘制。
-        # 透明度随时间衰减，和俯视图一致表达“越新越醒目”。
+        self._sync_trail_path_caches(snapshot)
+        altitude_span = max(1e-9, self.altitude_max - self.altitude_min)
+        vertical_scale = max(1.0, self.height() - self.PLOT_VERTICAL_MARGINS) / altitude_span
+        # 把逻辑路径一次性映射到屏幕；平移、横向缩放和高度缩放均不重建 QPainterPath。
+        painter.save()
+        painter.translate(
+            self.horizontal_offset,
+            self.height() - self.PLOT_BOTTOM_MARGIN + self.altitude_min * vertical_scale,
+        )
+        painter.scale(self.horizontal_scale, -vertical_scale)
+        try:
+            # 尾迹路径只允许描边；主动清除任何调用方画刷，防止开放折线被隐式闭合填充。
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            for node in snapshot.nodes:
+                if not node.trail:
+                    continue
+                is_leader = is_leader_node(node)
+                base = self.theme.leader if is_leader else self.theme.wingman
+                cache = self._trail_path_caches[node.node_id]
+                for batch in cache.render_batches(current_time=snapshot.time, trail_seconds=self.trail_seconds):
+                    painter.setPen(self._trail_pen(base, is_leader=is_leader, opacity_factor=batch.opacity_factor))
+                    painter.drawPath(batch.path)
+
+                tail = node.trail[-1]
+                tail_x = self._horizontal_for_point(tail.x, tail.y)
+                current_x = self._horizontal_for_point(node.x, node.y)
+                endpoint_changed = not (
+                    math.isclose(tail_x, current_x, rel_tol=0.0, abs_tol=1e-9)
+                    and math.isclose(tail.altitude, node.altitude, rel_tol=0.0, abs_tol=1e-9)
+                )
+                if endpoint_changed:
+                    # 当前机位只补一条队列外实时段，不进入投影缓存，也不修改稳定尾迹队列。
+                    painter.setPen(self._trail_pen(base, is_leader=is_leader, opacity_factor=1.0))
+                    painter.drawLine(
+                        QPointF(tail_x, tail.altitude),
+                        QPointF(current_x, node.altitude),
+                    )
+        finally:
+            painter.restore()
+
+    @staticmethod
+    def _trail_pen(base: QColor, *, is_leader: bool, opacity_factor: float) -> QPen:
+        """构造侧视尾迹画笔。注意：历史批次和队列外实时段使用完全相同的描边风格。"""
+
+        color = QColor(base)
+        color.setAlphaF((0.48 if is_leader else 0.40) * opacity_factor)
+        # cosmetic 画笔抵消两轴不同缩放；圆帽和圆角避免急转折点形成尖锐棱角。
+        pen = QPen(color, 2.0)
+        pen.setCosmetic(True)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        return pen
+
+    def _sync_trail_path_caches(self, snapshot: Snapshot) -> None:
+        """增量同步全部侧视尾迹路径。注意：投影语义键不包含任何屏幕变换参数。"""
+
+        active_node_ids = {node.node_id for node in snapshot.nodes}
+        for node_id in self._trail_path_caches.keys() - active_node_ids:
+            del self._trail_path_caches[node_id]
+        semantic_key = self._trail_projection_semantic_key()
         for node in snapshot.nodes:
-            if len(node.trail) <= 2:
-                continue
-            is_leader = is_leader_node(node)
-            base = self.theme.leader if is_leader else self.theme.wingman
-            # 长尾迹先抽样再画：与俯视图同口径，绘制段数有上限，避免长航时拖垮 GUI tick。
-            trail = sample_trail_for_display(node.trail)
-            for previous, current in zip(trail, trail[1:]):
-                x1 = self._map_x(self._horizontal_for_point(previous.x, previous.y))
-                x2 = self._map_x(self._horizontal_for_point(current.x, current.y))
-                if (x1 < -24 and x2 < -24) or (x1 > self.width() + 24 and x2 > self.width() + 24):
-                    continue
-                age = max(0.0, snapshot.time - current.time)
-                if age > self.trail_seconds:
-                    continue
-                alpha = max(0.08, 1.0 - age / self.trail_seconds)
-                color = QColor(base)
-                color.setAlphaF((0.48 if is_leader else 0.40) * alpha)
-                painter.setPen(QPen(color, 2))
-                painter.drawLine(QPointF(x1, self._map_y(previous.altitude)), QPointF(x2, self._map_y(current.altitude)))
+            cache = self._trail_path_caches.setdefault(node.node_id, TrailPathCache())
+            cache.synchronize(
+                node.trail,
+                projector=lambda point: (self._horizontal_for_point(point.x, point.y), point.altitude),
+                semantic_key=semantic_key,
+            )
+
+    def _trail_projection_semantic_key(self) -> tuple:
+        """返回侧视投影语义键。注意：航段或自由视角改变时必须使既有路径失效。"""
+
+        route = self._locked_route()
+        if route is None:
+            return "自由视角", round(self.view_angle_deg % 360.0, 9)
+        return (
+            "锁定航段",
+            route.start_x,
+            route.start_y,
+            route.end_x,
+            route.end_y,
+        )
 
     def _draw_nodes(self, painter: QPainter, snapshot: Snapshot) -> None:
         """绘制 nodes 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -498,9 +564,10 @@ class SideView(QWidget):
             values.append(self._horizontal_for_point(route.end_x, route.end_y))
         for node in self.snapshot.nodes:
             values.append(self._horizontal_for_point(node.x, node.y))
-            # 包围盒用抽样尾迹即可：长尾迹逐点求范围同样随时间线性变慢。
-            for point in sample_trail_for_display(node.trail):
-                values.append(self._horizontal_for_point(point.x, point.y))
+            cache = self._trail_path_caches.get(node.node_id)
+            bounds = cache.projected_bounds if cache is not None else None
+            if bounds is not None:
+                values.extend((bounds[0], bounds[1]))
         if not values:
             return None
         return min(values), max(values)
@@ -515,8 +582,10 @@ class SideView(QWidget):
             values.append(route.end_altitude)
         for node in self.snapshot.nodes:
             values.append(node.altitude)
-            # 与横向包围盒同口径，用抽样尾迹控制每帧计算量。
-            values.extend(point.altitude for point in sample_trail_for_display(node.trail))
+            cache = self._trail_path_caches.get(node.node_id)
+            bounds = cache.projected_bounds if cache is not None else None
+            if bounds is not None:
+                values.extend((bounds[2], bounds[3]))
         if not values:
             return None
         return min(values), max(values)

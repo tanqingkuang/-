@@ -50,6 +50,7 @@ from src.runner.sim_control_types import (
     SimulationEvent,
     SimulationSnapshot,
     Subscription,
+    TimedSnapshotCursor,
     _ConfiguredLink,
 )
 
@@ -74,6 +75,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._comm = CommunicationChannel()
         self._disturbance = _DisturbanceEngine()
         self._logger = _DataLogger()
+        # 定时快照游标代号独立于仿真时间；时间归零后旧游标也不能误跳过新样本。
+        self._timed_snapshot_generation = 0
         # 配置派生状态：load_config 成功后由 _init_modules_unlocked 统一填充。
         self._node_algorithms: dict[str, _NodeAlgorithm] = {}
         self._node_roles: dict[str, str] = {}
@@ -170,6 +173,26 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 # 显式查询应返回当前状态；调用频率由 UI 计时器或外部调用方控制。
                 self._latest_snapshot = self._make_snapshot_unlocked()
             return self._latest_snapshot
+
+    def read_timed_snapshots(
+        self,
+        cursor: TimedSnapshotCursor | None,
+    ) -> tuple[TimedSnapshotCursor, tuple[SimulationSnapshot, ...]]:
+        """增量读取固定仿真时钟快照。注意：旧代游标会从新运行索引零重新开始。"""
+
+        with self._lock:
+            generation = self._timed_snapshot_generation
+            snapshot_count = len(self._logger.snapshots)
+            if cursor is None or cursor.run_generation != generation:
+                # 首次读取或运行代变化时从零开始，确保新运行首批样本不会被旧索引跳过。
+                start_index = 0
+            else:
+                # 防御外部构造的越界游标，避免负索引反向读取或超长索引永久漏样本。
+                start_index = min(snapshot_count, max(0, int(cursor.next_index)))
+            # 返回不可变容器副本；调用方无法增删 logger 持有的原始列表。
+            snapshots = tuple(self._logger.snapshots[start_index:snapshot_count])
+            next_cursor = TimedSnapshotCursor(generation, snapshot_count)
+        return next_cursor, snapshots
 
     def start(self) -> CommandResult:
         """启动或继续 SimulationController 的运行流程。注意：重复调用应保持状态一致。"""
@@ -718,6 +741,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         }
         # 仅重置内存日志；文件目录延迟到首次实际 tick 时创建，避免空 run 目录。
         self._logger.reset()
+        # 只有完整模块初始化成功到达末尾才换代，失败的配置加载不会制造空运行代。
+        self._timed_snapshot_generation += 1
 
     def _build_rally_layer_altitudes(
         self,

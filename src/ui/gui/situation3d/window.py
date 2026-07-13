@@ -17,9 +17,10 @@ from src.ui.gui.situation3d.aircraft_model_style import (
     AircraftModelType,
 )
 from src.ui.gui.situation3d.bridge import Situation3DBridge
-from src.ui.gui.situation3d.scene_data import build_scene_payload
+from src.ui.gui.situation3d.scene_data import TrailPayloadState, build_scene_payload
 from src.ui.gui.situation3d.terrain_geometry import TerrainGeometry
 from src.ui.gui.situation3d.trail_ribbon_geometry import TrailRibbonGeometry
+from src.ui.gui.situation3d.trail_tip_geometry import TrailTipGeometry
 from src.ui.gui.view_models import ObstacleView, Snapshot
 
 _QML_TYPES_REGISTERED = False
@@ -35,6 +36,7 @@ def _register_qml_types() -> None:
     QQuickStyle.setStyle("Basic")
     qmlRegisterType(TerrainGeometry, "Simu3D", 1, 0, "TerrainGeometry")
     qmlRegisterType(TrailRibbonGeometry, "Simu3D", 1, 0, "TrailRibbonGeometry")
+    qmlRegisterType(TrailTipGeometry, "Simu3D", 1, 0, "TrailTipGeometry")
     _QML_TYPES_REGISTERED = True
 
 
@@ -58,6 +60,7 @@ class Situation3DWindow(QDialog):
         self.root_layout.setContentsMargins(0, 0, 0, 0)
         self.root_layout.setSpacing(0)
         self.bridge = Situation3DBridge()
+        self._trail_payload_state = TrailPayloadState()
         self._current_model_type = DEFAULT_AIRCRAFT_MODEL_TYPE
         self._cached_scene: tuple[Snapshot, list[ObstacleView], float] | None = None
         self.bridge.modelSelected.connect(self._on_model_selected)
@@ -118,6 +121,7 @@ class Situation3DWindow(QDialog):
             obstacles,
             clearance_m=clearance_m,
             model_type=self._current_model_type,
+            trail_state=self._trail_payload_state,
         )
         self.bridge.set_scene_payload(payload)
         self._schedule_terrain_refresh(payload)

@@ -9,7 +9,7 @@ import math
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import numpy as np
 
@@ -35,10 +35,6 @@ from src.ui.gui.view_models import (
     reference_route_points,
 )
 
-MAX_TRAIL_POINTS_PER_NODE = 28
-ENABLE_TRAIL_SMOOTHING = True
-TRAIL_SMOOTHING_PASSES = 2
-TRAIL_SMOOTHING_MAX_POINTS = 96
 MAX_ROUTE_POINTS_PER_SEGMENT = 32
 ROUTE_DASH_LENGTH_M = 140.0
 ROUTE_DASH_GAP_M = 90.0
@@ -50,6 +46,96 @@ DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
 DEFAULT_TERRAIN_RELIEF_M = 2200.0
 
+
+class TrailPayloadState:
+    """记录 3D 接收端已消费的尾迹游标。注意：状态属于单个 3D 窗口，不能跨窗口共享。"""
+
+    def __init__(self) -> None:
+        """初始化空游标表，确保每架飞机第一次出现时发送 reset。"""
+
+        self._cursors: dict[str, tuple[int, int, int]] = {}
+        # observed 记录当前消息看到的数据队尾，eligible 只保存上一条展示消息的地平线。
+        # 两套游标分离后，高倍频一次补入多点也不会让历史网格抢到补间飞机前方。
+        # 同一时刻重推也算下一条消息；QML 展示队列会等当前补间完成后再按序应用它。
+        self._observed_ends: dict[str, tuple[int, int]] = {}
+        self._eligible_ends: dict[str, tuple[int, int]] = {}
+        # 坐标锚独立于 TrailBuffer 生命周期；队首越过展示地平线后仍能连接上一飞机位置。
+        self._observed_anchors: dict[str, tuple[int, object, object]] = {}
+        self._eligible_anchors: dict[str, tuple[int, object, object]] = {}
+
+    def begin_frame(self) -> None:
+        """开始构造一条展示消息。注意：本轮只能固化上一条消息观察到的队尾。"""
+
+        # 新展示消息只允许固化上一条消息已观察到的尾后序号；本轮批量点继续留在活动末段。
+        self._eligible_ends = dict(self._observed_ends)
+        self._eligible_anchors = dict(self._observed_anchors)
+
+    def presentation_length(
+        self,
+        node_id: str,
+        generation: int,
+        first_sequence: int,
+        end_sequence: int,
+        trail: Sequence[object],
+    ) -> int:
+        """返回本帧可固化的稳定前缀长度。注意：首次出现可直接提交完整队列。"""
+
+        point_count = len(trail)
+        self._observed_ends[node_id] = (generation, end_sequence)
+        if point_count:
+            self._observed_anchors[node_id] = (
+                generation,
+                trail[-2] if point_count >= 2 else trail[-1],
+                trail[-1],
+            )
+        eligible = self._eligible_ends.get(node_id)
+        if eligible is None or eligible[0] != generation:
+            return point_count
+        # 允许稳定前缀清空；活动小网格会改用独立保存的上一展示锚，不抢用本轮新队首。
+        eligible_length = eligible[1] - first_sequence
+        return min(point_count, max(0, eligible_length))
+
+    def presentation_anchor(self, node_id: str, generation: int) -> tuple[object, object] | None:
+        """返回上一条消息的末段方向点与队尾锚。注意：锚可已从数据队列淘汰。"""
+
+        anchor = self._eligible_anchors.get(node_id)
+        if anchor is None or anchor[0] != generation:
+            return None
+        return anchor[1], anchor[2]
+
+    def cursor(self, node_id: str) -> tuple[int, int, int] | None:
+        """返回飞机上次发送的 generation、队首序号和尾后序号。"""
+
+        return self._cursors.get(node_id)
+
+    def update(self, node_id: str, generation: int, first_sequence: int, end_sequence: int) -> None:
+        """提交飞机最新游标。注意：仅在对应 payload 已构造成功后调用。"""
+
+        self._cursors[node_id] = (generation, first_sequence, end_sequence)
+
+    def discard(self, node_id: str) -> None:
+        """丢弃已移除飞机或空尾迹的全部展示游标。"""
+
+        self._cursors.pop(node_id, None)
+        self._observed_ends.pop(node_id, None)
+        self._eligible_ends.pop(node_id, None)
+        self._observed_anchors.pop(node_id, None)
+        self._eligible_anchors.pop(node_id, None)
+
+    def retain(self, node_ids: set[str]) -> None:
+        """只保留本帧仍有 ribbon 的飞机，防止消失后重现时误发 delta。"""
+
+        for node_id in set(self._cursors) - node_ids:
+            self._cursors.pop(node_id, None)
+        for node_id in set(self._observed_ends) - node_ids:
+            self._observed_ends.pop(node_id, None)
+        for node_id in set(self._eligible_ends) - node_ids:
+            self._eligible_ends.pop(node_id, None)
+        for node_id in set(self._observed_anchors) - node_ids:
+            self._observed_anchors.pop(node_id, None)
+        for node_id in set(self._eligible_anchors) - node_ids:
+            self._eligible_anchors.pop(node_id, None)
+
 # 3D payload 设计说明：
 # 1. QML 侧只接收 JSON 字符串，因此 payload 不能携带完整高度场大数组。
 # 2. 布局地形只把 layoutFile、resolution、中心和范围传给 TerrainGeometry。
@@ -60,7 +146,7 @@ DEFAULT_TERRAIN_RELIEF_M = 2200.0
 # 7. 旧路径的 surface.width/depth/height 字段保持不变，避免历史 QML 绑定失效。
 # 8. 新布局模式只影响显示层，不改变 Snapshot 的 ENU 坐标、航线和障碍语义。
 # 9. 障碍物 obstacles 仍表示避障模块二维障碍；riskZones 表示手工标记山峰风险罩面。
-# 10. 航线虚线、尾迹和风险细线都用同一几何契约：JSON 编码的 Quick3D 三元组数组。
+# 10. 航线和风险细线使用点数组；尾迹额外携带队列序号，使几何层能原子识别追加和弹头。
 # 11. 红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
 # 12. 淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
 # 13. 风险罩面高度略高于峰顶，避免和地形 z-fighting。
@@ -105,17 +191,29 @@ def build_scene_payload(
     clearance_m: float = 0.0,
     model_type: AircraftModelType = DEFAULT_AIRCRAFT_MODEL_TYPE,
     terrain_display_file: str | None = None,
+    trail_state: TrailPayloadState | None = None,
 ) -> dict[str, object]:
     """把 UI 快照转换为 QML 场景数据。注意：输入仍采用 x/y/z=东/北/天。"""
 
     obstacle_views = list(obstacles)
+    if trail_state is not None:
+        # 一次 build 对应一条 QML 展示消息，固化进度由消息顺序而非仿真时间差驱动。
+        trail_state.begin_frame()
     aircraft = [_aircraft_payload(node) for node in snapshot.nodes]
     aircraft_style = create_aircraft_model_style(model_type).style_payload()
     trail_ribbons = [
         ribbon
         for node in snapshot.nodes
-        for ribbon in _trail_ribbon_payload(node.node_id, node.trail, _node_color(node.role, node.health))
+        for ribbon in _trail_ribbon_payload(
+            node.node_id,
+            node.trail,
+            _node_color(node.role, node.health),
+            trail_state,
+        )
     ]
+    if trail_state is not None:
+        # QML 会删除本帧缺失的 delegate；同步遗忘游标，保证该节点再出现时从 reset 开始。
+        trail_state.retain({str(item["nodeId"]) for item in trail_ribbons})
     route_segments = _route_segments(snapshot)
     route_polylines = [_route_polyline(segment) for segment in route_segments]
     # 航点球和虚线共用同一组采样折线，避免同一航段被重复展开。
@@ -234,53 +332,157 @@ def _aircraft_payload(node) -> dict[str, object]:  # noqa: ANN001
     }
 
 
-def _trail_ribbon_payload(node_id: str, trail: list, color: str) -> list[dict[str, object]]:
-    """生成连续尾迹拖尾带数据。注意：每架飞机一条 ribbon，避免段间接缝。"""
+def _trail_ribbon_payload(
+    node_id: str,
+    trail: Sequence[object],
+    color: str,
+    trail_state: TrailPayloadState | None = None,
+) -> list[dict[str, object]]:
+    """生成历史线带与活动末段数据。注意：活动末段从稳定队尾连接飞机实时位置。"""
 
-    if len(trail) < 2:
+    if not trail:
+        if trail_state is not None:
+            trail_state.discard(node_id)
         return []
-    sampled = _evenly_sample(trail, MAX_TRAIL_POINTS_PER_NODE)
-    path: list[list[float]] = []
-    for point in sampled:
-        coord = enu_to_quick3d(point.x, point.y, point.altitude)
-        # pathValue 契约是 Quick3D 坐标 [x, y, z] 三元组数组，供 TrailRibbonGeometry 直接解析。
-        path.append([coord["x"], coord["y"], coord["z"]])
-    path = _smooth_trail_path(path)
+    trail_length = len(trail)
+    metadata = _trail_metadata(trail, trail_length)
+    if trail_state is not None and metadata is not None:
+        generation, first_sequence, end_sequence = metadata
+        trail_length = trail_state.presentation_length(
+            node_id,
+            generation,
+            first_sequence,
+            end_sequence,
+            trail,
+        )
+    # 数据队列保留全部固定点；历史网格延后一条展示消息，活动末段始终从已展示队尾出发。
+    stream = _trail_stream_value(node_id, trail, trail_length, trail_state)
+    if trail_length:
+        tip_start = _trail_quick3d_point(trail[trail_length - 1])
+        tip_previous = _trail_quick3d_point(
+            trail[trail_length - 2] if trail_length >= 2 else trail[trail_length - 1]
+        )
+    else:
+        # 短窗口可能已淘汰上一队尾；用窗口级展示锚连接，绝不提前采用本轮新队首。
+        if trail_state is None or metadata is None:
+            return []
+        anchor = trail_state.presentation_anchor(node_id, metadata[0])
+        if anchor is None:
+            return []
+        tip_previous = _trail_quick3d_point(anchor[0])
+        tip_start = _trail_quick3d_point(anchor[1])
     return [
         {
             "nodeId": node_id,
             "color": color,
             "width": 44.0,
-            "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+            "pathValue": json.dumps(stream, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+            "tipPreviousX": tip_previous[0],
+            "tipPreviousY": tip_previous[1],
+            "tipPreviousZ": tip_previous[2],
+            "tipStartX": tip_start[0],
+            "tipStartY": tip_start[1],
+            "tipStartZ": tip_start[2],
         }
     ]
 
 
-def _smooth_trail_path(path: list[list[float]]) -> list[list[float]]:
-    """返回平滑后的尾迹路径。注意：只供尾迹使用，不处理航线或其他 ribbon。"""
+def _trail_stream_value(
+    node_id: str,
+    trail: Sequence[object],
+    trail_length: int,
+    trail_state: TrailPayloadState | None,
+) -> dict[str, object]:
+    """编码稳定历史的 reset 或 delta。注意：队列外实时端点不会进入本数据流。"""
 
-    # 手动调试需要原始折线时，把 ENABLE_TRAIL_SMOOTHING 改为 False 即可关闭。
-    if not ENABLE_TRAIL_SMOOTHING or len(path) < 3:
-        return path
-    smoothed = [list(point) for point in path]
-    for _ in range(TRAIL_SMOOTHING_PASSES):
-        if len(smoothed) >= TRAIL_SMOOTHING_MAX_POINTS:
-            break
-        smoothed = _chaikin_smooth_once(smoothed)
-    return _evenly_sample(smoothed, TRAIL_SMOOTHING_MAX_POINTS)
+    source_length = len(trail)
+    trail_length = max(0, min(source_length, int(trail_length)))
+    metadata = _trail_metadata(trail, source_length)
+    if trail_state is not None and metadata is not None:
+        generation, first_sequence, end_sequence = metadata
+        # 接收端游标只覆盖可展示前缀，尚未固化的批量点继续留在活动末段之外。
+        end_sequence -= source_length - trail_length
+        previous = trail_state.cursor(node_id)
+        if previous is not None:
+            old_generation, old_first, old_end = previous
+            removed_count = first_sequence - old_first
+            added_count = end_sequence - old_end
+            can_append = (
+                generation == old_generation
+                and 0 <= removed_count <= old_end - old_first
+                and added_count >= 0
+                and first_sequence <= old_end
+                and trail_length == old_end - first_sequence + added_count
+            )
+            if can_append:
+                # TrailSnapshot 支持切片；只转换新增项，使稳态每帧开销与历史长度无关。
+                added_items = trail[trail_length - added_count : trail_length] if added_count else ()
+                added_points = _trail_quick3d_points(added_items)
+                trail_state.update(node_id, generation, first_sequence, end_sequence)
+                return {
+                    "op": "delta",
+                    "generation": generation,
+                    "firstSequence": first_sequence,
+                    "endSequence": end_sequence,
+                    "removedCount": removed_count,
+                    "addedPoints": added_points,
+                }
+    if metadata is None:
+        generation, first_sequence, end_sequence = 0, 0, trail_length
+    else:
+        generation, first_sequence, end_sequence = metadata
+        end_sequence -= source_length - trail_length
+    path = _trail_quick3d_points(trail[:trail_length])
+    if trail_state is not None and metadata is not None:
+        trail_state.update(node_id, generation, first_sequence, end_sequence)
+    return {
+        "op": "reset",
+        "generation": generation,
+        "firstSequence": first_sequence,
+        "endSequence": end_sequence,
+        "points": path,
+    }
 
 
-def _chaikin_smooth_once(points: list[list[float]]) -> list[list[float]]:
-    """对折线路径执行一次 Chaikin 平滑。注意：保留首尾点，避免尾迹端点漂移。"""
+def _trail_metadata(trail: Sequence[object], trail_length: int) -> tuple[int, int, int] | None:
+    """读取稳定队列游标。注意：普通列表或长度不一致的对象返回 None，强制 reset。"""
 
-    smoothed = [points[0]]
-    for previous, current in zip(points, points[1:]):
-        # Q/R 点分别靠近当前线段的两端，连续迭代后尖角会被圆滑过渡替代。
-        q_point = [previous[index] * 0.75 + current[index] * 0.25 for index in range(3)]
-        r_point = [previous[index] * 0.25 + current[index] * 0.75 for index in range(3)]
-        smoothed.extend([q_point, r_point])
-    smoothed.append(points[-1])
-    return smoothed
+    generation = _optional_integer_attribute(trail, "generation")
+    first_sequence = _optional_integer_attribute(trail, "first_sequence")
+    end_sequence = _optional_integer_attribute(trail, "end_sequence")
+    if generation is None or first_sequence is None or end_sequence is None:
+        return None
+    if end_sequence - first_sequence != trail_length:
+        return None
+    return generation, first_sequence, end_sequence
+
+
+def _optional_integer_attribute(value: object, name: str) -> int | None:
+    """读取非负整数属性。注意：缺失、非法和负数都表示该对象没有可靠增量游标。"""
+
+    try:
+        normalized = int(getattr(value, name))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return normalized if normalized >= 0 else None
+
+
+def _trail_quick3d_points(points: Iterable[object]) -> list[list[float]]:
+    """把一段 ENU 尾迹转换为 Quick3D 点列。注意：调用方可只传新增尾部切片。"""
+
+    path: list[list[float]] = []
+    for point in points:
+        coord = enu_to_quick3d(point.x, point.y, point.altitude)
+        # 已入队的坐标只做轴映射，禁止在数据桥内重新抽样或整条平滑。
+        path.append([coord["x"], coord["y"], coord["z"]])
+    return path
+
+
+def _trail_quick3d_point(point: object) -> list[float]:
+    """转换单个尾迹点，供活动末段锚点复用同一 ENU 轴映射。"""
+
+    coord = enu_to_quick3d(point.x, point.y, point.altitude)
+    return [coord["x"], coord["y"], coord["z"]]
 
 
 def _route_payload(polyline: list[tuple[float, float, float]], *, color: str = ROUTE_DASH_COLOR) -> list[dict[str, object]]:

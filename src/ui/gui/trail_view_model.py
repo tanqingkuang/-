@@ -2,10 +2,184 @@
 
 from __future__ import annotations
 
+import math
+from collections import deque
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable
+from itertools import count, islice
 
-from src.ui.gui.view_models import trail_seconds_for_duration
+from src.ui.gui.view_models import TrailPoint, trail_seconds_for_duration
+
+
+# 控制器按仿真时间固定 10 Hz 采集尾迹；32768 点可完整覆盖内置最长配置的 2100 秒默认窗口，
+# 且不因播放倍率或 GUI 刷新率变化。该硬上界也供渲染缓存推导最大块数。
+MAX_TRAIL_POINTS = 32_768
+# 每次新建或显式清空缓冲区都取得不同代号，让绘制端可靠识别重置与配置切换。
+_TRAIL_GENERATION_IDS = count(1)
+
+
+@dataclass(frozen=True)
+class TrailSnapshot(Sequence[TrailPoint]):
+    """某一帧不可变的尾迹序列。注意：历史点对象与共享队列一致，容器不随下一帧变化。"""
+
+    _points: tuple[TrailPoint, ...]
+    generation: int
+    revision: int
+    first_sequence: int
+    end_sequence: int
+    capacity: int
+
+    def __len__(self) -> int:
+        """返回当前快照点数。注意：复杂度为 O(1)。"""
+
+        return len(self._points)
+
+    def __iter__(self) -> Iterator[TrailPoint]:
+        """按采样时间顺序迭代稳定点对象。注意：迭代期间快照不会变化。"""
+
+        return iter(self._points)
+
+    def __getitem__(self, index: int | slice) -> TrailPoint | list[TrailPoint]:
+        """按逻辑位置读取点或切片。注意：切片返回列表以兼容既有绘制代码。"""
+
+        if isinstance(index, slice):
+            return list(self._points[index])
+        return self._points[index]
+
+
+class TrailBuffer(Sequence[TrailPoint]):
+    """单架飞机的稳定有界 ENU 尾迹队列。注意：追加和容量弹头均为 O(1)。"""
+
+    def __init__(self, capacity: int = MAX_TRAIL_POINTS) -> None:
+        """创建空尾迹队列。注意：capacity 必须为正数。"""
+
+        if capacity <= 0:
+            raise ValueError("尾迹队列容量必须为正数")
+        self._points: deque[TrailPoint] = deque()
+        self._capacity = int(capacity)
+        self._generation = next(_TRAIL_GENERATION_IDS)
+        self._revision = 0
+        self._next_point_id = 0
+
+    @property
+    def capacity(self) -> int:
+        """返回硬容量上限。注意：达到上限后下一次追加会先弹出队首。"""
+
+        return self._capacity
+
+    @property
+    def generation(self) -> int:
+        """返回当前尾迹代号。注意：显式清空后代号改变。"""
+
+        return self._generation
+
+    @property
+    def revision(self) -> int:
+        """返回内容修订号。注意：每次追加、过期或清空最多递增一次。"""
+
+        return self._revision
+
+    @property
+    def first_sequence(self) -> int:
+        """返回当前首点逻辑序号。注意：空队列时等于下一待分配序号。"""
+
+        return self._points[0].point_id if self._points else self._next_point_id
+
+    @property
+    def end_sequence(self) -> int:
+        """返回尾后逻辑序号。注意：与 range 的 stop 一样采用 exclusive 语义。"""
+
+        return self._points[-1].point_id + 1 if self._points else self._next_point_id
+
+    def __len__(self) -> int:
+        """返回当前队列点数。注意：复杂度为 O(1)。"""
+
+        return len(self._points)
+
+    def __iter__(self) -> Iterator[TrailPoint]:
+        """按入队顺序迭代点。注意：调用方不得在迭代期间修改队列。"""
+
+        return iter(self._points)
+
+    def __getitem__(self, index: int | slice) -> TrailPoint | list[TrailPoint]:
+        """读取单点或切片。注意：切片仅为旧绘制接口兼容路径。"""
+
+        if isinstance(index, slice):
+            start, stop, step = index.indices(len(self._points))
+            if step > 0:
+                if step == 1 and stop == len(self._points):
+                    # 从队尾反向取新增段，避免为跳过稳定历史而扫描整条 deque。
+                    tail = list(islice(reversed(self._points), stop - start))
+                    tail.reverse()
+                    return tail
+                # 其他正向兼容切片使用 islice，不创建无关的中间完整列表。
+                return list(islice(self._points, start, stop, step))
+            # 反向切片只用于兼容普通 Sequence 语义，不进入每帧增量热路径。
+            return list(self._points)[index]
+        return self._points[index]
+
+    def append_position(
+        self,
+        x: float,
+        y: float,
+        altitude: float,
+        time: float,
+    ) -> TrailPoint:
+        """追加一个 ENU 位置点并返回它。注意：同一时刻重复快照不会重复入队。"""
+
+        if self._points and self._points[-1].time == time:
+            return self._points[-1]
+        if self._points and time < self._points[-1].time:
+            # 时间回拨意味着控制器进入新一轮运行；换代后才能继续保持按时间有序弹头。
+            self.clear()
+
+        path_distance = 0.0
+        if self._points:
+            previous = self._points[-1]
+            path_distance = previous.path_distance + math.hypot(x - previous.x, y - previous.y)
+        point = TrailPoint(x, y, altitude, time, path_distance, self._next_point_id)
+        self._next_point_id += 1
+        # 显式 popleft 让容量淘汰与时间淘汰采用完全相同的稳定弹头语义。
+        if len(self._points) >= self._capacity:
+            self._points.popleft()
+        self._points.append(point)
+        self._revision += 1
+        return point
+
+    def expire(self, current_time: float, trail_seconds: float) -> int:
+        """从队首弹出时间窗外的点并返回数量。注意：边界点会被保留。"""
+
+        if trail_seconds <= 0.0:
+            removed = len(self._points)
+            self.clear()
+            return removed
+        removed = 0
+        while self._points and current_time - self._points[0].time > trail_seconds:
+            self._points.popleft()
+            removed += 1
+        if removed:
+            self._revision += 1
+        return removed
+
+    def clear(self) -> None:
+        """清空所有点并开启新代。注意：即使原本为空也会通知渲染端重置。"""
+
+        self._points.clear()
+        self._generation = next(_TRAIL_GENERATION_IDS)
+        self._next_point_id = 0
+        self._revision += 1
+
+    def snapshot(self) -> TrailSnapshot:
+        """冻结当前点引用供一个 GUI 快照共用。注意：后续追加不会改变已返回容器。"""
+
+        return TrailSnapshot(
+            _points=tuple(self._points),
+            generation=self._generation,
+            revision=self._revision,
+            first_sequence=self.first_sequence,
+            end_sequence=self.end_sequence,
+            capacity=self._capacity,
+        )
 
 
 @dataclass(frozen=True)
@@ -54,36 +228,3 @@ class TrailViewModel:
         """清空自动同步依据。注意：用于配置切换后重新应用默认尾迹。"""
 
         self._duration_basis = None
-
-
-def prune_trail(trail: Iterable[Any], current_time: float, trail_seconds: float) -> list[Any]:
-    """按尾迹时间窗裁剪采样点。注意：只依赖采样点存在 time 属性。"""
-
-    if trail_seconds <= 0.0:
-        return []
-    # 不假设输入按时间排序，逐点按当前时间窗保留边界内采样。
-    return [point for point in trail if current_time - point.time <= trail_seconds]
-
-
-# 2D 视图每帧逐段绘制尾迹，绘制段数必须有上限：长航时尾迹可积累上万点，
-# 逐点 QPen+drawLine 会把 100ms 的 GUI tick 拖到数百毫秒(表现为 3D 飞机"一卡卡")。
-MAX_TRAIL_DRAW_POINTS = 360
-# 尾迹头部保留的原始采样数：头部若参与抽样，最新绘制点会滞后机体最多数秒，
-# 表现为轨迹头与飞机脱节；保留近段原始点让轨迹头始终贴住机体。
-TRAIL_HEAD_RAW_POINTS = 48
-
-
-def sample_trail_for_display(trail: list, max_points: int = MAX_TRAIL_DRAW_POINTS) -> list:
-    """按显示上限抽样尾迹：近段保留原始点，旧段均匀抽样。注意：只供绘制端使用，不改数据缓存。"""
-
-    # 上限过小时夹到 4，保证头部保留与旧段抽样两部分都至少有 2 个点。
-    max_points = max(4, max_points)
-    if len(trail) <= max_points:
-        return trail
-    head_keep = min(TRAIL_HEAD_RAW_POINTS, max_points // 2)
-    older, head = trail[:-head_keep], trail[-head_keep:]
-    budget = max_points - head_keep
-    # 旧段按索引均匀取样并保留首点，旧段整体处于淡出区间，抽稀在视觉上无感。
-    last = len(older) - 1
-    sampled = [older[round(last * index / (budget - 1))] for index in range(budget)]
-    return sampled + head

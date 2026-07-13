@@ -631,12 +631,62 @@ class GuiViewInteractionTests(unittest.TestCase):
             links=[],
         )
         self.window.sim.set_trail_seconds(1.5)
-        self.window.sim._convert_snapshot(snapshot)
-        self.window.sim._convert_snapshot(replace(snapshot, time_s=2.0, nodes=[replace(node, x_m=112.0)]))
+        # 本用例直接构造控制器固定时钟样本；_convert_snapshot 只读队列，不再按 GUI 帧入队。
+        self.window.sim._append_trail_sample(snapshot)
+        self.window.sim._append_trail_sample(replace(snapshot, time_s=2.0, nodes=[replace(node, x_m=112.0)]))
+        self.window.sim._append_trail_sample(
+            replace(snapshot, time_s=3.0, nodes=[replace(node, x_m=124.0)])
+        )
+        self.window.sim._trail_by_node["A02"].expire(3.0, 1.5)
         converted = self.window.sim._convert_snapshot(replace(snapshot, time_s=3.0, nodes=[replace(node, x_m=124.0)]))
 
         self.assertEqual([point.x for point in converted.nodes[0].trail], [112.0, 124.0])
         self.assertEqual([point.path_distance for point in converted.nodes[0].trail], [12.0, 24.0])
+
+    def test_adapter_trail_sampling_is_independent_of_gui_poll_frequency(self) -> None:
+        """相同仿真区间必须得到相同 10 Hz 尾迹，不能把 GUI 轮询频率当采样时钟。"""
+
+        self._load_ui_config(duration_s=2.0, playback_rate=7.0)
+        for _ in range(7):
+            self.assertEqual(self.window.sim.controller.step(20).code, "OK")
+            frequent = self.window.sim.snapshot()
+        frequent_times = [round(point.time, 6) for point in frequent.nodes[0].trail]
+
+        reset = self.window.sim.reset()
+        self.assertEqual(self.window.sim.last_result_code, "OK")
+        self.assertEqual([point.time for point in reset.nodes[0].trail], [0.0])
+        self.assertEqual(self.window.sim.controller.step(140).code, "OK")
+        delayed = self.window.sim.snapshot()
+        delayed_times = [round(point.time, 6) for point in delayed.nodes[0].trail]
+
+        self.assertEqual(frequent_times, [round(index * 0.1, 6) for index in range(8)])
+        self.assertEqual(delayed_times, frequent_times)
+
+    def test_adapter_keeps_current_aircraft_position_outside_stable_trail_queue(self) -> None:
+        """固定采样间隙内只更新飞机实时端点，稳定队列不得追加墙钟轮询点。"""
+
+        self._load_ui_config(duration_s=1.0, playback_rate=7.0)
+        self.assertEqual(self.window.sim.controller.step(1).code, "OK")
+
+        converted = self.window.sim.snapshot()
+
+        self.assertAlmostEqual(converted.time, 0.005)
+        self.assertEqual([point.time for point in converted.nodes[0].trail], [0.0])
+
+    def test_adapter_does_not_backfill_samples_recorded_while_trail_is_disabled(self) -> None:
+        """关闭期间只推进固定样本游标，重新开启必须从当前机位建立新尾迹。"""
+
+        self._load_ui_config(duration_s=1.0, playback_rate=7.0)
+        self.assertEqual(self.window.sim.controller.step(40).code, "OK")
+        before_close = self.window.sim.snapshot()
+        self.assertEqual([round(point.time, 6) for point in before_close.nodes[0].trail], [0.0, 0.1, 0.2])
+
+        self.window.sim.set_trail_seconds(0.0)
+        self.assertEqual(self.window.sim.controller.step(40).code, "OK")
+        self.window.sim.set_trail_seconds(1.0)
+        reopened = self.window.sim.snapshot()
+
+        self.assertEqual([round(point.time, 6) for point in reopened.nodes[0].trail], [0.4])
 
     def test_side_grid_uses_side_horizontal_mapping(self) -> None:
         self.window.side_view.snapshot = None
@@ -1211,7 +1261,10 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(wingman_pens)
         self.assertTrue(all(pen.style() == Qt.PenStyle.SolidLine for pen in leader_pens))
         self.assertTrue(all(pen.style() == Qt.PenStyle.CustomDashLine for pen in wingman_pens))
-        self.assertNotEqual(wingman_pens[0].dashOffset(), wingman_pens[1].dashOffset())
+        self.assertEqual(leader_painter.drawPath.call_count, 1)
+        self.assertEqual(wingman_painter.drawPath.call_count, 1)
+        self.assertEqual(wingman_pens[0].capStyle(), Qt.PenCapStyle.RoundCap)
+        self.assertEqual(wingman_pens[0].joinStyle(), Qt.PenJoinStyle.RoundJoin)
 
     def test_top_view_wingman_dash_offset_stays_stable_after_oldest_trail_point_is_pruned(self) -> None:
         view = self.window.top_view
@@ -1235,7 +1288,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         )
         pruned_pens = [call.args[0] for call in pruned_painter.setPen.call_args_list]
 
-        self.assertAlmostEqual(full_pens[1].dashOffset(), pruned_pens[0].dashOffset())
+        self.assertAlmostEqual(full_pens[0].dashOffset(), 0.0)
+        self.assertAlmostEqual(pruned_pens[0].dashOffset(), 12.0 * view.scale_value / 2.4)
 
     def test_top_view_wingman_dash_offset_stays_stable_after_new_trail_point_is_appended(self) -> None:
         view = self.window.top_view
