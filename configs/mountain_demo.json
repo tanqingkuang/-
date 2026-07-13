@@ -32,8 +32,11 @@
     "coordinate_system": "x_forward_y_up_z_right",
     "formation_files": [
       "element/formations/wedge_5_aircraft_a01_a05.json",
-      "element/formations/line_abreast_5_aircraft_a01_a05.json",
-      "element/formations/double_column_5_aircraft_a01_a05.json"
+      "element/formations/aifly_a_5_aircraft_a01_a05.json",
+      "element/formations/aifly_i_5_aircraft_a01_a05.json",
+      "element/formations/aifly_f_5_aircraft_a01_a05.json",
+      "element/formations/aifly_l_5_aircraft_a01_a05.json",
+      "element/formations/aifly_y_5_aircraft_a01_a05.json"
     ]
   },
   "model": {
