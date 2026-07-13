@@ -76,11 +76,22 @@ def card_rect_for(
     height: float,
     dx: float = 16.0,
     dy: float = -14.0,
+    viewport_w: float | None = None,
+    viewport_h: float | None = None,
 ) -> CardRect:
-    """计算飞机右上方的卡片矩形。注意：dx、dy 描述左下锚点相对机体中心的偏移。"""
+    """计算飞机右上方的卡片矩形。注意：dx、dy 描述固定锚点相对机体中心的偏移；
+    传入视口宽高时把矩形整体夹紧到可视区域内，避免贴边节点的卡片被裁出画布。
+    """
 
     # 卡片左下角位于 (x + dx, y + dy)，再向屏幕上方展开完整高度。
-    return CardRect(point.x + dx, point.y + dy - height, width, height)
+    x = point.x + dx
+    y = point.y + dy - height
+    if viewport_w is not None:
+        # 视口窄于卡片时退化贴左对齐，至少保证左边界可见。
+        x = min(max(x, 0.0), max(0.0, viewport_w - width))
+    if viewport_h is not None:
+        y = min(max(y, 0.0), max(0.0, viewport_h - height))
+    return CardRect(x, y, width, height)
 
 
 @dataclass
@@ -131,10 +142,16 @@ class CardBoardState:
         card_h: float,
         dx: float = 16.0,
         dy: float = -14.0,
-        icon_size: float = 28.0,
+        icon_size: float = 48.0,
         recovery_margin: float = 10.0,
+        viewport_w: float | None = None,
+        viewport_h: float | None = None,
     ) -> bool:
-        """按优先级与滞回更新自动卡片可见性。注意：返回是否有实际状态变化。"""
+        """按优先级与滞回更新自动卡片可见性。注意：返回是否有实际状态变化。
+
+        icon_size 默认 48px：机体剪影任意朝向下的外接圆半径约 21px，
+        加画笔半宽与抗锯齿余量后取整为方框边长，确保旋转机头也不会被误判为不重叠。
+        """
 
         # 全部图标先形成不可覆盖区域；每张卡片只排除自己的图标方框。
         half_icon = icon_size / 2.0
@@ -144,7 +161,7 @@ class CardBoardState:
         }
         # pinned_show 无条件显示并先占位；它们彼此不做排斥判断。
         occupied_cards = [
-            card_rect_for(point, card_w, card_h, dx, dy)
+            card_rect_for(point, card_w, card_h, dx, dy, viewport_w, viewport_h)
             for point in points
             if self.overrides.get(point.node_id) is True
         ]
@@ -156,8 +173,8 @@ class CardBoardState:
         # 变化标记只反映实际可见性切换，供画布避免无意义重绘。
         changed = False
         for point in auto_points:
-            # 候选矩形与 GUI 绘制复用完全相同的右上锚点参数。
-            candidate = card_rect_for(point, card_w, card_h, dx, dy)
+            # 候选矩形与 GUI 绘制复用完全相同的右上锚点参数与视口夹紧规则。
+            candidate = card_rect_for(point, card_w, card_h, dx, dy, viewport_w, viewport_h)
             # 未记录节点按默认全显处理，首次重叠可以在本轮立即隐藏。
             previous = self.visible.get(point.node_id, True)
             # 已隐藏节点用 10px 外扩检测净空；可见节点重叠后立即隐藏。

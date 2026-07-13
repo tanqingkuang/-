@@ -35,6 +35,9 @@ NODE_CARD_HEIGHT = 58.0
 # 锚点以飞机中心为基准，使卡片左下角始终落在机体右上方。
 NODE_CARD_DX = 16.0
 NODE_CARD_DY = -14.0
+# _draw_nodes 机体剪影任意朝向下的外接圆半径约 21px，加画笔半宽与抗锯齿余量后
+# 取整为方框边长，供遮挡检测排除真实机体覆盖范围（而非过窄的固定图标框）。
+NODE_ICON_ENVELOPE = 48.0
 
 
 class TopView(QGraphicsView):
@@ -335,12 +338,17 @@ class TopView(QGraphicsView):
 
         if self.snapshot is not self._card_snapshot:
             return
+        # 遮挡检测与实际绘制共用同一视口尺寸，保证夹紧后的矩形完全一致。
+        viewport_size = self.viewport().size()
         if self.cards.update_visibility(
             self._node_screen_points(),
             NODE_CARD_WIDTH,
             NODE_CARD_HEIGHT,
             NODE_CARD_DX,
             NODE_CARD_DY,
+            icon_size=NODE_ICON_ENVELOPE,
+            viewport_w=float(viewport_size.width()),
+            viewport_h=float(viewport_size.height()),
         ):
             self.viewport().update()
 
@@ -775,16 +783,22 @@ class TopView(QGraphicsView):
             painter.drawLine(QPointF(source.x, source.y), QPointF(target.x, target.y))
 
     def _draw_node_cards(self, painter: QPainter, snapshot: Snapshot) -> None:
-        """在机体下方绘制可见信息卡片。注意：卡片矩形必须与 ViewModel 使用相同尺寸。"""
+        """在机体下方绘制可见信息卡片。注意：卡片矩形必须与 ViewModel 使用相同尺寸与视口夹紧。"""
 
         if snapshot is not self._card_snapshot:
             return
+        # 与遮挡检测共用同一视口尺寸，保证绘制矩形和判定矩形完全一致。
+        viewport_size = self.viewport().size()
+        viewport_w = float(viewport_size.width())
+        viewport_h = float(viewport_size.height())
         points = {point.node_id: point for point in self._node_screen_points()}
         for node in snapshot.nodes:
             if not self.cards.is_card_shown(node.node_id):
                 continue
             point = points[node.node_id]
-            rect = card_rect_for(point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_DX, NODE_CARD_DY)
+            rect = card_rect_for(
+                point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_DX, NODE_CARD_DY, viewport_w, viewport_h
+            )
             self._draw_node_card(painter, node, point, rect)
 
     def _draw_node_card(

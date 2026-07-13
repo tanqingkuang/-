@@ -56,6 +56,28 @@ class NodeCardViewModelTests(unittest.TestCase):
         self.assertFalse(rect.overlaps(CardRect(217.0, 128.0, 20.0, 20.0)))
         self.assertTrue(rect.overlaps(CardRect(217.0, 128.0, 20.0, 20.0), margin=10.0))
 
+    def test_card_rect_clamps_to_viewport_when_anchor_would_overflow(self) -> None:
+        """节点贴近视口边缘时卡片矩形被夹紧，不会被裁出可视区域。
+
+        复现评审场景：640x420 视口内节点位于右上角附近，默认右上锚点会让卡片
+        顶部越出视口上边界；传入视口尺寸后卡片必须整体落在 [0, w] x [0, h] 内。
+        """
+
+        point = ScreenPoint("A", 620.0, 30.0)
+        rect = card_rect_for(point, 92.0, 58.0, 16.0, -14.0, viewport_w=640.0, viewport_h=420.0)
+
+        self.assertGreaterEqual(rect.x, 0.0)
+        self.assertGreaterEqual(rect.y, 0.0)
+        self.assertLessEqual(rect.x + rect.w, 640.0)
+        self.assertLessEqual(rect.y + rect.h, 420.0)
+
+    def test_card_rect_without_viewport_stays_unclamped(self) -> None:
+        """未提供视口尺寸时保持旧有右上锚点行为，避免影响未接入夹紧的调用方。"""
+
+        rect = card_rect_for(ScreenPoint("A", 620.0, 30.0), 92.0, 58.0, 16.0, -14.0)
+
+        self.assertEqual(rect, CardRect(636.0, -42.0, 92.0, 58.0))
+
     def test_handle_click_cycles_auto_and_manual_overrides(self) -> None:
         """单击按当前实际可见性设置反向覆盖，再次单击清除覆盖。"""
 
@@ -85,10 +107,16 @@ class NodeCardViewModelTests(unittest.TestCase):
         self.assertEqual(state.overrides, {"A": True})
 
     def test_leader_claims_overlapping_card_before_wingman(self) -> None:
-        """卡片重叠时长机优先占位，僚机自动退化为纯 ID 标签。"""
+        """卡片重叠时长机优先占位，僚机自动退化为纯 ID 标签。
+
+        W01 相对 L01 的偏移量刻意选在“两机卡片互相重叠、但都不落入对方
+        48px 图标包络”的区间内，确保本用例只验证优先级占位规则，不与
+        `test_icon_envelope_covers_arbitrary_heading_not_just_narrow_box`
+        验证的机体避让规则相互干扰。
+        """
 
         state = CardBoardState()
-        points = [ScreenPoint("W01", 0.0, 0.0), ScreenPoint("L01", 0.0, 0.0, is_leader=True)]
+        points = [ScreenPoint("W01", -90.0, -30.0), ScreenPoint("L01", 0.0, 0.0, is_leader=True)]
 
         self.assertTrue(state.update_visibility(points, 92.0, 58.0))
         self.assertTrue(state.is_card_shown("L01"))
@@ -105,26 +133,45 @@ class NodeCardViewModelTests(unittest.TestCase):
         self.assertTrue(state.is_card_shown("B"))
 
     def test_visibility_hides_immediately_and_recovers_after_ten_pixel_clearance(self) -> None:
-        """自动卡片重叠即隐藏，隐藏后达到十像素净空才恢复。"""
+        """自动卡片重叠即隐藏，隐藏后达到十像素净空才恢复。
+
+        W 的纵向偏移固定在 40px，只让水平距离穿越卡片重叠边界，避免同时
+        触发机体图标避让规则，单独验证卡片间的滞回阈值。
+        """
 
         state = CardBoardState()
         leader = ScreenPoint("L", 0.0, 0.0, is_leader=True)
 
-        self.assertTrue(state.update_visibility([leader, ScreenPoint("W", 80.0, 0.0)], 92.0, 58.0))
+        self.assertTrue(state.update_visibility([leader, ScreenPoint("W", 80.0, 40.0)], 92.0, 58.0))
         self.assertFalse(state.is_card_shown("W"))
-        self.assertFalse(state.update_visibility([leader, ScreenPoint("W", 97.0, 0.0)], 92.0, 58.0))
+        self.assertFalse(state.update_visibility([leader, ScreenPoint("W", 97.0, 40.0)], 92.0, 58.0))
         self.assertFalse(state.is_card_shown("W"))
-        self.assertTrue(state.update_visibility([leader, ScreenPoint("W", 102.0, 0.0)], 92.0, 58.0))
+        self.assertTrue(state.update_visibility([leader, ScreenPoint("W", 102.0, 40.0)], 92.0, 58.0))
         self.assertTrue(state.is_card_shown("W"))
 
     def test_other_aircraft_icon_blocks_an_auto_card(self) -> None:
-        """候选卡片碰到其他飞机的 28 像素图标方框时自动退化。"""
+        """候选卡片碰到其他飞机的默认图标方框时自动退化。"""
 
         state = CardBoardState(overrides={"A": False})
         points = [ScreenPoint("A", 0.0, 0.0), ScreenPoint("B", -20.0, 43.0)]
 
         self.assertTrue(state.update_visibility(points, 92.0, 58.0))
         self.assertFalse(state.is_card_shown("B"))
+
+    def test_icon_envelope_covers_arbitrary_heading_not_just_narrow_box(self) -> None:
+        """图标遮挡框需覆盖机体任意朝向的外接圆，而非过窄的旧 28px 方框。
+
+        复现评审场景：L01=(0,0) 为长机，W01=(60,0)。旧的 28px 图标框（半宽 14px）
+        与 L01 卡片矩形的下边界恰好相切、按"仅边界接触不算重叠"规则漏判为不重叠，
+        导致 L01 卡片视觉上侵入 W01 机体。默认 icon_size 改为 48px 后必须正确判定重叠，
+        使 L01 卡片退化，不再压住 W01 的真实机体范围。
+        """
+
+        state = CardBoardState()
+        points = [ScreenPoint("L01", 0.0, 0.0, is_leader=True), ScreenPoint("W01", 60.0, 0.0)]
+
+        self.assertTrue(state.update_visibility(points, 92.0, 58.0))
+        self.assertFalse(state.is_card_shown("L01"))
 
     def test_sync_nodes_removes_departed_visibility_and_overrides(self) -> None:
         """节点退场时同时清理其人工覆盖和遮挡滞回记录。"""
