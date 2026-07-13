@@ -140,17 +140,17 @@ class TrailPayloadState:
 # 1. QML 侧只接收 JSON 字符串，因此 payload 不能携带完整高度场大数组。
 # 2. 布局地形只把 layoutFile、resolution、中心和范围传给 TerrainGeometry。
 # 3. TerrainGeometry 在 Python/QML 类型内部生成网格，避免 JSON 序列化数十 MB 数据。
-# 4. riskZones 是语义数据，riskZoneLines/riskZoneBuffers 是为 QML 简化准备的渲染线段。
-# 5. 风险区线段保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
+# 4. riskZones 是语义数据；riskZoneLines 同时承载真实障碍边界和无障碍库旧场景的兼容提示。
+# 5. 风险线保持米制 Quick3D 坐标，复用 TrailRibbonGeometry 的三角带实现细线。
 # 6. 旧配置没有 terrain_display_file 时，payload 仍然走 procedural 地形路径。
 # 7. 旧路径的 surface.width/depth/height 字段保持不变，避免历史 QML 绑定失效。
 # 8. 新布局模式只影响显示层，不改变 Snapshot 的 ENU 坐标、航线和障碍语义。
 # 9. 障碍物 obstacles 表示避障模块二维障碍；riskZones 优先由当前启用障碍生成，无避障数据时才回退布局标记。
 # 10. 航线和风险细线使用点数组；尾迹额外携带队列序号，使几何层能原子识别追加和弹头。
-# 11. 红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
-# 12. 淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
-# 13. 风险罩面高度略高于峰顶，避免和地形 z-fighting。
-# 14. 缓冲虚线放在山脚高度附近，表达安全缓冲而不是禁飞实体墙。
+# 11. 兼容红色风险线宽固定为 7m，明显细于历史粗网纹和默认尾迹。
+# 12. 兼容淡青缓冲圈拆成 24 个短弧，视觉上是虚线，QML 不需要计算三角函数。
+# 13. 真实障碍转换成地形局部坐标，供 TerrainGeometry 直接混入顶点色。
+# 14. 圆形并入安全间距，多边形保留边界与 clearance，由几何层做圆角膨胀。
 # 15. 布局文件读取使用 lru_cache，实时刷新快照时不会重复解析 JSON。
 # 16. 文件不可读只回退旧地形，不阻断 3D 窗口打开。
 # 17. 但 terrain_field 的单元测试会直接读取正式布局，确保验收文件本身有效。
@@ -165,22 +165,22 @@ class TrailPayloadState:
 # 26. 当前生效航线来自 snapshot.route_segments，保证飞机飞行坐标语义不变。
 # 27. 采用避障航线后，当前航线仍走 route_segments，保持既有渲染管线不变。
 # 28. 被替代的配置航线走 blocked_route_segments，以红色虚线保留封锁状态。
-# 29. 颜色和材质在 QML 层控制，本文件只提供几何和数据。
-# 30. 单个风险区生成 10 条红色网格线，覆盖但不遮蔽山体细节。
-# 31. 线段 y 坐标取风险峰高度，缓冲圈 y 坐标取低值，形成上下层次。
+# 29. 基础材质仍由 QML 控制，障碍风险色由 Python 地形几何按本文件提供的范围混合。
+# 30. 只有布局回退风险区生成 10 条红色网格线，覆盖但不遮蔽山体细节。
+# 31. 兼容线段 y 坐标取风险峰高度，缓冲圈 y 坐标取低值，形成上下层次。
 # 32. 通过 json.dumps separators 压缩 pathValue，降低实时 payload 字符串体积。
 # 33. 失败回退只吞 IO/JSON/值错误，普通编程错误仍由测试暴露。
 # 34. terrain payload 的 ground 字段保留给后续需要地平面或雾墙时复用。
 # 35. 这里的 Quick3D z 是 -north，所有风险线同样遵守 enu_to_quick3d。
 # 36. route dash 切分仍按空间距离，巡航 900m 地形不会影响虚线节奏。
-# 37. 旧 obstacles 与新 riskZones 可同时存在，二者分别显示为柱体和贴地风险罩面。
+# 37. obstacles 仍保留兼容 payload 与相机包围盒用途，但 QML 不再把它们渲染成柱体或方盒。
 # 38. scene_data 不缓存生成后的 mesh，避免和 TerrainGeometry 的重建生命周期竞争。
 # 39. 如果布局文件变更，改变路径或清理 _cached_layout 即可刷新元数据。
 # 40. P2 风险区与当前启用的真实障碍同源；旧场景未提供避障数据时继续使用正式 JSON 布局标记。
 # 41. 注释中的“显示层”均指 GUI/QML，不包含 runner、algorithm 或 environment 模块。
 # 42. 所有数值都用 float 输出，QML ListModel 不需要再做类型归一化。
-# 43. 风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
-# 44. 风险缓冲虚线 alpha 更低，避免抢过航线蓝色主视觉。
+# 43. 兼容风险线材质发光很弱，最终视觉厚度主要由几何 width 控制。
+# 44. 兼容风险缓冲虚线 alpha 更低，避免抢过航线蓝色主视觉。
 # 45. payload 中保留 label，后续需要 3D 标注时不用再改 terrain_field。
 
 
@@ -245,25 +245,48 @@ def build_scene_payload(
     display_file = terrain_display_file or snapshot.terrain_display_file
     terrain = _terrain_payload(bounds, display_file, obstacle_views)
     risk_zones = list(terrain.get("riskZones", []))
-    risk_zone_lines = list(terrain.get("riskZoneLines", []))
-    if not risk_zone_lines:
-        risk_zone_lines = [
-            line
-            for zone in risk_zones
-            for line in _risk_zone_line_payload(zone)
-        ]
-    risk_zone_buffers = list(terrain.get("riskZoneBuffers", []))
-    if not risk_zone_buffers:
-        risk_zone_buffers = [
-            dash
-            for zone in risk_zones
-            for dash in _risk_zone_buffer_payload(zone)
-        ]
+    if obstacle_views:
+        # 真实障碍只有精确边界参与呼吸；旧外接圆网格和缓冲圈都不再叠加到地形上。
+        risk_zone_lines = _obstacle_boundary_payloads(obstacle_views, clearance_m, terrain.get("surface", {}))
+        risk_zone_buffers: list[dict[str, object]] = []
+    else:
+        raw_risk_zone_lines = terrain.get("riskZoneLines")
+        risk_zone_lines = list(raw_risk_zone_lines) if isinstance(raw_risk_zone_lines, list) else []
+        if raw_risk_zone_lines is None:
+            risk_zone_lines = [
+                line
+                for zone in risk_zones
+                for line in _risk_zone_line_payload(zone)
+            ]
+        raw_risk_zone_buffers = terrain.get("riskZoneBuffers")
+        risk_zone_buffers = list(raw_risk_zone_buffers) if isinstance(raw_risk_zone_buffers, list) else []
+        if raw_risk_zone_buffers is None:
+            risk_zone_buffers = [
+                dash
+                for zone in risk_zones
+                for dash in _risk_zone_buffer_payload(zone)
+            ]
+    terrain_risk_areas = _terrain_risk_area_payloads(
+        obstacle_views,
+        clearance_m,
+        terrain.get("surface", {}),
+        risk_zones,
+    )
     camera_payload = _camera_payload(bounds, aircraft)
     if terrain.get("surface", {}).get("mode") == "layout":
         camera_payload = _layout_camera_payload(terrain["surface"])
     # 静态内容签名：QML 据此决定是否重建航线/障碍/风险区模型，避免每帧 clear+append 造成卡顿。
-    static_key = _static_content_key(route_points, route_dashes, blocked_route_points, blocked_route_dashes, obstacle_items, risk_zones, risk_zone_lines, risk_zone_buffers)
+    static_key = _static_content_key(
+        route_points,
+        route_dashes,
+        blocked_route_points,
+        blocked_route_dashes,
+        obstacle_items,
+        risk_zones,
+        risk_zone_lines,
+        risk_zone_buffers,
+        terrain_risk_areas,
+    )
     return {
         "staticKey": static_key,
         "time": snapshot.time,
@@ -282,6 +305,7 @@ def build_scene_payload(
         "riskZones": risk_zones,
         "riskZoneLines": risk_zone_lines,
         "riskZoneBuffers": risk_zone_buffers,
+        "terrainRiskAreas": terrain_risk_areas,
         "camera": camera_payload,
         "counts": {
             "aircraft": len(aircraft),
@@ -623,7 +647,7 @@ def _interpolate_polyline(
 
 
 def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, object]:
-    """生成障碍/风险区显示数据。注意：二维障碍在 3D 中按无限高柱体近似显示。"""
+    """生成障碍兼容与相机包围盒数据。注意：QML 不再把这些尺寸直接渲染成实体柱体。"""
 
     # 安全间距在显示层膨胀半径/包围盒，便于和避障预览里的风险边界对应。
     safe_clearance = max(0.0, float(clearance_m))
@@ -653,6 +677,178 @@ def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, o
         "height": column_height_m,
         **coord,
     }
+
+
+def _terrain_risk_area_payloads(
+    obstacles: list[ObstacleView],
+    clearance_m: float,
+    surface: object,
+    fallback_zones: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """生成地形顶点着色范围。注意：坐标转为地形模型局部坐标，复杂多边形保留真实轮廓。"""
+
+    surface_data = surface if isinstance(surface, dict) else {}
+    origin_x = float(surface_data.get("x", 0.0))
+    origin_z = float(surface_data.get("z", 0.0))
+    safe_clearance = max(0.0, float(clearance_m))
+    areas: list[dict[str, object]] = []
+    for obstacle in obstacles:
+        if not obstacle.enabled:
+            continue
+        if obstacle.kind == "circle":
+            # 圆形直接把规划安全间距并入半径，着色边界与旧柱体表达的膨胀范围一致。
+            areas.append(
+                {
+                    "id": obstacle.obstacle_id,
+                    "kind": "circle",
+                    "center": [obstacle.center_x - origin_x, -obstacle.center_y - origin_z],
+                    "radius": max(1.0, obstacle.radius + safe_clearance),
+                }
+            )
+            continue
+        vertices = obstacle.vertices if obstacle.vertices else _obstacle_corner_points(obstacle)
+        # 多边形不转外接圆或包围盒；地形几何层按边界距离完成圆角膨胀。
+        areas.append(
+            {
+                "id": obstacle.obstacle_id,
+                "kind": "polygon",
+                "points": [[east - origin_x, -north - origin_z] for east, north in vertices],
+                "clearance": safe_clearance,
+            }
+        )
+
+    if obstacles:
+        # 配置存在但全部禁用表示用户明确隐藏障碍，不能回退布局里的旧风险峰。
+        return areas
+    for zone in fallback_zones:
+        areas.append(
+            {
+                "id": str(zone.get("id", "风险区")),
+                "kind": "circle",
+                "center": [float(zone.get("x", 0.0)) - origin_x, float(zone.get("z", 0.0)) - origin_z],
+                "radius": max(1.0, float(zone.get("radius", 1.0))),
+            }
+        )
+    return areas
+
+
+def _obstacle_boundary_payloads(
+    obstacles: list[ObstacleView], clearance_m: float, surface: object
+) -> list[dict[str, object]]:
+    """生成贴地的障碍告警边界。注意：只有真实且启用的障碍边界携带呼吸标志。"""
+
+    surface_data = surface if isinstance(surface, dict) else {}
+    field: TerrainField | None = None
+    if surface_data.get("mode") == "layout":
+        layout_file = str(surface_data.get("layoutFile", ""))
+        resolution = int(surface_data.get("resolution", DEFAULT_TERRAIN_RESOLUTION))
+        if layout_file:
+            # 高度场未就绪时先用基准面；fieldReady 翻转会改变 staticKey 并自动换成贴地路径。
+            field = _cached_terrain_field(layout_file, resolution)
+
+    safe_clearance = max(0.0, float(clearance_m))
+    boundaries: list[dict[str, object]] = []
+    for obstacle in obstacles:
+        if not obstacle.enabled:
+            continue
+        horizontal_points = _obstacle_boundary_points(obstacle, safe_clearance)
+        if len(horizontal_points) < 3:
+            continue
+        # 一条障碍只生成一个闭合 ribbon；动画只改材质透明度，不触碰地形顶点色。
+        path = _terrain_boundary_path(horizontal_points, surface_data, field)
+        boundaries.append(
+            {
+                "color": "#ff684f",
+                "width": 7.0,
+                "pulse": True,
+                "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
+            }
+        )
+    return boundaries
+
+
+def _obstacle_boundary_points(obstacle: ObstacleView, clearance_m: float) -> list[tuple[float, float]]:
+    """返回障碍安全区的水平边界。注意：坐标仍为 ENU east/north，末点暂不闭合。"""
+
+    if obstacle.kind == "circle":
+        radius = max(1.0, float(obstacle.radius) + clearance_m)
+        # 圆周按周长自适应采样，同时保留最低 48 段，近看不会呈现明显多边形折角。
+        segment_count = max(48, min(160, int(math.ceil(math.tau * radius / 80.0))))
+        return [
+            (
+                float(obstacle.center_x) + radius * math.cos(index * math.tau / segment_count),
+                float(obstacle.center_y) + radius * math.sin(index * math.tau / segment_count),
+            )
+            for index in range(segment_count)
+        ]
+
+    vertices = list(obstacle.vertices) if obstacle.vertices else _obstacle_corner_points(obstacle)
+    if len(vertices) >= 2 and math.dist(vertices[0], vertices[-1]) <= 1e-6:
+        # 配置允许显式重复首点；先去重再交给圆角外扩，避免产生零长边。
+        vertices.pop()
+    if len(vertices) < 3 or clearance_m <= 0.0:
+        return vertices
+
+    # 与俯视避障预览复用同一圆角 Minkowski 外扩，确保 2D/3D 告警边界语义一致。
+    from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
+
+    return _rounded_inflated_polygon_points(vertices, clearance_m)
+
+
+def _terrain_boundary_path(
+    boundary: list[tuple[float, float]], surface: dict[str, object], field: TerrainField | None
+) -> list[list[float]]:
+    """把 ENU 闭合轮廓逐点披挂到地形表面。注意：输出转换为 Quick3D x/y/z。"""
+
+    width = max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)))
+    depth = max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)))
+    resolution = int(surface.get("resolution", 0))
+    grid_segments = max(1, resolution - 1) if resolution > 1 else 191
+    # 采样步长略小于地形网格，轮廓跨过陡坡时不会悬空或切入山体。
+    sample_spacing = max(24.0, min(110.0, max(width, depth) / grid_segments * 0.75))
+    path: list[list[float]] = []
+    for start, end in zip(boundary, boundary[1:] + boundary[:1]):
+        edge_length = math.dist(start, end)
+        segments = max(1, int(math.ceil(edge_length / sample_spacing)))
+        # 每条边不重复写末点；全部边完成后统一追加首点，保持 ribbon 闭合且无零长中间段。
+        for index in range(segments):
+            ratio = index / segments
+            east = start[0] + (end[0] - start[0]) * ratio
+            north = start[1] + (end[1] - start[1]) * ratio
+            x = float(east)
+            z = -float(north)
+            y = _terrain_surface_height(surface, field, x, z, 34.0)
+            path.append([x, y, z])
+    if path:
+        path.append(list(path[0]))
+    return path
+
+
+def _terrain_surface_height(
+    surface: dict[str, object], field: TerrainField | None, x_m: float, z_m: float, offset_m: float
+) -> float:
+    """采样风险边界的世界高度。注意：边界始终悬浮少量距离以规避地形 z-fighting。"""
+
+    if field is not None:
+        # 正式地形显示可能叠加受限岩脊位移；边界必须采样显示面，不能埋进仅显示层的沟脊里。
+        return _sample_field_display_height(field, x_m, -z_m) + offset_m
+    surface_y = float(surface.get("y", 0.0))
+    if surface.get("mode") != "procedural":
+        # 布局高度场异步生成期间只显示低位占位线；下一次静态刷新会替换成真实高度。
+        return surface_y + offset_m
+
+    # procedural 地形使用与 TerrainGeometry 完全相同的标量高度函数，避免另造近似曲面。
+    from src.ui.gui.situation3d.terrain_geometry import _height_value
+
+    local_x = x_m - float(surface.get("x", 0.0))
+    local_z = z_m - float(surface.get("z", 0.0))
+    return surface_y + _height_value(
+        local_x,
+        local_z,
+        max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M))),
+        max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M))),
+        max(1.0, float(surface.get("height", DEFAULT_TERRAIN_RELIEF_M))),
+    ) + offset_m
 
 
 def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float]:
@@ -830,18 +1026,18 @@ def _layout_terrain_payload(
         obstacle_zones = _risk_zones_from_obstacles(obstacle_views, field)
         source_zones = obstacle_zones if obstacle_views else risk_zones_from_layout(layout)
         risk_zones = [_risk_zone_payload(zone, field) for zone in source_zones]
-        # 线网在 Python 侧提前采样成多点折线，QML 只负责按正式 TrailRibbonGeometry 渲染。
-        risk_zone_lines = [
-            line
-            for zone in risk_zones
-            for line in _risk_zone_line_payload(zone, field)
-        ]
-        # 缓冲圈同样贴地，但 offset 更低，用来表达山脚安全边界。
-        risk_zone_buffers = [
-            dash
-            for zone in risk_zones
-            for dash in _risk_zone_buffer_payload(zone, field)
-        ]
+        # 真实障碍已经由精确轮廓的地形着色表达，不再叠加外接圆线网；
+        # 只有旧场景缺少障碍库时才保留布局风险峰的兼容提示。
+        risk_zone_lines = (
+            []
+            if obstacle_views
+            else [line for zone in risk_zones for line in _risk_zone_line_payload(zone, field)]
+        )
+        risk_zone_buffers = (
+            []
+            if obstacle_views
+            else [dash for zone in risk_zones for dash in _risk_zone_buffer_payload(zone, field)]
+        )
         payload = {
             "ground": {
                 "mode": "layout",
@@ -955,6 +1151,7 @@ def _risk_zone_line_payload(zone: dict[str, object], field: TerrainField | None 
                     "color": "#ff5a45",
                     # 风险网格必须显著细于主航线(16m):视觉层级上任务航线优先。
                     "width": 7.0,
+                    "pulse": False,
                     "pathValue": json.dumps(path, ensure_ascii=False, separators=(",", ":"), allow_nan=False),
                 }
             )
@@ -1015,10 +1212,27 @@ def _sample_quick3d_height(field: TerrainField | None, x_m: float, z_m: float, o
 def _sample_field_height(field: TerrainField, east_m: float, north_m: float) -> float:
     """双线性采样高度场。注意：坐标越界时夹到最近网格边界。"""
 
+    return _sample_height_values(field, field.heights_m, east_m, north_m)
+
+
+def _sample_field_display_height(field: TerrainField, east_m: float, north_m: float) -> float:
+    """双线性采样渲染高度。注意：没有显示增强网格时回退真实米制高度。"""
+
+    heights = field.display_heights_m if field.display_heights_m is not None else field.heights_m
+    return _sample_height_values(field, heights, east_m, north_m)
+
+
+def _sample_height_values(
+    field: TerrainField, heights: np.ndarray, east_m: float, north_m: float
+) -> float:
+    """在指定高度数组上做双线性采样。注意：数组必须与 field.resolution 同尺寸。"""
+
     min_e = field.center_east_m - field.width_m / 2.0
     min_n = field.center_north_m - field.depth_m / 2.0
-    u = np.clip((float(east_m) - min_e) / max(field.width_m, 1.0), 0.0, 1.0) * (field.resolution - 1)
-    v = np.clip((float(north_m) - min_n) / max(field.depth_m, 1.0), 0.0, 1.0) * (field.resolution - 1)
+    # 这是逐点热路径，使用标量夹取可避免为每个轮廓点进入两次 NumPy ufunc。
+    grid_limit = float(field.resolution - 1)
+    u = max(0.0, min(grid_limit, (float(east_m) - min_e) / max(field.width_m, 1.0) * grid_limit))
+    v = max(0.0, min(grid_limit, (float(north_m) - min_n) / max(field.depth_m, 1.0) * grid_limit))
     # 高度场行列方向仍是 ENU north/east，Quick3D 的 z 翻转已在调用侧处理。
     col = int(math.floor(u))
     row = int(math.floor(v))
@@ -1026,10 +1240,10 @@ def _sample_field_height(field: TerrainField, east_m: float, north_m: float) -> 
     row1 = min(row + 1, field.resolution - 1)
     tx = float(u - col)
     ty = float(v - row)
-    h00 = float(field.heights_m[row, col])
-    h10 = float(field.heights_m[row, col1])
-    h01 = float(field.heights_m[row1, col])
-    h11 = float(field.heights_m[row1, col1])
+    h00 = float(heights[row, col])
+    h10 = float(heights[row, col1])
+    h01 = float(heights[row1, col])
+    h11 = float(heights[row1, col1])
     return (h00 * (1.0 - tx) + h10 * tx) * (1.0 - ty) + (h01 * (1.0 - tx) + h11 * tx) * ty
 
 

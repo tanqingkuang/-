@@ -47,6 +47,11 @@ _COLOR_MID = (0.255, 0.285, 0.270)
 _COLOR_HIGH = (0.535, 0.510, 0.465)
 # 中段提前进入岩石灰，压缩大面积绿色在斜俯视图中的占比。
 _COLOR_SPLIT = 0.38
+# 障碍风险色采用低饱和铁锈红，只改变地形色相，不制造新的发光实体。
+_RISK_TINT_SRGB = (0.44, 0.22, 0.20)
+_RISK_TINT_STRENGTH = 0.30
+
+_RiskArea = tuple[str, float, float, float, tuple[tuple[float, float], ...], float]
 
 
 class _TerrainGeometryBase(QQuick3DGeometry):
@@ -215,6 +220,38 @@ class _TerrainGeometryBase(QQuick3DGeometry):
 class TerrainGeometry(_TerrainGeometryBase):
     """连续高度场地表。注意：QML 通过 Model.geometry 直接渲染这张 mesh。"""
 
+    riskAreasValueChanged = Signal()
+
+    def __init__(self, parent: object | None = None) -> None:
+        """初始化地形与风险着色范围。注意：风险范围使用地形模型局部坐标。"""
+
+        # 保存原始字符串可让 QML 每帧重复赋同值时直接短路。
+        self._risk_areas_value = "[]"
+        # 解析后的定长元组供 192/768 网格重建共用，避免在顶点循环里反复读 JSON。
+        self._risk_areas: tuple[_RiskArea, ...] = ()
+        super().__init__(parent)
+
+    @Property(str, notify=riskAreasValueChanged)
+    def riskAreasValue(self) -> str:
+        """返回风险着色 JSON。注意：圆与多边形均保持原始形状。"""
+
+        return self._risk_areas_value
+
+    @riskAreasValue.setter
+    def riskAreasValue(self, value: str) -> None:
+        """更新风险着色范围。注意：仅静态障碍变化时才重建地形顶点色。"""
+
+        normalized = str(value or "[]")
+        if normalized == self._risk_areas_value:
+            return
+        # 先保存输入，即使坏 JSON 也能稳定短路同一错误值。
+        self._risk_areas_value = normalized
+        # 单条坏障碍由解析器忽略，其余合法范围仍继续显示。
+        self._risk_areas = _parse_risk_areas(normalized)
+        # 风险色属于顶点属性，范围变化后必须重新上传整张地形网格。
+        self._rebuild()
+        self.riskAreasValueChanged.emit()
+
     def _rebuild(self) -> None:
         """重建地表顶点、法线、纹理坐标、顶点色和索引数据。"""
 
@@ -242,6 +279,11 @@ class TerrainGeometry(_TerrainGeometryBase):
         heights = self._sample_height_grid(step_x, step_z)
         min_height = min(min(row[1:-1]) for row in heights[1:-1])
         max_height = max(max(row[1:-1]) for row in heights[1:-1])
+        local_x = np.linspace(-width / 2.0, width / 2.0, _SURFACE_COLUMNS, dtype=np.float32)
+        local_z = np.linspace(-depth / 2.0, depth / 2.0, _SURFACE_ROWS, dtype=np.float32)
+        x_grid, z_grid = np.meshgrid(local_x, local_z)
+        # 占位地形也使用真实障碍范围，保证没有布局文件的普通 3D 场景不退回红色柱体。
+        risk_weights = _risk_weight_grid(x_grid, z_grid, self._risk_areas, max(step_x, step_z) * 1.35)
 
         vertices = bytearray()
         indices = bytearray()
@@ -251,7 +293,19 @@ class TerrainGeometry(_TerrainGeometryBase):
             for column in range(_SURFACE_COLUMNS):
                 x = -width / 2.0 + step_x * column
                 u_coord = column / (_SURFACE_COLUMNS - 1)
-                self._append_vertex(vertices, heights, row, column, x, z, step_x, step_z, u_coord, v_coord)
+                self._append_vertex(
+                    vertices,
+                    heights,
+                    row,
+                    column,
+                    x,
+                    z,
+                    step_x,
+                    step_z,
+                    u_coord,
+                    v_coord,
+                    float(risk_weights[row, column]),
+                )
 
         # 每个网格单元拆成两个三角面，保持地表是一张连续 mesh。
         for row in range(_SURFACE_ROWS - 1):
@@ -343,7 +397,14 @@ class TerrainGeometry(_TerrainGeometryBase):
         binormals = (binormals / binormal_length).astype(np.float32)
         vertices[:, :, 8:11] = tangents
         vertices[:, :, 11:14] = binormals
-        vertices[:, :, 14:17] = field.colors
+        # 正式布局网格直接在缓存颜色的副本上混色，不修改进程级 TerrainField 缓存。
+        risk_weights = _risk_weight_grid(
+            x_grid,
+            z_grid,
+            self._risk_areas,
+            max(field.width_m / max(1, columns - 1), field.depth_m / max(1, rows - 1)) * 1.35,
+        )
+        vertices[:, :, 14:17] = _tint_risk_colors(field.colors, risk_weights)
         vertices[:, :, 17] = 1.0
 
         top_left = (np.arange(rows - 1, dtype=np.uint32)[:, None] * columns) + np.arange(columns - 1, dtype=np.uint32)[None, :]
@@ -429,6 +490,7 @@ class TerrainGeometry(_TerrainGeometryBase):
         step_z: float,
         u_coord: float,
         v_coord: float,
+        risk_weight: float,
     ) -> None:
         """追加单个地表顶点。注意：法线和颜色都来自同一张高度表。"""
 
@@ -451,7 +513,7 @@ class TerrainGeometry(_TerrainGeometryBase):
         binormal_x = tangent_y * normal_z
         binormal_y = -tangent_x * normal_z
         binormal_z = tangent_x * normal_y - tangent_y * normal_x
-        red, green, blue = _height_color(y, self._amplitude_value)
+        red, green, blue = _tint_risk_color(_height_color(y, self._amplitude_value), risk_weight)
         vertices.extend(
             struct.pack(
                 "<ffffffffffffffffff",
@@ -503,6 +565,164 @@ class TerrainGeometry(_TerrainGeometryBase):
             QVector3D(-self._width_value / 2.0, min(0.0, min_height - 4.0), -self._depth_value / 2.0),
             QVector3D(self._width_value / 2.0, max_height + 16.0, self._depth_value / 2.0),
         )
+
+
+def _parse_risk_areas(value: str) -> tuple[_RiskArea, ...]:
+    """解析 QML 传入的风险范围。注意：坏条目单独忽略，不能让 3D 地形整体消失。"""
+
+    try:
+        raw_areas = json.loads(value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # 显示层坏数据按空风险区降级，基础地形仍可正常渲染。
+        return ()
+    if not isinstance(raw_areas, list):
+        return ()
+    areas: list[_RiskArea] = []
+    for raw in raw_areas:
+        # payload 允许以后混入额外元数据，非对象项不应影响当前障碍。
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind", ""))
+        try:
+            if kind == "circle":
+                center = raw.get("center", [])
+                # 圆心必须是地形局部 x/z 二元坐标。
+                if not isinstance(center, list) or len(center) != 2:
+                    continue
+                center_x = float(center[0])
+                center_z = float(center[1])
+                radius = float(raw.get("radius", 0.0))
+                if not all(math.isfinite(item) for item in (center_x, center_z, radius)) or radius <= 0.0:
+                    continue
+                # 圆形已经在 scene_data 中并入安全间距，这里无需再保存 clearance。
+                areas.append((kind, center_x, center_z, radius, (), 0.0))
+                continue
+            if kind != "polygon":
+                continue
+            raw_points = raw.get("points", [])
+            if not isinstance(raw_points, list):
+                continue
+            # 多边形点保持输入顺序，奇偶规则才能兼容当前山脉凹轮廓。
+            points = tuple((float(point[0]), float(point[1])) for point in raw_points if isinstance(point, list) and len(point) == 2)
+            clearance = max(0.0, float(raw.get("clearance", 0.0)))
+            if len(points) < 3 or not math.isfinite(clearance):
+                continue
+            if not all(math.isfinite(coordinate) for point in points for coordinate in point):
+                continue
+            # clearance 留到距离场阶段处理，可得到真实圆角外扩而不是轴对齐放大。
+            areas.append((kind, 0.0, 0.0, 0.0, points, clearance))
+        except (TypeError, ValueError, OverflowError):
+            # 单个数值转换失败只淘汰当前条目，避免清空其他已启用障碍。
+            continue
+    return tuple(areas)
+
+
+def _risk_weight_grid(
+    x_grid: np.ndarray,
+    z_grid: np.ndarray,
+    areas: tuple[_RiskArea, ...],
+    feather_m: float,
+) -> np.ndarray:
+    """计算风险色混合权重。注意：边缘按一个网格量级柔化，避免多边形锯齿。"""
+
+    weights = np.zeros(x_grid.shape, dtype=np.float32)
+    if not areas:
+        return weights
+    # 柔化宽度至少 1m，防止极小测试网格产生除零或硬锯齿。
+    feather = max(1.0, float(feather_m))
+    for kind, center_x, center_z, radius, points, clearance in areas:
+        if kind == "circle":
+            # 正值位于圆内，负值位于圆外，可直接进入统一平滑函数。
+            signed_distance = radius - np.hypot(x_grid - center_x, z_grid - center_z)
+            weights = np.maximum(weights, _smooth_risk_weight(signed_distance, feather))
+            continue
+        point_array = np.asarray(points, dtype=np.float64)
+        margin = clearance + feather
+        # 先按包围盒裁出候选网格，避免长地形对每条多边形边做全图距离计算。
+        candidate = (
+            (x_grid >= float(point_array[:, 0].min()) - margin)
+            & (x_grid <= float(point_array[:, 0].max()) + margin)
+            & (z_grid >= float(point_array[:, 1].min()) - margin)
+            & (z_grid <= float(point_array[:, 1].max()) + margin)
+        )
+        if not bool(np.any(candidate)):
+            continue
+        candidate_x = x_grid[candidate].astype(np.float64)
+        candidate_z = z_grid[candidate].astype(np.float64)
+        # 奇偶规则提供内外符号，最近边距离提供安全间距与柔化尺度。
+        inside = _points_inside_polygon(candidate_x, candidate_z, point_array)
+        edge_distance = _minimum_polygon_edge_distance(candidate_x, candidate_z, point_array)
+        signed_distance = np.where(inside, edge_distance, -edge_distance) + clearance
+        # 多障碍重叠时取最大权重，色彩不会因重复叠加越来越红。
+        weights[candidate] = np.maximum(weights[candidate], _smooth_risk_weight(signed_distance, feather))
+    return weights
+
+
+def _points_inside_polygon(x_values: np.ndarray, z_values: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """批量判断点是否位于多边形内。注意：使用奇偶规则兼容凹多边形。"""
+
+    inside = np.zeros(x_values.shape, dtype=bool)
+    previous = points[-1]
+    for current in points:
+        z_delta = float(previous[1] - current[1])
+        # 水平边不会跨过水平射线，跳过还能避免零除。
+        if abs(z_delta) > 1e-12:
+            crosses = (current[1] > z_values) != (previous[1] > z_values)
+            boundary_x = (previous[0] - current[0]) * (z_values - current[1]) / z_delta + current[0]
+            # 每穿过一条边翻转一次，最终奇数次即位于多边形内部。
+            inside ^= crosses & (x_values < boundary_x)
+        previous = current
+    return inside
+
+
+def _minimum_polygon_edge_distance(x_values: np.ndarray, z_values: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """计算点到多边形最近边的距离。注意：同时用于安全间距膨胀与边缘柔化。"""
+
+    minimum_sq = np.full(x_values.shape, np.inf, dtype=np.float64)
+    previous = points[-1]
+    for current in points:
+        edge_x = float(current[0] - previous[0])
+        edge_z = float(current[1] - previous[1])
+        length_sq = edge_x * edge_x + edge_z * edge_z
+        if length_sq <= 1e-12:
+            # 重复顶点形成的退化边没有距离贡献。
+            previous = current
+            continue
+        # 投影比例夹到 [0,1] 后，同一公式同时覆盖线段内部与两个端点。
+        ratio = np.clip(((x_values - previous[0]) * edge_x + (z_values - previous[1]) * edge_z) / length_sq, 0.0, 1.0)
+        nearest_x = previous[0] + ratio * edge_x
+        nearest_z = previous[1] + ratio * edge_z
+        distance_sq = (x_values - nearest_x) ** 2 + (z_values - nearest_z) ** 2
+        minimum_sq = np.minimum(minimum_sq, distance_sq)
+        previous = current
+    return np.sqrt(minimum_sq)
+
+
+def _smooth_risk_weight(signed_distance: np.ndarray, feather_m: float) -> np.ndarray:
+    """把有符号边界距离映射成平滑权重。注意：障碍内部为 1，外部逐渐衰减到 0。"""
+
+    # smoothstep 比线性过渡更柔和，且在两端导数为零，不会形成明显色带。
+    ratio = np.clip((signed_distance + feather_m) / (2.0 * feather_m), 0.0, 1.0)
+    return (ratio * ratio * (3.0 - 2.0 * ratio)).astype(np.float32)
+
+
+def _tint_risk_colors(colors: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    """批量叠加低饱和风险色。注意：输入输出均为线性色彩，保持材质光照正确。"""
+
+    # TerrainField 颜色在线性空间，目标色也必须先从 sRGB 转换再混合。
+    target = np.asarray([_srgb_to_linear(component) for component in _RISK_TINT_SRGB], dtype=np.float32)
+    # 0.30 上限只产生色相提示，仍让高度分层、阴影和岩面纹理占主导。
+    blend = np.clip(weights * _RISK_TINT_STRENGTH, 0.0, 1.0)[..., None]
+    return (colors * (1.0 - blend) + target * blend).astype(np.float32)
+
+
+def _tint_risk_color(color: tuple[float, float, float], weight: float) -> tuple[float, float, float]:
+    """为单个占位地形顶点叠加风险色。注意：与布局地形使用相同参数。"""
+
+    # 标量路径只服务旧 procedural 网格，参数必须与 numpy 批量路径完全一致。
+    blend = max(0.0, min(1.0, weight * _RISK_TINT_STRENGTH))
+    target = tuple(_srgb_to_linear(component) for component in _RISK_TINT_SRGB)
+    return tuple(base * (1.0 - blend) + risk * blend for base, risk in zip(color, target))
 
 
 def _height_value(x: float, z: float, width: float, depth: float, amplitude: float) -> float:
