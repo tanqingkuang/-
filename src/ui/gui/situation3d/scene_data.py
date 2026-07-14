@@ -1624,20 +1624,20 @@ def _camera_payload(bounds: dict[str, float], aircraft: list[dict[str, object]])
 
 
 def _layout_camera_payload(surface: dict[str, object]) -> dict[str, float]:
-    """生成布局地形相机。注意：取景按内容跨度，不按 90km 渲染裙边。"""
+    """生成布局地形相机。注意：重置视角需要覆盖完整渲染地图。"""
 
-    effective_span = float(surface.get("effectiveSpan", 32000.0))
-    # 定稿布局是"平原+走廊"的稀疏构图，大俯角远机位会让暗平原占满画面；
-    # 默认机位改为顺峡谷走廊的低角度近景，让两侧受光山坡填充画面下部（style_a 同族构图）。
-    distance = max(8200.0, effective_span * 0.30)
+    width = max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)))
+    depth = max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)))
+    # 按已确认截图的地图四角反推构图：距离约为跨度 91.5%，焦点向西偏 6.7%、
+    # 向近侧偏 25%。比例随布局尺寸缩放，避免只对 32km 演示地图硬编码绝对坐标。
+    distance = max(12000.0, max(width, depth) * 0.915)
     return {
-        # 焦点略偏走廊东段，主光来自西南，北山链朝南受光大坡正对相机成为画面主体。
-        "focusX": float(surface.get("x", 0.0)) + effective_span * 0.05,
+        "focusX": float(surface.get("x", 0.0)) - width * 0.067,
         "focusY": 900.0,
-        "focusZ": float(surface.get("z", 0.0)),
+        "focusZ": float(surface.get("z", 0.0)) + depth * 0.25,
         "distance": distance,
-        "yaw": -62.0,
-        "pitch": -20.0,
+        "yaw": -25.0,
+        "pitch": -39.5,
     }
 
 
