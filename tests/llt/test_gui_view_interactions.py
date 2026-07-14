@@ -16,8 +16,8 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QMetaObject, QPointF, QRect, Qt
-from PySide6.QtWidgets import QApplication, QFrame, QPushButton, QSplitter, QTableWidget
+from PySide6.QtCore import QMetaObject, QPoint, QPointF, QRect, Qt
+from PySide6.QtWidgets import QApplication, QFrame, QGroupBox, QLabel, QPushButton, QSplitter, QTableWidget
 
 from src.data.geo import GeoOrigin
 from tests.llt._geo_route import geodetic_config
@@ -89,6 +89,27 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(self.window.theme_key, "light")
         style_hints.return_value.setColorScheme.assert_called_once_with(Qt.ColorScheme.Light)
+
+    def test_plain_labels_blend_into_panel_in_both_themes(self) -> None:
+        """普通文字标签应透出面板底色，显式状态胶囊仍保留自己的字段底色。"""
+        config_group = next(group for group in self.window.findChildren(QGroupBox) if group.title() == "配置")
+        duration_label = next(label for label in config_group.findChildren(QLabel) if label.text() == "时长(s)")
+
+        for theme_key in ("dark", "light"):
+            with self.subTest(theme_key=theme_key):
+                self.window._set_theme(theme_key)
+                self.app.processEvents()
+
+                group_image = config_group.grab().toImage()
+                label_corner_pos = duration_label.mapTo(
+                    config_group, QPoint(duration_label.width() - 1, duration_label.height() - 1)
+                )
+                label_corner = group_image.pixelColor(label_corner_pos)
+                self.assertEqual(label_corner.name(), self.window.theme.panel.name())
+
+                pill_image = self.window.run_state_label.grab().toImage()
+                pill_corner = pill_image.pixelColor(pill_image.width() - 1, pill_image.height() - 1)
+                self.assertEqual(pill_corner.name(), self.window.theme.field.name())
 
     def test_stage_fullscreen_reparents_only_realtime_display(self) -> None:
         self.window._enter_stage_fullscreen()

@@ -30,6 +30,9 @@ class MainWindowStyleMixin:
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI";
                 font-size: 13px;
             }}
+            QLabel {{
+                background: transparent;
+            }}
             QFrame#panel, QGroupBox {{
                 background: {theme.panel.name()};
                 border: 1px solid {theme.line.name()};
