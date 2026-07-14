@@ -8,6 +8,7 @@ import json
 import math
 import struct
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -48,6 +49,17 @@ MOUNTAIN_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "mounta
 
 class Situation3DSceneDataTests(unittest.TestCase):
     """验证 3D 视图适配层不污染仿真坐标语义。"""
+
+    def test_enabled_obstacle_iterator_filters_disabled_items_in_order(self) -> None:
+        """所有障碍载荷构造路径共用同一个启用状态筛选器。"""
+
+        first = SimpleNamespace(enabled=True)
+        disabled = SimpleNamespace(enabled=False)
+        last = SimpleNamespace(enabled=True)
+
+        result = list(scene_data._enabled_obstacles((first, disabled, last)))
+
+        self.assertEqual(result, [first, last])
 
     def _snapshot(self) -> Snapshot:
         """构造含飞机、尾迹和航线的最小快照。"""

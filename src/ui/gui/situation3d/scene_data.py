@@ -9,7 +9,7 @@ import math
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Iterator, Sequence
 
 import numpy as np
 
@@ -716,6 +716,17 @@ def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, o
     }
 
 
+def _enabled_obstacles(obstacles: Iterable[ObstacleView]) -> Iterator[ObstacleView]:
+    """按输入顺序迭代启用障碍，统一所有 3D 风险载荷的筛选口径。"""
+
+    # 保持惰性迭代，调用方传入生成器时也不会预先复制整组障碍。
+    # enabled 是规划与显示共用的开关，集中判断可避免某个消费者漏掉禁用状态。
+    for obstacle in obstacles:
+        if obstacle.enabled:
+            # 原样返回视图对象，让各消费者继续读取完整几何和枚举字段。
+            yield obstacle
+
+
 def _terrain_risk_area_payloads(
     obstacles: list[ObstacleView],
     clearance_m: float,
@@ -729,9 +740,8 @@ def _terrain_risk_area_payloads(
     origin_z = float(surface_data.get("z", 0.0))
     safe_clearance = max(0.0, float(clearance_m))
     areas: list[dict[str, object]] = []
-    for obstacle in obstacles:
-        if not obstacle.enabled:
-            continue
+    # 地形顶点着色与其他风险图层必须消费同一组启用障碍。
+    for obstacle in _enabled_obstacles(obstacles):
         if obstacle.kind is ObstacleKind.CIRCLE:
             # 圆形直接把规划安全间距并入半径，着色边界与旧柱体表达的膨胀范围一致。
             areas.append(
@@ -785,9 +795,8 @@ def _obstacle_boundary_payloads(
 
     safe_clearance = max(0.0, float(clearance_m))
     boundaries: list[dict[str, object]] = []
-    for obstacle in obstacles:
-        if not obstacle.enabled:
-            continue
+    # 告警边界复用公共筛选，取消勾选后会与填充层同步消失。
+    for obstacle in _enabled_obstacles(obstacles):
         horizontal_points = _obstacle_boundary_points(obstacle, safe_clearance)
         if len(horizontal_points) < 3:
             continue
@@ -906,9 +915,8 @@ def _obstacle_fill_payloads(
     safe_clearance = max(0.0, float(clearance_m))
     surface_key = _fill_surface_key(surface_data)
     fills: list[dict[str, object]] = []
-    for obstacle in obstacles:
-        if not obstacle.enabled:
-            continue
+    # 危险填充不再维护自己的 enabled 分支，防止与边界层状态漂移。
+    for obstacle in _enabled_obstacles(obstacles):
         points = _obstacle_boundary_points(obstacle, safe_clearance)
         if len(points) < 3:
             continue
@@ -1247,10 +1255,9 @@ def _risk_zones_from_obstacles(
     """从当前生效的避障障碍集合生成风险区。注意：只处理已启用障碍，替代布局手工标记。"""
 
     zones: list[TerrainRiskZone] = []
-    for obstacle in obstacles:
-        # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
-        if not obstacle.enabled:
-            continue
+    # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
+    # 公共筛选同时保持输入顺序，风险区与障碍图例的对应关系不会变化。
+    for obstacle in _enabled_obstacles(obstacles):
         vertices = obstacle.vertices if obstacle.kind is ObstacleKind.POLYGON else _obstacle_corner_points(obstacle)
         if not vertices:
             continue
