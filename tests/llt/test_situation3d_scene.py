@@ -132,12 +132,11 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(obstacle_payload["radius"], 30.0)
         self.assertEqual(obstacle_payload["z"], -70.0)
 
-        surface = payload["terrain"]["surface"]
-        risk_area = payload["terrainRiskAreas"][0]
-        self.assertEqual(risk_area["id"], "OBS1")
-        self.assertEqual(risk_area["kind"], "circle")
-        self.assertEqual(risk_area["radius"], 30.0)
-        self.assertEqual(risk_area["center"], [80.0 - surface["x"], -70.0 - surface["z"]])
+        # 真实障碍不再烘焙地形顶点色：静态基色改由填充层的呼吸最低值承担，
+        # 否则同一区域会被"烘焙红"和"呼吸红"重复叠加，且呼吸参数归零也无法真正消除红色。
+        self.assertEqual(payload["terrainRiskAreas"], [])
+        self.assertEqual(len(payload["riskZoneFills"]), 1)
+        self.assertIn("meshValue", payload["riskZoneFills"][0])
 
     def test_payload_contains_blocked_route_with_red_color(self) -> None:
         """验证封锁航线拥有独立红色 payload，空数据不产生残留模型。"""
@@ -183,6 +182,87 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(boundary_points[0], boundary_points[-1])
         radii = [math.hypot(point[0] - 100.0, point[2] + 200.0) for point in boundary_points]
         self.assertTrue(all(abs(radius - 100.0) < 1e-6 for radius in radii))
+
+    def test_obstacle_fill_payload_matches_boundary_outline_and_hugs_terrain(self) -> None:
+        """验证危险区填充覆盖层：轮廓与边界同源、三角网合法、逐点贴合地形高度。"""
+
+        enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
+        snapshot = self._snapshot()
+        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        payload = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+
+        fills = payload["riskZoneFills"]
+        self.assertEqual(len(fills), 1)
+        self.assertEqual(fills[0]["color"], "#ff684f")
+        mesh = json.loads(fills[0]["meshValue"])
+        vertices = mesh["v"]
+        triangles = mesh["t"]
+        self.assertGreater(len(vertices), 8)
+        self.assertGreater(len(triangles), 8)
+        self.assertEqual(len(triangles) % 3, 0)
+        self.assertTrue(all(0 <= index < len(vertices) for index in triangles))
+        # 全部顶点必须落在安全区(半径 80+20)内，容差只放开厘米级坐标取整。
+        radii = [math.hypot(point[0] - 100.0, point[2] + 200.0) for point in vertices]
+        self.assertLessEqual(max(radii), 100.0 + 0.05)
+        # 三角面总面积应接近圆面积，证明内部整格与边界裁剪块共同铺满了危险区。
+        area = 0.0
+        for start in range(0, len(triangles), 3):
+            a, b, c = (vertices[triangles[start + offset]] for offset in range(3))
+            area += abs((b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])) / 2.0
+        self.assertGreater(area / (math.pi * 100.0 * 100.0), 0.9)
+        # 每个顶点高度 = 地形显示高度 + 固定抬升，既不穿地也不悬空。
+        surface = payload["terrain"]["surface"]
+        field = scene_data._cached_terrain_field(surface["layoutFile"], surface["resolution"])
+        for point in vertices[:32]:
+            expected = scene_data._terrain_surface_height(
+                surface, field, point[0], point[2], scene_data._FILL_HEIGHT_OFFSET_M
+            )
+            self.assertLess(abs(point[1] - expected), 8.0)
+
+        # 无避障数据的旧场景不生成填充；全部禁用时同样应清空。
+        self.assertEqual(build_scene_payload(snapshot)["riskZoneFills"], [])
+        disabled = ObstacleView("禁用圆", "circle", enabled=False, center_x=0.0, center_y=0.0, radius=40.0)
+        self.assertEqual(build_scene_payload(snapshot, [disabled])["riskZoneFills"], [])
+
+    def test_obstacle_fill_mesh_is_cached_and_participates_in_static_key(self) -> None:
+        """验证填充三角网走缓存复用，且进入 staticKey 参与静态重建判定。"""
+
+        enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
+        snapshot = self._snapshot()
+        first = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+        second = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
+        # 同一障碍与地形版本必须复用同一份缓存字符串，避免 10Hz 快照重复三角化。
+        self.assertIs(first["riskZoneFills"][0]["meshValue"], second["riskZoneFills"][0]["meshValue"])
+        self.assertEqual(first["staticKey"], second["staticKey"])
+        # 障碍尺寸变化 → 填充变化 → staticKey 必须翻转触发 QML 静态模型重建。
+        larger = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=120.0)
+        changed = build_scene_payload(snapshot, [larger], clearance_m=20.0)
+        self.assertNotEqual(first["staticKey"], changed["staticKey"])
+
+    def test_risk_fill_geometry_uploads_valid_mesh_and_rejects_bad_input(self) -> None:
+        """验证 RiskFillGeometry 上传合法三角网，坏 JSON 与越界索引降级为空几何。"""
+
+        from src.ui.gui.situation3d.risk_fill_geometry import RiskFillGeometry
+
+        geometry = RiskFillGeometry()
+        mesh = {"v": [[0.0, 10.0, 0.0], [100.0, 12.0, 0.0], [0.0, 11.0, -100.0]], "t": [0, 1, 2]}
+        geometry.meshValue = json.dumps(mesh)
+        # 顶点布局 position(3)+normal(3)，共 24 字节一个顶点。
+        self.assertEqual(len(geometry.vertexData()), 3 * 24)
+        self.assertEqual(len(geometry.indexData()), 3 * 4)
+        bounds_min = geometry.boundsMin()
+        bounds_max = geometry.boundsMax()
+        self.assertEqual(bounds_min.x(), 0.0)
+        self.assertEqual(bounds_max.x(), 100.0)
+        self.assertLess(bounds_min.y(), 10.0)
+        self.assertGreater(bounds_max.y(), 12.0)
+
+        geometry.meshValue = "not json"
+        self.assertEqual(len(geometry.vertexData()), 0)
+        geometry.meshValue = json.dumps({"v": [[0.0, 0.0, 0.0]], "t": [0, 0, 5]})
+        self.assertEqual(len(geometry.vertexData()), 0)
+        geometry.meshValue = json.dumps({"v": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], "t": [0, 1]})
+        self.assertEqual(len(geometry.vertexData()), 0)
 
     def test_terrain_field_generates_layout_height_grid_and_risk_zones(self) -> None:
         """验证布局地形高度场尺寸、有限值和风险区显式标记。"""
@@ -1748,11 +1828,41 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("data.riskZoneLines", qml)
         self.assertIn("data.riskZoneBuffers", qml)
         self.assertIn("terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])", qml)
-        self.assertIn("property real alertBoundaryPulse: 0.48", qml)
+        self.assertIn("readonly property real boundaryPulseMin: 0.4", qml)
+        self.assertIn("readonly property real boundaryPulseMax: 0.8", qml)
+        self.assertIn("readonly property real fillPulseMin: 0.0", qml)
+        self.assertIn("readonly property real fillPulseMax: 0.1", qml)
+        self.assertIn("readonly property int pulseDurationMs: 3000", qml)
+        self.assertIn("property real alertBoundaryPulse: boundaryPulseMin", qml)
         self.assertIn("SequentialAnimation on alertBoundaryPulse", qml)
-        self.assertEqual(qml.count("duration: 2400"), 2)
+        # 最终版呼吸节奏是非对称的：变亮 pulseDurationMs(3s)、变暗 pulseDurationMs/3(1s)，
+        # 一轮共 4 秒，缓动仍是 InOutSine。
+        self.assertIn("duration: root.pulseDurationMs\n", qml)
+        self.assertIn("duration: root.pulseDurationMs / 3", qml)
+        self.assertEqual(qml.count("duration: 2400"), 0)
+        self.assertEqual(qml.count("duration: 500"), 0)
+        self.assertEqual(qml.count("easing.type: Easing.InOutSine"), 2)
         self.assertIn("pulseValue: item.pulse === true", qml)
         self.assertIn("opacity: model.pulseValue ? root.alertBoundaryPulse : 0.95", qml)
+        # 危险区填充与边界共用同一呼吸源，按 fillPulseMin/Max 线性映射，振幅收窄、不再硬编码魔法数字；
+        # min===max 时比例项按 0 处理，避免呼吸振幅归零时除零得到 NaN。
+        self.assertIn(
+            "readonly property real riskFillPulse: fillPulseMin +\n"
+            "        (boundaryPulseMax === boundaryPulseMin ? 0.0 :\n"
+            "            (alertBoundaryPulse - boundaryPulseMin) / (boundaryPulseMax - boundaryPulseMin)) *\n"
+            "        (fillPulseMax - fillPulseMin)",
+            qml,
+        )
+        self.assertIn("ListModel { id: riskFillModel }", qml)
+        self.assertIn("data.riskZoneFills", qml)
+        self.assertIn("RiskFillGeometry", qml)
+        self.assertIn("meshValue: model.meshValue", qml)
+        self.assertIn("opacity: root.riskFillPulse", qml)
+        # 填充是贴地提示薄层，绝不能参与阴影，否则会遮挡飞机与尾迹可读性。
+        fill_block = qml[qml.index("model: riskFillModel") : qml.index("model: riskLineModel")]
+        self.assertIn("castsShadows: false", fill_block)
+        self.assertIn("receivesShadows: false", fill_block)
+        self.assertIn("alphaMode: PrincipledMaterial.Blend", fill_block)
         self.assertNotIn("model: obstacleModel", qml)
         self.assertIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
         self.assertIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)
@@ -1834,6 +1944,74 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("飞机视觉缩放单独保持远景可辨识；尾迹近景按翼展 1/5 显示，远景不继续加粗。", qml)
         self.assertNotIn("property real trailWidthScale: nearViewWidthScale", qml)
         self.assertNotIn("property real trailWidthScale: aircraftVisualScale / (1800.0 / 85.0)", qml)
+
+
+class Situation3DBridgeMeshDedupTests(unittest.TestCase):
+    """验证桥接层不会在同一 staticKey 下重复下发风险区填充网格。"""
+
+    def _bridge(self):
+        """构造一个用于测试的 Situation3DBridge 实例。"""
+
+        from PySide6.QtWidgets import QApplication
+
+        QApplication.instance() or QApplication([])
+        from src.ui.gui.situation3d.bridge import Situation3DBridge
+
+        return Situation3DBridge()
+
+    def test_mesh_value_only_sent_once_per_static_key(self) -> None:
+        """相同 staticKey 连续推送两次，第二次应去掉 meshValue 只保留展示无关的字段。"""
+
+        bridge = self._bridge()
+        fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        first = json.loads(bridge.sceneData())
+        self.assertIn("meshValue", first["riskZoneFills"][0])
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        second = json.loads(bridge.sceneData())
+        self.assertNotIn("meshValue", second["riskZoneFills"][0])
+        self.assertEqual(second["riskZoneFills"][0]["color"], "#ff5a45")
+
+    def test_mesh_value_resent_when_static_key_changes(self) -> None:
+        """staticKey 变化(障碍布局改变)时必须重新带上完整 meshValue，不能延续裁剪结果。"""
+
+        bridge = self._bridge()
+        fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        bridge.set_scene_payload({"staticKey": "B", "riskZoneFills": fills})
+
+        payload = json.loads(bridge.sceneData())
+        self.assertIn("meshValue", payload["riskZoneFills"][0])
+
+    def test_empty_fills_do_not_crash(self) -> None:
+        """空填充列表(如无避障障碍)应原样通过，不报错也不参与裁剪。"""
+
+        bridge = self._bridge()
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": []})
+        payload = json.loads(bridge.sceneData())
+        self.assertEqual(payload["riskZoneFills"], [])
+
+    def test_mesh_value_resent_after_toggling_through_empty_fills(self) -> None:
+        """A → 全部关闭障碍(空填充,签名变 B) → 再恢复同一批障碍(签名回到 A)，
+        第三帧必须带上完整 meshValue，不能被误判为"签名未变"而裁掉。
+
+        QML 侧 A→B 的 staticChanged 会先用空列表清空 riskFillModel；B→A 再次
+        staticChanged 时必须重新拿到完整网格才能重建，否则恢复后填充会凭空消失。
+        """
+
+        bridge = self._bridge()
+        fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+        bridge.set_scene_payload({"staticKey": "B", "riskZoneFills": []})
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+
+        restored = json.loads(bridge.sceneData())
+        self.assertIn("meshValue", restored["riskZoneFills"][0])
 
 
 if __name__ == "__main__":

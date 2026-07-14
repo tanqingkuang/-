@@ -45,8 +45,20 @@ Item {
     readonly property int presentationQueueCapacity: 2
     // 静态内容签名：与 payload 的 staticKey 对比，决定是否重建航线与风险区模型。
     property string staticContentKey: ""
-    // 地形顶点色保持静态；只有真实障碍的闭合告警边界在低频改变透明度。
-    property real alertBoundaryPulse: 0.48
+    // 呼吸动画调参入口：改这四个命名属性即可，不要在别处硬编码同源数字。
+    readonly property real boundaryPulseMin: 0.4
+    readonly property real boundaryPulseMax: 0.8
+    readonly property real fillPulseMin: 0.0
+    readonly property real fillPulseMax: 0.1
+    readonly property int pulseDurationMs: 3000
+    // 地形顶点色保持静态；真实障碍的闭合告警边界与贴地填充共用这一个呼吸值。
+    property real alertBoundaryPulse: boundaryPulseMin
+    // 填充层把同一呼吸值线性映射到 fillPulseMin~fillPulseMax，同相位且不刺眼。
+    // boundaryPulseMax 等于 boundaryPulseMin 时振幅为零，比例项按 0 处理，避免除零得到 NaN。
+    readonly property real riskFillPulse: fillPulseMin +
+        (boundaryPulseMax === boundaryPulseMin ? 0.0 :
+            (alertBoundaryPulse - boundaryPulseMin) / (boundaryPulseMax - boundaryPulseMin)) *
+        (fillPulseMax - fillPulseMin)
     // 跟随目标 nodeId:按长机角色解析,更新快照时据此逐帧刷新相机焦点。
     property string followNodeId: ""
     // 跟随焦点与飞机共用唯一展示时钟，避免两套动画时长不同导致飞机相对镜头周期性抖动。
@@ -65,20 +77,23 @@ Item {
     ListModel { id: blockedRouteModel }
     ListModel { id: riskLineModel }
     ListModel { id: riskBufferModel }
+    ListModel { id: riskFillModel }
 
+    // 非对称呼吸：变亮 pulseDurationMs(3s)、变暗 pulseDurationMs/3(1s)，一轮共 4 秒；
+    // 振幅由 boundaryPulseMin/Max 控制，两段时长按同一个属性推导，不再各自硬编码毫秒数。
     SequentialAnimation on alertBoundaryPulse {
         loops: Animation.Infinite
         running: true
         NumberAnimation {
-            from: 0.48
-            to: 0.92
-            duration: 2400
+            from: root.boundaryPulseMin
+            to: root.boundaryPulseMax
+            duration: root.pulseDurationMs
             easing.type: Easing.InOutSine
         }
         NumberAnimation {
-            from: 0.92
-            to: 0.48
-            duration: 2400
+            from: root.boundaryPulseMax
+            to: root.boundaryPulseMin
+            duration: root.pulseDurationMs / 3
             easing.type: Easing.InOutSine
         }
     }
@@ -414,6 +429,13 @@ Item {
                 pathValue: item.pathValue
             })
         }
+        riskFillModel.clear()
+        for (const item of data.riskZoneFills || []) {
+            riskFillModel.append({
+                color: item.color,
+                meshValue: item.meshValue
+            })
+        }
     }
 
     function updateScene(payload, forceCamera) {
@@ -696,6 +718,29 @@ Item {
                     mipFilter: Texture.Linear
                 }
                 normalStrength: 0.92
+            }
+        }
+
+        Repeater3D {
+            model: riskFillModel
+            delegate: Model {
+                geometry: RiskFillGeometry {
+                    meshValue: model.meshValue
+                }
+                // 贴地薄层不参与阴影，也永远不能遮挡飞机、尾迹和航线的可读性。
+                castsShadows: false
+                receivesShadows: false
+                materials: PrincipledMaterial {
+                    baseColor: model.color
+                    alphaMode: PrincipledMaterial.Blend
+                    // 与告警边界共用同一呼吸源：填充映射到 0.10~0.35 的低透明度区间。
+                    opacity: root.riskFillPulse
+                    cullMode: Material.NoCulling
+                    roughness: 1.0
+                    specularAmount: 0.0
+                    // 少量自发光让填充在背光坡上仍呈红色警示，而不是被阴影压成暗棕。
+                    emissiveFactor: Qt.vector3d(0.42, 0.06, 0.02)
+                }
             }
         }
 
