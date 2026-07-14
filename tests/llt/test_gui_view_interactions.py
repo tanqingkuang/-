@@ -321,7 +321,17 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreaterEqual(scene_data["counts"]["trailRibbons"], 1)
         self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
         self.assertEqual(scene_data["counts"]["obstacles"], 1)
-        self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)
+        self.assertEqual(
+            scene_data["obstacles"][0],
+            {
+                "id": "OBS1",
+                "minX": 50.0,
+                "maxX": 110.0,
+                "minZ": -100.0,
+                "maxZ": -40.0,
+                "boundsHeight": 720.0,
+            },
+        )
 
         self.window._update_snapshot(
             Snapshot(

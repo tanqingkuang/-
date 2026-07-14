@@ -46,6 +46,7 @@ BLOCKED_ROUTE_DASH_COLOR = "#ff5a45"
 DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
 DEFAULT_TERRAIN_RELIEF_M = 2200.0
+OBSTACLE_CAMERA_BOUNDS_HEIGHT_M = 720.0
 
 
 class TrailPayloadState:
@@ -174,7 +175,7 @@ class TrailPayloadState:
 # 34. terrain payload 的 ground 字段保留给后续需要地平面或雾墙时复用。
 # 35. 这里的 Quick3D z 是 -north，所有风险线同样遵守 enu_to_quick3d。
 # 36. route dash 切分仍按空间距离，巡航 900m 地形不会影响虚线节奏。
-# 37. obstacles 仍保留兼容 payload 与相机包围盒用途，但 QML 不再把它们渲染成柱体或方盒。
+# 37. obstacles 只携带不可渲染的相机包围盒字段，避免旧柱体字段被误当成真实障碍形状。
 # 38. scene_data 不缓存生成后的 mesh，避免和 TerrainGeometry 的重建生命周期竞争。
 # 39. 如果布局文件变更，改变路径或清理 _cached_layout 即可刷新元数据。
 # 40. P2 风险区与当前启用的真实障碍同源；旧场景未提供避障数据时继续使用正式 JSON 布局标记。
@@ -685,35 +686,32 @@ def _interpolate_polyline(
 
 
 def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, object]:
-    """生成障碍兼容与相机包围盒数据。注意：QML 不再把这些尺寸直接渲染成实体柱体。"""
+    """生成障碍相机包围盒。注意：载荷不携带可被 QML 误渲染的实体形状字段。"""
 
-    # 安全间距在显示层膨胀半径/包围盒，便于和避障预览里的风险边界对应。
+    # 安全间距并入相机边界，使风险填充不会在初始取景时被裁掉。
     safe_clearance = max(0.0, float(clearance_m))
-    column_height_m = 720.0
     if obstacle.kind == "circle":
         radius = max(1.0, obstacle.radius + safe_clearance)
-        coord = enu_to_quick3d(obstacle.center_x, obstacle.center_y, column_height_m / 2.0)
+        min_x = obstacle.center_x - radius
+        max_x = obstacle.center_x + radius
+        min_north = obstacle.center_y - radius
+        max_north = obstacle.center_y + radius
         return {
-            "kind": "circle",
             "id": obstacle.obstacle_id,
-            "radius": radius,
-            "width": radius * 2.0,
-            "depth": radius * 2.0,
-            "height": column_height_m,
-            **coord,
+            "minX": min_x,
+            "maxX": max_x,
+            "minZ": -max_north,
+            "maxZ": -min_north,
+            "boundsHeight": OBSTACLE_CAMERA_BOUNDS_HEIGHT_M,
         }
     min_x, max_x, min_y, max_y = _obstacle_bounds(obstacle)
-    width = max(1.0, max_x - min_x + safe_clearance * 2.0)
-    depth = max(1.0, max_y - min_y + safe_clearance * 2.0)
-    coord = enu_to_quick3d((min_x + max_x) / 2.0, (min_y + max_y) / 2.0, column_height_m / 2.0)
     return {
-        "kind": "box",
         "id": obstacle.obstacle_id,
-        "radius": max(width, depth) / 2.0,
-        "width": width,
-        "depth": depth,
-        "height": column_height_m,
-        **coord,
+        "minX": min_x - safe_clearance,
+        "maxX": max_x + safe_clearance,
+        "minZ": -(max_y + safe_clearance),
+        "maxZ": -(min_y - safe_clearance),
+        "boundsHeight": OBSTACLE_CAMERA_BOUNDS_HEIGHT_M,
     }
 
 
@@ -1287,11 +1285,9 @@ def _scene_bounds(
     zs = [float(item["z"]) for item in aircraft + route_points]
     ys = [float(item["y"]) for item in aircraft + route_points]
     for obstacle in obstacles:
-        half_width = float(obstacle["width"]) / 2.0
-        half_depth = float(obstacle["depth"]) / 2.0
-        xs.extend([float(obstacle["x"]) - half_width, float(obstacle["x"]) + half_width])
-        zs.extend([float(obstacle["z"]) - half_depth, float(obstacle["z"]) + half_depth])
-        ys.extend([0.0, float(obstacle["height"])])
+        xs.extend([float(obstacle["minX"]), float(obstacle["maxX"])])
+        zs.extend([float(obstacle["minZ"]), float(obstacle["maxZ"])])
+        ys.extend([0.0, float(obstacle["boundsHeight"])])
     if not xs:
         xs = [-800.0, 800.0]
         zs = [-500.0, 500.0]
