@@ -17,6 +17,11 @@ Item {
     property real focusZ: 0
     property string cameraMode: "自由"
     property bool followEnabled: false
+    // 指北针复用相机旋转：yaw 与屏幕方位同号；pitch 越接近侧视，地平面投影越扁。
+    readonly property real compassHeadingDeg: yaw
+    readonly property real compassPitchScale: Math.max(
+        0.22, Math.sin(Math.abs(pitch) * Math.PI / 180.0)
+    )
     property string sceneTime: "0.0s"
     property int sceneApplyCount: 0
     property string aircraftModelValue: "tb2"
@@ -1300,6 +1305,153 @@ Item {
             anchors.fill: parent
             acceptedButtons: Qt.AllButtons
             onWheel: function(wheel) { wheel.accepted = true }
+        }
+    }
+
+    ViewCompass {
+        id: viewCompass
+        objectName: "viewCompass"
+        z: 20
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.rightMargin: 24
+        anchors.bottomMargin: 22
+        headingDeg: root.compassHeadingDeg
+        pitchScale: root.compassPitchScale
+    }
+
+    component ViewCompass: Item {
+        id: compass
+        property real headingDeg: 0.0
+        property real pitchScale: 1.0
+        width: 116
+        height: 116
+        opacity: 0.74
+
+        Item {
+            id: projectedFace
+            anchors.centerIn: parent
+            width: 96
+            height: 96
+            transform: Scale {
+                origin.x: projectedFace.width / 2.0
+                origin.y: projectedFace.height / 2.0
+                yScale: compass.pitchScale
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                radius: width / 2.0
+                color: "#52101b27"
+                border.width: 1
+                border.color: "#7087ddea"
+            }
+
+            Canvas {
+                anchors.fill: parent
+                antialiasing: true
+                onPaint: {
+                    const ctx = getContext("2d")
+                    const center = width / 2.0
+                    const outerRadius = width / 2.0 - 5.0
+                    ctx.clearRect(0, 0, width, height)
+                    ctx.save()
+
+                    // 外圈、十字基准和 15° 刻度保持在屏幕方位，指针在其上独立旋转。
+                    ctx.globalAlpha = 0.40
+                    ctx.strokeStyle = "#87ddea"
+                    ctx.lineWidth = 1.0
+                    ctx.beginPath()
+                    ctx.arc(center, center, outerRadius, 0, Math.PI * 2.0)
+                    ctx.stroke()
+
+                    ctx.globalAlpha = 0.16
+                    ctx.beginPath()
+                    ctx.moveTo(center, 9)
+                    ctx.lineTo(center, height - 9)
+                    ctx.moveTo(9, center)
+                    ctx.lineTo(width - 9, center)
+                    ctx.stroke()
+
+                    for (let index = 0; index < 24; index += 1) {
+                        const angle = (index * 15.0 - 90.0) * Math.PI / 180.0
+                        const innerRadius = outerRadius - (index % 6 === 0 ? 8.0 : 4.0)
+                        ctx.globalAlpha = index % 6 === 0 ? 0.62 : 0.28
+                        ctx.lineWidth = index % 6 === 0 ? 1.4 : 0.8
+                        ctx.beginPath()
+                        ctx.moveTo(
+                            center + innerRadius * Math.cos(angle),
+                            center + innerRadius * Math.sin(angle)
+                        )
+                        ctx.lineTo(
+                            center + outerRadius * Math.cos(angle),
+                            center + outerRadius * Math.sin(angle)
+                        )
+                        ctx.stroke()
+                    }
+                    ctx.restore()
+                }
+            }
+
+            Item {
+                id: compassCard
+                anchors.fill: parent
+                rotation: compass.headingDeg
+
+                Canvas {
+                    anchors.fill: parent
+                    antialiasing: true
+                    onPaint: {
+                        const ctx = getContext("2d")
+                        const center = width / 2.0
+                        ctx.clearRect(0, 0, width, height)
+                        ctx.save()
+                        ctx.lineCap = "round"
+
+                        // 北向使用高亮箭头，反向尾杆降亮度，避免与航线主视觉争抢。
+                        ctx.globalAlpha = 0.42
+                        ctx.strokeStyle = "#87ddea"
+                        ctx.lineWidth = 1.4
+                        ctx.beginPath()
+                        ctx.moveTo(center, center + 27)
+                        ctx.lineTo(center, center - 24)
+                        ctx.stroke()
+
+                        ctx.globalAlpha = 0.94
+                        ctx.fillStyle = "#9debf5"
+                        ctx.beginPath()
+                        ctx.moveTo(center, center - 36)
+                        ctx.lineTo(center - 5.5, center - 23)
+                        ctx.lineTo(center + 5.5, center - 23)
+                        ctx.closePath()
+                        ctx.fill()
+
+                        ctx.globalAlpha = 0.82
+                        ctx.fillStyle = "#10212c"
+                        ctx.strokeStyle = "#9debf5"
+                        ctx.lineWidth = 1.8
+                        ctx.beginPath()
+                        ctx.arc(center, center, 5.5, 0, Math.PI * 2.0)
+                        ctx.fill()
+                        ctx.stroke()
+                        ctx.restore()
+                    }
+                }
+
+                Text {
+                    x: (parent.width - width) / 2.0
+                    y: -1
+                    text: "N"
+                    color: "#b9f4fb"
+                    font.pixelSize: 13
+                    font.bold: true
+                    style: Text.Outline
+                    styleColor: "#80101b27"
+                    // 标签随北向位置公转，但抵消卡片旋转，保证字形始终正立可读。
+                    rotation: -compassCard.rotation
+                    transformOrigin: Item.Center
+                }
+            }
         }
     }
 
