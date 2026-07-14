@@ -22,6 +22,7 @@ from src.ui.gui.situation3d.scene_data import (
     enu_to_quick3d,
 )
 from src.ui.gui.situation3d import terrain_field as terrain_field_module
+from src.ui.gui.situation3d import terrain_geometry as terrain_geometry_module
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     generate_terrain_field,
@@ -1576,6 +1577,24 @@ class Situation3DSceneDataTests(unittest.TestCase):
         history.pathValue = initial["pathValue"]
         history.pathValue = receiving["pathValue"]
         self.assertEqual(list(history._stream_points), [])
+
+    def test_horizon_span_separates_shared_blend_radius_from_geometry_safety_radius(self) -> None:
+        """验证融合与几何共用倍率计算，同时保留远裁剪面外的纯色安全地面。"""
+
+        core_span = 20000.0
+        self.assertAlmostEqual(terrain_geometry_module._scaled_horizon_half_span(core_span), 80000.0)
+        self.assertAlmostEqual(terrain_geometry_module._horizon_geometry_half_span(core_span), 120000.0)
+
+        core_axis = np.array([-10000.0, 10000.0], dtype=np.float32)
+        sample_x = np.array([[10000.0, 80000.0, 120000.0]], dtype=np.float32)
+        sample_z = np.zeros_like(sample_x)
+        blend = terrain_geometry_module._horizon_blend_grid(
+            sample_x,
+            sample_z,
+            core_axis,
+            core_axis,
+        )
+        np.testing.assert_allclose(blend, [[0.0, 1.0, 1.0]], atol=1e-6)
 
     def test_terrain_geometry_builds_connected_heightfield(self) -> None:
         """验证 3D 地形使用连续 mesh，并以低密外围地面隐藏主地图硬边。"""
