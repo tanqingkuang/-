@@ -185,6 +185,7 @@ class TrailPayloadState:
 # 46. riskZoneFills 是真实障碍安全区的贴地半透明填充三角网，与告警边界同轮廓同呼吸相位。
 # 47. 填充网按地形网格量级采样高度并整体抬升，QML 只动 opacity，不做逐帧几何重建。
 # 48. 填充三角化结果按(轮廓,地形版本)缓存，10Hz 快照重推时直接复用缓存字符串。
+# 49. 航点球只表示航线端点和航段交接点；圆弧中间采样点仅供虚线几何与场景包围盒使用。
 
 
 def build_scene_payload(
@@ -219,11 +220,11 @@ def build_scene_payload(
         trail_state.retain({str(item["nodeId"]) for item in trail_ribbons})
     route_segments = _route_segments(snapshot)
     route_polylines = [_route_polyline(segment) for segment in route_segments]
-    # 航点球和虚线共用同一组采样折线，避免同一航段被重复展开。
-    route_points = [
+    route_points = _route_marker_payload(route_segments)
+    route_geometry_points = [
         point
         for polyline in route_polylines
-        for point in _route_payload(polyline)
+        for point in _route_sample_payload(polyline)
     ]
     route_dashes = [
         dash
@@ -232,10 +233,11 @@ def build_scene_payload(
     ]
     blocked_route_segments = _blocked_route_segments(snapshot)
     blocked_route_polylines = [_route_polyline(segment) for segment in blocked_route_segments]
-    blocked_route_points = [
+    blocked_route_points = _route_marker_payload(blocked_route_segments, color=BLOCKED_ROUTE_DASH_COLOR)
+    blocked_route_geometry_points = [
         point
         for polyline in blocked_route_polylines
-        for point in _route_payload(polyline, color=BLOCKED_ROUTE_DASH_COLOR)
+        for point in _route_sample_payload(polyline)
     ]
     blocked_route_dashes = [
         dash
@@ -244,7 +246,7 @@ def build_scene_payload(
     ]
     obstacle_items = [_obstacle_payload(obstacle, clearance_m) for obstacle in obstacle_views if obstacle.enabled]
     # 相机包围盒同时纳入封锁航线，避免覆盖路线偏移较大时红线落到初始视野外。
-    bounds = _scene_bounds(aircraft, route_points + blocked_route_points, obstacle_items)
+    bounds = _scene_bounds(aircraft, route_geometry_points + blocked_route_geometry_points, obstacle_items)
     display_file = terrain_display_file or snapshot.terrain_display_file
     terrain = _terrain_payload(bounds, display_file, obstacle_views)
     risk_zones = list(terrain.get("riskZones", []))
@@ -522,10 +524,32 @@ def _trail_quick3d_point(point: object) -> list[float]:
     return [coord["x"], coord["y"], coord["z"]]
 
 
-def _route_payload(polyline: list[tuple[float, float, float]], *, color: str = ROUTE_DASH_COLOR) -> list[dict[str, object]]:
-    """生成航线采样点显示数据。注意：圆弧按现有二维视图采样口径展开。"""
+def _route_marker_payload(
+    routes: Sequence[ReferenceRoute], *, color: str = ROUTE_DASH_COLOR
+) -> list[dict[str, object]]:
+    """生成航点球数据。注意：只保留语义端点，并去掉相邻航段共用的交接点。"""
 
-    return [{"color": color, "size": 9.0, "x": x, "y": y, "z": z} for x, y, z in polyline]
+    markers: list[dict[str, object]] = []
+    for route in routes:
+        endpoints = (
+            (route.start_x, route.start_y, route.start_altitude),
+            (route.end_x, route.end_y, route.end_altitude),
+        )
+        for east_m, north_m, altitude_m in endpoints:
+            coord = enu_to_quick3d(east_m, north_m, altitude_m)
+            if markers and all(
+                abs(float(markers[-1][axis]) - coord[axis]) <= 1e-6
+                for axis in ("x", "y", "z")
+            ):
+                continue
+            markers.append({"color": color, "size": 9.0, **coord})
+    return markers
+
+
+def _route_sample_payload(polyline: list[tuple[float, float, float]]) -> list[dict[str, object]]:
+    """生成航线几何采样点。注意：仅供场景包围盒使用，不暴露为 QML 航点球。"""
+
+    return [{"x": x, "y": y, "z": z} for x, y, z in polyline]
 
 
 def _route_dash_payload(polyline: list[tuple[float, float, float]], *, color: str = ROUTE_DASH_COLOR) -> list[dict[str, object]]:

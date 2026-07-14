@@ -154,6 +154,100 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(cleared_payload["blockedRoutePoints"], [])
         self.assertEqual(cleared_payload["blockedRouteDashes"], [])
 
+    def test_arc_route_points_only_mark_segment_junctions(self) -> None:
+        """圆弧采样点只供画线，航点球只标记起终点和航段交接点。"""
+
+        snapshot = self._snapshot()
+        snapshot.nodes = []
+        snapshot.route_segments = [
+            ReferenceRoute(-200.0, 0.0, 900.0, 400.0, 0.0, 900.0),
+            ReferenceRoute(
+                400.0,
+                0.0,
+                900.0,
+                0.0,
+                400.0,
+                900.0,
+                radius=400.0,
+                center_x=0.0,
+                center_y=0.0,
+                turn_sign=1.0,
+            ),
+            ReferenceRoute(0.0, 400.0, 900.0, 0.0, 800.0, 900.0),
+        ]
+
+        payload = build_scene_payload(snapshot)
+
+        self.assertEqual(
+            [(item["x"], item["y"], item["z"]) for item in payload["routePoints"]],
+            [
+                (-200.0, 900.0, -0.0),
+                (400.0, 900.0, -0.0),
+                (0.0, 900.0, -400.0),
+                (0.0, 900.0, -800.0),
+            ],
+        )
+        dash_points = [
+            point
+            for dash in payload["routeDashes"]
+            for point in json.loads(dash["pathValue"])
+        ]
+        self.assertTrue(
+            any(0.0 < point[0] < 400.0 and -400.0 < point[2] < 0.0 for point in dash_points)
+        )
+
+    def test_blocked_arc_route_points_only_mark_endpoints(self) -> None:
+        """被封锁圆弧也不能把中间绘制采样点暴露成红色航点球。"""
+
+        snapshot = self._snapshot()
+        snapshot.blocked_route_segments = [
+            ReferenceRoute(
+                400.0,
+                0.0,
+                900.0,
+                0.0,
+                400.0,
+                900.0,
+                radius=400.0,
+                center_x=0.0,
+                center_y=0.0,
+                turn_sign=1.0,
+            )
+        ]
+
+        payload = build_scene_payload(snapshot)
+
+        self.assertEqual(
+            [(item["x"], item["y"], item["z"]) for item in payload["blockedRoutePoints"]],
+            [(400.0, 900.0, -0.0), (0.0, 900.0, -400.0)],
+        )
+
+    def test_arc_geometry_samples_still_expand_scene_bounds(self) -> None:
+        """隐藏圆弧采样球后，场景包围盒仍须覆盖圆弧中部而不只看端点。"""
+
+        snapshot = self._snapshot()
+        snapshot.nodes = []
+        snapshot.route_segments = [
+            ReferenceRoute(
+                0.0,
+                15000.0,
+                900.0,
+                15000.0,
+                0.0,
+                900.0,
+                radius=15000.0,
+                center_x=0.0,
+                center_y=0.0,
+                turn_sign=1.0,
+            )
+        ]
+
+        payload = build_scene_payload(snapshot)
+
+        self.assertEqual(payload["counts"]["routePoints"], 2)
+        self.assertGreater(payload["terrain"]["ground"]["width"], 30000.0)
+        self.assertGreater(payload["terrain"]["ground"]["depth"], 30000.0)
+
     def test_obstacle_risk_zones_only_include_enabled_and_empty_falls_back_to_layout(self) -> None:
         """验证风险区只跟随启用障碍；全禁用时清空，无避障数据时才回退布局。"""
 
