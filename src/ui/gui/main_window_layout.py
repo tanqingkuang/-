@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.ui.gui.disturbance_view_model import DISTURBANCE_ACTIONS
+
 from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.side_view import SideView
 from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, THEMES, SelectButton
@@ -191,17 +193,12 @@ class MainWindowLayoutMixin:
         grid.setContentsMargins(10, 18, 10, 10)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
-        # (按钮文案, 扰动种类) ——种类传给 _inject_disturbance/适配器。
-        actions: list[tuple[str, str]] = [
-            ("风场脉冲", "wind"),
-            ("节点故障", "fault"),
-            ("链路丢包", "loss"),
-            ("清除扰动", "clear"),
-        ]
-        for index, (text, kind) in enumerate(actions):
-            button = QPushButton(text)
+        for index, action in enumerate(DISTURBANCE_ACTIONS):
+            button = QPushButton(action.button_text)
             # 默认参数绑定 kind，避免闭包共享同一变量的经典陷阱。
-            button.clicked.connect(lambda checked=False, value=kind: self._inject_disturbance(value))
+            button.clicked.connect(
+                lambda checked=False, value=action.kind: self._inject_disturbance(value)
+            )
             # 收集按钮以便按运行态统一启用/禁用。
             self.disturbance_buttons.append(button)
             # index//2 为行、index%2 为列，铺成两行两列。

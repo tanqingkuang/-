@@ -54,6 +54,7 @@ from src.runner.sim_control_routes import (
 )
 from src.runner.sim_control_types import (
     DisturbanceCommand,
+    DisturbanceType,
     SimulationEvent,
     SimulationSnapshot,
     _NodeAlgorithmOutput,
@@ -426,6 +427,19 @@ class _DisturbanceEngine:
     def read_health(self) -> dict[str, str]:
         """读取扰动模块健康状态。注意：用于状态表和回报显示。"""
         return dict(self._node_health)
+
+    def active_types(self) -> tuple[DisturbanceType, ...]:
+        """按注入顺序返回仍生效的扰动类型，同类重复注入只报告一次。"""
+
+        active: list[DisturbanceType] = []
+        seen: set[DisturbanceType] = set()
+        for command, _ in self._active:
+            # 引擎内部允许同类命令作用于不同目标，快照字段只报告类型集合。
+            kind = DisturbanceType(command.type)
+            if kind not in seen:
+                seen.add(kind)
+                active.append(kind)
+        return tuple(active)
 
     def inject(self, command: DisturbanceCommand, current_time_s: float) -> SimulationEvent:
         """注入扰动命令。注意：扰动类型和目标由命令字段决定。"""

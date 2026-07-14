@@ -7,6 +7,7 @@ from pathlib import Path
 
 from src.runner.sim_control import (
     AvoidancePlanOutcome,
+    DisturbanceType,
     GeoReference,
     GuiConfigData,
     ObstacleSpec,
@@ -22,6 +23,7 @@ from src.runner.sim_control import (
 )
 from src.runner.sim_control import SimulationController, TimedSnapshotCursor
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
+from src.ui.gui.disturbance_view_model import active_disturbance_text, disturbance_action
 from src.ui.gui.playback_view_model import PlaybackViewModel
 from src.ui.gui.trail_view_model import TrailBuffer
 from src.ui.gui.view_models import (
@@ -43,7 +45,6 @@ class ControllerSimulationAdapter:
         self.controller = SimulationController()
         self.speed = 1.0
         self.playback_vm = PlaybackViewModel()
-        self.disturbance = "无"
         # 普通显示快照只给瞬时位置；固定时钟批次由本适配器按 node_id 累积成尾迹。
         self._trail_by_node: dict[str, TrailBuffer] = {}
         # 游标消费控制器固定仿真时钟快照；GUI 轮询再慢也不会漏掉中间尾迹节点。
@@ -51,8 +52,6 @@ class ControllerSimulationAdapter:
         self.trail_seconds = trail_seconds_for_duration(0.0)
         # 记录上一帧位置与时间，用于差分估算速度（控制器速度字段不一定可靠）。
         self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
-        # 已消费的事件数游标，避免重复处理历史扰动事件。
-        self._processed_event_count = 0
         # 3D 态势显示用地形文件，只由 GUI 读取，不传入控制器算法闭环。
         self.terrain_display_file: str | None = None
         # 控制器成功加载后由 runner 应用层提供 GUI 辅助配置，界面不再自行读配置文件。
@@ -105,9 +104,6 @@ class ControllerSimulationAdapter:
             self.speed = playback_update.display_rate
             # 数据源自身也同步半程尾迹，保证非 MainWindow 调用 load_config 时行为一致。
             self.set_trail_seconds(trail_seconds_for_duration(self.controller.get_snapshot().duration_s))
-            # 把事件游标推到当前末尾，避免把加载前的旧事件当成新扰动消费。
-            self._processed_event_count = len(self.controller.get_recent_events(limit=1000))
-            self.disturbance = "无"
         return self.snapshot()
 
     def start(self) -> Snapshot:
@@ -152,7 +148,6 @@ class ControllerSimulationAdapter:
                 self.controller.set_playback_rate(playback_update.controller_rate)
             self._trail_by_node.clear()
             self._last_xy_by_node.clear()
-            self.disturbance = "无"
         return self.snapshot()
 
     def poll(self) -> Snapshot:
@@ -170,20 +165,12 @@ class ControllerSimulationAdapter:
         self._synchronize_trails(controller_snapshot)
         return self._convert_snapshot(controller_snapshot)
 
-    def inject_disturbance(self, kind: str) -> Snapshot:
+    def inject_disturbance(self, kind: DisturbanceType | str) -> Snapshot:
         """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
-        command = self._disturbance_command(kind)
-        result = self.controller.inject_disturbance(command)
+        action = disturbance_action(kind)
+        result = self.controller.inject_disturbance(action.command)
         self.last_result_code = result.code
         self.last_result_message = result.message
-        # 注入成功后立即把本地显示标签同步为中文名，无需等事件回流。
-        if result.code == "OK":
-            self.disturbance = {
-                "wind": "风场",
-                "fault": "节点故障",
-                "loss": "链路丢包",
-                "clear": "无",
-            }[kind]
         return self.snapshot()
 
     def plan_avoidance_route(
@@ -330,8 +317,6 @@ class ControllerSimulationAdapter:
 
     def _convert_snapshot(self, snapshot: ControllerSnapshot) -> Snapshot:
         """把控制器快照转换为 GUI 绘图模型。注意：需要同步维护轨迹缓存和显示字段。"""
-        # 先把事件流里的扰动状态同步过来，使显示与控制器内部状态一致。
-        self._sync_disturbance_from_events()
         nodes: list[NodeState] = []
         for node in snapshot.nodes:
             previous = self._last_xy_by_node.get(node.node_id)
@@ -429,7 +414,7 @@ class ControllerSimulationAdapter:
             step=snapshot.step_s,
             run_state=snapshot.run_state,
             control_report=snapshot.control_report,
-            disturbance=self._visible_disturbance(snapshot),
+            disturbance=active_disturbance_text(snapshot.active_disturbances),
             nodes=nodes,
             links=links,
             route=route,
@@ -455,49 +440,6 @@ class ControllerSimulationAdapter:
             center_y=route.center_y_m,
             turn_sign=route.turn_sign,
         )
-
-    def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
-        """返回当前界面应显示的扰动名称。注意：已清除或过期扰动显示为无。"""
-        # 优先按实际效果判定：有节点异常 → 节点故障，有链路异常 → 链路丢包。
-        if any(node.health != "normal" for node in snapshot.nodes):
-            return "节点故障"
-        if any(link.status != "normal" for link in snapshot.links):
-            return "链路丢包"
-        # 就绪态且本地也认为无扰动时显式返回“无”，避免残留旧标签。
-        if snapshot.run_state == "READY" and self.disturbance == "无":
-            return "无"
-        return self.disturbance
-
-    def _sync_disturbance_from_events(self) -> None:
-        """根据控制器事件同步扰动显示状态。注意：只处理尚未消费的新事件。"""
-        events = self.controller.get_recent_events(limit=1000)
-        # 只遍历游标之后的新事件，按消息关键字解析出当前应显示的扰动名称。
-        for event in events[self._processed_event_count:]:
-            if event.source != "Disturbance":
-                continue
-            if event.message == "清除扰动" or event.message.startswith("扰动结束"):
-                self.disturbance = "无"
-            elif "wind" in event.message:
-                self.disturbance = "风场"
-            elif "node_fault" in event.message:
-                self.disturbance = "节点故障"
-            elif "link_loss" in event.message or "link_fault" in event.message:
-                self.disturbance = "链路丢包"
-        # 推进游标到末尾，下次只处理更新的事件。
-        self._processed_event_count = len(events)
-
-    def _disturbance_command(self, kind: str) -> dict[str, object]:
-        """生成 GUI 按钮对应的扰动命令。注意：命令结构需与控制器注入接口一致。"""
-        # 把 UI 按钮种类翻译为控制器扰动命令字典；目标节点/链路与参数为预设演示值。
-        if kind == "wind":
-            return {"type": "wind", "duration_s": 8.0, "params": {"speed_mps": 8.0, "direction_deg": 90.0}}
-        if kind == "fault":
-            # 节点故障：目标 A02，降级模式持续 10s。
-            return {"type": "node_fault", "target": "A02", "duration_s": 10.0, "params": {"mode": "degraded"}}
-        if kind == "loss":
-            return {"type": "link_loss", "target": "A01-A02", "duration_s": 12.0, "params": {"loss_rate": 0.3}}
-        # 其余（clear）统一下发清除命令。
-        return {"type": "clear"}
 
 def _warm_terrain_field_cache(display_file: str | None) -> None:
     """后台线程预热高度场缓存。注意：失败静默,正式回退诊断由 scene_data 负责。"""

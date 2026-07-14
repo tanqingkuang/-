@@ -41,6 +41,7 @@ from src.runner.sim_control_types import (
     CommandResult,
     ControlReport,
     DisturbanceCommand,
+    DisturbanceType,
     EventLevel,
     LinkState,
     NodeState,
@@ -944,14 +945,20 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
 
     def _normalize_disturbance(self, command: DisturbanceCommand | dict[str, object]) -> DisturbanceCommand:
         """规范化扰动命令。注意：兼容 GUI 和脚本的不同字段写法。"""
-        # 已是结构化命令则直接透传。
+        # 已是结构化命令也统一规范枚举，避免调用方手工构造时绕过类型校验。
         if isinstance(command, DisturbanceCommand):
-            return command
+            return DisturbanceCommand(
+                type=DisturbanceType(command.type),
+                target=command.target,
+                duration_s=command.duration_s,
+                params=dict(command.params),
+            )
         if not isinstance(command, dict):
             raise TypeError("command must be DisturbanceCommand or dict")
-        # 校验扰动类型在允许集合内。
-        command_type = command.get("type")
-        if command_type not in {"wind", "node_fault", "link_loss", "link_fault", "clear"}:
+        # 枚举是唯一允许集合；非法字符串在控制器边界转成参数错误。
+        try:
+            command_type = DisturbanceType(command.get("type"))
+        except (TypeError, ValueError):
             raise ValueError("invalid disturbance type")
         params = command.get("params", {})
         if not isinstance(params, dict):
@@ -959,7 +966,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # duration_s 可缺省（None 表示持续到显式 clear）。
         duration = command.get("duration_s")
         return DisturbanceCommand(
-            type=command_type,  # type: ignore[arg-type]
+            type=command_type,
             target=str(command["target"]) if command.get("target") is not None else None,
             duration_s=float(duration) if duration is not None else None,
             params=dict(params),

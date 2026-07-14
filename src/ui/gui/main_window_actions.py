@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidget
 
+from src.runner.sim_control import DisturbanceType
 from src.ui.gui.config_state_view_model import (
     dialog_start_dir,
     display_config_path,
@@ -15,6 +16,7 @@ from src.ui.gui.config_state_view_model import (
     relative_config_path,
 )
 from src.ui.gui.dialogs import StageFullscreenDialog
+from src.ui.gui.disturbance_view_model import disturbance_action
 from src.ui.gui.theme_widgets import THEMES
 from src.ui.gui.side_view_control_view_model import geodetic_click_text
 from src.ui.gui.sim_control_view_model import parse_duration_text, rally_button_enabled
@@ -176,17 +178,15 @@ class MainWindowActionMixin:
         self._update_snapshot(snapshot)
         self._log("Formation", f"切换队形 -> index={index}, {self.sim.last_result_code}, state={snapshot.run_state}")
 
-    def _inject_disturbance(self, kind: str) -> None:
+    def _inject_disturbance(self, kind: DisturbanceType | str) -> None:
         """响应扰动按钮并下发扰动命令。注意：失败时需要记录控制器返回信息。"""
-        messages = {
-            "wind": "注入风场脉冲",
-            "fault": "注入 A02 控制效率下降",
-            "loss": "注入链路丢包",
-            "clear": "清除运行期扰动",
-        }
+        action = disturbance_action(kind)
         snapshot = self.sim.inject_disturbance(kind)
         self._update_snapshot(snapshot)
-        self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
+        self._log(
+            "Disturb",
+            f"{action.log_text} -> {self.sim.last_result_code}, state={snapshot.run_state}",
+        )
 
     def _load_demo_config(self, filename: str) -> None:
         """加载 configs/ 目录下的预置演示配置。注意：文件不存在时记录告警。"""

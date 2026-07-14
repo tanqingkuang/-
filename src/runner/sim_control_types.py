@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Callable, Literal
 
 from src.algorithm.context.leaf_types import PosTrackDiagS
@@ -12,7 +13,6 @@ from src.environment.model import AccelerationCommand
 RunState = Literal["UNLOADED", "READY", "RUNNING", "PAUSED", "FINISHED"]
 ControlReport = Literal["待命", "集结", "保持", "重构"]
 EventLevel = Literal["DEBUG", "INFO", "WARN", "ERROR"]
-DisturbanceType = Literal["wind", "node_fault", "link_loss", "link_fault", "clear"]
 ResultCode = Literal[
     "OK",
     "ERR_NO_CONFIG",
@@ -26,6 +26,16 @@ ResultCode = Literal[
     "ERR_LOG_FAILED",
     "ERR_INTERNAL",
 ]
+
+
+class DisturbanceType(StrEnum):
+    """控制器支持的扰动类型。注意：字符串值也是跨层序列化契约。"""
+
+    WIND = "wind"
+    NODE_FAULT = "node_fault"
+    LINK_LOSS = "link_loss"
+    LINK_FAULT = "link_fault"
+    CLEAR = "clear"
 
 @dataclass(frozen=True)
 class NodeState:
@@ -145,6 +155,7 @@ class SimulationSnapshot:
     control_report: ControlReport  # 控制回报文本（待命/集结/保持/重构）。
     nodes: list[NodeState]
     links: list[LinkState]
+    active_disturbances: tuple[DisturbanceType, ...] = ()  # 当前仍生效的权威扰动类型。
     route: RouteState | None = None  # 当前航段。
     route_segments: list[RouteState] = field(default_factory=list)  # 全部航段。
     cpu_utilization: float = 0.0  # 后台调度忙碌时间占墙钟周期比例，范围 0..1。

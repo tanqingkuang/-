@@ -83,6 +83,7 @@ class SimulationControllerSnapshotMixin:
             control_report=self._control_report,
             nodes=nodes,
             links=links,
+            active_disturbances=self._disturbance.active_types(),
             route=route,
             route_segments=route_segments,
             blocked_route_segments=blocked_route_segments,

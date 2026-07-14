@@ -1406,6 +1406,30 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertTrue(any("node_fault" in event.message for event in events))
             controller.close()
 
+    def test_snapshot_exposes_active_disturbance_types(self) -> None:
+        """快照必须直接给出权威扰动类型，消费端不得解析事件文本反推。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            controller.load_config(str(_write_config(Path(tmp))))
+            controller.inject_disturbance(
+                {"type": "wind", "duration_s": 1.0, "params": {"speed_mps": 8.0}}
+            )
+            controller.inject_disturbance(
+                {
+                    "type": "node_fault",
+                    "target": "A02",
+                    "duration_s": 1.0,
+                    "params": {"mode": "fault"},
+                }
+            )
+
+            self.assertEqual(controller.get_snapshot().active_disturbances, ("wind", "node_fault"))
+
+            controller.inject_disturbance({"type": "clear"})
+            self.assertEqual(controller.get_snapshot().active_disturbances, ())
+            controller.close()
+
     def test_link_fault_sets_link_status_lost(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()
