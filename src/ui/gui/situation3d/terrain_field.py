@@ -14,6 +14,8 @@ from typing import Any
 
 import numpy as np
 
+from src.ui.gui.situation3d.color_space import srgb_to_linear
+
 
 DEFAULT_TERRAIN_RESOLUTION = 641
 LOW_SPEC_TERRAIN_RESOLUTION = 384
@@ -672,7 +674,7 @@ def _color_grid(
     color = np.maximum(color, np.array([0.065, 0.085, 0.110], dtype=np.float32))
     color = np.minimum(color, np.array([0.68, 0.66, 0.62], dtype=np.float32))
     # 上传前转线性 RGB；QML 基色保持白色，避免再次染色破坏冷暖坡向关系。
-    return _srgb_to_linear(np.clip(color, 0.0, 1.0)).astype(np.float32)
+    return srgb_to_linear(np.clip(color, 0.0, 1.0)).astype(np.float32)
 
 
 def _edge_fade(east_grid: np.ndarray, north_grid: np.ndarray, extent: dict[str, float]) -> np.ndarray:
@@ -938,12 +940,6 @@ def _lerp_color(start: tuple[float, float, float], end: tuple[float, float, floa
     a = np.array(start, dtype=np.float32)
     b = np.array(end, dtype=np.float32)
     return a + (b - a) * ratio[..., None]
-
-
-def _srgb_to_linear(color: np.ndarray) -> np.ndarray:
-    """把 sRGB 颜色转换到线性空间。注意：Quick3D 顶点色按线性值上传。"""
-
-    return np.where(color <= 0.04045, color / 12.92, ((color + 0.055) / 1.055) ** 2.4)
 
 
 def _uv_to_m(point: Any) -> tuple[float, float]:

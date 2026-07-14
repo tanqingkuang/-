@@ -13,6 +13,7 @@ from PySide6.QtQuick3D import QQuick3DGeometry
 import numpy as np
 
 from src.runner.sim_control import ObstacleKind
+from src.ui.gui.situation3d.color_space import srgb_to_linear
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
@@ -663,7 +664,7 @@ def _extend_surface_grid(core_vertices: np.ndarray) -> np.ndarray:
     vertices[:, :, 6] = (x_grid - float(core_x[0])) / width
     vertices[:, :, 7] = (z_grid - float(core_z[0])) / depth
     horizon_color = np.asarray(
-        [_srgb_to_linear(component) for component in _HORIZON_COLOR_SRGB],
+        [srgb_to_linear(component) for component in _HORIZON_COLOR_SRGB],
         dtype=np.float32,
     )
     vertices[:, :, 14:17] = vertices[:, :, 14:17] * (1.0 - blend3) + horizon_color * blend3
@@ -894,7 +895,7 @@ def _tint_risk_colors(colors: np.ndarray, weights: np.ndarray) -> np.ndarray:
     """批量叠加低饱和风险色。注意：输入输出均为线性色彩，保持材质光照正确。"""
 
     # TerrainField 颜色在线性空间，目标色也必须先从 sRGB 转换再混合。
-    target = np.asarray([_srgb_to_linear(component) for component in _RISK_TINT_SRGB], dtype=np.float32)
+    target = np.asarray([srgb_to_linear(component) for component in _RISK_TINT_SRGB], dtype=np.float32)
     # 0.30 上限只产生色相提示，仍让高度分层、阴影和岩面纹理占主导。
     blend = np.clip(weights * _RISK_TINT_STRENGTH, 0.0, 1.0)[..., None]
     return (colors * (1.0 - blend) + target * blend).astype(np.float32)
@@ -905,7 +906,7 @@ def _tint_risk_color(color: tuple[float, float, float], weight: float) -> tuple[
 
     # 标量路径只服务旧 procedural 网格，参数必须与 numpy 批量路径完全一致。
     blend = max(0.0, min(1.0, weight * _RISK_TINT_STRENGTH))
-    target = tuple(_srgb_to_linear(component) for component in _RISK_TINT_SRGB)
+    target = tuple(srgb_to_linear(component) for component in _RISK_TINT_SRGB)
     return tuple(base * (1.0 - blend) + risk * blend for base, risk in zip(color, target))
 
 
@@ -1005,15 +1006,7 @@ def _height_color(height: float, amplitude: float) -> tuple[float, float, float]
     else:
         mixed = _lerp_color(_COLOR_MID, _COLOR_HIGH, min(1.0, (normalized - _COLOR_SPLIT) / (1.0 - _COLOR_SPLIT)))
     # Quick3D 光照在线性空间进行,sRGB 调色板必须先转线性,否则整体被洗白。
-    return (_srgb_to_linear(mixed[0]), _srgb_to_linear(mixed[1]), _srgb_to_linear(mixed[2]))
-
-
-def _srgb_to_linear(component: float) -> float:
-    """把 sRGB 分量转换为线性空间。注意：输入输出都在 0 到 1 区间。"""
-
-    if component <= 0.04045:
-        return component / 12.92
-    return ((component + 0.055) / 1.055) ** 2.4
+    return (srgb_to_linear(mixed[0]), srgb_to_linear(mixed[1]), srgb_to_linear(mixed[2]))
 
 
 def _lerp_color(
