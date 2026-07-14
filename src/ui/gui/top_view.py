@@ -4,12 +4,19 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
-from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
-from src.ui.gui.node_card_view_model import CardBoardState, CardRect, ScreenPoint, card_rect_for
+from src.runner.sim_control import ObstacleKind
+from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
+from src.ui.gui.node_card_view_model import (
+    CardBoardState,
+    CardLayoutConfig,
+    CardRect,
+    ScreenPoint,
+    card_rect_for,
+)
 from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.trail_path_cache import TrailPathCache
 from src.ui.gui.view_models import (
@@ -22,9 +29,9 @@ from src.ui.gui.view_models import (
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
+    centroid_of_active_nodes,
     is_major_grid_line,
     is_leader_node,
-    leader_node_from,
     reference_route_points,
 )
 
@@ -342,19 +349,22 @@ class TopView(QGraphicsView):
 
         if self.snapshot is not self._card_snapshot:
             return
-        # 遮挡检测与实际绘制共用同一视口尺寸，保证锚点选择与离屏判定完全一致。
-        viewport_size = self.viewport().size()
-        if self.cards.update_visibility(
-            self._node_screen_points(),
-            NODE_CARD_WIDTH,
-            NODE_CARD_HEIGHT,
-            NODE_CARD_GAP_X,
-            NODE_CARD_GAP_Y,
-            icon_size=NODE_ICON_ENVELOPE,
-            viewport_w=float(viewport_size.width()),
-            viewport_h=float(viewport_size.height()),
-        ):
+        if self.cards.update_visibility(self._node_screen_points(), self._card_layout_config()):
             self.viewport().update()
+
+    def _card_layout_config(self) -> CardLayoutConfig:
+        """返回遮挡判定与绘制共用的当前卡片布局。"""
+
+        viewport_size = self.viewport().size()
+        return CardLayoutConfig(
+            card_width=NODE_CARD_WIDTH,
+            card_height=NODE_CARD_HEIGHT,
+            gap_x=NODE_CARD_GAP_X,
+            gap_y=NODE_CARD_GAP_Y,
+            icon_size=NODE_ICON_ENVELOPE,
+            viewport_width=float(viewport_size.width()),
+            viewport_height=float(viewport_size.height()),
+        )
 
     def _draw_screen_text(self, painter: QPainter, x: float, y: float, dx: float, dy: float, text: str) -> None:
         """按屏幕坐标绘制文本。注意：避免世界 y 轴翻转导致文字倒置。"""
@@ -428,12 +438,10 @@ class TopView(QGraphicsView):
         """应用 auto center 设置。注意：只修改对应显示或运行参数。"""
         if not self.snapshot or not self.snapshot.nodes:
             return
-        # 优先以正常节点的质心为中心；全部异常时退回所有节点。
-        active = [node for node in self.snapshot.nodes if node.health == "normal"]
-        if not active:
-            active = self.snapshot.nodes
-        center_x = sum(node.x for node in active) / len(active)
-        center_y = sum(node.y for node in active) / len(active)
+        centroid = centroid_of_active_nodes(self.snapshot.nodes)
+        if centroid is None:
+            return
+        center_x, center_y, _ = centroid
         rect = self.viewport().rect()
         # 只平移不缩放：把质心移到视口正中。
         self.offset = QPointF(
@@ -491,10 +499,10 @@ class TopView(QGraphicsView):
         for obstacle in self.obstacles:
             if not obstacle.enabled:
                 continue
-            if obstacle.kind == "polygon":
+            if obstacle.kind is ObstacleKind.POLYGON:
                 xs.extend(point[0] for point in obstacle.vertices)
                 ys.extend(point[1] for point in obstacle.vertices)
-            elif obstacle.kind == "rect":
+            elif obstacle.kind is ObstacleKind.RECT:
                 xs.extend([obstacle.min_x, obstacle.max_x])
                 ys.extend([obstacle.min_y, obstacle.max_y])
             else:
@@ -547,24 +555,24 @@ class TopView(QGraphicsView):
 
     def _obstacle_center(self, obstacle: ObstacleView) -> tuple[float, float]:
         """返回障碍中心世界坐标。注意：矩形取几何中心，圆取圆心。"""
-        if obstacle.kind == "polygon" and obstacle.vertices:
+        if obstacle.kind is ObstacleKind.POLYGON and obstacle.vertices:
             return (
                 sum(point[0] for point in obstacle.vertices) / len(obstacle.vertices),
                 sum(point[1] for point in obstacle.vertices) / len(obstacle.vertices),
             )
-        if obstacle.kind == "rect":
+        if obstacle.kind is ObstacleKind.RECT:
             return (obstacle.min_x + obstacle.max_x) / 2.0, (obstacle.min_y + obstacle.max_y) / 2.0
         return obstacle.center_x, obstacle.center_y
 
     def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
         """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（polygon 为显示近似）。"""
-        if obstacle.kind == "polygon" and obstacle.vertices:
+        if obstacle.kind is ObstacleKind.POLYGON and obstacle.vertices:
             # polygon 安全间距按圆角外扩显示，与后端 inside() 的“点到边距离≤clearance”边界一致，
             # 避免 miter 尖角在角部凸出、令折线看上去擦过所画膨胀框。
             vertices = _rounded_inflated_polygon_points(obstacle.vertices, inflate)
             polygon = QPolygonF([QPointF(east, north) for east, north in vertices])
             painter.drawPolygon(polygon)
-        elif obstacle.kind == "rect":
+        elif obstacle.kind is ObstacleKind.RECT:
             painter.drawRect(
                 QRectF(
                     obstacle.min_x - inflate,
@@ -748,18 +756,14 @@ class TopView(QGraphicsView):
 
         if snapshot is not self._card_snapshot:
             return
-        # 与遮挡检测共用同一视口尺寸，保证绘制矩形和判定矩形（含锚点选择、离屏判定）完全一致。
-        viewport_size = self.viewport().size()
-        viewport_w = float(viewport_size.width())
-        viewport_h = float(viewport_size.height())
+        # 与遮挡检测共用同一配置，保证绘制矩形和判定矩形完全一致。
+        layout = self._card_layout_config()
         points = {point.node_id: point for point in self._node_screen_points()}
         for node in snapshot.nodes:
             if not self.cards.is_card_shown(node.node_id):
                 continue
             point = points[node.node_id]
-            rect = card_rect_for(
-                point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_GAP_X, NODE_CARD_GAP_Y, viewport_w, viewport_h
-            )
+            rect = card_rect_for(point, layout)
             self._draw_node_card(painter, node, point, rect)
 
     def _draw_node_card(

@@ -45,7 +45,7 @@ from src.ui.gui.view_models import (
     is_major_grid_line,
     trail_seconds_for_duration,
 )
-from src.ui.gui.node_card_view_model import card_rect_for
+from src.ui.gui.node_card_view_model import CardLayoutConfig, card_rect_for
 from src.ui.gui.side_view import SideView
 from src.ui.gui.top_view import NODE_CARD_GAP_X, NODE_CARD_GAP_Y, NODE_CARD_HEIGHT, NODE_CARD_WIDTH, TopView
 
@@ -182,7 +182,15 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(top_view.cards.is_card_shown("A01"))
 
         rect = card_rect_for(
-            point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_GAP_X, NODE_CARD_GAP_Y, 640.0, 420.0
+            point,
+            CardLayoutConfig(
+                NODE_CARD_WIDTH,
+                NODE_CARD_HEIGHT,
+                NODE_CARD_GAP_X,
+                NODE_CARD_GAP_Y,
+                viewport_width=640.0,
+                viewport_height=420.0,
+            ),
         )
         contains_owner = rect.x <= point.x <= rect.x + rect.w and rect.y <= point.y <= rect.y + rect.h
         self.assertFalse(contains_owner, "贴边节点的卡片矩形不得覆盖属主飞机本体")
@@ -321,7 +329,17 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertGreaterEqual(scene_data["counts"]["trailRibbons"], 1)
         self.assertGreaterEqual(scene_data["counts"]["routePoints"], 2)
         self.assertEqual(scene_data["counts"]["obstacles"], 1)
-        self.assertEqual(scene_data["obstacles"][0]["radius"], 30.0)
+        self.assertEqual(
+            scene_data["obstacles"][0],
+            {
+                "id": "OBS1",
+                "minX": 50.0,
+                "maxX": 110.0,
+                "minZ": -100.0,
+                "maxZ": -40.0,
+                "boundsHeight": 720.0,
+            },
+        )
 
         self.window._update_snapshot(
             Snapshot(
@@ -1179,6 +1197,20 @@ class GuiViewInteractionTests(unittest.TestCase):
             side_center_altitude,
             delta=0.01,
         )
+
+    def test_side_view_owns_manual_view_signal_and_main_window_bridges_it(self) -> None:
+        """侧视图手动操作信号由自身声明，主窗口负责关闭自动居中。"""
+
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+
+        self.assertFalse(hasattr(self.window.side_view, "top_view"))
+        self.window.side_view.manualViewChanged.emit()
+        self.app.processEvents()
+
+        self.assertFalse(self.window.auto_center.isChecked())
+        self.assertFalse(self.window.top_view.auto_center)
+        self.assertFalse(self.window.side_view.auto_center)
 
     def test_auto_center_survives_top_view_selection_zoom(self) -> None:
         self._load_ui_config()
@@ -2075,7 +2107,7 @@ class GuiViewInteractionTests(unittest.TestCase):
             )
             try:
                 with patch(
-                    "src.ui.gui.main_window.QFileDialog.getOpenFileName",
+                    "src.ui.gui.main_window_actions.QFileDialog.getOpenFileName",
                     return_value=(str(new_config), "Config (*.json)"),
                 ) as get_open_file_name:
                     window._choose_config()

@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 from configparser import ConfigParser
-import json
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QVBoxLayout
 
-from src.data.geo import enu_to_geodetic
-from src.ui.gui.avoidance_tools import _geo_origin_from_config_for_ui, parse_avoidance_config
+from src.runner.sim_control import DisturbanceType, RunState
 from src.ui.gui.config_state_view_model import (
     dialog_start_dir,
     display_config_path,
@@ -18,18 +16,17 @@ from src.ui.gui.config_state_view_model import (
     relative_config_path,
 )
 from src.ui.gui.dialogs import StageFullscreenDialog
+from src.ui.gui.disturbance_view_model import disturbance_action
 from src.ui.gui.theme_widgets import THEMES
 from src.ui.gui.side_view_control_view_model import geodetic_click_text
-from src.ui.gui.sim_control_view_model import parse_duration_text, rally_button_enabled
+from src.ui.gui.sim_control_view_model import parse_duration_text
 from src.ui.gui.status_table_view_model import link_table_rows, node_table_rows, overall_table_row
 from src.ui.gui.trail_view_model import TrailControlUpdate
 from src.ui.gui.view_models import (
     APP_CONFIG_KEY_LAST_CONFIG,
     APP_CONFIG_SECTION,
-    LinkState,
-    NodeState,
     Snapshot,
-    default_project_root,
+    TIMER_IDLE_RUN_STATES,
 )
 
 
@@ -61,12 +58,6 @@ class MainWindowActionMixin:
         self._sync_side_view_controls()
         self._update_tables(snapshot)
         self.features.on_snapshot_updated(self, snapshot)
-
-    @staticmethod
-    def _rally_button_enabled(snapshot: Snapshot) -> bool:
-        """判断集结按钮是否可用。注意：兼容旧测试入口，实际规则由 ViewModel 承载。"""
-
-        return rally_button_enabled(snapshot.run_state, snapshot.nodes)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
@@ -119,9 +110,9 @@ class MainWindowActionMixin:
         """响应暂停按钮并切换暂停状态。注意：暂停不清空当前快照。"""
         snapshot = self.sim.pause()
         # 暂停/继续切换：停或起刷新定时器与运行态保持一致。
-        if snapshot.run_state == "PAUSED":
+        if snapshot.run_state == RunState.PAUSED:
             self.timer.stop()
-        elif snapshot.run_state == "RUNNING":
+        elif snapshot.run_state == RunState.RUNNING:
             self.timer.start()
         self._update_snapshot(snapshot)
         self._log("UI", f"pause/start -> {self.sim.last_result_code}, state={snapshot.run_state}")
@@ -154,7 +145,7 @@ class MainWindowActionMixin:
         snapshot = self.sim.poll()
         self._update_snapshot(snapshot)
         # 进入非运行态(就绪/暂停/结束)就停掉定时器，省去无谓刷新。
-        if snapshot.run_state in {"READY", "PAUSED", "FINISHED"}:
+        if snapshot.run_state in TIMER_IDLE_RUN_STATES:
             self.timer.stop()
 
     def _refresh_formation_options(self) -> None:
@@ -179,17 +170,15 @@ class MainWindowActionMixin:
         self._update_snapshot(snapshot)
         self._log("Formation", f"切换队形 -> index={index}, {self.sim.last_result_code}, state={snapshot.run_state}")
 
-    def _inject_disturbance(self, kind: str) -> None:
+    def _inject_disturbance(self, kind: DisturbanceType | str) -> None:
         """响应扰动按钮并下发扰动命令。注意：失败时需要记录控制器返回信息。"""
-        messages = {
-            "wind": "注入风场脉冲",
-            "fault": "注入 A02 控制效率下降",
-            "loss": "注入链路丢包",
-            "clear": "清除运行期扰动",
-        }
+        action = disturbance_action(kind)
         snapshot = self.sim.inject_disturbance(kind)
         self._update_snapshot(snapshot)
-        self._log("Disturb", f"{messages[kind]} -> {self.sim.last_result_code}, state={snapshot.run_state}")
+        self._log(
+            "Disturb",
+            f"{action.log_text} -> {self.sim.last_result_code}, state={snapshot.run_state}",
+        )
 
     def _load_demo_config(self, filename: str) -> None:
         """加载 configs/ 目录下的预置演示配置。注意：文件不存在时记录告警。"""
@@ -246,8 +235,9 @@ class MainWindowActionMixin:
 
     def _set_top_view_geo_origin_from_config(self, path: str) -> None:
         """刷新俯视图点击坐标 origin。注意：无经纬航线时清空，避免沿用旧配置 origin。"""
+        del path
         # origin 来自基础航线第一个经纬航点；旧 ENU 配置没有 origin，不能反推经纬度。
-        self._top_view_geo_origin = _geo_origin_from_config_for_ui(path)
+        self._top_view_geo_origin = self.sim.gui_config.geo_reference
         self.top_view_coordinate.clear()
         if self._top_view_geo_origin is None:
             self.top_view_coordinate.setPlaceholderText("当前配置无经纬 origin")
@@ -256,10 +246,8 @@ class MainWindowActionMixin:
 
     def _on_top_view_point_clicked(self, east_m: float, north_m: float) -> None:
         """处理俯视图单击坐标。注意：只显示经纬度，不修改仿真状态。"""
-        geodetic = None
-        if self._top_view_geo_origin is not None:
-            # 坐标系转换属于 data 层，ViewModel 只负责缺失提示与复制文案。
-            geodetic = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
+        # 坐标系转换由 runner 应用层完成，ViewModel 只负责缺失提示与复制文案。
+        geodetic = self.sim.to_geodetic(east_m, north_m, self._top_view_geo_origin)
         self.top_view_coordinate.setText(geodetic_click_text(geodetic))
         if geodetic is not None:
             # 有效坐标沿用原聚焦行为，用户单击后可直接 Ctrl+C 复制数字。
@@ -334,11 +322,6 @@ class MainWindowActionMixin:
             # 写盘失败不应中断主流程，记录告警即可。
             self._log("WARN", f"写入 config.ini 失败：{exc}")
 
-    def _relative_to_project_root(self, path: Path) -> str | None:
-        """计算 to project root 相对路径。注意：兼容旧调用入口，规则由 ViewModel 承载。"""
-
-        return relative_config_path(path, self.project_root)
-
     def _on_speed_changed(self, value: int) -> None:
         """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
         update = self.sim.playback_vm.on_slider_changed(value)
@@ -408,40 +391,15 @@ class MainWindowActionMixin:
         self._update_snapshot(snapshot)
         if self.sim.last_result_code == "OK":
             try:
-                self._persist_config_duration(duration_s)
-            except Exception as exc:  # noqa: BLE001
+                if self.current_config_path is None:
+                    raise ValueError("未加载配置文件")
+                self.sim.persist_duration(self.current_config_path, duration_s)
+            except (OSError, ValueError) as exc:
                 self._log("WARN", f"写入配置时长失败：{exc}")
             self._log("Config", f"设置仿真时长 {duration_s:g}s")
         else:
             self._log("WARN", f"设置仿真时长失败：{self.sim.last_result_message}")
             self._sync_duration_input(self.sim.snapshot())
-
-    def _persist_config_duration(self, duration_s: float) -> None:
-        """把当前仿真时长写回配置文件。注意：只更新 duration_s 字段。"""
-        if self.current_config_path is None:
-            raise ValueError("未加载配置文件")
-        path = self.current_config_path
-        suffix = path.suffix.lower()
-        text = path.read_text(encoding="utf-8")
-        if suffix == ".json":
-            config = json.loads(text)
-            if not isinstance(config, dict):
-                raise ValueError("config root must be an object")
-            config["duration_s"] = duration_s
-            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return
-        if suffix in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError as exc:  # pragma: no cover - 依赖运行环境
-                raise ValueError("YAML config requires PyYAML") from exc
-            config = yaml.safe_load(text)
-            if not isinstance(config, dict):
-                raise ValueError("config root must be an object")
-            config["duration_s"] = duration_s
-            path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            return
-        raise ValueError("config must be .json, .yaml, or .yml")
 
     def _sync_duration_input(self, snapshot: Snapshot) -> None:
         """同步 duration input 显示。注意：加载配置后以控制器快照为准。"""
@@ -543,22 +501,11 @@ class MainWindowActionMixin:
 
     def _enter_stage_fullscreen(self) -> None:
         """进入 stage fullscreen 模式。注意：需要保存退出时恢复的界面状态。"""
-        # 前置条件：stage/布局存在且当前未全屏。
-        if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is not None:
+        # 前置条件：stage 存在且当前未全屏；布局细节由布局 Mixin 自己维护。
+        if self.stage is None or self._stage_fullscreen_dialog is not None:
             return
-
-        index = self.main_layout.indexOf(self.stage)
-        if index < 0:
+        if not self._take_stage_for_fullscreen():
             return
-
-        # 记录 stage 在主布局中的位置与拉伸系数，供退出时原样还原。
-        self._stage_layout_index = index
-        self._stage_layout_stretch = self.main_layout.stretch(index)
-        self.main_layout.removeWidget(self.stage)
-
-        # 用占位控件顶住原位，避免左右面板布局塌陷。
-        self._stage_placeholder = QWidget()
-        self.main_layout.insertWidget(self._stage_layout_index, self._stage_placeholder, self._stage_layout_stretch)
 
         # 把 stage 移入无边框全屏对话框（reparent 到对话框布局）。
         dialog = StageFullscreenDialog(self)
@@ -573,7 +520,7 @@ class MainWindowActionMixin:
     def _exit_stage_fullscreen(self) -> None:
         """退出 stage fullscreen 模式。注意：需要恢复进入前的布局状态。"""
         # 前置条件：处于全屏态。
-        if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is None:
+        if self.stage is None or self._stage_fullscreen_dialog is None:
             return
 
         # 先把 stage 从对话框取出，再销毁对话框。
@@ -582,18 +529,7 @@ class MainWindowActionMixin:
         dialog.hide()
         dialog.deleteLater()
         self._stage_fullscreen_dialog = None
-
-        # 移除并销毁占位控件。
-        if self._stage_placeholder is not None:
-            placeholder_index = self.main_layout.indexOf(self._stage_placeholder)
-            if placeholder_index >= 0:
-                self.main_layout.removeWidget(self._stage_placeholder)
-            self._stage_placeholder.deleteLater()
-            self._stage_placeholder = None
-
-        # 把 stage 插回原位置（用 min 兜底防止索引越界）并还原拉伸系数。
-        insert_index = min(self._stage_layout_index, self.main_layout.count())
-        self.main_layout.insertWidget(insert_index, self.stage, self._stage_layout_stretch)
+        self._restore_stage_from_fullscreen()
         self._set_fullscreen_button_state(False)
         self.stage.show()
         # reparent 后强制重绘两视图，避免残留旧画面。

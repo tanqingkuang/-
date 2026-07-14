@@ -9,6 +9,8 @@ from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 
 # 主窗口初始配色与主题菜单勾选状态共用这一处默认值，避免两边出现分歧。
 DEFAULT_THEME_KEY = "dark"
+# 右侧弹出菜单避开按钮与邻近边框，保持足够的视觉间隔。
+SELECT_POPUP_RIGHT_GAP_PX = 34
 
 
 class Theme:
@@ -170,6 +172,13 @@ class SelectButton(QPushButton):
             return None
         return self._items[self._index][1]
 
+    def _popup_anchor(self) -> QPoint:
+        """返回菜单在按钮局部坐标中的弹出锚点。"""
+
+        if self._popup_side == "right":
+            return QPoint(self.width() + SELECT_POPUP_RIGHT_GAP_PX, 0)
+        return QPoint(0, self.height() + 2)
+
     def show_menu(self) -> None:
         """显示下拉菜单。注意：菜单项选择会同步当前索引。"""
         self.setDown(True)
@@ -183,10 +192,5 @@ class SelectButton(QPushButton):
             action.setChecked(index == self._index)
             action.triggered.connect(lambda checked=False, row=index: self.setCurrentIndex(row))
             self._menu.addAction(action)
-        # 计算弹出锚点（按钮局部坐标），右侧弹出留出 34px 横向间隙。
-        if self._popup_side == "right":
-            point = QPoint(self.width() + 34, 0)
-        else:
-            point = QPoint(0, self.height() + 2)
         # 转换为全局坐标后弹出菜单。
-        self._menu.popup(self.mapToGlobal(point))
+        self._menu.popup(self.mapToGlobal(self._popup_anchor()))

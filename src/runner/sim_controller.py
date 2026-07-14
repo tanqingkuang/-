@@ -41,6 +41,7 @@ from src.runner.sim_control_types import (
     CommandResult,
     ControlReport,
     DisturbanceCommand,
+    DisturbanceType,
     EventLevel,
     LinkState,
     NodeState,
@@ -105,7 +106,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._algorithm_decimation = _DEFAULT_ALGORITHM_DECIMATION
         self._algorithm_period_s = self._step_s * self._algorithm_decimation
         # 对外状态和事件缓存用于 GUI 状态栏、日志窗口和测试断言。
-        self._run_state: RunState = "UNLOADED"
+        self._run_state = RunState.UNLOADED
         self._control_report: ControlReport = "待命"
         self._latest_snapshot = self._make_snapshot_for_empty_controller()
         self._events: deque[SimulationEvent] = deque(maxlen=self._EVENT_BUFFER_SIZE)
@@ -133,7 +134,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         with self._lock:
             if self._closed:
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("ERR_BUSY", "pause or reset before loading a new config")
         # 文件读取与解析放在锁外（可能耗时 IO），按异常类型映射结果码。
         try:
@@ -147,7 +148,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         with self._lock:
             if self._closed:
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("ERR_BUSY", "pause or reset before loading a new config")
             # 新配置：清除上一个配置遗留的避障航线覆盖，回到该配置的原始长机航线。
             self._leader_route_override = None
@@ -156,7 +157,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             except Exception as exc:  # noqa: BLE001 - 首版统一映射模块初始化失败
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             # 加载成功转入 READY/待命，准备 start。
-            self._run_state = "READY"
+            self._run_state = RunState.READY
             self._control_report = "待命"
             self._latest_snapshot = self._make_snapshot_unlocked()
             self._append_event_unlocked("INFO", "SimControl", f"配置已加载: {path}")
@@ -168,7 +169,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         """获取当前仿真快照。注意：该操作不推进仿真时间。"""
 
         with self._lock:
-            if self._config is not None and self._run_state == "RUNNING":
+            if self._config is not None and self._run_state == RunState.RUNNING:
                 # 显式查询应返回当前状态；调用频率由 UI 计时器或外部调用方控制。
                 self._latest_snapshot = self._make_snapshot_unlocked()
             return self._latest_snapshot
@@ -204,9 +205,9 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before start")
             # 已结束必须先 reset 才能重跑；运行中重复 start 视为幂等成功。
-            if self._run_state == "FINISHED":
+            if self._run_state == RunState.FINISHED:
                 return CommandResult("ERR_INVALID_STATE", "reset before restarting")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("OK", "already running")
             should_stop_worker = self._worker is not None and self._worker.is_alive()
 
@@ -220,12 +221,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before start")
-            if self._run_state == "FINISHED":
+            if self._run_state == RunState.FINISHED:
                 return CommandResult("ERR_INVALID_STATE", "reset before restarting")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("OK", "already running")
             # 切到运行态，清停止标志并拉起后台线程开始自动推进。
-            self._run_state = "RUNNING"
+            self._run_state = RunState.RUNNING
             self._control_report = self._derive_control_report_unlocked()
             self._cpu_utilization = 0.0
             self._stop_requested.clear()
@@ -242,11 +243,11 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before rally")
-            if self._run_state == "READY":
+            if self._run_state == RunState.READY:
                 return CommandResult("ERR_INVALID_STATE", "请先开始运行")
-            if self._run_state == "FINISHED":
+            if self._run_state == RunState.FINISHED:
                 return CommandResult("ERR_INVALID_STATE", "集结已结束，请重置后重试")
-            if self._run_state not in {"RUNNING", "PAUSED"}:
+            if self._run_state not in {RunState.RUNNING, RunState.PAUSED}:
                 return CommandResult("ERR_INVALID_STATE", "当前状态不能开始集结")
             rally_algorithms = {
                 node_id: algorithm
@@ -273,13 +274,13 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
 
         with self._lock:
             # 运行->暂停：仅改状态与回报，不动模型数据，便于随后 step 或继续。
-            if self._run_state == "RUNNING":
-                self._run_state = "PAUSED"
+            if self._run_state == RunState.RUNNING:
+                self._run_state = RunState.PAUSED
                 self._control_report = self._derive_control_report_unlocked()
                 self._cpu_utilization = 0.0
                 self._latest_snapshot = self._make_snapshot_unlocked()
                 snapshot = self._latest_snapshot
-            elif self._run_state == "PAUSED":
+            elif self._run_state == RunState.PAUSED:
                 # 重复暂停幂等返回成功。
                 return CommandResult("OK", "already paused")
             else:
@@ -299,12 +300,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before step")
             # 单步只在非自动运行时允许：RUNNING 下须先 pause，FINISHED 下须先 reset。
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("ERR_INVALID_STATE", "pause before manual step")
-            if self._run_state == "FINISHED":
+            if self._run_state == RunState.FINISHED:
                 return CommandResult("ERR_INVALID_STATE", "reset before stepping")
             # 单步语义即"暂停态下手动推进 count 个 tick"。
-            self._run_state = "PAUSED"
+            self._run_state = RunState.PAUSED
             self._control_report = "保持"
             for _ in range(count):
                 try:
@@ -316,7 +317,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 if snapshot is not None:
                     snapshots_to_notify.append(snapshot)
                 # 中途到达总时长即停止剩余步进。
-                if self._run_state == "FINISHED":
+                if self._run_state == RunState.FINISHED:
                     break
             # 若全程无新快照，至少回传一帧最近快照以刷新 UI。
             if not snapshots_to_notify:
@@ -341,7 +342,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             except Exception as exc:  # noqa: BLE001
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             # 重置后回到 READY/待命，等待再次 start。
-            self._run_state = "READY"
+            self._run_state = RunState.READY
             self._control_report = "待命"
             self._latest_snapshot = self._make_snapshot_unlocked()
             self._append_event_unlocked("INFO", "SimControl", "仿真已重置")
@@ -358,7 +359,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before applying a route")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("ERR_BUSY", "pause or reset before applying a route")
             config = dict(self._config)
         # 先停后台线程（锁外），再持锁带覆盖重建模块（时间归零，等价一次 reset）。
@@ -369,7 +370,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 self._init_modules_unlocked(config)
             except Exception as exc:  # noqa: BLE001
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
-            self._run_state = "READY"
+            self._run_state = RunState.READY
             self._control_report = "待命"
             self._latest_snapshot = self._make_snapshot_unlocked()
             self._append_event_unlocked("INFO", "SimControl", "已采用避障航线")
@@ -384,7 +385,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config first")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("ERR_BUSY", "pause or reset before clearing the route")
             if self._leader_route_override is None:
                 return CommandResult("OK", "no avoidance route to clear")
@@ -396,7 +397,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 self._init_modules_unlocked(config)
             except Exception as exc:  # noqa: BLE001
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
-            self._run_state = "READY"
+            self._run_state = RunState.READY
             self._control_report = "待命"
             self._latest_snapshot = self._make_snapshot_unlocked()
             self._append_event_unlocked("INFO", "SimControl", "已清除避障航线")
@@ -450,9 +451,9 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "controller is closed")
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before setting duration")
-            if self._run_state == "RUNNING":
+            if self._run_state == RunState.RUNNING:
                 return CommandResult("ERR_INVALID_STATE", "pause before setting duration")
-            if self._run_state == "FINISHED":
+            if self._run_state == RunState.FINISHED:
                 return CommandResult("ERR_INVALID_STATE", "reset before setting duration")
             # 缩短到当前时间之前会制造“时间回退但模型未回滚”的不一致快照，必须拒绝。
             if duration_s + _TIME_EPSILON_S < self._time_s:
@@ -462,7 +463,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             # 若总时长刚好等于当前时间，应立即按新的边界结束。
             if self._time_s >= self._duration_s:
                 self._time_s = self._duration_s
-                self._run_state = "FINISHED"
+                self._run_state = RunState.FINISHED
                 self._control_report = self._derive_control_report_unlocked()
             self._latest_snapshot = self._make_snapshot_unlocked()
         return CommandResult("OK", "duration updated")
@@ -479,7 +480,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before disturbance")
             # 仿真结束后不再接受扰动（轨迹已定型）。
-            if self._run_state == "FINISHED":
+            if self._run_state == RunState.FINISHED:
                 return CommandResult("ERR_INVALID_STATE", "disturbance is not accepted after finish")
             # 以当前仿真时间为基准注入扰动并记录事件。
             event = self._disturbance.inject(normalized, self._time_s)
@@ -598,7 +599,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                     self._init_modules_unlocked(config_copy)
                 except Exception as exc:  # noqa: BLE001
                     return CommandResult("ERR_CONFIG_INVALID", str(exc))
-                self._run_state = "READY"
+                self._run_state = RunState.READY
                 self._latest_snapshot = self._make_snapshot_unlocked()
         else:
             return CommandResult("ERR_INVALID_ARGUMENT", "config must be path or dict")
@@ -607,7 +608,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         with self._lock:
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before run")
-            self._run_state = "RUNNING"
+            self._run_state = RunState.RUNNING
             rally_algorithms = {
                 node_id: algorithm
                 for node_id, algorithm in self._node_algorithms.items()
@@ -625,7 +626,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                     # 与 GUI start_rally() 保持同类事件，方便日志侧统一检索。
                     self._append_event_unlocked("INFO", "SimControl", "开始集结")
             self._control_report = self._derive_control_report_unlocked()
-            while self._run_state == "RUNNING":
+            while self._run_state == RunState.RUNNING:
                 try:
                     # force_snapshot 确保每帧都落日志/快照（批处理需完整轨迹）。
                     self._tick_unlocked(force_snapshot=True)
@@ -807,7 +808,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
     def _tick_unlocked(self, *, force_snapshot: bool = False) -> SimulationSnapshot | None:
         """在已持锁状态下推进一个仿真 tick。注意：调用方负责锁和阶段检查。"""
         # 仅在运行/暂停态推进；其他状态直接回最近快照，不产生副作用。
-        if self._run_state not in {"RUNNING", "PAUSED"}:
+        if self._run_state not in {RunState.RUNNING, RunState.PAUSED}:
             return self._latest_snapshot
         self._ensure_logger_open_unlocked()
         step_s = self._step_s
@@ -834,12 +835,14 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
 
         # 状态机收尾：到达总时长则置 FINISHED 并锁定回报；否则在运行态刷新回报文本。
         if self._time_s >= self._duration_s:
-            self._run_state = "FINISHED"
+            self._run_state = RunState.FINISHED
             self._control_report = self._derive_control_report_unlocked()
-        elif self._run_state in {"RUNNING", "PAUSED"}:
+        elif self._run_state in {RunState.RUNNING, RunState.PAUSED}:
             self._control_report = self._derive_control_report_unlocked()
 
-        should_refresh_display = self._should_refresh_display_unlocked() or self._run_state == "FINISHED"
+        should_refresh_display = (
+            self._should_refresh_display_unlocked() or self._run_state == RunState.FINISHED
+        )
         # 日志按仿真时间固定 10Hz 采样，保证不同播放倍率得到一致的离线数据点。
         should_log_snapshot = self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s
         # 快照生成按墙钟显示频率限流；日志采样点额外生成，避免漏记关键状态。
@@ -944,14 +947,20 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
 
     def _normalize_disturbance(self, command: DisturbanceCommand | dict[str, object]) -> DisturbanceCommand:
         """规范化扰动命令。注意：兼容 GUI 和脚本的不同字段写法。"""
-        # 已是结构化命令则直接透传。
+        # 已是结构化命令也统一规范枚举，避免调用方手工构造时绕过类型校验。
         if isinstance(command, DisturbanceCommand):
-            return command
+            return DisturbanceCommand(
+                type=DisturbanceType(command.type),
+                target=command.target,
+                duration_s=command.duration_s,
+                params=dict(command.params),
+            )
         if not isinstance(command, dict):
             raise TypeError("command must be DisturbanceCommand or dict")
-        # 校验扰动类型在允许集合内。
-        command_type = command.get("type")
-        if command_type not in {"wind", "node_fault", "link_loss", "link_fault", "clear"}:
+        # 枚举是唯一允许集合；非法字符串在控制器边界转成参数错误。
+        try:
+            command_type = DisturbanceType(command.get("type"))
+        except (TypeError, ValueError):
             raise ValueError("invalid disturbance type")
         params = command.get("params", {})
         if not isinstance(params, dict):
@@ -959,7 +968,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # duration_s 可缺省（None 表示持续到显式 clear）。
         duration = command.get("duration_s")
         return DisturbanceCommand(
-            type=command_type,  # type: ignore[arg-type]
+            type=command_type,
             target=str(command["target"]) if command.get("target") is not None else None,
             duration_s=float(duration) if duration is not None else None,
             params=dict(params),

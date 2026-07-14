@@ -10,7 +10,7 @@ from src.runner.sim_control_constants import (
     _MAX_RUN_LOOP_BATCH_TICKS,
     _RUN_LOOP_SLEEP_SLICE_S,
 )
-from src.runner.sim_control_types import SimulationSnapshot
+from src.runner.sim_control_types import RunState, SimulationSnapshot
 
 
 def _cpu_utilization_sample_period_s() -> float:
@@ -42,7 +42,7 @@ class SimulationControllerLoopMixin:
                 should_sleep = False
                 with self._lock:
                     # 运行态被外部改为非 RUNNING（暂停/结束）时退出循环。
-                    if self._run_state != "RUNNING":
+                    if self._run_state != RunState.RUNNING:
                         break
                     step_s = self._step_s
                     playback_rate = self._playback_rate
@@ -60,14 +60,14 @@ class SimulationControllerLoopMixin:
                         except Exception as exc:  # noqa: BLE001
                             # tick 出错不崩线程：记录错误、转入暂停并产出一帧快照便于排查。
                             self._append_event_unlocked("ERROR", "SimControl", f"tick failed: {exc}")
-                            self._run_state = "PAUSED"
+                            self._run_state = RunState.PAUSED
                             snapshot = self._make_snapshot_unlocked()
                         sim_budget_s = max(0.0, sim_budget_s - step_s)
                         if snapshot is not None:
                             snapshots_to_notify.append(snapshot)
-                        if self._run_state != "RUNNING":
+                        if self._run_state != RunState.RUNNING:
                             break
-                    if self._run_state == "RUNNING" and sim_budget_s < step_s:
+                    if self._run_state == RunState.RUNNING and sim_budget_s < step_s:
                         should_sleep = True
                 # 在锁外通知订阅者，避免回调阻塞持锁路径。
                 for snapshot in snapshots_to_notify:

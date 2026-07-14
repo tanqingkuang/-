@@ -88,13 +88,6 @@ class DataAnalysisWindowTests(unittest.TestCase):
                 )
             )
 
-            rows = window._metric_rows_for_source(window._sources["A"], 0.0, 1.0)
-            self.assertEqual(len(rows), 18)
-            self.assertEqual(rows[0]["input_label"], "A")
-            self.assertEqual(rows[0]["scope"], "all")
-            self.assertEqual(rows[0]["channel"], "track_pos_err_x_m")
-            self.assertEqual(rows[0]["channel_label"], "前向位置误差 x")
-
     def test_chart_popup_button_uses_icon_instead_of_text_glyph(self) -> None:
         """滑动窗口弹出按钮应使用图标，避免字体缺字时显示成小方框。"""
         window = DataAnalysisWindow()
@@ -129,6 +122,19 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.assertEqual(window._selected_channel().key, "vel_y")
             self.assertEqual(window._status_label.text(), "垂向速度误差 y")
             self.assertIn(("A", "all", "vel_y", 0.0, 1.0, 5.0), window._window_curve_cache)
+
+    def test_channel_click_dispatches_one_selection_change(self) -> None:
+        """一次按钮点击只经选中态信号切换一次通道。"""
+
+        window = DataAnalysisWindow()
+        window.show()
+        self.app.processEvents()
+
+        with patch.object(window, "_set_plot_channel", wraps=window._set_plot_channel) as callback:
+            window._channel_buttons["pos_y"].click()
+            self.app.processEvents()
+
+        callback.assert_called_once_with("pos_y")
 
     def test_channel_button_row_blank_area_is_clickable(self) -> None:
         """点击通道按钮右侧空白区域也应切换绘图通道。"""

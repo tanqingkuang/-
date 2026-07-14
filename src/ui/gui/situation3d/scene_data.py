@@ -9,7 +9,7 @@ import math
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, Iterator, Sequence
 
 import numpy as np
 
@@ -29,6 +29,7 @@ from src.ui.gui.situation3d.terrain_field import (
     terrain_extent_from_layout,
     load_terrain_layout,
 )
+from src.runner.sim_control import ObstacleKind
 from src.ui.gui.view_models import (
     ObstacleView,
     ReferenceRoute,
@@ -46,6 +47,7 @@ BLOCKED_ROUTE_DASH_COLOR = "#ff5a45"
 DEFAULT_GROUND_MARGIN_M = 420.0
 DEFAULT_TERRAIN_SPAN_M = 20000.0
 DEFAULT_TERRAIN_RELIEF_M = 2200.0
+OBSTACLE_CAMERA_BOUNDS_HEIGHT_M = 720.0
 
 
 class TrailPayloadState:
@@ -174,7 +176,7 @@ class TrailPayloadState:
 # 34. terrain payload 的 ground 字段保留给后续需要地平面或雾墙时复用。
 # 35. 这里的 Quick3D z 是 -north，所有风险线同样遵守 enu_to_quick3d。
 # 36. route dash 切分仍按空间距离，巡航 900m 地形不会影响虚线节奏。
-# 37. obstacles 仍保留兼容 payload 与相机包围盒用途，但 QML 不再把它们渲染成柱体或方盒。
+# 37. obstacles 只携带不可渲染的相机包围盒字段，避免旧柱体字段被误当成真实障碍形状。
 # 38. scene_data 不缓存生成后的 mesh，避免和 TerrainGeometry 的重建生命周期竞争。
 # 39. 如果布局文件变更，改变路径或清理 _cached_layout 即可刷新元数据。
 # 40. P2 风险区与当前启用的真实障碍同源；旧场景未提供避障数据时继续使用正式 JSON 布局标记。
@@ -685,36 +687,44 @@ def _interpolate_polyline(
 
 
 def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, object]:
-    """生成障碍兼容与相机包围盒数据。注意：QML 不再把这些尺寸直接渲染成实体柱体。"""
+    """生成障碍相机包围盒。注意：载荷不携带可被 QML 误渲染的实体形状字段。"""
 
-    # 安全间距在显示层膨胀半径/包围盒，便于和避障预览里的风险边界对应。
+    # 安全间距并入相机边界，使风险填充不会在初始取景时被裁掉。
     safe_clearance = max(0.0, float(clearance_m))
-    column_height_m = 720.0
-    if obstacle.kind == "circle":
+    if obstacle.kind is ObstacleKind.CIRCLE:
         radius = max(1.0, obstacle.radius + safe_clearance)
-        coord = enu_to_quick3d(obstacle.center_x, obstacle.center_y, column_height_m / 2.0)
+        min_x = obstacle.center_x - radius
+        max_x = obstacle.center_x + radius
+        min_north = obstacle.center_y - radius
+        max_north = obstacle.center_y + radius
         return {
-            "kind": "circle",
             "id": obstacle.obstacle_id,
-            "radius": radius,
-            "width": radius * 2.0,
-            "depth": radius * 2.0,
-            "height": column_height_m,
-            **coord,
+            "minX": min_x,
+            "maxX": max_x,
+            "minZ": -max_north,
+            "maxZ": -min_north,
+            "boundsHeight": OBSTACLE_CAMERA_BOUNDS_HEIGHT_M,
         }
     min_x, max_x, min_y, max_y = _obstacle_bounds(obstacle)
-    width = max(1.0, max_x - min_x + safe_clearance * 2.0)
-    depth = max(1.0, max_y - min_y + safe_clearance * 2.0)
-    coord = enu_to_quick3d((min_x + max_x) / 2.0, (min_y + max_y) / 2.0, column_height_m / 2.0)
     return {
-        "kind": "box",
         "id": obstacle.obstacle_id,
-        "radius": max(width, depth) / 2.0,
-        "width": width,
-        "depth": depth,
-        "height": column_height_m,
-        **coord,
+        "minX": min_x - safe_clearance,
+        "maxX": max_x + safe_clearance,
+        "minZ": -(max_y + safe_clearance),
+        "maxZ": -(min_y - safe_clearance),
+        "boundsHeight": OBSTACLE_CAMERA_BOUNDS_HEIGHT_M,
     }
+
+
+def _enabled_obstacles(obstacles: Iterable[ObstacleView]) -> Iterator[ObstacleView]:
+    """按输入顺序迭代启用障碍，统一所有 3D 风险载荷的筛选口径。"""
+
+    # 保持惰性迭代，调用方传入生成器时也不会预先复制整组障碍。
+    # enabled 是规划与显示共用的开关，集中判断可避免某个消费者漏掉禁用状态。
+    for obstacle in obstacles:
+        if obstacle.enabled:
+            # 原样返回视图对象，让各消费者继续读取完整几何和枚举字段。
+            yield obstacle
 
 
 def _terrain_risk_area_payloads(
@@ -730,15 +740,14 @@ def _terrain_risk_area_payloads(
     origin_z = float(surface_data.get("z", 0.0))
     safe_clearance = max(0.0, float(clearance_m))
     areas: list[dict[str, object]] = []
-    for obstacle in obstacles:
-        if not obstacle.enabled:
-            continue
-        if obstacle.kind == "circle":
+    # 地形顶点着色与其他风险图层必须消费同一组启用障碍。
+    for obstacle in _enabled_obstacles(obstacles):
+        if obstacle.kind is ObstacleKind.CIRCLE:
             # 圆形直接把规划安全间距并入半径，着色边界与旧柱体表达的膨胀范围一致。
             areas.append(
                 {
                     "id": obstacle.obstacle_id,
-                    "kind": "circle",
+                    "kind": ObstacleKind.CIRCLE.value,
                     "center": [obstacle.center_x - origin_x, -obstacle.center_y - origin_z],
                     "radius": max(1.0, obstacle.radius + safe_clearance),
                 }
@@ -749,7 +758,7 @@ def _terrain_risk_area_payloads(
         areas.append(
             {
                 "id": obstacle.obstacle_id,
-                "kind": "polygon",
+                "kind": ObstacleKind.POLYGON.value,
                 "points": [[east - origin_x, -north - origin_z] for east, north in vertices],
                 "clearance": safe_clearance,
             }
@@ -762,7 +771,7 @@ def _terrain_risk_area_payloads(
         areas.append(
             {
                 "id": str(zone.get("id", "风险区")),
-                "kind": "circle",
+                "kind": ObstacleKind.CIRCLE.value,
                 "center": [float(zone.get("x", 0.0)) - origin_x, float(zone.get("z", 0.0)) - origin_z],
                 "radius": max(1.0, float(zone.get("radius", 1.0))),
             }
@@ -786,9 +795,8 @@ def _obstacle_boundary_payloads(
 
     safe_clearance = max(0.0, float(clearance_m))
     boundaries: list[dict[str, object]] = []
-    for obstacle in obstacles:
-        if not obstacle.enabled:
-            continue
+    # 告警边界复用公共筛选，取消勾选后会与填充层同步消失。
+    for obstacle in _enabled_obstacles(obstacles):
         horizontal_points = _obstacle_boundary_points(obstacle, safe_clearance)
         if len(horizontal_points) < 3:
             continue
@@ -808,7 +816,7 @@ def _obstacle_boundary_payloads(
 def _obstacle_boundary_points(obstacle: ObstacleView, clearance_m: float) -> list[tuple[float, float]]:
     """返回障碍安全区的水平边界。注意：坐标仍为 ENU east/north，末点暂不闭合。"""
 
-    if obstacle.kind == "circle":
+    if obstacle.kind is ObstacleKind.CIRCLE:
         radius = max(1.0, float(obstacle.radius) + clearance_m)
         # 圆周按周长自适应采样，同时保留最低 48 段，近看不会呈现明显多边形折角。
         segment_count = max(48, min(160, int(math.ceil(math.tau * radius / 80.0))))
@@ -907,9 +915,8 @@ def _obstacle_fill_payloads(
     safe_clearance = max(0.0, float(clearance_m))
     surface_key = _fill_surface_key(surface_data)
     fills: list[dict[str, object]] = []
-    for obstacle in obstacles:
-        if not obstacle.enabled:
-            continue
+    # 危险填充不再维护自己的 enabled 分支，防止与边界层状态漂移。
+    for obstacle in _enabled_obstacles(obstacles):
         points = _obstacle_boundary_points(obstacle, safe_clearance)
         if len(points) < 3:
             continue
@@ -1223,7 +1230,7 @@ def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float
 def _obstacle_corner_points(obstacle: ObstacleView) -> list[tuple[float, float]]:
     """把非多边形障碍近似为顶点集合。注意：统一后续风险区的质心和半径计算。"""
 
-    if obstacle.kind == "circle":
+    if obstacle.kind is ObstacleKind.CIRCLE:
         # 圆没有原生顶点；用八边形近似换取和 polygon/rect 共用同一套质心+最大半径公式，
         # 不必为圆再写一条独立的风险区分支。
         return [
@@ -1248,11 +1255,10 @@ def _risk_zones_from_obstacles(
     """从当前生效的避障障碍集合生成风险区。注意：只处理已启用障碍，替代布局手工标记。"""
 
     zones: list[TerrainRiskZone] = []
-    for obstacle in obstacles:
-        # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
-        if not obstacle.enabled:
-            continue
-        vertices = obstacle.vertices if obstacle.kind == "polygon" else _obstacle_corner_points(obstacle)
+    # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
+    # 公共筛选同时保持输入顺序，风险区与障碍图例的对应关系不会变化。
+    for obstacle in _enabled_obstacles(obstacles):
+        vertices = obstacle.vertices if obstacle.kind is ObstacleKind.POLYGON else _obstacle_corner_points(obstacle)
         if not vertices:
             continue
         center_x = sum(point[0] for point in vertices) / len(vertices)
@@ -1287,11 +1293,9 @@ def _scene_bounds(
     zs = [float(item["z"]) for item in aircraft + route_points]
     ys = [float(item["y"]) for item in aircraft + route_points]
     for obstacle in obstacles:
-        half_width = float(obstacle["width"]) / 2.0
-        half_depth = float(obstacle["depth"]) / 2.0
-        xs.extend([float(obstacle["x"]) - half_width, float(obstacle["x"]) + half_width])
-        zs.extend([float(obstacle["z"]) - half_depth, float(obstacle["z"]) + half_depth])
-        ys.extend([0.0, float(obstacle["height"])])
+        xs.extend([float(obstacle["minX"]), float(obstacle["maxX"])])
+        zs.extend([float(obstacle["minZ"]), float(obstacle["maxZ"])])
+        ys.extend([0.0, float(obstacle["boundsHeight"])])
     if not xs:
         xs = [-800.0, 800.0]
         zs = [-500.0, 500.0]

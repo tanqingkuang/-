@@ -39,7 +39,6 @@ from src.data.control_effect_analysis import (
     AnalysisSourceData,
     MetricSummary,
     load_snapshot_samples,
-    metric_rows_for_source,
     node_ids_from_sources,
     normalized_time_range,
     points_for,
@@ -422,8 +421,6 @@ class DataAnalysisWindow(QDialog):
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             # 默认绘制第一个通道；汇总表仍显示全部通道。
             button.setChecked(index == 0)
-            button.pressed.connect(lambda channel_key=channel.key: self._set_plot_channel(channel_key))
-            button.clicked.connect(lambda _checked=False, channel_key=channel.key: self._set_plot_channel(channel_key))
             button.toggled.connect(
                 lambda checked, channel_key=channel.key: self._set_plot_channel(channel_key) if checked else None
             )
@@ -437,7 +434,7 @@ class DataAnalysisWindow(QDialog):
         """切换当前绘图通道，并刷新滑动窗口曲线。"""
         channel_label = self._channel_label(channel_key)
         if self._selected_channel_key == channel_key and self._status_label.text() == channel_label:
-            # pressed/clicked/toggled 会形成多路保险，重复信号不应重复刷新。
+            # 直接调用入口时保持幂等，避免无变化的重复刷新。
             return
         self._selected_channel_key = channel_key
         self._refresh_all()
@@ -817,13 +814,6 @@ class DataAnalysisWindow(QDialog):
         start_s, end_s = self._time_range()
         data_sources = [source.data for source in sources if source.data is not None]
         write_metrics_csv(path, data_sources, start_s, end_s, channels=CHANNELS)
-
-    def _metric_rows_for_source(self, source: InputSource, start_s: float, end_s: float) -> list[dict[str, object]]:
-        """生成单个输入源的全机和逐机指标行。"""
-        if source.data is None:
-            return []
-        return metric_rows_for_source(source.data, start_s, end_s, channels=CHANNELS)
-
 
 def _curve_source_labels(curves_by_metric: dict[str, list[CurveSpec]]) -> list[str]:
     """从当前窗口曲线中提取已显示的数据源标签。"""

@@ -70,57 +70,93 @@ class CardRect:
         )
 
 
+@dataclass(frozen=True)
+class CardLayoutConfig:
+    """卡片布局的固定尺寸与当前视口边界。"""
+
+    # 卡片尺寸同时决定绘制矩形与遮挡占位，调用方不得分别估算。
+    card_width: float
+    card_height: float
+    # 水平与垂直间距确保卡片不覆盖属主机体。
+    gap_x: float = 16.0
+    gap_y: float = 14.0
+    # 图标包络覆盖机体旋转后的最大屏幕范围。
+    icon_size: float = 48.0
+    # 已隐藏卡片只有获得额外净空后才恢复，避免临界位置闪烁。
+    recovery_margin: float = 10.0
+    # 两个视口维度必须成对提供；都为空时保留无边界布局语义。
+    viewport_width: float | None = None
+    viewport_height: float | None = None
+
+
 def _anchor_candidates(
     point: ScreenPoint,
-    width: float,
-    height: float,
-    gap_x: float,
-    gap_y: float,
+    layout: CardLayoutConfig,
 ) -> tuple[CardRect, CardRect, CardRect, CardRect]:
     """生成右上/左上/右下/左下四个候选卡片矩形。注意：四者都与机体保持固定间距，
     绝不与机体自身重叠，方向选择只影响卡片朝哪一侧展开。
     """
 
     return (
-        CardRect(point.x + gap_x, point.y - gap_y - height, width, height),  # 右上（默认优先）
-        CardRect(point.x - gap_x - width, point.y - gap_y - height, width, height),  # 左上
-        CardRect(point.x + gap_x, point.y + gap_y, width, height),  # 右下
-        CardRect(point.x - gap_x - width, point.y + gap_y, width, height),  # 左下
+        CardRect(
+            point.x + layout.gap_x,
+            point.y - layout.gap_y - layout.card_height,
+            layout.card_width,
+            layout.card_height,
+        ),  # 右上（默认优先）
+        CardRect(
+            point.x - layout.gap_x - layout.card_width,
+            point.y - layout.gap_y - layout.card_height,
+            layout.card_width,
+            layout.card_height,
+        ),  # 左上
+        CardRect(
+            point.x + layout.gap_x,
+            point.y + layout.gap_y,
+            layout.card_width,
+            layout.card_height,
+        ),  # 右下
+        CardRect(
+            point.x - layout.gap_x - layout.card_width,
+            point.y + layout.gap_y,
+            layout.card_width,
+            layout.card_height,
+        ),  # 左下
     )
 
 
-def card_rect_for(
-    point: ScreenPoint,
-    width: float,
-    height: float,
-    gap_x: float = 16.0,
-    gap_y: float = 14.0,
-    viewport_w: float | None = None,
-    viewport_h: float | None = None,
-) -> CardRect:
+def card_rect_for(point: ScreenPoint, layout: CardLayoutConfig) -> CardRect:
     """计算飞机信息卡片矩形。注意：卡片与机体的间距固定不变，绝不做覆盖式夹紧；
     提供视口尺寸时按右上→左上→右下→左下顺序挑第一个完整落入视口的锚点，
     四者都放不下时退化为与视口重叠面积最大的锚点（卡片可能被部分裁切，但仍不压住机体）。
     """
 
-    candidates = _anchor_candidates(point, width, height, gap_x, gap_y)
-    if viewport_w is None or viewport_h is None:
+    # 候选顺序属于交互契约，优先在机体右上方展示。
+    candidates = _anchor_candidates(point, layout)
+    if layout.viewport_width is None or layout.viewport_height is None:
         return candidates[0]
 
     def fits_fully(rect: CardRect) -> bool:
         """判断候选卡片是否完整位于当前视口内。"""
-        return 0.0 <= rect.x and 0.0 <= rect.y and rect.x + rect.w <= viewport_w and rect.y + rect.h <= viewport_h
+        return (
+            0.0 <= rect.x
+            and 0.0 <= rect.y
+            and rect.x + rect.w <= layout.viewport_width
+            and rect.y + rect.h <= layout.viewport_height
+        )
 
     for candidate in candidates:
+        # 首个完整入屏候选即可确定，不再按面积重新排序。
         if fits_fully(candidate):
             return candidate
 
     def overlap_area(rect: CardRect) -> float:
         """计算候选卡片与当前视口的重叠面积。"""
-        overlap_w = max(0.0, min(rect.x + rect.w, viewport_w) - max(rect.x, 0.0))
-        overlap_h = max(0.0, min(rect.y + rect.h, viewport_h) - max(rect.y, 0.0))
+        overlap_w = max(0.0, min(rect.x + rect.w, layout.viewport_width) - max(rect.x, 0.0))
+        overlap_h = max(0.0, min(rect.y + rect.h, layout.viewport_height) - max(rect.y, 0.0))
         return overlap_w * overlap_h
 
+    # 极窄视口无法完整容纳卡片时，选择可见面积最大的方向。
     return max(candidates, key=overlap_area)
 
 
@@ -176,14 +212,7 @@ class CardBoardState:
     def update_visibility(
         self,
         points: Sequence[ScreenPoint],
-        card_w: float,
-        card_h: float,
-        gap_x: float = 16.0,
-        gap_y: float = 14.0,
-        icon_size: float = 48.0,
-        recovery_margin: float = 10.0,
-        viewport_w: float | None = None,
-        viewport_h: float | None = None,
+        layout: CardLayoutConfig,
     ) -> bool:
         """按优先级与滞回更新自动卡片可见性。注意：返回是否有实际状态变化。
 
@@ -193,38 +222,72 @@ class CardBoardState:
         不参与遮挡占位，避免画面上出现没有属主飞机的孤立卡片。
         """
 
-        # 视口未知时一律视为在屏，兼容旧调用方；仅在提供尺寸时才做离屏判定。
-        def on_screen(point: ScreenPoint) -> bool:
-            """判断节点是否应按当前视口尺寸参与卡片布局。"""
-            if viewport_w is None or viewport_h is None:
-                return True
-            return is_point_on_screen(point.x, point.y, viewport_w, viewport_h)
+        # 第一阶段先更新离屏状态，后续两个阶段都以此为权威输入。
+        changed = self._update_on_screen(points, layout)
+        # 全部图标先形成不可覆盖区域；每张卡片只排除自己的图标方框。
+        half_icon = layout.icon_size / 2.0
+        icon_rects = {
+            point.node_id: CardRect(
+                point.x - half_icon,
+                point.y - half_icon,
+                layout.icon_size,
+                layout.icon_size,
+            )
+            for point in points
+        }
+        # 第二阶段让固定显示卡片优先占位，保持用户选择高于自动规则。
+        occupied_cards = self._pinned_card_rects(points, layout)
+        # 第三阶段按长机优先顺序贪心放置其余卡片。
+        return self._place_auto_cards(points, layout, icon_rects, occupied_cards) or changed
+
+    def _update_on_screen(self, points: Sequence[ScreenPoint], layout: CardLayoutConfig) -> bool:
+        """更新节点离屏状态并返回是否发生变化。"""
 
         changed = False
         for point in points:
-            now_on_screen = on_screen(point)
+            if layout.viewport_width is None or layout.viewport_height is None:
+                now_on_screen = True
+            else:
+                now_on_screen = is_point_on_screen(
+                    point.x,
+                    point.y,
+                    layout.viewport_width,
+                    layout.viewport_height,
+                )
             if self.on_screen.get(point.node_id, True) != now_on_screen:
                 changed = True
             self.on_screen[point.node_id] = now_on_screen
+        return changed
 
-        # 全部图标先形成不可覆盖区域；每张卡片只排除自己的图标方框。
-        half_icon = icon_size / 2.0
-        icon_rects = {
-            point.node_id: CardRect(point.x - half_icon, point.y - half_icon, icon_size, icon_size)
-            for point in points
-        }
-        # pinned_show 无条件显示并先占位；离屏节点即使被强制显示也不生成卡片矩形。
-        occupied_cards = [
-            card_rect_for(point, card_w, card_h, gap_x, gap_y, viewport_w, viewport_h)
+    def _pinned_card_rects(
+        self,
+        points: Sequence[ScreenPoint],
+        layout: CardLayoutConfig,
+    ) -> list[CardRect]:
+        """返回当前在屏固定显示卡片的占位矩形。"""
+
+        return [
+            card_rect_for(point, layout)
             for point in points
             if self.overrides.get(point.node_id) is True and self.on_screen.get(point.node_id, True)
         ]
+
+    def _place_auto_cards(
+        self,
+        points: Sequence[ScreenPoint],
+        layout: CardLayoutConfig,
+        icon_rects: dict[str, CardRect],
+        occupied_cards: list[CardRect],
+    ) -> bool:
+        """按优先级放置自动卡片并更新遮挡记忆。"""
+
         # 自动节点按长机优先、同类 node_id 字典序依次尝试占位。
         auto_points = sorted(
             (point for point in points if point.node_id not in self.overrides),
             key=lambda point: (not point.is_leader, point.node_id),
         )
         # 变化标记只反映实际可见性切换，供画布避免无意义重绘。
+        changed = False
         for point in auto_points:
             previous = self.visible.get(point.node_id, True)
             if not self.on_screen.get(point.node_id, True):
@@ -232,9 +295,9 @@ class CardBoardState:
                 next_visible = False
             else:
                 # 候选矩形与 GUI 绘制复用完全相同的锚点选择与视口适配规则。
-                candidate = card_rect_for(point, card_w, card_h, gap_x, gap_y, viewport_w, viewport_h)
+                candidate = card_rect_for(point, layout)
                 # 已隐藏节点用 10px 外扩检测净空；可见节点重叠后立即隐藏。
-                margin = 0.0 if previous else recovery_margin
+                margin = 0.0 if previous else layout.recovery_margin
                 # 已占位卡片仅来自 pinned_show 或本轮已接受的高优先级 auto 节点。
                 blocked_by_card = any(candidate.overlaps(rect, margin) for rect in occupied_cards)
                 # 图标方框覆盖所有其他节点，属主自己的图标按需求明确排除。

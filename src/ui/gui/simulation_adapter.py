@@ -2,232 +2,43 @@
 
 from __future__ import annotations
 
-import json
-import math
+from collections.abc import Callable
 import threading
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import WayPointInputS
+from src.runner.sim_control import (
+    AvoidancePlanOutcome,
+    CommandResult,
+    DisturbanceType,
+    GeoReference,
+    GuiConfigData,
+    ObstacleSpec,
+    PlannedRoute,
+    apply_planned_route,
+    export_planned_route,
+    geodetic_from_enu,
+    load_gui_config,
+    persist_config_duration,
+    plan_route_for_gui,
+    planned_route_from_waypoints,
+    route_export_defaults,
+)
+from src.runner.sim_control import LinkState as ControllerLinkState
+from src.runner.sim_control import NodeState as ControllerNodeState
+from src.runner.sim_control import RouteState as ControllerRouteState
 from src.runner.sim_control import SimulationController, TimedSnapshotCursor
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
+from src.ui.gui.disturbance_view_model import active_disturbance_text, disturbance_action
 from src.ui.gui.playback_view_model import PlaybackViewModel
 from src.ui.gui.trail_view_model import TrailBuffer
 from src.ui.gui.view_models import (
-    WORLD_HEIGHT,
-    WORLD_WIDTH,
     LinkState,
     NodeState,
     RallyGeometryView,
     ReferenceRoute,
     Snapshot,
-    link_direction_label,
     trail_seconds_for_duration,
 )
-
-
-class MockSimulation:
-    """真实控制器接入前使用的小型 UI 演示数据源。注意：仅作为界面兜底。"""
-
-    def __init__(self) -> None:
-        """初始化 MockSimulation 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
-        self.duration = 120.0
-        self.step = 0.1
-        self.playback_vm = PlaybackViewModel()
-        self.speed = 1.0
-        self.time = 0.0
-        self.running = False
-        self.paused = False
-        self.disturbance = "无"
-        self.disturbance_until = 0.0
-        self.fault_node: str | None = None
-        self.loss_until = 0.0
-        self.trail_seconds = trail_seconds_for_duration(self.duration)
-        self.nodes: list[NodeState] = []
-        self.links: list[LinkState] = []
-        self.reset()
-
-    def set_trail_seconds(self, seconds: float) -> None:
-        """设置尾迹保留时长。注意：0 表示关闭尾迹缓存与显示。"""
-        # 负数输入按关闭处理，保证外部控件和脚本调用都落到同一边界。
-        self.trail_seconds = max(0.0, seconds)
-        if self.trail_seconds <= 0.0:
-            # Mock 节点直接持有 trail，关闭时逐节点清空即可让下一帧无尾迹。
-            for node in self.nodes:
-                node.trail.clear()
-            return
-        for node in self.nodes:
-            # Mock 内部节点统一持有 TrailBuffer，缩短窗口时只从队首弹出过期点。
-            if isinstance(node.trail, TrailBuffer):
-                node.trail.expire(self.time, self.trail_seconds)
-
-    def reset(self) -> Snapshot:
-        """复位 MockSimulation 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
-        # 时间归零并清空所有扰动相关计时器，回到“待命”初始态。
-        self.time = 0.0
-        self.running = False
-        self.paused = False
-        self.disturbance = "无"
-        self.disturbance_until = 0.0
-        self.fault_node = None
-        self.loss_until = 0.0
-        # 预置三机楔形编队：1 长机 + 2 僚机，坐标为演示用初值。
-        self.nodes = [
-            NodeState("A01", "leader", 140.0, 260.0, 5.2, -0.1, trail=TrailBuffer()),
-            NodeState("A02", "wing", 92.0, 318.0, 5.0, 0.0, trail=TrailBuffer()),
-            NodeState("A03", "wing", 88.0, 202.0, 5.0, 0.0, trail=TrailBuffer()),
-        ]
-        self.links = [
-            LinkState("A01", "A02", "duplex", 18, 0.01),
-            LinkState("A01", "A03", "duplex", 21, 0.01),
-            LinkState("A02", "A03", "duplex", 30, 0.02),
-        ]
-        return self.snapshot()
-
-    def start(self) -> Snapshot:
-        """启动或继续 MockSimulation 的运行流程。注意：重复调用应保持状态一致。"""
-        self.running = True
-        self.paused = False
-        return self.snapshot()
-
-    def pause(self) -> Snapshot:
-        """暂停 MockSimulation 的运行流程。注意：只暂停调度，不清空当前状态。"""
-        decision = self.playback_vm.command_for_pause_request(self.snapshot().run_state)
-        if decision.should_pause and self.running:
-            self.paused = True
-        return self.snapshot()
-
-    def set_speed(self, speed: float) -> None:
-        """设置 MockSimulation 播放速度。注意：与真实 adapter 保持同名接口。"""
-        playback_update = self.playback_vm.on_rate_requested(speed)
-        self.speed = playback_update.display_rate
-
-    def single_step(self) -> Snapshot:
-        """执行单步推进。注意：仅在暂停或可单步状态下使用。"""
-        # 进入“运行且暂停”态后只推进一拍，模拟逐帧调试。
-        self.running = True
-        self.paused = True
-        self.advance()
-        return self.snapshot()
-
-    def inject_disturbance(self, kind: str) -> Snapshot:
-        """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
-        # 各扰动设置“持续到 disturbance_until 时刻”的窗口，到期后自动恢复。
-        if kind == "wind":
-            self.disturbance = "风场"
-            self.disturbance_until = self.time + 8.0
-        elif kind == "fault":
-            # 节点故障锁定 A02：advance 中对该节点用更弱的控制增益模拟失效。
-            self.disturbance = "节点故障"
-            self.fault_node = "A02"
-            self.disturbance_until = self.time + 10.0
-        elif kind == "loss":
-            # 链路丢包额外维护 loss_until，供链路退化判断使用。
-            self.disturbance = "链路丢包"
-            self.loss_until = self.time + 12.0
-            self.disturbance_until = self.time + 12.0
-        elif kind == "clear":
-            # 清除：复位所有扰动计时器与故障节点标记。
-            self.disturbance = "无"
-            self.disturbance_until = 0.0
-            self.loss_until = 0.0
-            self.fault_node = None
-        return self.snapshot()
-
-    def advance(self) -> Snapshot:
-        """推进仿真显示或数据状态。注意：步长应与调用方传入时间一致。"""
-        # 到达总时长则停机，不再推进时间。
-        if self.time >= self.duration:
-            self.running = False
-            self.paused = False
-            return self.snapshot()
-
-        # 按播放倍率推进仿真时间，并夹在 duration 内防止越界。
-        self.time = min(self.duration, self.time + self.step * self.speed)
-        # 风场扰动时给出非零侧向风强度，否则为 0。
-        wind = 1.8 if self.disturbance == "风场" else 0.0
-        # 楔形队形相对长机的横/纵偏置：长机在前，两僚机在后两侧。
-        formation = [(0.0, 0.0), (-54.0, 58.0), (-54.0, -58.0)]
-        leader = self.nodes[0]
-
-        for index, node in enumerate(self.nodes):
-            _, dy = formation[index]
-            # 长机沿正弦轨迹机动，僚机则跟随长机纵向位置加各自队形偏移。
-            target_y = 238.0 + math.sin(self.time / 8.0) * 34.0 if index == 0 else leader.y + dy
-            # 故障节点用更小的跟踪增益，表现为“跟不上、收敛慢”。
-            gain = 0.012 if self.fault_node == node.node_id else 0.04
-            node.vx = 4.8 + index * 0.12
-            # 纵向速度向目标 y 收敛，并叠加随相位变化的风扰。
-            node.vy += (target_y - node.y) * gain + wind * math.sin(self.time + index)
-            # x 方向额外乘 3.2 让画面横向推进更明显（纯演示系数）。
-            node.x += node.vx * self.step * self.speed * 3.2
-            node.y += node.vy * self.step * self.speed
-            # 飞出右边界后从左侧重新进入，并清空尾迹避免横贯屏幕的连线。
-            if node.x > WORLD_WIDTH + 60.0:
-                node.x = -30.0
-                node.trail.clear()
-            # 0 秒代表关闭尾迹：演示数据源也必须立即清空已有线段。
-            if self.trail_seconds <= 0.0:
-                node.trail.clear()
-            else:
-                # 每架飞机只追加一个新 ENU 点，并从队首弹出时间窗外节点。
-                trail = node.trail
-                if not isinstance(trail, TrailBuffer):
-                    trail = TrailBuffer()
-                    node.trail = trail
-                trail.append_position(node.x, node.y, node_altitude(index, self.time), self.time)
-                trail.expire(self.time, self.trail_seconds)
-
-        # 扰动窗口到期后自动清除，恢复正常显示。
-        if self.disturbance != "无" and self.time > self.disturbance_until:
-            self.disturbance = "无"
-            self.fault_node = None
-
-        for index, link in enumerate(self.links):
-            # 丢包扰动期内除第三条外的链路进入退化态（高丢包高延迟）。
-            degraded = self.time < self.loss_until and index != 2
-            link.loss = 0.26 + index * 0.05 if degraded else 0.01 + index * 0.006
-            link.latency_ms = 76 + index * 8 if degraded else 18 + index * 5 + round(math.sin(self.time + index) * 3)
-            # 丢包率超过 20% 视为链路异常。
-            link.ok = link.loss < 0.2
-
-        return self.snapshot()
-
-    def snapshot(self) -> Snapshot:
-        """返回当前快照。注意：返回数据用于显示，不应被调用方回写。"""
-        # 运行状态与“控制回报”文案根据当前是否运行/暂停/扰动类型联合决定。
-        if not self.running:
-            run_state = "READY"
-            report = "待命"
-        elif self.paused:
-            run_state = "PAUSED"
-            report = "保持"
-        elif self.disturbance == "风场":
-            # 运行中且处于各类扰动时，给出对应的控制策略回报文案。
-            run_state = "RUNNING"
-            report = "抗风"
-        elif self.disturbance == "节点故障":
-            run_state = "RUNNING"
-            report = "重构"
-        elif self.disturbance == "链路丢包":
-            run_state = "RUNNING"
-            report = "保链"
-        else:
-            # 无扰动的正常运行：集结。
-            run_state = "RUNNING"
-            report = "集结"
-        return Snapshot(
-            time=self.time,
-            duration=self.duration,
-            step=self.step,
-            run_state=run_state,
-            control_report=report,
-            disturbance=self.disturbance,
-            nodes=self.nodes,
-            links=self.links,
-            route=ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0),
-            route_segments=[ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0)],
-            cpu_utilization=0.0,
-        )
 
 
 class ControllerSimulationAdapter:
@@ -238,7 +49,6 @@ class ControllerSimulationAdapter:
         self.controller = SimulationController()
         self.speed = 1.0
         self.playback_vm = PlaybackViewModel()
-        self.disturbance = "无"
         # 普通显示快照只给瞬时位置；固定时钟批次由本适配器按 node_id 累积成尾迹。
         self._trail_by_node: dict[str, TrailBuffer] = {}
         # 游标消费控制器固定仿真时钟快照；GUI 轮询再慢也不会漏掉中间尾迹节点。
@@ -246,10 +56,10 @@ class ControllerSimulationAdapter:
         self.trail_seconds = trail_seconds_for_duration(0.0)
         # 记录上一帧位置与时间，用于差分估算速度（控制器速度字段不一定可靠）。
         self._last_xy_by_node: dict[str, tuple[float, float, float]] = {}
-        # 已消费的事件数游标，避免重复处理历史扰动事件。
-        self._processed_event_count = 0
         # 3D 态势显示用地形文件，只由 GUI 读取，不传入控制器算法闭环。
         self.terrain_display_file: str | None = None
+        # 控制器成功加载后由 runner 应用层提供 GUI 辅助配置，界面不再自行读配置文件。
+        self.gui_config = GuiConfigData()
         # 缓存最近一次控制器调用的返回码/消息，供 UI 记录日志与判断成败。
         self.last_result_code = "OK"
         self.last_result_message = ""
@@ -266,13 +76,13 @@ class ControllerSimulationAdapter:
         self.trail_seconds = max(0.0, seconds)
         if self.trail_seconds <= 0.0:
             # 缓存整体清掉，后续转换快照时不会再把旧轨迹带回 NodeState。
-            self._trail_by_node.clear()
+            self._reset_trail_state()
             # 关闭期间仍推进游标，重新开启时不会把用户明确隐藏的历史一次性回填。
             self._trail_cursor, _ = self.controller.read_timed_snapshots(self._trail_cursor)
             return
         if previous_seconds <= 0.0:
             # 重新开启从当前机位建立新队列；此前固定时钟样本已在关闭分支被跳过。
-            self._trail_by_node.clear()
+            self._reset_trail_state()
             self._trail_cursor, _ = self.controller.read_timed_snapshots(self._trail_cursor)
             self._append_trail_sample(self.controller.get_snapshot())
         # 当前时间来自控制器快照，确保裁剪基准和后续 _convert_snapshot 一致。
@@ -284,67 +94,48 @@ class ControllerSimulationAdapter:
     def load_config(self, path: str) -> Snapshot:
         """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
         result = self.controller.load_config(path)
-        self.last_result_code = result.code
-        self.last_result_message = result.message
+        self._record_result(result)
         # 仅在加载成功时重置缓存：清空旧尾迹/速度缓存，扰动复位为“无”。
         if result.code == "OK":
-            self.terrain_display_file = _terrain_display_file_from_config(path)
+            self.gui_config = load_gui_config(path)
+            self.terrain_display_file = self.gui_config.terrain_display_file
             # 后台预热 3D 高度场缓存:用户打开 3D 窗口时直接命中,避免主线程卡数秒。
             _warm_terrain_field_cache(self.terrain_display_file)
-            self._trail_by_node.clear()
-            self._last_xy_by_node.clear()
+            self._reset_trail_state(reset_velocity=True)
             playback_update = self.playback_vm.on_config_loaded(self.controller.playback_rate)
             self.speed = playback_update.display_rate
             # 数据源自身也同步半程尾迹，保证非 MainWindow 调用 load_config 时行为一致。
             self.set_trail_seconds(trail_seconds_for_duration(self.controller.get_snapshot().duration_s))
-            # 把事件游标推到当前末尾，避免把加载前的旧事件当成新扰动消费。
-            self._processed_event_count = len(self.controller.get_recent_events(limit=1000))
-            self.disturbance = "无"
         return self.snapshot()
 
     def start(self) -> Snapshot:
         """启动或继续 ControllerSimulationAdapter 的运行流程。注意：重复调用应保持状态一致。"""
-        result = self.controller.start()
-        self.last_result_code = result.code
-        self.last_result_message = result.message
-        return self.snapshot()
+        return self._run_controller_command(self.controller.start)
 
     def start_rally(self) -> Snapshot:
         """开始集结流程。注意：只触发集结命令，不改变播放/暂停状态。"""
-        result = self.controller.start_rally()
-        self.last_result_code = result.code
-        self.last_result_message = result.message
-        return self.snapshot()
+        return self._run_controller_command(self.controller.start_rally)
 
     def pause(self) -> Snapshot:
         """暂停 ControllerSimulationAdapter 的运行流程。注意：只暂停调度，不清空当前状态。"""
         # 暂停语义（含 PAUSED 幂等、非法态报错）由控制器状态机独家裁决，适配器不复刻守卫。
-        result = self.controller.pause()
-        self.last_result_code = result.code
-        self.last_result_message = result.message
-        return self.snapshot()
+        return self._run_controller_command(self.controller.pause)
 
     def single_step(self) -> Snapshot:
         """执行单步推进。注意：仅在暂停或可单步状态下使用。"""
-        result = self.controller.step()
-        self.last_result_code = result.code
-        self.last_result_message = result.message
-        return self.snapshot()
+        return self._run_controller_command(self.controller.step)
 
     def reset(self) -> Snapshot:
         """复位 ControllerSimulationAdapter 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
         result = self.controller.reset()
-        self.last_result_code = result.code
-        self.last_result_message = result.message
+        self._record_result(result)
         if result.code == "OK":
             playback_update = self.playback_vm.on_reset()
             self.speed = playback_update.display_rate
             # 控制器 reset 会按配置重建模块，需要把 UI 当前倍率重新下发给墙钟调度。
             if playback_update.controller_rate is not None:
                 self.controller.set_playback_rate(playback_update.controller_rate)
-            self._trail_by_node.clear()
-            self._last_xy_by_node.clear()
-            self.disturbance = "无"
+            self._reset_trail_state(reset_velocity=True)
         return self.snapshot()
 
     def poll(self) -> Snapshot:
@@ -362,40 +153,71 @@ class ControllerSimulationAdapter:
         self._synchronize_trails(controller_snapshot)
         return self._convert_snapshot(controller_snapshot)
 
-    def inject_disturbance(self, kind: str) -> Snapshot:
+    def inject_disturbance(self, kind: DisturbanceType | str) -> Snapshot:
         """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
-        command = self._disturbance_command(kind)
-        result = self.controller.inject_disturbance(command)
-        self.last_result_code = result.code
-        self.last_result_message = result.message
-        # 注入成功后立即把本地显示标签同步为中文名，无需等事件回流。
-        if result.code == "OK":
-            self.disturbance = {
-                "wind": "风场",
-                "fault": "节点故障",
-                "loss": "链路丢包",
-                "clear": "无",
-            }[kind]
-        return self.snapshot()
+        action = disturbance_action(kind)
+        return self._run_controller_command(
+            lambda: self.controller.inject_disturbance(action.command)
+        )
 
-    def apply_avoidance_route(self, route: list[WayPointInputS]) -> Snapshot:
+    def plan_avoidance_route(
+        self,
+        waypoints: list[tuple[float, float, float]],
+        obstacles: list[ObstacleSpec],
+        **kwargs: object,
+    ) -> AvoidancePlanOutcome:
+        """规划避障航线。注意：算法类型与转换全部封装在 runner 应用层。"""
+
+        return plan_route_for_gui(waypoints, obstacles, **kwargs)
+
+    def route_export_defaults(self, config_path: Path) -> tuple[Path, str]:
+        """获取航线导出默认路径与过滤器。"""
+
+        return route_export_defaults(config_path)
+
+    def export_route(
+        self,
+        config_path: Path,
+        route_path: Path,
+        route: PlannedRoute,
+        speed_mps: float,
+        geo_reference: GeoReference | None,
+    ) -> Path:
+        """输出规划航线。注意：具体格式与数据转换由 runner 应用层负责。"""
+
+        normalized_route = route if isinstance(route, PlannedRoute) else planned_route_from_waypoints(route)
+        return export_planned_route(config_path, route_path, normalized_route, speed_mps, geo_reference)
+
+    def persist_duration(self, config_path: Path, duration_s: float) -> None:
+        """把时长写回主配置。注意：只更新 duration_s 字段。"""
+
+        persist_config_duration(config_path, duration_s)
+
+    def to_geodetic(
+        self,
+        east_m: float,
+        north_m: float,
+        reference: GeoReference | None = None,
+    ) -> tuple[float, float] | None:
+        """把 ENU 点击坐标转换为经纬度。注意：无地理原点时返回 None。"""
+
+        return geodetic_from_enu(east_m, north_m, reference or self.gui_config.geo_reference)
+
+    def apply_avoidance_route(self, route: PlannedRoute) -> Snapshot:
         """采用一条避障规划航线，替换长机航线。注意：成功后清空尾迹缓存（航线已变）。"""
-        result = self.controller.apply_avoidance_route(route)
-        self.last_result_code = result.code
-        self.last_result_message = result.message
+        normalized_route = route if isinstance(route, PlannedRoute) else planned_route_from_waypoints(route)
+        result = apply_planned_route(self.controller, normalized_route)
+        self._record_result(result)
         if result.code == "OK":
-            self._trail_by_node.clear()
-            self._last_xy_by_node.clear()
+            self._reset_trail_state(reset_velocity=True)
         return self.snapshot()
 
     def clear_avoidance_route(self) -> Snapshot:
         """清除避障航线覆盖，恢复配置原始长机航线。"""
         result = self.controller.clear_avoidance_route()
-        self.last_result_code = result.code
-        self.last_result_message = result.message
+        self._record_result(result)
         if result.code == "OK":
-            self._trail_by_node.clear()
-            self._last_xy_by_node.clear()
+            self._reset_trail_state(reset_velocity=True)
         return self.snapshot()
 
     def formation_names(self) -> list[str]:
@@ -408,10 +230,7 @@ class ControllerSimulationAdapter:
 
     def switch_formation(self, index: int) -> Snapshot:
         """运行时热切换编队队形。注意：不清尾迹，保留切换过程轨迹供观察。"""
-        result = self.controller.switch_formation(index)
-        self.last_result_code = result.code
-        self.last_result_message = result.message
-        return self.snapshot()
+        return self._run_controller_command(lambda: self.controller.switch_formation(index))
 
     def set_speed(self, speed: float) -> None:
         """设置播放速度。注意：只影响界面或控制器调度倍率。"""
@@ -424,8 +243,7 @@ class ControllerSimulationAdapter:
     def set_duration(self, duration_s: float) -> Snapshot:
         """设置仿真总时长。注意：只改变停止边界，不改变步长。"""
         result = self.controller.set_duration(duration_s)
-        self.last_result_code = result.code
-        self.last_result_message = result.message
+        self._record_result(result)
         if result.code == "OK":
             # 修改仿真总时长等价于重新定义默认尾迹窗口，立即裁剪缓存。
             self.set_trail_seconds(trail_seconds_for_duration(duration_s))
@@ -434,10 +252,34 @@ class ControllerSimulationAdapter:
     def close(self) -> None:
         """释放 ControllerSimulationAdapter 持有的资源。注意：关闭后不应继续调用运行接口。"""
         # 关闭属于尾迹生命周期终点，必须丢弃全部节点队列与差分速度基准。
-        self._trail_by_node.clear()
-        self._trail_cursor = None
-        self._last_xy_by_node.clear()
+        self._reset_trail_state(reset_velocity=True, reset_cursor=True)
         self.controller.close()
+
+    def _record_result(self, result: CommandResult) -> None:
+        """保存最近一次控制器命令结果，供主窗口统一记录与判断。"""
+
+        self.last_result_code = result.code
+        self.last_result_message = result.message
+
+    def _run_controller_command(self, command: Callable[[], CommandResult]) -> Snapshot:
+        """执行无额外适配器副作用的控制器命令，并返回转换后的最新快照。"""
+
+        self._record_result(command())
+        return self.snapshot()
+
+    def _reset_trail_state(
+        self,
+        *,
+        reset_velocity: bool = False,
+        reset_cursor: bool = False,
+    ) -> None:
+        """清理尾迹，并按生命周期边界选择是否同步清理速度基准和采样游标。"""
+
+        self._trail_by_node.clear()
+        if reset_velocity:
+            self._last_xy_by_node.clear()
+        if reset_cursor:
+            self._trail_cursor = None
 
     def _synchronize_trails(self, current_snapshot: ControllerSnapshot) -> None:
         """消费固定时钟样本并裁剪队列。注意：当前显示机位始终留在队列外。"""
@@ -451,11 +293,11 @@ class ControllerSimulationAdapter:
         self._trail_cursor = next_cursor
         if self.trail_seconds <= 0.0:
             # 即使关闭尾迹也已消费到最新游标，防止重新开启时回灌隐藏区间。
-            self._trail_by_node.clear()
+            self._reset_trail_state()
             return
         if generation_changed:
             # 配置加载、reset 与航线重建会换运行代，旧队列不能跨代连接。
-            self._trail_by_node.clear()
+            self._reset_trail_state()
         if timed_snapshots:
             for timed_snapshot in timed_snapshots:
                 self._append_trail_sample(timed_snapshot)
@@ -478,88 +320,109 @@ class ControllerSimulationAdapter:
 
     def _convert_snapshot(self, snapshot: ControllerSnapshot) -> Snapshot:
         """把控制器快照转换为 GUI 绘图模型。注意：需要同步维护轨迹缓存和显示字段。"""
-        # 先把事件流里的扰动状态同步过来，使显示与控制器内部状态一致。
-        self._sync_disturbance_from_events()
-        nodes: list[NodeState] = []
-        for node in snapshot.nodes:
-            previous = self._last_xy_by_node.get(node.node_id)
-            if previous is None:
-                # 首帧无历史可差分，直接采用控制器给出的速度分量。
-                vx = node.vx_mps
-                vy = node.vy_mps
-            else:
-                # 只有仿真时间推进时才用位移差分；暂停同帧刷新时保留控制器速度，避免机头归零朝东。
-                previous_x, previous_y, previous_time = previous
-                dt = snapshot.time_s - previous_time
-                if dt > 1e-9:
-                    vx = (node.x_m - previous_x) / dt
-                    vy = (node.y_m - previous_y) / dt
-                else:
-                    vx = node.vx_mps
-                    vy = node.vy_mps
-            self._last_xy_by_node[node.node_id] = (node.x_m, node.y_m, snapshot.time_s)
+        nodes = [self._convert_node(node, snapshot.time_s) for node in snapshot.nodes]
+        links = [self._convert_link(link) for link in snapshot.links]
+        route, route_segments, blocked_route_segments = self._convert_routes(snapshot)
+        return Snapshot(
+            time=snapshot.time_s,
+            duration=snapshot.duration_s,
+            step=snapshot.step_s,
+            run_state=snapshot.run_state,
+            control_report=snapshot.control_report,
+            disturbance=active_disturbance_text(snapshot.active_disturbances),
+            nodes=nodes,
+            links=links,
+            route=route,
+            route_segments=route_segments,
+            blocked_route_segments=blocked_route_segments,
+            cpu_utilization=snapshot.cpu_utilization,
+            rally_geometry=self._convert_rally_geometry(snapshot),
+            terrain_display_file=self.terrain_display_file,
+        )
 
-            # 当前位置不写回稳定队列；2D/3D 绘制端只补一条队尾到飞机的实时末段。
-            if self.trail_seconds <= 0.0:
-                self._trail_by_node.pop(node.node_id, None)
-                trail = []
-            else:
-                trail_buffer = self._trail_by_node.get(node.node_id)
-                trail = trail_buffer.snapshot() if trail_buffer is not None else []
-            nodes.append(
-                NodeState(
-                    node_id=node.node_id,
-                    role=node.role,
-                    x=node.x_m,
-                    y=node.y_m,
-                    vx=vx,
-                    vy=vy,
-                    altitude=node.altitude_m,
-                    vertical_speed=node.vz_mps,
-                    health=node.health,
-                    trail=trail,
-                    cross_track_error=node.cross_track_error_m,
-                    distance_to_go=node.distance_to_go_m,
-                    track_pos_err_x=node.track_pos_err_x_m,
-                    track_pos_err_y=node.track_pos_err_y_m,
-                    track_pos_err_z=node.track_pos_err_z_m,
-                    cmd_pos_x=node.cmd_pos_east_m,
-                    cmd_pos_y=node.cmd_pos_north_m,
-                    rally_phase=node.rally_phase,
-                )
-            )
+    def _convert_node(self, node: ControllerNodeState, snapshot_time_s: float) -> NodeState:
+        """转换单个节点，并只在仿真时间前进时用位置差分修正水平速度。"""
 
-        links: list[LinkState] = []
-        for link in snapshot.links:
-            # 链路 id 形如 "A01-A02"，按短横线拆出源/目标节点。
-            source, _, target = link.link_id.partition("-")
-            links.append(
-                LinkState(
-                    source=source,
-                    target=target,
-                    direction=link.direction,
-                    latency_ms=round(link.latency_ms),
-                    loss=link.loss_rate,
-                    ok=link.status == "normal",
-                )
-            )
-        # 兼容“单航线”与“多航段”两种来源：优先多航段，缺省时用单航线兜底。
-        route = None
-        if snapshot.route is not None:
-            route = self._convert_route(snapshot.route)
-        route_segments = [
-            self._convert_route(segment)
-            for segment in snapshot.route_segments
-        ]
+        previous = self._last_xy_by_node.get(node.node_id)
+        if previous is None:
+            # 首帧无历史可差分，直接采用控制器给出的速度分量。
+            velocity_x = node.vx_mps
+            velocity_y = node.vy_mps
+        else:
+            previous_x, previous_y, previous_time = previous
+            delta_time = snapshot_time_s - previous_time
+            if delta_time > 1e-9:
+                velocity_x = (node.x_m - previous_x) / delta_time
+                velocity_y = (node.y_m - previous_y) / delta_time
+            else:
+                # 暂停同帧刷新保留控制器速度，避免机头因零时间差错误归零朝东。
+                velocity_x = node.vx_mps
+                velocity_y = node.vy_mps
+        self._last_xy_by_node[node.node_id] = (node.x_m, node.y_m, snapshot_time_s)
+
+        # 当前位置不写回稳定队列；绘制端只补一条队尾到飞机的实时末段。
+        if self.trail_seconds <= 0.0:
+            self._trail_by_node.pop(node.node_id, None)
+            trail = []
+        else:
+            trail_buffer = self._trail_by_node.get(node.node_id)
+            trail = trail_buffer.snapshot() if trail_buffer is not None else []
+        return NodeState(
+            node_id=node.node_id,
+            role=node.role,
+            x=node.x_m,
+            y=node.y_m,
+            vx=velocity_x,
+            vy=velocity_y,
+            altitude=node.altitude_m,
+            vertical_speed=node.vz_mps,
+            health=node.health,
+            trail=trail,
+            cross_track_error=node.cross_track_error_m,
+            distance_to_go=node.distance_to_go_m,
+            track_pos_err_x=node.track_pos_err_x_m,
+            track_pos_err_y=node.track_pos_err_y_m,
+            track_pos_err_z=node.track_pos_err_z_m,
+            cmd_pos_x=node.cmd_pos_east_m,
+            cmd_pos_y=node.cmd_pos_north_m,
+            rally_phase=node.rally_phase,
+        )
+
+    @staticmethod
+    def _convert_link(link: ControllerLinkState) -> LinkState:
+        """把控制器链路状态转换为 GUI 表格与绘图使用的简化状态。"""
+
+        # 链路 id 形如 A01-A02，按第一个短横线拆出源和目标节点。
+        source, _, target = link.link_id.partition("-")
+        return LinkState(
+            source=source,
+            target=target,
+            direction=link.direction,
+            latency_ms=round(link.latency_ms),
+            loss=link.loss_rate,
+            ok=link.status == "normal",
+        )
+
+    def _convert_routes(
+        self,
+        snapshot: ControllerSnapshot,
+    ) -> tuple[ReferenceRoute | None, list[ReferenceRoute], list[ReferenceRoute]]:
+        """转换当前、完整和封锁航线，并保持既有单航段兼容回退。"""
+
+        route = self._convert_route(snapshot.route) if snapshot.route is not None else None
+        route_segments = [self._convert_route(segment) for segment in snapshot.route_segments]
+        # 旧控制器只提供当前航段时仍保留一条可绘制参考路线。
         if not route_segments and route is not None:
             route_segments = [route]
-        # 被封锁航线只来自控制器显式快照，不能回退当前航段以免伪造封锁语义。
-        blocked_route_segments = [
-            self._convert_route(segment)
-            for segment in snapshot.blocked_route_segments
-        ]
-        # GUI 只接收实际绘制的圆参数，运行期切线不经过快照适配层。
-        rally_geometry = [
+        # 封锁航线只来自权威字段，不能回退当前航段以免伪造封锁语义。
+        blocked = [self._convert_route(segment) for segment in snapshot.blocked_route_segments]
+        return route, route_segments, blocked
+
+    @staticmethod
+    def _convert_rally_geometry(snapshot: ControllerSnapshot) -> list[RallyGeometryView]:
+        """转换集结圆显示参数。注意：运行期切线不进入 GUI 快照。"""
+
+        return [
             RallyGeometryView(
                 node_id=node_id,
                 center_x=geometry.loiter_center_east_m,
@@ -571,25 +434,9 @@ class ControllerSimulationAdapter:
             )
             for node_id, geometry in snapshot.rally_geometry.items()
         ]
-        return Snapshot(
-            time=snapshot.time_s,
-            duration=snapshot.duration_s,
-            step=snapshot.step_s,
-            run_state=snapshot.run_state,
-            control_report=snapshot.control_report,
-            disturbance=self._visible_disturbance(snapshot),
-            nodes=nodes,
-            links=links,
-            route=route,
-            route_segments=route_segments,
-            blocked_route_segments=blocked_route_segments,
-            cpu_utilization=snapshot.cpu_utilization,
-            rally_geometry=rally_geometry,
-            terrain_display_file=self.terrain_display_file,
-        )
 
     @staticmethod
-    def _convert_route(route) -> ReferenceRoute:  # noqa: ANN001
+    def _convert_route(route: ControllerRouteState) -> ReferenceRoute:
         """把控制器航线状态转换为 GUI 参考航线。注意：空航线返回空值。"""
         return ReferenceRoute(
             start_x=route.start_x_m,
@@ -603,85 +450,6 @@ class ControllerSimulationAdapter:
             center_y=route.center_y_m,
             turn_sign=route.turn_sign,
         )
-
-    def _visible_disturbance(self, snapshot: ControllerSnapshot) -> str:
-        """返回当前界面应显示的扰动名称。注意：已清除或过期扰动显示为无。"""
-        # 优先按实际效果判定：有节点异常 → 节点故障，有链路异常 → 链路丢包。
-        if any(node.health != "normal" for node in snapshot.nodes):
-            return "节点故障"
-        if any(link.status != "normal" for link in snapshot.links):
-            return "链路丢包"
-        # 就绪态且本地也认为无扰动时显式返回“无”，避免残留旧标签。
-        if snapshot.run_state == "READY" and self.disturbance == "无":
-            return "无"
-        return self.disturbance
-
-    def _sync_disturbance_from_events(self) -> None:
-        """根据控制器事件同步扰动显示状态。注意：只处理尚未消费的新事件。"""
-        events = self.controller.get_recent_events(limit=1000)
-        # 只遍历游标之后的新事件，按消息关键字解析出当前应显示的扰动名称。
-        for event in events[self._processed_event_count:]:
-            if event.source != "Disturbance":
-                continue
-            if event.message == "清除扰动" or event.message.startswith("扰动结束"):
-                self.disturbance = "无"
-            elif "wind" in event.message:
-                self.disturbance = "风场"
-            elif "node_fault" in event.message:
-                self.disturbance = "节点故障"
-            elif "link_loss" in event.message or "link_fault" in event.message:
-                self.disturbance = "链路丢包"
-        # 推进游标到末尾，下次只处理更新的事件。
-        self._processed_event_count = len(events)
-
-    def _disturbance_command(self, kind: str) -> dict[str, object]:
-        """生成 GUI 按钮对应的扰动命令。注意：命令结构需与控制器注入接口一致。"""
-        # 把 UI 按钮种类翻译为控制器扰动命令字典；目标节点/链路与参数为预设演示值。
-        if kind == "wind":
-            return {"type": "wind", "duration_s": 8.0, "params": {"speed_mps": 8.0, "direction_deg": 90.0}}
-        if kind == "fault":
-            # 节点故障：目标 A02，降级模式持续 10s。
-            return {"type": "node_fault", "target": "A02", "duration_s": 10.0, "params": {"mode": "degraded"}}
-        if kind == "loss":
-            return {"type": "link_loss", "target": "A01-A02", "duration_s": 12.0, "params": {"loss_rate": 0.3}}
-        # 其余（clear）统一下发清除命令。
-        return {"type": "clear"}
-
-def node_altitude(index: int, time_value: float) -> float:
-    """读取节点高度用于侧视图显示。注意：缺省时使用 0 作为兜底。"""
-
-    # 基准高度 1200m，按机序错开 35m 层差，再叠加随时间起伏的正弦扰动。
-    return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
-
-
-def _terrain_display_file_from_config(path: str) -> str | None:
-    """从主配置读取 3D 地形文件路径。注意：该字段只影响显示层。"""
-
-    config_path = Path(path)
-    try:
-        text = config_path.read_text(encoding="utf-8")
-        if config_path.suffix.lower() == ".json":
-            data = json.loads(text)
-        elif config_path.suffix.lower() in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError:
-                return None
-            data = yaml.safe_load(text)
-        else:
-            return None
-    except (OSError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    raw_file = data.get("terrain_display_file")
-    if not isinstance(raw_file, str) or not raw_file.strip():
-        return None
-    display_path = Path(raw_file)
-    if not display_path.is_absolute():
-        display_path = config_path.parent / display_path
-    return str(display_path.resolve())
-
 
 def _warm_terrain_field_cache(display_file: str | None) -> None:
     """后台线程预热高度场缓存。注意：失败静默,正式回退诊断由 scene_data 负责。"""

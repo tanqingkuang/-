@@ -5,8 +5,6 @@ from __future__ import annotations
 import math
 
 from src.ui.gui.view_models import (
-    WORLD_HEIGHT,
-    WORLD_WIDTH,
     LinkState,
     NodeState,
     leader_node_from,
@@ -44,20 +42,16 @@ def overall_table_row(nodes: list[NodeState]) -> list[str] | None:
     leader = leader_node_from(nodes)
     if leader is None:
         return None
-    # 控制器未提供 route metric 时，用世界坐标估算保持旧演示数据可显示。
-    side_offset = leader.cross_track_error
-    if side_offset is None:
-        side_offset = (leader.y - WORLD_HEIGHT / 2) * 0.8
-    distance_to_go = leader.distance_to_go
-    if distance_to_go is None:
-        distance_to_go = max(0.0, (WORLD_WIDTH - leader.x) * 4)
+    # 路径诊断量只能来自控制器快照；缺失值显式留空，禁止用画布坐标伪造业务数据。
+    side_offset = "—" if leader.cross_track_error is None else f"{leader.cross_track_error:.0f}"
+    distance_to_go = "—" if leader.distance_to_go is None else f"{leader.distance_to_go:.0f}"
     # 地速按水平面速度模长显示，不把垂向爬升率计入整体跟踪表。
     ground_speed = math.hypot(leader.vx, leader.vy)
     # 返回五列字符串，列顺序与 main_window_layout.py 的表头保持一致。
     # 链路方向文案来自 view_models，避免本 VM 依赖 adapter 形成反向导入。
     return [
-        f"{side_offset:.0f}",
-        f"{distance_to_go:.0f}",
+        side_offset,
+        distance_to_go,
         f"{leader.altitude:.0f}",
         f"{ground_speed:.0f}",
         f"{leader.vertical_speed:.0f}",

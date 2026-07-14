@@ -8,6 +8,7 @@ import json
 import math
 import struct
 import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -48,6 +49,17 @@ MOUNTAIN_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "mounta
 
 class Situation3DSceneDataTests(unittest.TestCase):
     """验证 3D 视图适配层不污染仿真坐标语义。"""
+
+    def test_enabled_obstacle_iterator_filters_disabled_items_in_order(self) -> None:
+        """所有障碍载荷构造路径共用同一个启用状态筛选器。"""
+
+        first = SimpleNamespace(enabled=True)
+        disabled = SimpleNamespace(enabled=False)
+        last = SimpleNamespace(enabled=True)
+
+        result = list(scene_data._enabled_obstacles((first, disabled, last)))
+
+        self.assertEqual(result, [first, last])
 
     def _snapshot(self) -> Snapshot:
         """构造含飞机、尾迹和航线的最小快照。"""
@@ -130,9 +142,19 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(payload["riskZones"], [])
 
         obstacle_payload = payload["obstacles"][0]
-        self.assertEqual(obstacle_payload["kind"], "circle")
-        self.assertEqual(obstacle_payload["radius"], 30.0)
-        self.assertEqual(obstacle_payload["z"], -70.0)
+        self.assertEqual(
+            set(obstacle_payload),
+            {"id", "minX", "maxX", "minZ", "maxZ", "boundsHeight"},
+        )
+        self.assertEqual(obstacle_payload["id"], "OBS1")
+        self.assertEqual(obstacle_payload["minX"], 50.0)
+        self.assertEqual(obstacle_payload["maxX"], 110.0)
+        self.assertEqual(obstacle_payload["minZ"], -100.0)
+        self.assertEqual(obstacle_payload["maxZ"], -40.0)
+        self.assertGreater(obstacle_payload["boundsHeight"], 0.0)
+        self.assertTrue(
+            {"kind", "radius", "width", "depth", "height", "x", "y", "z"}.isdisjoint(obstacle_payload)
+        )
 
         # 真实障碍不再烘焙地形顶点色：静态基色改由填充层的呼吸最低值承担，
         # 否则同一区域会被"烘焙红"和"呼吸红"重复叠加，且呼吸参数归零也无法真正消除红色。

@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import sys
-from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
-    QAbstractSpinBox,
     QCheckBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -34,16 +32,36 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.gui.dialogs import StageFullscreenDialog
+from src.runner.sim_control import RunState
+from src.ui.gui.disturbance_view_model import DISTURBANCE_ACTIONS
+
 from src.ui.gui.side_view import SideView
-from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, THEMES, SelectButton
+from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, SelectButton
 from src.ui.gui.top_view import TopView
 from src.ui.gui.view_models import (
     PLAYBACK_RATE_SLIDER_MAX,
     PLAYBACK_RATE_SLIDER_MIN,
     playback_rate_to_slider_value,
-    Snapshot,
 )
+
+# 演示入口只在文案、提示和配置文件上有差异，统一规格避免新增场景时复制控件样板。
+DEMO_CONFIG_ACTIONS: tuple[tuple[str, str, str], ...] = (
+    ("编队保持", "加载 configs/base.json — 三机楔形保持队形演示", "base.json"),
+    (
+        "集结演示",
+        "加载 configs/rally_demo_5_aircraft.json — 五机分散后集结演示",
+        "rally_demo_5_aircraft.json",
+    ),
+)
+
+
+@dataclass(frozen=True)
+class _StageLayoutSlot:
+    """记录实时显示区在主布局中的位置。注意：只由布局 Mixin 创建和恢复。"""
+
+    index: int
+    stretch: int
+    placeholder: QWidget
 
 
 class MainWindowLayoutMixin:
@@ -51,6 +69,7 @@ class MainWindowLayoutMixin:
 
     def _build_ui(self) -> None:
         """构建主窗口全部 UI 区域。注意：控件引用需保存供后续事件更新使用。"""
+        self._stage_layout_slot: _StageLayoutSlot | None = None
         self._build_menus()
         root = QWidget()
         self.setCentralWidget(root)
@@ -71,6 +90,37 @@ class MainWindowLayoutMixin:
         main.addWidget(self.stage, 1)
         main.addWidget(self._build_right_panel(), 0)
         self._build_avoidance_window()
+
+    def _take_stage_for_fullscreen(self) -> bool:
+        """从主布局取出实时显示区并留下占位控件，供全屏动作接管。"""
+
+        if self.stage is None or self.main_layout is None or self._stage_layout_slot is not None:
+            return False
+        index = self.main_layout.indexOf(self.stage)
+        if index < 0:
+            return False
+        stretch = self.main_layout.stretch(index)
+        placeholder = QWidget()
+        self.main_layout.removeWidget(self.stage)
+        self.main_layout.insertWidget(index, placeholder, stretch)
+        self._stage_layout_slot = _StageLayoutSlot(index, stretch, placeholder)
+        return True
+
+    def _restore_stage_from_fullscreen(self) -> bool:
+        """移除占位控件并把实时显示区恢复到原布局位置和拉伸系数。"""
+
+        slot = self._stage_layout_slot
+        if self.stage is None or self.main_layout is None or slot is None:
+            return False
+        placeholder_index = self.main_layout.indexOf(slot.placeholder)
+        if placeholder_index >= 0:
+            self.main_layout.removeWidget(slot.placeholder)
+        slot.placeholder.deleteLater()
+        # 其他布局项可能在全屏期间变化，恢复索引需要限制在当前有效范围内。
+        insert_index = min(slot.index, self.main_layout.count())
+        self.main_layout.insertWidget(insert_index, self.stage, slot.stretch)
+        self._stage_layout_slot = None
+        return True
 
     def _build_menus(self) -> None:
         """构建菜单栏入口。注意：常驻控制集中到菜单，避免占用主界面高度。"""
@@ -118,7 +168,7 @@ class MainWindowLayoutMixin:
         layout.setContentsMargins(10, 18, 10, 10)
         layout.setSpacing(8)
         # 高频变化的运行状态保留为独立胶囊，便于一眼确认当前生命周期。
-        self.run_state_label = QLabel("READY")
+        self.run_state_label = QLabel(RunState.READY)
         self.run_state_label.setObjectName("statusPill")
         # 控制回报跟随状态放在左侧栏，删除顶部 header 后仍保持可见。
         self.report_label = QLabel("回报：待命")
@@ -192,17 +242,12 @@ class MainWindowLayoutMixin:
         grid.setContentsMargins(10, 18, 10, 10)
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
-        # (按钮文案, 扰动种类) ——种类传给 _inject_disturbance/适配器。
-        actions: list[tuple[str, str]] = [
-            ("风场脉冲", "wind"),
-            ("节点故障", "fault"),
-            ("链路丢包", "loss"),
-            ("清除扰动", "clear"),
-        ]
-        for index, (text, kind) in enumerate(actions):
-            button = QPushButton(text)
+        for index, action in enumerate(DISTURBANCE_ACTIONS):
+            button = QPushButton(action.button_text)
             # 默认参数绑定 kind，避免闭包共享同一变量的经典陷阱。
-            button.clicked.connect(lambda checked=False, value=kind: self._inject_disturbance(value))
+            button.clicked.connect(
+                lambda checked=False, value=action.kind: self._inject_disturbance(value)
+            )
             # 收集按钮以便按运行态统一启用/禁用。
             self.disturbance_buttons.append(button)
             # index//2 为行、index%2 为列，铺成两行两列。
@@ -214,14 +259,15 @@ class MainWindowLayoutMixin:
         demo_layout = QVBoxLayout(demo_group)
         demo_layout.setContentsMargins(10, 18, 10, 10)
         demo_layout.setSpacing(8)
-        btn_hold = QPushButton("编队保持")
-        btn_hold.setToolTip("加载 configs/base.json — 三机楔形保持队形演示")
-        btn_hold.clicked.connect(lambda: self._load_demo_config("base.json"))
-        btn_rally = QPushButton("集结演示")
-        btn_rally.setToolTip("加载 configs/rally_demo_5_aircraft.json — 五机分散后集结演示")
-        btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo_5_aircraft.json"))
-        demo_layout.addWidget(btn_hold)
-        demo_layout.addWidget(btn_rally)
+        for button_text, tooltip, filename in DEMO_CONFIG_ACTIONS:
+            button = QPushButton(button_text)
+            button.setToolTip(tooltip)
+            button.clicked.connect(
+                lambda checked=False, config_filename=filename: self._load_demo_config(
+                    config_filename
+                )
+            )
+            demo_layout.addWidget(button)
         layout.addWidget(demo_group)
 
         # 底部弹性占位把上面各分组顶到面板顶部。
@@ -323,10 +369,11 @@ class MainWindowLayoutMixin:
 
         # 创建俯视图与侧视图；侧视图独立维护高度轴和横向投影轴。
         self.top_view = TopView()
-        self.side_view = SideView(self.top_view)
-        # 信号联动：俯视图手动操作 -> 关闭自动居中；重置 -> 侧视图也恢复默认显示范围。
+        self.side_view = SideView()
+        # 两个画布各自报告手动操作，主窗口统一关闭自动居中。
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
+        self.side_view.manualViewChanged.connect(self._disable_auto_center)
         self.top_view.resetViewRequested.connect(self.side_view.reset_view)
         self.top_view.pointClicked.connect(self._on_top_view_point_clicked)
         # 俯视图/侧视图之间用细分隔线承载拖动调整，不额外占用明显空间。

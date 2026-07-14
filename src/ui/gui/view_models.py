@@ -8,7 +8,35 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.data.geo import GeoOrigin
+from src.runner.sim_control import ObstacleKind, RunState
+
+# GUI 命名状态集合集中描述交互语义；控制器仍独立裁决命令是否合法。
+# 已加载集合包含结束态，用于“可重置”这类不要求继续运行的入口。
+LOADED_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.READY, RunState.RUNNING, RunState.PAUSED, RunState.FINISHED}
+)
+# 可交互集合排除未加载和结束态，统一驱动播放与扰动按钮。
+INTERACTIVE_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.READY, RunState.RUNNING, RunState.PAUSED}
+)
+# 单步和时长编辑共享待命/暂停约束，避免两处集合逐渐分叉。
+EDITABLE_RUN_STATES: frozenset[RunState] = frozenset({RunState.READY, RunState.PAUSED})
+# 轮询定时器只在真正运行时保持启动，其余稳定态都应停止。
+TIMER_IDLE_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.READY, RunState.PAUSED, RunState.FINISHED}
+)
+# 集结入口还需结合节点角色和阶段判断，这里只表达运行态硬阻断。
+RALLY_BLOCKED_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.UNLOADED, RunState.READY, RunState.FINISHED}
+)
+# 播放切换在待命/暂停时请求 start；未加载虽会被按钮禁用，纯逻辑仍返回稳定语义。
+TOGGLE_START_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.UNLOADED, RunState.READY, RunState.PAUSED}
+)
+# 显式 pause 在暂停态保持幂等，不能误解释成恢复运行。
+PAUSE_REQUEST_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.RUNNING, RunState.PAUSED}
+)
 
 # 世界坐标范围（米）：用于 mock 数据居中、待飞距/侧偏兜底估算等。
 WORLD_WIDTH = 1600.0
@@ -147,6 +175,21 @@ class NodeState:
     rally_phase: str = ""   # 集结阶段，如 JOINING/FLYING、CATCHUP、HOLD
 
 
+def centroid_of_active_nodes(nodes: Sequence[NodeState]) -> tuple[float, float, float] | None:
+    """返回健康节点优先的东、北、高度质心；全部异常时回退全体节点。"""
+
+    if not nodes:
+        return None
+    # 自动居中优先跟随仍健康的编队；全体异常时仍需保持场景可见。
+    active_nodes = [node for node in nodes if node.health == "normal"] or list(nodes)
+    count = len(active_nodes)
+    return (
+        sum(node.x for node in active_nodes) / count,
+        sum(node.y for node in active_nodes) / count,
+        sum(node.altitude for node in active_nodes) / count,
+    )
+
+
 @dataclass
 class LinkState:
     """单条通信链路的显示状态。注意：loss 为 0 到 1 的比例。"""
@@ -219,7 +262,7 @@ class ObstacleView:
     """俯视图显示用的二维障碍（无限高柱体）。注意：当前仅供 UI 显示与勾选，规划后端后续接入。"""
 
     obstacle_id: str  # 障碍唯一标识，列表显示/勾选用
-    kind: str  # "circle" | "rect" | "polygon"
+    kind: ObstacleKind
     enabled: bool = True  # 是否启用（参与避障）
     center_x: float = 0.0  # 圆心 east（kind=circle）
     center_y: float = 0.0  # 圆心 north
@@ -230,11 +273,16 @@ class ObstacleView:
     max_y: float = 0.0  # 矩形 north 上界
     vertices: list[tuple[float, float]] = field(default_factory=list)  # 旋转矩形/多边形顶点
 
+    def __post_init__(self) -> None:
+        """把外部配置字符串归一化为应用层共享枚举。"""
+
+        self.kind = ObstacleKind(self.kind)
+
     def label(self) -> str:
         """生成左面板勾选列表的显示文本。注意：仅用于界面展示。"""
-        if self.kind == "polygon":
+        if self.kind is ObstacleKind.POLYGON:
             return f"{self.obstacle_id}  矩形 {len(self.vertices)}点"
-        if self.kind == "rect":
+        if self.kind is ObstacleKind.RECT:
             return f"{self.obstacle_id}  矩形 ({self.min_x:.0f},{self.min_y:.0f})-({self.max_x:.0f},{self.max_y:.0f})"
         return f"{self.obstacle_id}  圆 ({self.center_x:.0f},{self.center_y:.0f}) r{self.radius:.0f}"
 
@@ -246,7 +294,7 @@ class Snapshot:
     time: float
     duration: float
     step: float
-    run_state: str
+    run_state: RunState | str
     control_report: str
     disturbance: str
     nodes: list[NodeState]

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
-from PySide6.QtWidgets import QFrame, QWidget
 
 
 class MainWindowStyleMixin:
@@ -68,7 +67,7 @@ class MainWindowStyleMixin:
                 font-weight: 700;
             }}
             QLabel#reportPill {{
-                color: #175cd3;
+                color: {theme.accent.name()};
                 background: {theme.field.name()};
                 border-radius: 14px;
                 padding: 5px 14px;

@@ -23,14 +23,12 @@ _ensure_project_root_on_path()
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QHBoxLayout, QMainWindow, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QCheckBox, QHBoxLayout, QMainWindow, QPushButton, QWidget
 
-from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
+from src.runner.sim_control import AvoidanceParams, GeoReference, PlannedRoute
 from src.ui.gui.avoidance_tools import (
-    AvoidanceParams,
     AvoidanceWindow,
     ObstacleView,
-    _inflated_polygon_vertices,
     parse_avoidance_config,
     parse_avoidance_params,
     preview_route_marker_points,
@@ -46,7 +44,7 @@ from src.ui.gui.main_window_style import MainWindowStyleMixin
 from src.ui.gui.side_view import SideView
 from src.ui.gui.side_view_control_view_model import SideViewControlViewModel
 from src.ui.gui.sim_control_view_model import SimControlViewModel
-from src.ui.gui.simulation_adapter import ControllerSimulationAdapter, MockSimulation
+from src.ui.gui.simulation_adapter import ControllerSimulationAdapter
 from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, THEMES, SelectButton, Theme
 from src.ui.gui.top_view import TopView
 from src.ui.gui.trail_view_model import TrailViewModel
@@ -71,13 +69,8 @@ from src.ui.gui.view_models import (
     adaptive_world_grid_spacing,
     default_project_root,
     is_leader_node,
-    leader_node_from,
     reference_route_points,
 )
-from src.data.geo import GeoOrigin
-from src.algorithm.context.leaf_types import WayPointInputS
-
-
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
 
@@ -132,19 +125,15 @@ class MainWindow(
         self.main_layout: QHBoxLayout | None = None
         self.stage: QWidget | None = None
         self.fullscreen_button: QPushButton | None = None
-        # 全屏时用占位控件顶替原位置，退出时据此还原布局位置与拉伸系数。
-        self._stage_placeholder: QWidget | None = None
         self._stage_fullscreen_dialog: StageFullscreenDialog | None = None
-        self._stage_layout_index = 1
-        self._stage_layout_stretch = 1
         self.disturbance_buttons: list[QPushButton] = []
         # 避障障碍（来自配置）与其勾选框，加载配置后填充。
         self.obstacles: list[ObstacleView] = []
         self.obstacle_checkboxes: list[QCheckBox] = []
         # 避障规划参数（来自配置）与“生成航线”得到的预览航线（采用前）。
         self._avoidance_params: AvoidanceParams | None = None
-        self._preview_route: list[WayPointInputS] | None = None
-        self._top_view_geo_origin: GeoOrigin | None = None
+        self._preview_route: PlannedRoute | None = None
+        self._top_view_geo_origin: GeoReference | None = None
         self.avoidance_window: AvoidanceWindow | None = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()

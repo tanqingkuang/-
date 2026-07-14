@@ -26,11 +26,10 @@ from src.data.geo import GeoOrigin
 from src.data.geo_config import route_to_internal
 from tests.llt._geo_route import geodetic_config, geodetic_route
 from src.runner.sim_control import _build_leader_route
-from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
+from src.ui.gui.avoidance_tools import AVOIDANCE_PARAM_SPECS, _rounded_inflated_polygon_points
 from src.ui.gui.main_window import (
     MainWindow,
     ReferenceRoute,
-    _inflated_polygon_vertices,
     parse_avoidance_params,
     preview_route_marker_points,
     reference_route_points,
@@ -146,13 +145,15 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
     def test_polygon_clearance_display_expands_rotated_rect(self) -> None:
         vertices = [(0.0, 100.0), (100.0, 0.0), (200.0, 100.0), (100.0, 200.0)]
 
-        inflated = _inflated_polygon_vertices(vertices, 20.0)
+        inflated = _rounded_inflated_polygon_points(vertices, 20.0)
 
-        self.assertEqual(len(inflated), len(vertices))
+        self.assertGreater(len(inflated), len(vertices))
         self.assertNotEqual(inflated, vertices)
-        self.assertLess(inflated[0][0], vertices[0][0])
-        self.assertGreater(inflated[2][0], vertices[2][0])
-        self.assertGreater(inflated[3][1], vertices[3][1])
+        xs = [point[0] for point in inflated]
+        ys = [point[1] for point in inflated]
+        self.assertLess(min(xs), min(point[0] for point in vertices))
+        self.assertGreater(max(xs), max(point[0] for point in vertices))
+        self.assertGreater(max(ys), max(point[1] for point in vertices))
 
     def test_polygon_clearance_display_does_not_draw_circle_at_concave_corner(self) -> None:
         vertices = [
@@ -375,6 +376,29 @@ class AvoidanceUiFlowTests(unittest.TestCase):
             ],
         )
 
+    def test_single_param_specs_drive_order_widgets_and_tooltips(self) -> None:
+        """单一参数规格同时驱动顺序、控件属性和提示文案。"""
+
+        window = self._window()
+        self.assertEqual(
+            [spec.key for spec in AVOIDANCE_PARAM_SPECS],
+            window.avoidance_window.param_order,
+        )
+        self.assertEqual(len({spec.widget_attr for spec in AVOIDANCE_PARAM_SPECS}), len(AVOIDANCE_PARAM_SPECS))
+        for spec in AVOIDANCE_PARAM_SPECS:
+            spin = getattr(window, spec.widget_attr)
+            self.assertEqual(spin.toolTip(), spec.tooltip)
+
+    def test_avoidance_report_updates_status_and_one_log_together(self) -> None:
+        """统一回报入口应同步状态文本并只记录一条指定等级日志。"""
+
+        window = self._window()
+        with patch.object(window, "_log") as log:
+            window._report_avoidance_result("规划失败", "详细原因", level="WARN")
+
+        self.assertEqual(window.avoidance_status.text(), "规划失败")
+        log.assert_called_once_with("WARN", "详细原因")
+
     def test_param_tooltips_focus_on_effect_and_advice(self) -> None:
         # 参数 tooltip 不重复参数名，直接说明作用、影响和建议，方便现场调参。
         window = self._window()
@@ -413,7 +437,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
         # 绕障产生内部拐点 → 至少一个内部航点拿到交接半径 R>0。
-        self.assertTrue(any(wpi.r > 0.0 for wpi in window._preview_route))
+        self.assertGreater(window._preview_route.transition_radius_count, 0)
 
     def test_widget_value_overrides_config_at_generate(self) -> None:
         # 界面调大 L 到不可飞 → 生成失败，证明用的是控件值而非配置值。
@@ -451,7 +475,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.clearance_spin.setValue(110.0)
 
         with patch(
-            "src.ui.gui.main_window.plan_avoidance_route",
+            "src.ui.gui.simulation_adapter.ControllerSimulationAdapter.plan_avoidance_route",
             return_value=SimpleNamespace(ok=False, route=None, code="ERR_TEST", detail="captured"),
         ) as planner:
             window._generate_route()
@@ -469,7 +493,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.turn_angle_weight_spin.setValue(3.0)
 
         with patch(
-            "src.ui.gui.main_window.plan_avoidance_route",
+            "src.ui.gui.simulation_adapter.ControllerSimulationAdapter.plan_avoidance_route",
             return_value=SimpleNamespace(ok=False, route=None, code="ERR_TEST", detail="captured"),
         ) as planner:
             window._generate_route()
@@ -524,7 +548,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
         window.export_route_button.setEnabled(True)
 
-        with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=(str(output), "JSON 文件 (*.json)")) as dialog:
+        with patch("src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName", return_value=(str(output), "JSON 文件 (*.json)")) as dialog:
             window._export_route()
 
         saved = output.with_suffix(".json")
@@ -559,7 +583,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.export_route_button.setEnabled(True)
 
         with patch(
-            "src.ui.gui.main_window.QFileDialog.getSaveFileName",
+            "src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName",
             return_value=(str(output), "钻石 XML (*.XML *.xml)"),
         ):
             window._export_route()
@@ -590,7 +614,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
             WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
         ]
 
-        with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
+        with patch("src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
             window._export_route()
 
         default_path = Path(dialog.call_args.args[2])
@@ -617,7 +641,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.export_route_button.setEnabled(True)
 
         with patch(
-            "src.ui.gui.main_window.QFileDialog.getSaveFileName",
+            "src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName",
             return_value=(str(output), "钻石 XML (*.XML *.xml)"),
         ):
             window._export_route()

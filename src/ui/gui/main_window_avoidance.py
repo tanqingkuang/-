@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
+from typing import Callable
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -21,9 +20,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.data.config_loader import _LINE_FILE_MANAGER
 from src.ui.gui.avoidance_panel_view_model import (
     adopt_enabled,
     avoidance_status_text,
@@ -32,50 +28,15 @@ from src.ui.gui.avoidance_panel_view_model import (
     simplify_should_follow,
 )
 from src.ui.gui.avoidance_tools import (
-    AvoidanceParams,
+    AVOIDANCE_PARAM_SPECS,
     AvoidanceWindow,
-    _obstacle_view_to_backend,
-    parse_avoidance_config,
-    parse_avoidance_params,
-    preview_route_marker_points,
-    route_inputs_to_config,
-    route_to_polyline,
+    obstacle_spec_to_view,
+    obstacle_view_to_spec,
 )
 
 _JSON_ROUTE_FILTER = "JSON 文件 (*.json)"
 _DIAMOND_XML_ROUTE_FILTER = "钻石 XML (*.XML *.xml)"
 _ROUTE_EXPORT_FILTERS = f"{_JSON_ROUTE_FILTER};;{_DIAMOND_XML_ROUTE_FILTER}"
-
-
-def _plan_avoidance_route_for_ui(*args, **kwargs):  # noqa: ANN002, ANN003
-    """从公开入口取避障规划函数。注意：保留旧测试和外部 patch 路径。"""
-    from src.ui.gui import main_window
-
-    return main_window.plan_avoidance_route(*args, **kwargs)
-
-
-def _route_file_from_config(path: Path) -> str | None:
-    """读取当前配置声明的 route_file。注意：仅用于导出默认文件名，失败时回退 JSON 默认值。"""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    route_file = data.get("route_file") if isinstance(data, dict) else None
-    return route_file if isinstance(route_file, str) and route_file.strip() else None
-
-
-def _route_export_defaults(config_path: Path) -> tuple[Path, str]:
-    """根据当前 route_file 策略生成导出默认路径和过滤器。注意：不读取航线文件内容。"""
-    route_file = _route_file_from_config(config_path)
-    if route_file is None:
-        return config_path.parent / "avoidance_route.json", _JSON_ROUTE_FILTER
-    route_path = _LINE_FILE_MANAGER.resolve_path(config_path, route_file)
-    try:
-        filename = _LINE_FILE_MANAGER.default_output_filename(route_path)
-    except ValueError:
-        return config_path.parent / "avoidance_route.json", _JSON_ROUTE_FILTER
-    selected_filter = _DIAMOND_XML_ROUTE_FILTER if Path(filename).suffix.lower() == ".xml" else _JSON_ROUTE_FILTER
-    return config_path.parent / filename, selected_filter
 
 
 class MainWindowAvoidanceMixin:
@@ -140,100 +101,28 @@ class MainWindowAvoidanceMixin:
         layout = QVBoxLayout(group)
         layout.setContentsMargins(10, 18, 10, 10)
         layout.setSpacing(8)
-        # tooltip 文案直接来自设计文档语义，避免界面标签过长。
-        tips = {
-            "turn_radius_m": (
-                "作用：约束拐点圆弧的最小转弯半径。\n"
-                "影响：越大转弯越平缓，但更容易腿太短或圆弧触障。\n"
-                "建议：按飞机能力给定；无约束时先取 200~300 m。"
-            ),
-            "leg_length_margin_m": (
-                "作用：要求相邻圆弧之间保留额外直线余度。\n"
-                "影响：越大越保守，但更容易触发腿长不足。\n"
-                "建议：R 确定后再调，先试 0.2R~0.5R。"
-            ),
-            "clearance_m": (
-                "作用：A* 搜索时对障碍做外扩，形成安全边界。\n"
-                "影响：越大越安全但绕行更远，窄通道更可能无路。\n"
-                "建议：优先按业务安全距离，常用 80~150 m。"
-            ),
-            "grid.resolution_m": (
-                "作用：决定 A* 栅格离散精度。\n"
-                "影响：越小路径越细但更慢；越大更快但更粗。\n"
-                "建议：先取小于等于 R/10，例如 R=300 m 时 20~30 m。"
-            ),
-            "grid.margin_m": (
-                "作用：扩展起终点和障碍外侧的搜索包围盒。\n"
-                "影响：越大绕行空间越足但网格规模增大。\n"
-                "建议：先取安全间距 + 转弯半径，或直接取 300 m。"
-            ),
-            "simplify_clearance_m": (
-                "作用：A* 后视线去冗余使用的障碍外扩距离。\n"
-                "影响：越小越容易拉直、航段更少，但更贴近障碍。\n"
-                "建议：初始等于安全间距；减少碎段时试 0.5 倍安全间距。"
-            ),
-            "turn_switch_penalty_m": (
-                "作用：惩罚 A* 中每次 8 邻域方向切换。\n"
-                "影响：越大越少频繁换向，但可能绕远或贴边。\n"
-                "建议：减少碎段时从 1 倍栅格间距试起。"
-            ),
-            "turn_angle_weight_m": (
-                "作用：按每 45° 航迹角变化增加线性代价。\n"
-                "影响：可减少硬拐；过大时会和最短路目标拉扯。\n"
-                "建议：最后再调，先试转向切换惩罚的 0.25~0.5 倍。"
-            ),
-        }
-        # 物理约束区：前三项决定可飞性和安全边界。
-        self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tips["turn_radius_m"])
-        self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tips["leg_length_margin_m"])
-        self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tips["clearance_m"])
-        # 搜索范围区：分辨率和边界余量直接影响 A* 速度与可达性。
-        self.resolution_spin = self._make_param_spin(maximum=100000.0, step=5.0, tooltip=tips["grid.resolution_m"])
-        self.margin_spin = self._make_param_spin(maximum=100000.0, step=50.0, tooltip=tips["grid.margin_m"])
-        # 去冗余安全距可独立调；旧配置未显式配置时会跟随安全间距。
-        self.simplify_clearance_spin = self._make_param_spin(
-            maximum=100000.0,
-            step=10.0,
-            tooltip=tips["simplify_clearance_m"],
-            on_change=self._on_simplify_clearance_changed,
-        )
-        # 两个惩罚参数的单位不是普通米值，需要在输入框后缀里区分。
-        self.turn_switch_penalty_spin = self._make_param_spin(
-            maximum=100000.0,
-            step=1.0,
-            suffix=" m/次",
-            tooltip=tips["turn_switch_penalty_m"],
-        )
-        self.turn_angle_weight_spin = self._make_param_spin(
-            maximum=100000.0,
-            step=1.0,
-            suffix=" m/45°",
-            tooltip=tips["turn_angle_weight_m"],
-        )
         # 参数表格采用两列：左侧固定标签、右侧输入框吃掉剩余宽度。
         param_grid = QGridLayout()
         param_grid.setContentsMargins(0, 0, 0, 0)
         param_grid.setHorizontalSpacing(10)
         param_grid.setVerticalSpacing(8)
         param_grid.setColumnStretch(1, 1)
-        # rows 顺序必须与 AvoidanceWindow.param_order 保持一致，测试会锁定。
-        rows = [
-            ("转弯半径 R", "turn_radius_m", self.turn_radius_spin),
-            ("航段余度 L", "leg_length_margin_m", self.leg_margin_spin),
-            ("安全间距", "clearance_m", self.clearance_spin),
-            ("栅格间距", "grid.resolution_m", self.resolution_spin),
-            ("搜索边界余量", "grid.margin_m", self.margin_spin),
-            ("拉直安全间距", "simplify_clearance_m", self.simplify_clearance_spin),
-            ("转向切换惩罚", "turn_switch_penalty_m", self.turn_switch_penalty_spin),
-            ("航迹角惩罚", "turn_angle_weight_m", self.turn_angle_weight_spin),
-        ]
-        for row, (caption, key, spin) in enumerate(rows):
-            label = QLabel(caption)
+        # 单一规格同时创建控件、排列顺序与 tooltip，避免平行列表漂移。
+        for row, spec in enumerate(AVOIDANCE_PARAM_SPECS):
+            on_change = getattr(self, spec.on_change_method) if spec.on_change_method else None
+            spin = self._make_param_spin(
+                maximum=spec.maximum,
+                step=spec.step,
+                tooltip=spec.tooltip,
+                suffix=spec.suffix,
+                on_change=on_change,
+            )
+            setattr(self, spec.widget_attr, spin)
+            label = QLabel(spec.caption)
             label.setObjectName("paramLabel")
             # 标签和输入框都挂 tooltip，鼠标停在任一处都能看到解释。
             label.setMinimumWidth(104)
-            label.setToolTip(tips[key])
-            spin.setToolTip(tips[key])
+            label.setToolTip(spec.tooltip)
             param_grid.addWidget(label, row, 0)
             param_grid.addWidget(spin, row, 1)
         layout.addLayout(param_grid)
@@ -427,10 +316,12 @@ class MainWindowAvoidanceMixin:
         self.avoidance_status.setText(avoidance_status_text(enabled, len(self.obstacles)))
 
     def _set_obstacles_from_config(self, path: str) -> None:
-        """从配置文件解析障碍与规划参数并刷新显示。注意：解析失败时清空，保持界面一致。"""
-        obstacles, clearance = parse_avoidance_config(path)
+        """应用 runner 已解析的障碍与规划参数。注意：本方法不直接读配置文件。"""
+        data = self.sim.gui_config
+        obstacles = [obstacle_spec_to_view(obstacle) for obstacle in data.obstacles]
+        clearance = data.obstacle_clearance_m
         self.obstacles = obstacles
-        self._avoidance_params = parse_avoidance_params(path)
+        self._avoidance_params = data.avoidance_params
         if hasattr(self, "avoidance_config_label"):
             self.avoidance_config_label.setText(Path(path).name)
         self.top_view.set_obstacles(obstacles, clearance)
@@ -448,12 +339,11 @@ class MainWindowAvoidanceMixin:
             return
         params = self._avoidance_params
         # 只把当前勾选项交给后端；未勾选障碍仍留在库里但不参与规划。
-        enabled = [_obstacle_view_to_backend(ob) for ob in self.obstacles if ob.enabled]
+        enabled = [obstacle_view_to_spec(obstacle) for obstacle in self.obstacles if obstacle.enabled]
         if not enabled:
             # 未选择任何障碍：等价于维持原航线，不生成 R 圆弧航线，也不允许采用。
             self._invalidate_preview()
-            self.avoidance_status.setText("未选择障碍 · 维持原航线")
-            self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
+            self._report_avoidance_result("未选择障碍 · 维持原航线", "未选择障碍，跳过生成（维持原航线）")
             return
         # 规划参数以界面控件为准（用户可现场调），覆盖配置解析值。
         # 旧配置未显式配置 simplify_clearance_m 时，让去冗余安全距跟随当前安全间距控件，保持旧行为。
@@ -461,7 +351,7 @@ class MainWindowAvoidanceMixin:
         simplify_clearance_m = self.simplify_clearance_spin.value()
         try:
             # 所有可调参数均以子窗口当前值为准，覆盖加载时的配置快照。
-            result = _plan_avoidance_route_for_ui(
+            result = self.sim.plan_avoidance_route(
                 params.waypoints,
                 enabled,
                 turn_radius_m=self.turn_radius_spin.value(),
@@ -477,23 +367,33 @@ class MainWindowAvoidanceMixin:
             )
         except ValueError as exc:
             self._invalidate_preview()
-            self.avoidance_status.setText(f"参数错误：{exc}")
-            self._log("WARN", f"生成航线参数错误：{exc}")
+            self._report_avoidance_result(f"参数错误：{exc}", f"生成航线参数错误：{exc}", level="WARN")
             return
         if result.ok and result.route is not None:
             self._preview_route = result.route
             # 预览线只进画布，不进入控制器，直到用户点击“采用航线”。
-            self.top_view.set_preview_route(route_to_polyline(result.route), preview_route_marker_points(result.route))
-            _preview_lines = waypoint_inputs_to_waylines(result.route)
-            arcs = sum(1 for line in _preview_lines if line.start.turnSign != 0.0)
+            self.top_view.set_preview_route(list(result.route.polyline), list(result.route.markers))
+            segment_count = result.route.segment_count
+            arcs = result.route.arc_count
             self.adopt_route_button.setEnabled(True)
             self.export_route_button.setEnabled(True)
-            self.avoidance_status.setText(f"预览就绪：{len(_preview_lines)} 段（{arcs} 圆弧）· 可采用")
-            self._log("Avoid", f"生成航线成功：{len(_preview_lines)} 段，{arcs} 圆弧")
+            self._report_avoidance_result(
+                f"预览就绪：{segment_count} 段（{arcs} 圆弧）· 可采用",
+                f"生成航线成功：{segment_count} 段，{arcs} 圆弧",
+            )
         else:
             self._invalidate_preview()
-            self.avoidance_status.setText(f"{result.code}：{result.detail}")
-            self._log("Avoid", f"生成航线失败 {result.code}: {result.detail}")
+            self._report_avoidance_result(
+                f"{result.code}：{result.detail}",
+                f"生成航线失败 {result.code}: {result.detail}",
+            )
+
+    def _report_avoidance_result(self, status: str, log_message: str, *, level: str = "Avoid") -> None:
+        """同步避障状态文本与对应日志。"""
+
+        # 状态先落到当前窗口，再把同一结果写入可追溯日志。
+        self.avoidance_status.setText(status)
+        self._log(level, log_message)
 
     def _export_route(self) -> None:
         """响应“航线输出”：把当前预览航线写成 route_file 文件。注意：只输出已生成但未失效的预览。"""
@@ -501,7 +401,7 @@ class MainWindowAvoidanceMixin:
             self.avoidance_status.setText("请先生成航线，再输出。")
             return
         config_path = self.current_config_path or (self.project_root / "configs" / "base.json")
-        default_path, default_filter = _route_export_defaults(config_path)
+        default_path, default_filter = self.sim.route_export_defaults(config_path)
         selected, selected_filter = QFileDialog.getSaveFileName(
             self.avoidance_window or self,
             "输出避障航线",
@@ -516,18 +416,15 @@ class MainWindowAvoidanceMixin:
             # QFileDialog 在部分平台不会自动追加过滤器后缀，这里按用户选中的格式补齐。
             suffix = ".XML" if "XML" in selected_filter or "xml" in selected_filter else ".json"
             route_path = route_path.with_suffix(suffix)
-        speed_mps = self._avoidance_params.speed_mps if self._avoidance_params is not None else self._preview_route[0].vdCmd
-        geo_origin = self._avoidance_params.geo_origin if self._avoidance_params is not None else None
-        route_config = route_inputs_to_config(self._preview_route, speed_mps, geo_origin)
+        speed_mps = self._avoidance_params.speed_mps if self._avoidance_params is not None else 0.0
+        geo_reference = self._avoidance_params.geo_reference if self._avoidance_params is not None else None
         try:
-            # 通过 LineFileManager 保存，确保输出路径和后缀策略与 route_file 加载链路一致。
-            written = _LINE_FILE_MANAGER.save_route(config_path, str(route_path), route_config)
+            # 通过 runner 应用层保存，确保格式策略与控制器加载链路一致。
+            written = self.sim.export_route(config_path, route_path, self._preview_route, speed_mps, geo_reference)
         except (OSError, ValueError) as exc:
-            self.avoidance_status.setText(f"航线输出失败：{exc}")
-            self._log("WARN", f"航线输出失败：{exc}")
+            self._report_avoidance_result(f"航线输出失败：{exc}", f"航线输出失败：{exc}", level="WARN")
             return
-        self.avoidance_status.setText(f"已输出航线：{written}")
-        self._log("Avoid", f"已输出避障航线：{written}")
+        self._report_avoidance_result(f"已输出航线：{written}", f"已输出避障航线：{written}")
 
     def _adopt_route(self) -> None:
         """响应“采用航线”：把预览航线下发控制器替换长机航线（采用后点播放仿真）。"""
@@ -540,11 +437,13 @@ class MainWindowAvoidanceMixin:
             self._invalidate_preview()
         self._update_snapshot(snapshot, fit_top_view=False)
         if self.sim.last_result_code == "OK":
-            self.avoidance_status.setText("已采用避障航线 · 点播放仿真")
-            self._log("Avoid", "已采用避障航线，长机航线已替换")
+            self._report_avoidance_result("已采用避障航线 · 点播放仿真", "已采用避障航线，长机航线已替换")
         else:
-            self.avoidance_status.setText(f"采用失败 {self.sim.last_result_code}")
-            self._log("WARN", f"采用航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}")
+            self._report_avoidance_result(
+                f"采用失败 {self.sim.last_result_code}",
+                f"采用航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}",
+                level="WARN",
+            )
 
     def _reset_avoidance_route(self) -> None:
         """响应“重置”：清除已采用避障航线，恢复配置默认长机航线。"""
@@ -553,11 +452,13 @@ class MainWindowAvoidanceMixin:
         self._update_snapshot(snapshot, fit_top_view=False)
         if self.sim.last_result_code == "OK":
             # 控制器已回到配置航线，画布快照也同步刷新。
-            self.avoidance_status.setText("已恢复默认航线")
-            self._log("Avoid", "已清除避障航线，恢复默认航线")
+            self._report_avoidance_result("已恢复默认航线", "已清除避障航线，恢复默认航线")
         else:
-            self.avoidance_status.setText(f"重置失败 {self.sim.last_result_code}")
-            self._log("WARN", f"重置航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}")
+            self._report_avoidance_result(
+                f"重置失败 {self.sim.last_result_code}",
+                f"重置航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}",
+                level="WARN",
+            )
 
     def _open_avoidance_window(self) -> None:
         """打开避障规划子窗口。注意：重复触发只激活已有窗口。"""

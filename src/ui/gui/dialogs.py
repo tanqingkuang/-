@@ -5,6 +5,9 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
+LOG_MAX_BLOCKS = 1000
+
+
 class LogDialog(QDialog):
     """仿真事件弹窗。注意：只展示日志文本。"""
 
@@ -16,6 +19,8 @@ class LogDialog(QDialog):
         layout = QVBoxLayout(self)
         self.text = QTextEdit()
         self.text.setReadOnly(True)
+        # 让 QTextDocument 在追加时自动淘汰最旧文本块，避免手工复制整段日志。
+        self.text.document().setMaximumBlockCount(LOG_MAX_BLOCKS)
         clear_button = QPushButton("清空")
         clear_button.clicked.connect(self.text.clear)
         layout.addWidget(self.text)

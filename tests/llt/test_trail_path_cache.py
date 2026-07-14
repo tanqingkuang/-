@@ -19,6 +19,7 @@ from src.ui.gui.top_view import TopView
 from src.ui.gui.trail_path_cache import (
     DEFAULT_TRAIL_MAX_SEGMENTS_PER_CHUNK,
     TrailPathCache,
+    TrailPointLike,
     _farthest_point_from_segment,
     opacity_bucket,
     simplify_polyline_indices,
@@ -78,6 +79,12 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
         """建立离屏 Qt 应用，供路径和视图构造使用。"""
 
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_尾迹点以显式协议约束必需字段(self) -> None:
+        """缓存接受结构化点对象，并公开可供静态检查复用的字段契约。"""
+
+        point = _测试点(1.0, 2.0, 3.0, 4.0, 5.0)
+        self.assertIsInstance(point, TrailPointLike)
 
     def test_六千点删头加尾时中间块对象保持不变(self) -> None:
         """滑动窗口只允许首尾块重建，不能搬动既有中间路径。"""
@@ -355,8 +362,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
     def test_侧视图大量尾迹只批量绘制路径(self) -> None:
         """侧视尾迹不得再映射并逐段 drawLine。"""
 
-        top_view = TopView()
-        view = SideView(top_view)
+        view = SideView()
         view.resize(900, 260)
         view.trail_seconds = 1000.0
         points = [TrailPoint(point.x, point.y, point.altitude, point.time, point.path_distance) for point in _生成测试点(6000)]
@@ -395,8 +401,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
     def test_侧视当前机位只追加队列外实时端点段(self) -> None:
         """侧视实时段使用投影距离和当前高度，同时保持历史缓存与队列不变。"""
 
-        top_view = TopView()
-        view = SideView(top_view)
+        view = SideView()
         view.resize(900, 260)
         view.segment_locked = False
         view.view_angle_deg = 0.0
@@ -446,8 +451,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
     def test_侧视单点尾迹可连实时端点且空队列或投影重合时不画(self) -> None:
         """侧视图允许单点队尾连当前高度，但投影端点重合或无尾迹时跳过。"""
 
-        top_view = TopView()
-        view = SideView(top_view)
+        view = SideView()
         view.resize(900, 260)
         view.segment_locked = False
         view.view_angle_deg = 0.0

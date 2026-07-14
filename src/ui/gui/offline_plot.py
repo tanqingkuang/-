@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import fields as dc_fields
 from pathlib import Path
 
@@ -14,7 +15,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -24,32 +24,19 @@ from PySide6.QtWidgets import (
 )
 
 from src.runner.sim_control import NodeState
-from src.ui.gui.live_monitor import Ch, _hdg_dev, _PALETTE, _apply_y_range
+from src.ui.gui.chart_common import (
+    CHART_PALETTE,
+    CONTROL_ERROR_CHANNELS,
+    ChannelSpec,
+    apply_y_range,
+    build_chart_sidebar,
+    refresh_chart_node_panel,
+)
 
 _NODE_STATE_FIELDS = {f.name for f in dc_fields(NodeState)}
 _X_MARGIN_S = 0.5  # X 轴右侧留白，避免末尾点被裁剪
-
-# 离线分析通道定义：与实时监控独立维护，后续可按需扩展
-OFFLINE_CHANNELS: list[Ch] = [
-    # 前向轴 x
-    Ch("perr_x", "前向位置误差", "m",   "前向轴 x", True,
-       lambda n: n.track_pos_err_x_m),
-    Ch("verr_x", "前向速度误差", "m/s", "前向轴 x", False,
-       lambda n: n.track_vel_err_x_mps),
-    # 垂向轴 y
-    Ch("perr_y", "垂向位置误差", "m",   "垂向轴 y", True,
-       lambda n: n.track_pos_err_y_m),
-    Ch("verr_y", "垂向速度误差", "m/s", "垂向轴 y", False,
-       lambda n: n.track_vel_err_y_mps),
-    # 侧向轴 z
-    Ch("perr_z", "侧向位置误差", "m",   "侧向轴 z", True,
-       lambda n: n.track_pos_err_z_m),
-    Ch("verr_z", "侧向速度误差", "m/s", "侧向轴 z", False,
-       lambda n: n.track_vel_err_z_mps),
-    Ch("hdg_dev", "航迹角偏差",  "°",   "侧向轴 z", False,
-       _hdg_dev),
-]
-
+# 文件错误既显示在窗口中，也进入日志供窗口关闭后继续排查。
+LOGGER = logging.getLogger(__name__)
 
 class OfflinePlotWindow(QDialog):
     """离线控制误差回放绘图窗口。从 snapshots.jsonl 加载仿真记录并绘制完整时序曲线。"""
@@ -125,60 +112,22 @@ class OfflinePlotWindow(QDialog):
 
     def _build_sidebar(self) -> QWidget:
         """构建左侧边栏：节点列表（动态）和通道 checkbox（按轴分组）。"""
-        sb = QWidget()
-        sb.setFixedWidth(170)
-        lay = QVBoxLayout(sb)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        node_box = QGroupBox("节点")
-        self._node_lay = QVBoxLayout(node_box)
-        self._node_lay.setSpacing(2)
-        self._node_lay.addWidget(QLabel("（未加载）"))
-        lay.addWidget(node_box)
-
-        ch_box = QGroupBox("通道")
-        ch_lay = QVBoxLayout(ch_box)
-        ch_lay.setSpacing(1)
-        cur_grp = ""
-        for ch in OFFLINE_CHANNELS:
-            if ch.group != cur_grp:
-                cur_grp = ch.group
-                sep = QLabel(f"  {ch.group}")
-                sep.setStyleSheet("color:#888; font-size:11px;")
-                ch_lay.addWidget(sep)
-            cb = QCheckBox(ch.label)
-            cb.setChecked(ch.on)
-            cb.toggled.connect(self._rebuild_charts)
-            self._ch_cbs[ch.key] = cb
-            ch_lay.addWidget(cb)
-        lay.addWidget(ch_box)
-
-        lay.addStretch()
-        return sb
+        sidebar = build_chart_sidebar(
+            empty_text="（未加载）",
+            rebuild_charts=self._rebuild_charts,
+        )
+        self._node_lay = sidebar.node_layout
+        self._ch_cbs = sidebar.channel_checkboxes
+        return sidebar.widget
 
     def _refresh_node_panel(self) -> None:
         """清空节点面板并按当前 _nodes 重新填充 checkbox。"""
-        while self._node_lay.count():
-            w = self._node_lay.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-        if not self._nodes:
-            self._node_lay.addWidget(QLabel("（未加载）"))
-            return
-        for nid, nd in self._nodes.items():
-            cb = QCheckBox(nid)
-            cb.setChecked(nd["visible"])
-            cb.setStyleSheet(f"color:{nd['color']}; font-weight:bold;")
-            cb.toggled.connect(lambda v, n=nid: self._toggle_node(n, v))
-            nd["cb"] = cb
-            self._node_lay.addWidget(cb)
-
-    def _toggle_node(self, nid: str, visible: bool) -> None:
-        """切换节点可见性并重建图表。"""
-        if nid in self._nodes:
-            self._nodes[nid]["visible"] = visible
-        self._rebuild_charts()
+        refresh_chart_node_panel(
+            self._node_lay,
+            self._nodes,
+            empty_text="（未加载）",
+            rebuild_charts=self._rebuild_charts,
+        )
 
     # ── 数据加载 ──────────────────────────────────────────────────────────────
 
@@ -205,6 +154,7 @@ class OfflinePlotWindow(QDialog):
                     if stripped:
                         records.append(json.loads(stripped))
         except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("加载离线回放文件失败：%s", path, exc_info=True)
             self._path_label.setText(f"加载失败: {exc}")
             self._refresh_node_panel()
             self._rebuild_charts()
@@ -232,14 +182,14 @@ class OfflinePlotWindow(QDialog):
                 if not nid:
                     continue
                 if nid not in self._nodes:
-                    color = _PALETTE[len(self._nodes) % len(_PALETTE)]
+                    color = CHART_PALETTE[len(self._nodes) % len(CHART_PALETTE)]
                     self._nodes[nid] = {"color": color, "visible": True, "cb": None}
                 node_kw = {k: v for k, v in node_dict.items() if k in _NODE_STATE_FIELDS}
                 try:
                     node = NodeState(**node_kw)
                 except TypeError:
                     continue
-                for ch in OFFLINE_CHANNELS:
+                for ch in CONTROL_ERROR_CHANNELS:
                     v = ch.act(node)
                     if v is not None:
                         (self._bufs
@@ -261,7 +211,7 @@ class OfflinePlotWindow(QDialog):
         self._series.clear()
         self._rows.clear()
 
-        active = [ch for ch in OFFLINE_CHANNELS if self._ch_cbs[ch.key].isChecked()]
+        active = [ch for ch in CONTROL_ERROR_CHANNELS if self._ch_cbs[ch.key].isChecked()]
         visible_nids = [nid for nid, nd in self._nodes.items() if nd["visible"]]
 
         if not active or not self._bufs:
@@ -304,7 +254,7 @@ class OfflinePlotWindow(QDialog):
         self._populate_series()
 
     def _make_chart(
-        self, ch: Ch, node_ids: list[str], show_x: bool
+        self, ch: ChannelSpec, node_ids: list[str], show_x: bool
     ) -> tuple[QChart, QValueAxis, QValueAxis, QLineSeries]:
         """创建单通道 QChart，含 y=0 灰色虚线基准和各节点误差曲线。"""
         chart = QChart()
@@ -371,4 +321,4 @@ class OfflinePlotWindow(QDialog):
                 all_y.extend(v for _, v in pts)
             x_ax.setRange(self._t_min, t_end)
             zero_s.replace([QPointF(self._t_min, 0.0), QPointF(t_end, 0.0)])
-            _apply_y_range(y_ax, all_y)
+            apply_y_range(y_ax, all_y)

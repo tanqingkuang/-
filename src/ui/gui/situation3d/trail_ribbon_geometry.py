@@ -13,6 +13,12 @@ from PySide6.QtCore import QByteArray, Property, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 
+from src.ui.gui.situation3d._xz_segment_geometry import (
+    edge_positions,
+    segment_direction,
+    segment_normal,
+)
+
 _FLOAT_SIZE = 4
 _RIBBON_COMPONENTS = 12
 _RIBBON_STRIDE = _RIBBON_COMPONENTS * _FLOAT_SIZE
@@ -542,8 +548,8 @@ class TrailRibbonGeometry(QQuick3DGeometry):
     def _write_first_segment_cap(self, slot: int, start: Point3D, end: Point3D) -> None:
         """恢复新首段起点的平头端帽，并清除其原有 bevel 三角形。"""
 
-        normal = self._segment_normal(start, end)
-        left, right = self._edge_positions(start, normal, self._width_value / 2.0)
+        normal = segment_normal(start, end)
+        left, right = edge_positions(start, normal, self._width_value / 2.0)
         alpha = self._segment_alpha.get(slot, _TRAIL_ALPHA_MAX)
         data = self._vertex_record(left, 0.0, 0.0, alpha)
         data += self._vertex_record(right, 0.0, 1.0, alpha)
@@ -597,10 +603,10 @@ class TrailRibbonGeometry(QQuick3DGeometry):
     ) -> None:
         """向完整缓冲编码一个带面段，预留第五个中心顶点供 bevel 接头使用。"""
 
-        normal = self._segment_normal(start, end)
+        normal = segment_normal(start, end)
         half_width = self._width_value / 2.0
-        start_left, start_right = self._edge_positions(start, normal, half_width)
-        end_left, end_right = self._edge_positions(end, normal, half_width)
+        start_left, start_right = edge_positions(start, normal, half_width)
+        end_left, end_right = edge_positions(end, normal, half_width)
         records = (
             self._vertex_record(start_left, 0.0, 0.0, alpha),
             self._vertex_record(start_right, 0.0, 1.0, alpha),
@@ -660,8 +666,8 @@ class TrailRibbonGeometry(QQuick3DGeometry):
     ) -> tuple[Point3D, Point3D, Point3D, Point3D, bool, float]:
         """计算折角边缘。注意：斜接长度超限或近乎掉头时退化为 bevel。"""
 
-        previous_direction = self._segment_direction(previous, current)
-        following_direction = self._segment_direction(current, following)
+        previous_direction = segment_direction(previous, current)
+        following_direction = segment_direction(current, following)
         previous_normal = (-previous_direction[1], previous_direction[0])
         following_normal = (-following_direction[1], following_direction[0])
         miter_x = previous_normal[0] + following_normal[0]
@@ -677,11 +683,11 @@ class TrailRibbonGeometry(QQuick3DGeometry):
             scale = half_width / abs(denominator) if abs(denominator) > 1e-6 else math.inf
             if scale <= half_width * _MITER_LIMIT:
                 miter_normal = (miter_x, miter_z)
-                left, right = self._edge_positions(current, miter_normal, scale)
+                left, right = edge_positions(current, miter_normal, scale)
                 return left, right, left, right, False, turn
         # bevel 保留相邻两段各自的法向端点，再用中心三角形填补外侧缺口。
-        previous_left, previous_right = self._edge_positions(current, previous_normal, half_width)
-        current_left, current_right = self._edge_positions(current, following_normal, half_width)
+        previous_left, previous_right = edge_positions(current, previous_normal, half_width)
+        current_left, current_right = edge_positions(current, following_normal, half_width)
         return previous_left, previous_right, current_left, current_right, True, turn
 
     @staticmethod
@@ -712,34 +718,6 @@ class TrailRibbonGeometry(QQuick3DGeometry):
 
         offset = slot * _STREAM_SEGMENT_VERTEX_BYTES + local_index * _RIBBON_STRIDE
         vertices[offset : offset + _RIBBON_STRIDE] = self._vertex_record(position, u_coord, v_coord, alpha)
-
-    @staticmethod
-    def _segment_direction(start: Point3D, end: Point3D) -> tuple[float, float]:
-        """返回 XZ 平面的单位方向。注意：纯竖直退化段使用 +Z 方向兜底。"""
-
-        delta_x = end[0] - start[0]
-        delta_z = end[2] - start[2]
-        length = math.hypot(delta_x, delta_z)
-        if length <= 1e-6:
-            return 0.0, 1.0
-        return delta_x / length, delta_z / length
-
-    @classmethod
-    def _segment_normal(cls, start: Point3D, end: Point3D) -> tuple[float, float]:
-        """返回 XZ 平面的单位侧向量。"""
-
-        direction_x, direction_z = cls._segment_direction(start, end)
-        return -direction_z, direction_x
-
-    @staticmethod
-    def _edge_positions(point: Point3D, normal: tuple[float, float], scale: float) -> tuple[Point3D, Point3D]:
-        """按给定侧向和长度返回中心线两侧边缘点。"""
-
-        offset_x = normal[0] * scale
-        offset_z = normal[1] * scale
-        left = (point[0] - offset_x, point[1], point[2] - offset_z)
-        right = (point[0] + offset_x, point[1], point[2] + offset_z)
-        return left, right
 
     def _stream_segment_alpha(self, index: int, segment_count: int) -> float:
         """返回双端渐隐值。注意：长尾迹中段保持低亮，避免整条历史成为高亮飘带。"""
