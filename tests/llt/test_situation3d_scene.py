@@ -40,6 +40,7 @@ from src.ui.gui.view_models import (
 )
 
 QML_VIEW_PATH = Path(__file__).resolve().parents[2] / "src" / "ui" / "gui" / "situation3d" / "qml" / "Situation3DView.qml"
+TERRAIN_LOADING_GUIDE_PATH = QML_VIEW_PATH.parent / "assets" / "terrain_loading_guide.png"
 TERRAIN_LAYOUT_PATH = Path(__file__).resolve().parents[2] / "configs" / "element" / "terrain_mountain_demo.json"
 MOUNTAIN_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "mountain_demo.json"
 
@@ -612,6 +613,50 @@ class Situation3DSceneDataTests(unittest.TestCase):
             points = json.loads(payload["riskZoneLines"][0]["pathValue"])
             self.assertGreater(max(p[1] for p in points) - min(p[1] for p in points), 1.0)
 
+    def test_background_field_failure_is_reported_without_restarting_worker(self) -> None:
+        """后台生成失败后应保留可见诊断，同一文件版本不得每 500ms 重启失败线程。"""
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            layout_path = Path(temp_dir) / "broken_runtime_layout.json"
+            layout_path.write_text("{}", encoding="utf-8")
+            resolved = layout_path.resolve()
+            key = (str(resolved), resolved.stat().st_mtime_ns, 96)
+            self._reset_terrain_caches()
+            with patch.object(terrain_field_module, "get_terrain_field", side_effect=ValueError("测试生成失败")):
+                terrain_field_module._background_generate(key)
+
+            error = terrain_field_module.terrain_field_error(resolved, resolution=96)
+            self.assertIn("测试生成失败", error)
+            with patch.object(terrain_field_module.threading, "Thread") as thread:
+                self.assertIsNone(terrain_field_module.peek_terrain_field(resolved, resolution=96))
+            thread.assert_not_called()
+
+    def test_failed_layout_payload_stops_refresh_timer(self) -> None:
+        """fieldError 到达窗口后应停止轮询，并交给 QML 保持失败提示。"""
+
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+        window = Situation3DWindow()
+        try:
+            window._schedule_terrain_refresh(
+                {
+                    "terrain": {
+                        "surface": {
+                            "mode": "layout",
+                            "fieldReady": False,
+                            "fieldError": "测试生成失败",
+                        }
+                    }
+                }
+            )
+            self.assertFalse(window._terrain_refresh_timer.isActive())
+        finally:
+            window.close()
+
     @staticmethod
     def _reset_terrain_caches() -> None:
         """清空高度场与布局缓存。注意：仅测试使用,模拟冷启动。"""
@@ -620,6 +665,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         with terrain_field_module._PENDING_LOCK:
             terrain_field_module._READY_FIELDS.clear()
             terrain_field_module._PENDING_KEYS.clear()
+            terrain_field_module._FAILED_FIELDS.clear()
         scene_data._cached_layout_versioned.cache_clear()
 
     def test_invalid_layout_values_fall_back_to_procedural_with_diagnostic(self) -> None:
@@ -649,13 +695,13 @@ class Situation3DSceneDataTests(unittest.TestCase):
                 json.dumps(payload, ensure_ascii=False, allow_nan=False)
 
     def test_release_scripts_bundle_terrain_detail_textures(self) -> None:
-        """验证岩面法线与反照率贴图存在，并以 --add-data 形式进入双平台打包参数。"""
+        """验证 3D 地形位图存在，并以 --add-data 形式进入双平台打包参数。"""
 
         import re
 
         project_root = Path(__file__).resolve().parents[2]
         asset_dir = project_root / "src" / "ui" / "gui" / "situation3d" / "qml" / "assets"
-        for texture_name in ("terrain_detail_normal.png", "terrain_detail_albedo.png"):
+        for texture_name in ("terrain_detail_normal.png", "terrain_detail_albedo.png", "terrain_loading_guide.png"):
             texture = asset_dir / texture_name
             self.assertTrue(texture.is_file(), texture_name)
             self.assertGreater(texture.stat().st_size, 0, texture_name)
@@ -700,6 +746,113 @@ class Situation3DSceneDataTests(unittest.TestCase):
         payload = json.loads(window.bridge.sceneData())
         self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
         window.close()
+
+    def test_layout_loading_cover_waits_for_ready_and_adjustable_minimum_duration(self) -> None:
+        """布局冷启动时旧地形必须隐藏，过场同时满足可调最短时长与 fieldReady 才能退出。"""
+
+        from PySide6.QtCore import QObject
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+        window = Situation3DWindow()
+        try:
+            window.show()
+            root = window.quick_view.rootObject()
+            root.setProperty("terrainTransitionDurationMs", 80)
+            layout_path = str(TERRAIN_LAYOUT_PATH.resolve())
+
+            def scene_payload(field_ready: bool) -> str:
+                """构造同一布局的等待态或就绪态 payload，隔离真实 6.8 秒生成耗时。"""
+
+                return json.dumps(
+                    {
+                        "staticKey": f"loading-{int(field_ready)}",
+                        "aircraft": [],
+                        "trailRibbons": [],
+                        "terrain": {
+                            "surface": {
+                                "mode": "layout",
+                                "x": 0.0,
+                                "y": 0.0,
+                                "z": 0.0,
+                                "width": 52000.0,
+                                "depth": 52000.0,
+                                "effectiveSpan": 32000.0,
+                                "layoutFile": layout_path,
+                                "resolution": 96,
+                                "revision": f"test:{int(field_ready)}",
+                                "fieldReady": field_ready,
+                            }
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+
+            root.updateScene(scene_payload(False), False)
+            app.processEvents()
+            terrain_model = root.findChild(QObject, "terrainSurfaceModel")
+            self.assertIsNotNone(terrain_model)
+            self.assertTrue(bool(root.property("terrainLoadingVisible")))
+            self.assertFalse(bool(terrain_model.property("visible")))
+
+            # 即使正式数据已经到达，也必须先走完可调的最短过场时间。
+            root.updateScene(scene_payload(True), False)
+            app.processEvents()
+            self.assertTrue(bool(root.property("terrainLoadingVisible")))
+            self.assertTrue(bool(terrain_model.property("visible")))
+
+            deadline = time.monotonic() + 1.0
+            while bool(root.property("terrainLoadingVisible")) and time.monotonic() < deadline:
+                # RUNNING 态每 100ms 都会重推同一 ready 帧；重复帧不得让淡出动画从头开始。
+                root.updateScene(scene_payload(True), False)
+                app.processEvents()
+                time.sleep(0.01)
+            self.assertFalse(bool(root.property("terrainLoadingVisible")))
+        finally:
+            window.close()
+
+    def test_prewarmed_layout_does_not_force_loading_cover(self) -> None:
+        """首帧已经 fieldReady 时直接显示正式地形，不能无条件多等 6.8 秒。"""
+
+        from PySide6.QtCore import QObject
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+        window = Situation3DWindow()
+        try:
+            root = window.quick_view.rootObject()
+            payload = json.dumps(
+                {
+                    "staticKey": "prewarmed",
+                    "aircraft": [],
+                    "trailRibbons": [],
+                    "terrain": {
+                        "surface": {
+                            "mode": "layout",
+                            "x": 0.0,
+                            "y": 0.0,
+                            "z": 0.0,
+                            "width": 52000.0,
+                            "depth": 52000.0,
+                            "effectiveSpan": 32000.0,
+                            "layoutFile": str(TERRAIN_LAYOUT_PATH.resolve()),
+                            "resolution": 96,
+                            "revision": "prewarmed:1",
+                            "fieldReady": True,
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            )
+            root.updateScene(payload, False)
+            app.processEvents()
+            terrain_model = root.findChild(QObject, "terrainSurfaceModel")
+            self.assertFalse(bool(root.property("terrainLoadingVisible")))
+            self.assertTrue(bool(terrain_model.property("visible")))
+        finally:
+            window.close()
 
     def test_follow_view_only_tracks_moving_leader_focus(self) -> None:
         """谷地运动双帧测试:跟随只接管焦点,并与旋转、缩放状态相互独立。"""
@@ -1523,6 +1676,18 @@ class Situation3DSceneDataTests(unittest.TestCase):
         geometry.widthValue = DEFAULT_TERRAIN_SPAN_M
         self.assertNotEqual(geometry.vertexData().size(), layout_vertex_size)
 
+    def test_terrain_geometry_configures_layout_with_one_rebuild(self) -> None:
+        """布局路径、分辨率和版本必须原子提交，避免 QML 逐属性触发三次重建。"""
+
+        geometry = TerrainGeometry()
+        with patch.object(geometry, "_rebuild") as rebuild:
+            geometry.configureLayout("terrain.json", 768, "revision:0")
+
+        self.assertEqual(rebuild.call_count, 1)
+        self.assertEqual(geometry.layoutFile, "terrain.json")
+        self.assertEqual(geometry.resolutionValue, 768)
+        self.assertEqual(geometry.layoutRevision, "revision:0")
+
     def test_layout_geometry_uses_display_relief_and_complete_tangent_basis(self) -> None:
         """正式地形网格应消费显示高度，并提供法线贴图所需的正交切线基。"""
 
@@ -1986,8 +2151,9 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("receivesShadows: false", fill_block)
         self.assertIn("alphaMode: PrincipledMaterial.Blend", fill_block)
         self.assertNotIn("model: obstacleModel", qml)
-        self.assertIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
-        self.assertIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)
+        self.assertIn("terrainGeometry.configureLayout(", qml)
+        self.assertNotIn('terrainGeometry.layoutFile = surface.layoutFile || ""', qml)
+        self.assertNotIn("terrainGeometry.resolutionValue = surface.resolution || 641", qml)
         self.assertIn("data.routeDashes", qml)
         self.assertIn("model: routeDashModel", qml)
         self.assertIn("TrailRibbonGeometry", qml)
@@ -2023,6 +2189,24 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("height: overlayContent.implicitHeight + 20", overlay_block)
         self.assertIn("id: overlayContent", overlay_block)
         self.assertNotIn("height: 178", overlay_block)
+
+    def test_qml_layout_loading_cover_uses_one_adjustable_duration_and_guide_asset(self) -> None:
+        """过场时长只保留一个 6800ms 调参入口，加载层按真实地形就绪状态控制。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("property int terrainTransitionDurationMs: 6800", qml)
+        self.assertEqual(qml.count("terrainTransitionDurationMs: 6800"), 1)
+        self.assertIn("property bool terrainLoadingVisible: false", qml)
+        self.assertIn("property bool terrainLoadingFinishing: false", qml)
+        self.assertIn("property string terrainLoadingError: \"\"", qml)
+        self.assertIn("function beginTerrainLoading(loadingKey, resolution)", qml)
+        self.assertIn("function markTerrainReady()", qml)
+        self.assertIn("terrainSurfaceModel.visible = fieldReady", qml)
+        self.assertIn('objectName: "terrainSurfaceModel"', qml)
+        self.assertIn('source: "assets/terrain_loading_guide.png"', qml)
+        self.assertIn('text: root.terrainLoadingError ? "三维地形生成失败" : "正在构建三维山地态势"', qml)
+        self.assertTrue(TERRAIN_LOADING_GUIDE_PATH.is_file())
 
     def test_terrain_material_is_matte_with_visible_micro_relief(self) -> None:
         """验证正式地形材质消除塑料高光，并保留足够强的近景岩面细节。"""

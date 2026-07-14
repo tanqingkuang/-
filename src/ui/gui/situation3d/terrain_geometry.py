@@ -7,7 +7,7 @@ import math
 import json
 import struct
 
-from PySide6.QtCore import QByteArray, Property, Signal
+from PySide6.QtCore import QByteArray, Property, Signal, Slot
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 import numpy as np
@@ -177,16 +177,37 @@ class _TerrainGeometryBase(QQuick3DGeometry):
     def resolutionValue(self, value: int) -> None:
         """更新布局地形网格分辨率。注意：默认 641，低配可降到 384。"""
 
-        try:
-            normalized = int(value)
-        except (TypeError, ValueError):
-            normalized = DEFAULT_TERRAIN_RESOLUTION
-        normalized = max(96, min(1024, normalized))
+        normalized = self._normalize_resolution(value)
         if normalized == self._resolution_value:
             return
         self._resolution_value = normalized
         self._rebuild()
         self.resolutionValueChanged.emit()
+
+    @Slot(str, int, str)
+    def configureLayout(self, layout_file: str, resolution: int, revision: str) -> None:
+        """原子更新布局地形参数。注意：QML 每帧只触发一次几何重建。"""
+
+        normalized_file = str(layout_file or "")
+        normalized_resolution = self._normalize_resolution(resolution)
+        normalized_revision = str(revision or "")
+        file_changed = normalized_file != self._layout_file_value
+        resolution_changed = normalized_resolution != self._resolution_value
+        revision_changed = normalized_revision != self._layout_revision_value
+        if not (file_changed or resolution_changed or revision_changed):
+            return
+
+        # 三个参数共同标识唯一地形版本；全部落位后再重建，禁止中间态重复生成旧 mesh。
+        self._layout_file_value = normalized_file
+        self._resolution_value = normalized_resolution
+        self._layout_revision_value = normalized_revision
+        self._rebuild()
+        if file_changed:
+            self.layoutFileChanged.emit()
+        if resolution_changed:
+            self.resolutionValueChanged.emit()
+        if revision_changed:
+            self.layoutRevisionChanged.emit()
 
     @Property(float, notify=generationTimeMsChanged)
     def generationTimeMs(self) -> float:
@@ -215,6 +236,16 @@ class _TerrainGeometryBase(QQuick3DGeometry):
         if not math.isfinite(normalized):
             return fallback
         return max(minimum, normalized)
+
+    @staticmethod
+    def _normalize_resolution(value: int) -> int:
+        """规范化 QML 地形分辨率。注意：与历史属性 setter 保持 96~1024 边界。"""
+
+        try:
+            normalized = int(value)
+        except (TypeError, ValueError):
+            normalized = DEFAULT_TERRAIN_RESOLUTION
+        return max(96, min(1024, normalized))
 
 
 class TerrainGeometry(_TerrainGeometryBase):

@@ -51,6 +51,7 @@ rm -rf "$release_app_dir"
     --add-data "src/ui/gui/situation3d/qml/Situation3DView.qml:src/ui/gui/situation3d/qml" \
     --add-data "src/ui/gui/situation3d/qml/assets/terrain_detail_normal.png:src/ui/gui/situation3d/qml/assets" \
     --add-data "src/ui/gui/situation3d/qml/assets/terrain_detail_albedo.png:src/ui/gui/situation3d/qml/assets" \
+    --add-data "src/ui/gui/situation3d/qml/assets/terrain_loading_guide.png:src/ui/gui/situation3d/qml/assets" \
     --add-binary "$pyside_root/Qt/plugins/assetimporters:PySide6/Qt/plugins/assetimporters" \
     --add-binary "$pyside_root/Qt/plugins/geometryloaders:PySide6/Qt/plugins/geometryloaders" \
     --add-binary "$pyside_root/Qt/plugins/renderers:PySide6/Qt/plugins/renderers" \

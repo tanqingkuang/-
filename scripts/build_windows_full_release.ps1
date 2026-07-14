@@ -38,6 +38,7 @@ $RenderersDir = Join-Path $PySideRoot "plugins\renderers"
     --add-data "src/ui/gui/situation3d/qml/Situation3DView.qml;src/ui/gui/situation3d/qml" `
     --add-data "src/ui/gui/situation3d/qml/assets/terrain_detail_normal.png;src/ui/gui/situation3d/qml/assets" `
     --add-data "src/ui/gui/situation3d/qml/assets/terrain_detail_albedo.png;src/ui/gui/situation3d/qml/assets" `
+    --add-data "src/ui/gui/situation3d/qml/assets/terrain_loading_guide.png;src/ui/gui/situation3d/qml/assets" `
     --add-binary "$AssetImportersDir;PySide6/plugins/assetimporters" `
     --add-binary "$GeometryLoadersDir;PySide6/plugins/geometryloaders" `
     --add-binary "$RenderersDir;PySide6/plugins/renderers" `
