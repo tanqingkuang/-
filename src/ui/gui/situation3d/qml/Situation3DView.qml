@@ -18,7 +18,6 @@ Item {
     property string cameraMode: "自由"
     property bool followEnabled: false
     property string sceneTime: "0.0s"
-    property string sceneSummary: "等待快照"
     property int sceneApplyCount: 0
     property string aircraftModelValue: "tb2"
     property string aircraftModelSource: "assets/BayraktarTB2.glb"
@@ -502,8 +501,6 @@ Item {
             cameraApplied = applyPayloadCamera(data.camera)
         }
         sceneTime = Number(data.time || 0).toFixed(1) + "s"
-        const counts = data.counts || {}
-        sceneSummary = "飞机 " + (counts.aircraft || 0) + " / 风险区 " + (counts.riskZones || 0)
         return cameraApplied
     }
 
@@ -973,13 +970,16 @@ Item {
         anchors.top: parent.top
         anchors.margins: 12
         width: 260
-        height: 178
+        height: overlayContent.implicitHeight + 20
         radius: 8
         color: "#dd151d26"
         border.color: "#2a3644"
 
         Column {
-            anchors.fill: parent
+            id: overlayContent
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.right: parent.right
             anchors.margins: 10
             spacing: 8
 
@@ -990,10 +990,27 @@ Item {
                 font.bold: true
             }
 
-            Text {
-                text: root.sceneSummary + " / 视角 " + root.cameraMode + (root.followEnabled ? " · 跟随中" : "")
-                color: "#94a3b8"
-                font.pixelSize: 12
+            Row {
+                id: sceneLegend
+                objectName: "sceneLegend"
+                spacing: 8
+
+                LegendItem {
+                    objectName: "flightRouteLegend"
+                    label: "飞行航线"
+                    swatchColor: "#22d3ee"
+                }
+                LegendItem {
+                    objectName: "originalRouteLegend"
+                    label: "原始航线"
+                    swatchColor: "#ff5a45"
+                }
+                LegendItem {
+                    objectName: "dangerAreaLegend"
+                    label: "危险区域"
+                    swatchColor: "#ff684f"
+                    areaSwatch: true
+                }
             }
 
             Row {
@@ -1093,6 +1110,64 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             onClicked: button.clicked()
+        }
+    }
+
+    component LegendItem: Item {
+        id: legendItem
+        property string label: ""
+        property color swatchColor: "transparent"
+        property bool areaSwatch: false
+        width: 72
+        height: 16
+
+        Row {
+            anchors.fill: parent
+            spacing: 4
+
+            Item {
+                width: 20
+                height: parent.height
+
+                Row {
+                    anchors.centerIn: parent
+                    spacing: 2
+                    visible: !legendItem.areaSwatch
+
+                    Repeater {
+                        model: legendItem.areaSwatch ? 0 : 3
+                        Rectangle {
+                            width: 4
+                            height: 2
+                            radius: 1
+                            color: legendItem.swatchColor
+                        }
+                    }
+                }
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    visible: legendItem.areaSwatch
+                    width: 20
+                    height: 10
+                    radius: 1
+                    color: Qt.rgba(
+                        legendItem.swatchColor.r,
+                        legendItem.swatchColor.g,
+                        legendItem.swatchColor.b,
+                        0.32
+                    )
+                    border.color: legendItem.swatchColor
+                    border.width: 1
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: legendItem.label
+                color: "#cbd5e1"
+                font.pixelSize: 11
+            }
         }
     }
 }
