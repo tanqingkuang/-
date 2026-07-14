@@ -24,32 +24,15 @@ from PySide6.QtWidgets import (
 )
 
 from src.runner.sim_control import NodeState
-from src.ui.gui.live_monitor import Ch, _hdg_dev, _PALETTE, _apply_y_range
+from src.ui.gui.chart_common import (
+    CHART_PALETTE,
+    CONTROL_ERROR_CHANNELS,
+    ChannelSpec,
+    apply_y_range,
+)
 
 _NODE_STATE_FIELDS = {f.name for f in dc_fields(NodeState)}
 _X_MARGIN_S = 0.5  # X 轴右侧留白，避免末尾点被裁剪
-
-# 离线分析通道定义：与实时监控独立维护，后续可按需扩展
-OFFLINE_CHANNELS: list[Ch] = [
-    # 前向轴 x
-    Ch("perr_x", "前向位置误差", "m",   "前向轴 x", True,
-       lambda n: n.track_pos_err_x_m),
-    Ch("verr_x", "前向速度误差", "m/s", "前向轴 x", False,
-       lambda n: n.track_vel_err_x_mps),
-    # 垂向轴 y
-    Ch("perr_y", "垂向位置误差", "m",   "垂向轴 y", True,
-       lambda n: n.track_pos_err_y_m),
-    Ch("verr_y", "垂向速度误差", "m/s", "垂向轴 y", False,
-       lambda n: n.track_vel_err_y_mps),
-    # 侧向轴 z
-    Ch("perr_z", "侧向位置误差", "m",   "侧向轴 z", True,
-       lambda n: n.track_pos_err_z_m),
-    Ch("verr_z", "侧向速度误差", "m/s", "侧向轴 z", False,
-       lambda n: n.track_vel_err_z_mps),
-    Ch("hdg_dev", "航迹角偏差",  "°",   "侧向轴 z", False,
-       _hdg_dev),
-]
-
 
 class OfflinePlotWindow(QDialog):
     """离线控制误差回放绘图窗口。从 snapshots.jsonl 加载仿真记录并绘制完整时序曲线。"""
@@ -141,7 +124,7 @@ class OfflinePlotWindow(QDialog):
         ch_lay = QVBoxLayout(ch_box)
         ch_lay.setSpacing(1)
         cur_grp = ""
-        for ch in OFFLINE_CHANNELS:
+        for ch in CONTROL_ERROR_CHANNELS:
             if ch.group != cur_grp:
                 cur_grp = ch.group
                 sep = QLabel(f"  {ch.group}")
@@ -232,14 +215,14 @@ class OfflinePlotWindow(QDialog):
                 if not nid:
                     continue
                 if nid not in self._nodes:
-                    color = _PALETTE[len(self._nodes) % len(_PALETTE)]
+                    color = CHART_PALETTE[len(self._nodes) % len(CHART_PALETTE)]
                     self._nodes[nid] = {"color": color, "visible": True, "cb": None}
                 node_kw = {k: v for k, v in node_dict.items() if k in _NODE_STATE_FIELDS}
                 try:
                     node = NodeState(**node_kw)
                 except TypeError:
                     continue
-                for ch in OFFLINE_CHANNELS:
+                for ch in CONTROL_ERROR_CHANNELS:
                     v = ch.act(node)
                     if v is not None:
                         (self._bufs
@@ -261,7 +244,7 @@ class OfflinePlotWindow(QDialog):
         self._series.clear()
         self._rows.clear()
 
-        active = [ch for ch in OFFLINE_CHANNELS if self._ch_cbs[ch.key].isChecked()]
+        active = [ch for ch in CONTROL_ERROR_CHANNELS if self._ch_cbs[ch.key].isChecked()]
         visible_nids = [nid for nid, nd in self._nodes.items() if nd["visible"]]
 
         if not active or not self._bufs:
@@ -304,7 +287,7 @@ class OfflinePlotWindow(QDialog):
         self._populate_series()
 
     def _make_chart(
-        self, ch: Ch, node_ids: list[str], show_x: bool
+        self, ch: ChannelSpec, node_ids: list[str], show_x: bool
     ) -> tuple[QChart, QValueAxis, QValueAxis, QLineSeries]:
         """创建单通道 QChart，含 y=0 灰色虚线基准和各节点误差曲线。"""
         chart = QChart()
@@ -371,4 +354,4 @@ class OfflinePlotWindow(QDialog):
                 all_y.extend(v for _, v in pts)
             x_ax.setRange(self._t_min, t_end)
             zero_s.replace([QPointF(self._t_min, 0.0), QPointF(t_end, 0.0)])
-            _apply_y_range(y_ax, all_y)
+            apply_y_range(y_ax, all_y)

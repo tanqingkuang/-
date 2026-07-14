@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import math
 from collections import deque
-from dataclasses import dataclass
-from typing import Callable
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 from PySide6.QtCore import QMargins, QPointF, Qt, QTimer
@@ -23,7 +20,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.runner.sim_control import NodeState, SimulationController
+from src.runner.sim_control import SimulationController
+from src.ui.gui.chart_common import (
+    CHART_PALETTE,
+    CONTROL_ERROR_CHANNELS,
+    ChannelSpec,
+    apply_y_range,
+)
 
 # ── 常量 ─────────────────────────────────────────────────────────────────────
 
@@ -32,60 +35,12 @@ _WIN_OPTIONS_S = [30.0, 60.0, 120.0]
 _WIN_DEFAULT = 60.0
 _MAX_PTS = int(120 * 10 * 1.2)
 
-_PALETTE = ["#1f77b4", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b"]
 _CTRL_COLORS = {
     "待命": "#888888",
     "集结": "#2ecc71",
     "保持": "#4c8ef5",
     "重构": "#c0392b",
 }
-
-# ── 通道定义 ──────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Ch:
-    """单个监控通道描述。扩展通道只需在 CHANNELS 末尾追加实例，其余代码无需改动。"""
-
-    key: str
-    label: str
-    unit: str
-    group: str
-    on: bool
-    act: Callable[[NodeState], float | None]
-
-
-def _hdg_dev(n: NodeState) -> float | None:
-    """实际航迹角 − 指令航迹角，归一化到 [-180°, 180°]。"""
-    # 指令水平速度太小时航向没有稳定定义，避免 atan2(0, 0) 产生虚假偏差。
-    spd = math.hypot(n.cmd_vel_east_mps, n.cmd_vel_north_mps)
-    if spd < 1e-3:
-        return None
-    # 项目航向约定是 ENU：0° 指东、90° 指北，因此用 atan2(north, east)。
-    cmd_psi = math.degrees(math.atan2(n.cmd_vel_north_mps, n.cmd_vel_east_mps))
-    return (n.psi_v_deg - cmd_psi + 180.0) % 360.0 - 180.0
-
-
-CHANNELS: list[Ch] = [
-    # 前向轴 x
-    Ch("perr_x", "前向位置误差", "m",   "前向轴 x", True,
-       lambda n: n.track_pos_err_x_m),
-    Ch("verr_x", "前向速度误差", "m/s", "前向轴 x", False,
-       lambda n: n.track_vel_err_x_mps),
-    # 垂向轴 y
-    Ch("perr_y", "垂向位置误差", "m",   "垂向轴 y", True,
-       lambda n: n.track_pos_err_y_m),
-    Ch("verr_y", "垂向速度误差", "m/s", "垂向轴 y", False,
-       lambda n: n.track_vel_err_y_mps),
-    # 侧向轴 z
-    Ch("perr_z", "侧向位置误差", "m",   "侧向轴 z", True,
-       lambda n: n.track_pos_err_z_m),
-    Ch("verr_z", "侧向速度误差", "m/s", "侧向轴 z", False,
-       lambda n: n.track_vel_err_z_mps),
-    Ch("hdg_dev", "航迹角偏差",  "°",   "侧向轴 z", False,
-       _hdg_dev),
-]
-
 
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
 
@@ -176,7 +131,7 @@ class LiveMonitorWindow(QDialog):
         self._nodes = {}
         for node in snap.nodes:
             old = old_nodes.get(node.node_id, {})
-            color = old.get("color", _PALETTE[len(self._nodes) % len(_PALETTE)])
+            color = old.get("color", CHART_PALETTE[len(self._nodes) % len(CHART_PALETTE)])
             visible = old.get("visible", True)
             self._nodes[node.node_id] = {"color": color, "visible": visible, "cb": None}
         self._refresh_node_panel()
@@ -223,7 +178,7 @@ class LiveMonitorWindow(QDialog):
         ch_lay = QVBoxLayout(ch_box)
         ch_lay.setSpacing(1)
         cur_grp = ""
-        for ch in CHANNELS:
+        for ch in CONTROL_ERROR_CHANNELS:
             if ch.group != cur_grp:
                 # 分组标题只是视觉分隔，不参与通道开关逻辑。
                 cur_grp = ch.group
@@ -298,7 +253,7 @@ class LiveMonitorWindow(QDialog):
         )
         self._right_lay.addWidget(self._strategy_strip)
 
-        active = [ch for ch in CHANNELS if self._ch_cbs[ch.key].isChecked()]
+        active = [ch for ch in CONTROL_ERROR_CHANNELS if self._ch_cbs[ch.key].isChecked()]
         # 隐藏节点的数据仍保留在缓冲区，只是不为它创建可见曲线。
         visible_nids = [nid for nid, nd in self._nodes.items() if nd["visible"]]
 
@@ -349,7 +304,7 @@ class LiveMonitorWindow(QDialog):
         self._repopulate()
 
     def _make_chart(
-        self, ch: Ch, node_ids: list[str], show_x: bool
+        self, ch: ChannelSpec, node_ids: list[str], show_x: bool
     ) -> tuple[QChart, QValueAxis, QValueAxis, dict[str, QLabel], QLineSeries, QWidget]:
         """创建单个通道的 QChart，包含 y=0 灰色虚线基准、各节点误差曲线和当前值面板。"""
         # 每个通道独立坐标轴，避免不同单位的误差互相压缩显示范围。
@@ -452,7 +407,7 @@ class LiveMonitorWindow(QDialog):
         for node in snap.nodes:
             if node.node_id not in self._nodes:
                 # 新节点按发现顺序取色，保证窗口生命周期内颜色稳定。
-                color = _PALETTE[len(self._nodes) % len(_PALETTE)]
+                color = CHART_PALETTE[len(self._nodes) % len(CHART_PALETTE)]
                 self._nodes[node.node_id] = {
                     "color": color, "visible": True, "cb": None,
                 }
@@ -470,7 +425,7 @@ class LiveMonitorWindow(QDialog):
         self._last_t = t
 
         for node in snap.nodes:
-            for ch in CHANNELS:
+            for ch in CONTROL_ERROR_CHANNELS:
                 v = ch.act(node)
                 if v is not None:
                     # 不论 visible，所有节点均持续写入缓冲区。
@@ -503,7 +458,7 @@ class LiveMonitorWindow(QDialog):
             x_ax.setRange(t_min, t + 2.0)
             # 0 基准线随 X 轴窗口移动，始终覆盖整个可见区间。
             zero_s.replace([QPointF(t_min, 0.0), QPointF(t + 2.0, 0.0)])
-            _apply_y_range(y_ax, all_y)
+            apply_y_range(y_ax, all_y)
 
     # ── 工具 ──────────────────────────────────────────────────────────────────
 
@@ -522,7 +477,7 @@ class LiveMonitorWindow(QDialog):
             if self._last_t >= 0:
                 x_ax.setRange(t_min, t_max)
                 zero_s.replace([QPointF(t_min, 0.0), QPointF(t_max, 0.0)])
-            _apply_y_range(y_ax, all_y)
+            apply_y_range(y_ax, all_y)
 
     def _set_win(self, s: float) -> None:
         """更新滚动时间窗口宽度（秒）。"""
@@ -535,27 +490,3 @@ class LiveMonitorWindow(QDialog):
         """关闭前停止轮询定时器。"""
         self._timer.stop()
         super().closeEvent(event)
-
-
-def _apply_y_range(y_ax: QValueAxis, all_y: list[float]) -> None:
-    """用 5%~95% 百分位设置 Y 轴范围，始终包含 0，避免离群大值撑开坐标轴。"""
-    if not all_y:
-        y_ax.setRange(-1.0, 1.0)
-        return
-    # 百分位截断防止单个尖峰把主要误差趋势压成一条线。
-    lo = min(_percentile(all_y, 5), 0.0)   # 5% 百分位，始终包含 0
-    hi = max(_percentile(all_y, 95), 0.0)  # 95% 百分位，始终包含 0
-    margin = max((hi - lo) * 0.15, 0.5)
-    y_ax.setRange(lo - margin, hi + margin)
-
-
-def _percentile(data: list[float], p: float) -> float:
-    """线性插值百分位数，p 取值 0~100。"""
-    # 数据点较少时仍使用线性插值，保持坐标轴变化平滑。
-    s = sorted(data)
-    idx = (len(s) - 1) * p / 100.0
-    lo = int(idx)
-    hi = lo + 1
-    if hi >= len(s):
-        return s[lo]
-    return s[lo] + (idx - lo) * (s[hi] - s[lo])
