@@ -1,4 +1,2 @@
-PySide6==6.11.1
-PySide6-Addons==6.11.1
-numpy==2.3.4
-pyinstaller>=6.0
+# 兼容旧安装命令；依赖版本与分组统一维护在 pyproject.toml。
+.[build]

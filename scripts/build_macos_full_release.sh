@@ -32,7 +32,7 @@ model_assets_dir="$project_root/src/ui/gui/situation3d/qml/assets"
 export PYINSTALLER_CONFIG_DIR="$project_root/build/pyinstaller-cache-macos"
 
 "$python_bin" -m pip install --upgrade pip
-"$python_bin" -m pip install -r requirements-gui.txt
+"$python_bin" -m pip install "$project_root[build]"
 pyside_root="$("$python_bin" -c 'from pathlib import Path; import PySide6; print(Path(PySide6.__file__).resolve().parent)')"
 rm -rf "$release_app_dir"
 

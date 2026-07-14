@@ -12,7 +12,7 @@ $LiteHook = Join-Path $ProjectRoot "scripts\pyinstaller_hooks\set_lite_feature_p
 $AppIconPath = Join-Path $ProjectRoot "src\ui\gui\assets\app_icon.ico"
 
 & $Python -m pip install --upgrade pip
-& $Python -m pip install -r requirements-gui.txt
+& $Python -m pip install ".[build]"
 Remove-Item -LiteralPath $DevSupportDir -Recurse -Force -ErrorAction SilentlyContinue
 
 & $Python -m PyInstaller `

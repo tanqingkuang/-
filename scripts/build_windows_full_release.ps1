@@ -14,7 +14,7 @@ $AppIconPath = Join-Path $ProjectRoot "src\ui\gui\assets\app_icon.ico"
 $AircraftModelSourceDir = Join-Path $ProjectRoot "src\ui\gui\situation3d\qml\assets"
 
 & $Python -m pip install --upgrade pip
-& $Python -m pip install -r requirements-gui.txt
+& $Python -m pip install ".[build]"
 Remove-Item -LiteralPath $DevSupportDir -Recurse -Force -ErrorAction SilentlyContinue
 $PySideRoot = @(& $Python -c "from pathlib import Path; import PySide6; print(Path(PySide6.__file__).resolve().parent)")[-1].Trim()
 $AssetImportersDir = Join-Path $PySideRoot "plugins\assetimporters"

@@ -31,7 +31,7 @@ runtime_hook="$project_root/scripts/pyinstaller_hooks/set_lite_feature_profile.p
 export PYINSTALLER_CONFIG_DIR="$project_root/build/pyinstaller-cache-macos"
 
 "$python_bin" -m pip install --upgrade pip
-"$python_bin" -m pip install -r requirements-gui.txt
+"$python_bin" -m pip install "$project_root[build]"
 rm -rf "$release_app_dir"
 
 "$python_bin" -m PyInstaller \
