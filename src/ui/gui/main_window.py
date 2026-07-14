@@ -47,7 +47,7 @@ from src.ui.gui.side_view import SideView
 from src.ui.gui.side_view_control_view_model import SideViewControlViewModel
 from src.ui.gui.sim_control_view_model import SimControlViewModel
 from src.ui.gui.simulation_adapter import ControllerSimulationAdapter, MockSimulation
-from src.ui.gui.theme_widgets import THEMES, SelectButton, Theme
+from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, THEMES, SelectButton, Theme
 from src.ui.gui.top_view import TopView
 from src.ui.gui.trail_view_model import TrailViewModel
 from src.ui.gui.view_models import (
@@ -121,7 +121,7 @@ class MainWindow(
         self.trail_vm = TrailViewModel()
         # GUI 可选功能按运行档位选择具体实现，裁剪逻辑不散落在主窗口流程里。
         self.features = build_gui_feature_registry()
-        self.theme_key = "light"
+        self.theme_key = DEFAULT_THEME_KEY
         self.theme = THEMES[self.theme_key]
         # 100ms 定时器驱动运行期界面刷新（约 10 FPS）。
         self.timer = QTimer(self)

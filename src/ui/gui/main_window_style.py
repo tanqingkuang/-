@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QFrame, QWidget
 
 
@@ -10,6 +12,9 @@ class MainWindowStyleMixin:
 
     def _apply_theme(self) -> None:
         """应用 theme 设置。注意：只修改对应显示或运行参数。"""
+        # Qt 的平台配色请求会同步 Windows 原生标题栏，避免深色客户区上方仍保留亮白标题栏。
+        color_scheme = Qt.ColorScheme.Dark if self.theme_key == "dark" else Qt.ColorScheme.Light
+        QGuiApplication.styleHints().setColorScheme(color_scheme)
         # 由当前主题派生若干交互态颜色（悬停/按下/选中），统一注入 Qt 样式表。
         theme = self.theme
         button_hover = theme.line.lighter(108)
