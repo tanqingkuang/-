@@ -320,10 +320,11 @@ class MainWindowLayoutMixin:
 
         # 创建俯视图与侧视图；侧视图独立维护高度轴和横向投影轴。
         self.top_view = TopView()
-        self.side_view = SideView(self.top_view)
-        # 信号联动：俯视图手动操作 -> 关闭自动居中；重置 -> 侧视图也恢复默认显示范围。
+        self.side_view = SideView()
+        # 两个画布各自报告手动操作，主窗口统一关闭自动居中。
         self.top_view.viewChanged.connect(self.side_view.update)
         self.top_view.manualViewChanged.connect(self._disable_auto_center)
+        self.side_view.manualViewChanged.connect(self._disable_auto_center)
         self.top_view.resetViewRequested.connect(self.side_view.reset_view)
         self.top_view.pointClicked.connect(self._on_top_view_point_clicked)
         # 俯视图/侧视图之间用细分隔线承载拖动调整，不额外占用明显空间。

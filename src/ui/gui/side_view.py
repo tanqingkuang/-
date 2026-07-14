@@ -4,27 +4,33 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from src.ui.gui.theme_widgets import THEMES, Theme
-from src.ui.gui.top_view import TopView
 from src.ui.gui.trail_path_cache import TrailPathCache
 from src.ui.gui.view_models import (
-    FIT_VIEWPORT_RATIO,
     VIEW_MAX_SCALE,
     VIEW_MIN_SCALE,
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
+    centroid_of_active_nodes,
     is_major_grid_line,
     is_leader_node,
     reference_route_points,
 )
 
+# 侧视区比俯视区更扁，略收紧留白可避免有效横向范围被过度压缩。
+SIDE_VIEW_FIT_RATIO = 0.86
+
+
 class SideView(QWidget):
     """高度侧视图。注意：横轴可按当前航段里程或用户视角投影显示。"""
+
+    # 视图只报告发生了手动操作，由组合它的主窗口决定如何联动其他控件。
+    manualViewChanged = Signal()
 
     # 侧视图横向范围独立于 TopView 的像素变换，但语义上跟随同一世界坐标系。
     # 高度轴由本类单独维护，避免俯视图缩放时压缩或拉伸高度读数。
@@ -37,10 +43,9 @@ class SideView(QWidget):
     PLOT_VERTICAL_MARGINS = 52.0
     ALTITUDE_GRID_SPACING = 40
 
-    def __init__(self, top_view: TopView, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         """初始化 SideView 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         super().__init__(parent)
-        self.top_view = top_view
         self.snapshot: Snapshot | None = None
         self.theme = THEMES["light"]
         self.show_grid = True
@@ -154,7 +159,7 @@ class SideView(QWidget):
             # 自动居中开启时，滚轮只调整横轴缩放，水平和高度中心仍由自动居中维护。
             self._apply_auto_center()
         else:
-            self.top_view.manualViewChanged.emit()
+            self.manualViewChanged.emit()
         self.update()
         event.accept()
 
@@ -179,7 +184,7 @@ class SideView(QWidget):
             self._manual_horizontal_view = True
             self._pan_origin = event.position()
             self.update()
-            self.top_view.manualViewChanged.emit()
+            self.manualViewChanged.emit()
             event.accept()
         elif self._selection_origin is not None:
             self._selection_current = event.position()
@@ -216,14 +221,13 @@ class SideView(QWidget):
         """应用自动居中。注意：只平移横轴和高度轴，不改变缩放或高度跨度。"""
         if self.snapshot is None or not self.snapshot.nodes:
             return
-        # 与俯视图一致：优先以正常节点质心为中心，全部异常时退回全部节点。
-        active = [node for node in self.snapshot.nodes if node.health == "normal"]
-        if not active:
-            active = self.snapshot.nodes
-        center_x = sum(self._horizontal_for_point(node.x, node.y) for node in active) / len(active)
+        centroid = centroid_of_active_nodes(self.snapshot.nodes)
+        if centroid is None:
+            return
+        center_east, center_north, center_altitude = centroid
+        center_x = self._horizontal_for_point(center_east, center_north)
         self.horizontal_offset = self.width() / 2.0 - center_x * self.horizontal_scale
         altitude_span = max(1.0, self.altitude_max - self.altitude_min)
-        center_altitude = sum(node.altitude for node in active) / len(active)
         self.altitude_min = center_altitude - altitude_span / 2.0
         self.altitude_max = center_altitude + altitude_span / 2.0
 
@@ -290,7 +294,7 @@ class SideView(QWidget):
             self.update()
             return
         self.update()
-        self.top_view.manualViewChanged.emit()
+        self.manualViewChanged.emit()
 
     def _draw_selection(self, painter: QPainter) -> None:
         """绘制 selection 画面元素。注意：只做渲染，不修改仿真状态。"""
@@ -608,13 +612,17 @@ class SideView(QWidget):
             right += 50.0
         span = max(1.0, right - left)
         width = max(1.0, float(self.width()))
-        self.horizontal_scale = min(VIEW_MAX_SCALE, max(VIEW_MIN_SCALE, width / span * 0.86))
+        # 侧视区高度较小，采用比俯视图更紧的留白比例以保留横向可读宽度。
+        self.horizontal_scale = min(
+            VIEW_MAX_SCALE,
+            max(VIEW_MIN_SCALE, width / span * SIDE_VIEW_FIT_RATIO),
+        )
         center = (left + right) / 2.0
         self.horizontal_offset = width / 2.0 - center * self.horizontal_scale
 
     def _fit_altitude_view(self) -> None:
         """自适应侧视图高度范围。注意：不改变横轴缩放和平移。"""
-        # 高度自适应用 0.86 留白，节点、参考线和标签都不会贴边。
+        # 横轴和高度轴使用同一侧视比例，重置后画面边距保持一致。
         # 单一高度扩展成 100 米窗口，保证静态初始状态也有纵向尺度。
         bounds = self._altitude_bounds()
         if bounds is None:
@@ -625,7 +633,7 @@ class SideView(QWidget):
         if math.isclose(bottom, top, abs_tol=1e-6):
             bottom -= 50.0
             top += 50.0
-        span = max(80.0, (top - bottom) / 0.86)
+        span = max(80.0, (top - bottom) / SIDE_VIEW_FIT_RATIO)
         center = (bottom + top) / 2.0
         self.altitude_min = center - span / 2.0
         self.altitude_max = center + span / 2.0

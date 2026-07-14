@@ -175,6 +175,21 @@ class NodeState:
     rally_phase: str = ""   # 集结阶段，如 JOINING/FLYING、CATCHUP、HOLD
 
 
+def centroid_of_active_nodes(nodes: Sequence[NodeState]) -> tuple[float, float, float] | None:
+    """返回健康节点优先的东、北、高度质心；全部异常时回退全体节点。"""
+
+    if not nodes:
+        return None
+    # 自动居中优先跟随仍健康的编队；全体异常时仍需保持场景可见。
+    active_nodes = [node for node in nodes if node.health == "normal"] or list(nodes)
+    count = len(active_nodes)
+    return (
+        sum(node.x for node in active_nodes) / count,
+        sum(node.y for node in active_nodes) / count,
+        sum(node.altitude for node in active_nodes) / count,
+    )
+
+
 @dataclass
 class LinkState:
     """单条通信链路的显示状态。注意：loss 为 0 到 1 的比例。"""

@@ -1190,6 +1190,20 @@ class GuiViewInteractionTests(unittest.TestCase):
             delta=0.01,
         )
 
+    def test_side_view_owns_manual_view_signal_and_main_window_bridges_it(self) -> None:
+        """侧视图手动操作信号由自身声明，主窗口负责关闭自动居中。"""
+
+        self.window.auto_center.setChecked(True)
+        self.app.processEvents()
+
+        self.assertFalse(hasattr(self.window.side_view, "top_view"))
+        self.window.side_view.manualViewChanged.emit()
+        self.app.processEvents()
+
+        self.assertFalse(self.window.auto_center.isChecked())
+        self.assertFalse(self.window.top_view.auto_center)
+        self.assertFalse(self.window.side_view.auto_center)
+
     def test_auto_center_survives_top_view_selection_zoom(self) -> None:
         self._load_ui_config()
         self.window.auto_center.setChecked(True)

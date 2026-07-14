@@ -355,8 +355,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
     def test_侧视图大量尾迹只批量绘制路径(self) -> None:
         """侧视尾迹不得再映射并逐段 drawLine。"""
 
-        top_view = TopView()
-        view = SideView(top_view)
+        view = SideView()
         view.resize(900, 260)
         view.trail_seconds = 1000.0
         points = [TrailPoint(point.x, point.y, point.altitude, point.time, point.path_distance) for point in _生成测试点(6000)]
@@ -395,8 +394,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
     def test_侧视当前机位只追加队列外实时端点段(self) -> None:
         """侧视实时段使用投影距离和当前高度，同时保持历史缓存与队列不变。"""
 
-        top_view = TopView()
-        view = SideView(top_view)
+        view = SideView()
         view.resize(900, 260)
         view.segment_locked = False
         view.view_angle_deg = 0.0
@@ -446,8 +444,7 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
     def test_侧视单点尾迹可连实时端点且空队列或投影重合时不画(self) -> None:
         """侧视图允许单点队尾连当前高度，但投影端点重合或无尾迹时跳过。"""
 
-        top_view = TopView()
-        view = SideView(top_view)
+        view = SideView()
         view.resize(900, 260)
         view.segment_locked = False
         view.view_angle_deg = 0.0

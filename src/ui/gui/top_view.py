@@ -22,6 +22,7 @@ from src.ui.gui.view_models import (
     ReferenceRoute,
     Snapshot,
     adaptive_world_grid_spacing,
+    centroid_of_active_nodes,
     is_major_grid_line,
     is_leader_node,
     reference_route_points,
@@ -427,12 +428,10 @@ class TopView(QGraphicsView):
         """应用 auto center 设置。注意：只修改对应显示或运行参数。"""
         if not self.snapshot or not self.snapshot.nodes:
             return
-        # 优先以正常节点的质心为中心；全部异常时退回所有节点。
-        active = [node for node in self.snapshot.nodes if node.health == "normal"]
-        if not active:
-            active = self.snapshot.nodes
-        center_x = sum(node.x for node in active) / len(active)
-        center_y = sum(node.y for node in active) / len(active)
+        centroid = centroid_of_active_nodes(self.snapshot.nodes)
+        if centroid is None:
+            return
+        center_x, center_y, _ = centroid
         rect = self.viewport().rect()
         # 只平移不缩放：把质心移到视口正中。
         self.offset = QPointF(
