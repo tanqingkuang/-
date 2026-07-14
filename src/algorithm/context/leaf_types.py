@@ -279,9 +279,9 @@ class FollowerStateS:
     arrived: int = 0  # 兼容旧协议；新协议以 rally_state == EXITED 为准
     valid: bool = False  # 本帧数据是否有效（收到最新报文则置 True）
     lastUpdate_s: float = 0.0  # 最近一次收到该机报文的仿真时间戳，秒
-    eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）；LOITERING/EXITED 时为当前时刻
+    plannedPathLength_m: float = -1.0  # 本次集结不含额外整圈的基础水平航程；负值表示尚未规划
     rally_state: str = "STANDBY"  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
-    reachedSlotOnce: bool = False  # 是否已至少一次路过松散点 M_i（LOITERING 但尚未路过时仍应计入 T_ref 聚合）
+    reachedSlotOnce: bool = False  # 是否已至少一次路过松散点 M_i，保留为汇合过程诊断量
 
 
 @dataclass
@@ -317,7 +317,7 @@ def copy_follower_state(src: FollowerStateS, dst: FollowerStateS) -> None:
     dst.arrived = src.arrived
     dst.valid = src.valid
     dst.lastUpdate_s = src.lastUpdate_s
-    dst.eta_s = src.eta_s
+    dst.plannedPathLength_m = src.plannedPathLength_m
     dst.rally_state = src.rally_state
     dst.reachedSlotOnce = src.reachedSlotOnce
 

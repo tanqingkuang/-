@@ -3,8 +3,8 @@
 每架飞机独立运行此模块，无长机/僚机之分。
 四个阶段：
   STANDBY   — 在本机当前位置按当前航向反推本地待命圆，沿圆盘旋等待外部开始集结指令
-  FLYING    — 开始集结时锁存待命圆到集结圆的 CCW 公切线；先沿待命圆飞到切出窗口，再沿公切线
-               直飞集结圆切入点 T，到达 T 附近后顺势转入圆弧飞行并广播 ETA
+  FLYING    — 开始集结时锁存待命圆到集结圆的 CCW 公切线和基础航程；先沿待命圆飞到切出窗口，
+               再沿公切线直飞集结圆切入点 T，并随阶段推进更新到下一次 M_i 的剩余航程
   LOITERING — 沿盘旋圆做 CCW 圆弧飞行；每次路过松散点 M_i（圆上固定的切出点）时评估是否切出
   EXITED    — 从松散点沿任务航向直飞，交由编队控制接管
 
@@ -13,7 +13,7 @@
 切出瞬间的指令不会因为到达方向不同而发生跳变（这也是为什么切入点 T 要专门算一条切线，
 而不是像旧版那样直飞 M_i 再原地盘旋：直飞 M_i 时的到达航向是任意的，会让盘旋圆摆歪）。
 圆半径固定（loiter_radius_m），通过调整盘旋速度改变盘旋周期以匹配 T_ref；
-如果本机恰好是"最后到达"的一架，绕圆弧第一次路过 M_i 时就会满足切出条件，不需要先转一整圈。
+固定计划为零圈时，飞机完成远区布防并第一次真实越过 M_i 后即可切出，不再依赖时间阈值。
 
 LOITERING 阶段的位置指令是"期望半径圆上、飞机当前角度处的投影点"（不是圆心），向心加速度前馈也用
 期望半径而非实时半径——这样飞机的实际盘旋半径才会收敛到 loiter_radius_m 本身；若指令目标点是圆心，
@@ -42,7 +42,7 @@ RALLY_STATE_EXITED = "EXITED"
 RALLY_STATE_STANDBY = "STANDBY"
 
 _EPSILON_HORIZ = 0.5  # 水平近零距离阈值，米
-_SLOT_ANG_NEAR = 0.35  # ≈20°：判定"经过 M_i"的角度窗口（不依赖轨道半径）
+_SLOT_ANG_NEAR = 0.35  # ≈20°：确认已进入 M_i 点前近区的角度窗口（不依赖轨道半径）
 _SLOT_ANG_AWAY = 1.05  # ≈60°：判定"已远离 M_i"的角度阈值
 # 切入圆弧（FLYING→LOITERING）触发半径 d 与航向跳变角 ψ 的几何关系是 ψ = atan(d/R)（R=loiter_radius_m，
 # 见 _compute_arc_capture_radius_m 推导），所以固定距离上限只对某一个 R 好使——R 越小，同样的 d 换算出的
@@ -140,14 +140,15 @@ class RallyJoinPosInputS(PosCalcInputS):
     """RallyJoinPos 输入端口。"""
 
     # 继承 selfState: MotionProfS
-    t_ref: float = 0.0  # 集结基准时刻（长机广播的最晚 ETA）
+    t_ref: float = 0.0  # 集结基准时刻（长机广播的全队最早公共可达时刻）
     t_ref_valid: bool = False  # False 时只允许进入/保持盘旋，不允许切出
+    assigned_loops: int = 0  # 固定计划分配给本机的整数绕圈数（Task 5 消费，本任务仅接线）
     t_now: float = 0.0  # 当前仿真时间
     standby: bool = False  # True 表示本拍保持本地待命盘旋，不进入集结圆汇合
 
 
 class RallyJoinPos(PosCalcBase):
-    """集结汇合位置解算器。注意：state 和 eta_s 属性供外部读取后广播。"""
+    """集结汇合位置解算器，提供锁存的基础航程及其当前剩余值。"""
 
     def init(self, cfg: RallyJoinPosInitS) -> None:
         """按配置初始化 RallyJoinPos。"""
@@ -193,7 +194,11 @@ class RallyJoinPos(PosCalcBase):
         self._theta_slot = math.atan2(d_n, d_e)  # M_i 在盘旋圆上的角度（弧度），固定不变
 
         self._state: str = RALLY_STATE_FLYING
-        self._eta_s: float = 0.0
+        self._planned_path_length_m: float = -1.0
+        self._remaining_path_length_m: float = -1.0
+        self._plan_applied: bool = False
+        self._assigned_loops: int = 0
+        self._remaining_loops: int = 0
         self._loiter_speed: float = cfg.approach_speed_mps
         self._standby_speed: float = cfg.approach_speed_mps
         self._standby_center_e: float | None = None
@@ -207,9 +212,12 @@ class RallyJoinPos(PosCalcBase):
         # 剩余角用于识别离散步进是否跨过 0° 切点，防止漏过窗口后多绕一圈。
         self._last_local_remaining_angle: float | None = None
         self._away_from_slot: bool = False  # 盘旋后是否已远离松散点（防止立即切出）
+        # 点前近窗只负责 armed，上一拍有向剩余角负责确认下一拍是否真正回绕。
+        self._last_slot_remaining_angle: float | None = None
+        self._slot_near_window_armed: bool = False
         self._entry_point: PosInEarthS | None = None  # 集结圆切入点 T；开始集结时一次性规划并锁存
-        self._theta_entry: float = 0.0  # 切入点在盘旋圆上的角度，供 ETA 弧长估算
-        self._reached_slot_once: bool = False  # 是否已至少一次路过 M_i；供 T_ref 聚合判断本机是否仍需被等待
+        self._theta_entry: float = 0.0  # 切入点在盘旋圆上的角度，供基础航程计算
+        self._reached_slot_once: bool = False  # 是否已至少一次路过 M_i，保留为汇合过程诊断量
 
     @property
     def state(self) -> str:
@@ -217,43 +225,70 @@ class RallyJoinPos(PosCalcBase):
         return self._state
 
     @property
-    def eta_s(self) -> float:
-        """返回当前预计到达松散点的仿真时刻。"""
-        return self._eta_s
+    def planned_path_length_m(self) -> float:
+        """返回开始集结时锁存的不含额外整圈的基础水平航程。"""
+        return self._planned_path_length_m
+
+    @property
+    def remaining_path_length_m(self) -> float:
+        """返回沿锁存路线到下一次 M_i 的水平剩余航程。"""
+        return self._remaining_path_length_m
+
+    @property
+    def remaining_loops(self) -> int:
+        """返回固定计划尚未消耗的整圈数量。"""
+        return self._remaining_loops
 
     @property
     def reached_slot_once(self) -> bool:
-        """返回是否已至少一次路过松散点 M_i。
-
-        注意：切入点 T 到 M_i 之间可能还有很长一段弧要飞（见 FLYING/LOITERING 说明），从 FLYING 切到
-        LOITERING 不代表已经"到过" M_i——T_ref 聚合（Rally 任务）需要这个更精确的信号来判断本机是否
-        仍应计入基准时间：还没路过 M_i 一次时应计入（避免被过早剔除导致 T_ref 提前塌缩），已经路过至少
-        一次后应排除（避免盘旋等待时每圈波动的 eta_s 反复推高 T_ref）。
-        """
+        """返回是否已至少一次路过松散点 M_i，供汇合过程诊断。"""
         return self._reached_slot_once
 
     def step(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
         """推进 RallyJoinPos 一个处理周期。"""
         if u.selfState is None or y.selfCmd is None:
             raise ValueError("RallyJoinPos ports must be bound")
+        # 实体会在固定计划生效后每拍重复发送同一圈数；这里只接受首个有效值，
+        # 避免飞机已经消耗的圈数被后续重复报文恢复。
+        if u.t_ref_valid and not self._plan_applied:
+            # 首次锁存必须先完成全部值域校验，任何失败都不能留下半套计划状态。
+            if not math.isfinite(u.t_ref) or not math.isfinite(u.t_now):
+                raise ValueError("首次有效计划的 t_ref 和 t_now 必须为有限数")
+            # bool 是 int 的子类，必须单独排除；浮点圈数不得通过转换静默截断。
+            if (
+                not isinstance(u.assigned_loops, int)
+                or isinstance(u.assigned_loops, bool)
+                or u.assigned_loops < 0
+            ):
+                raise ValueError("assigned_loops 必须为非 bool 的非负整数")
+            self._assigned_loops = u.assigned_loops
+            self._remaining_loops = self._assigned_loops
+            self._plan_applied = True
         if u.standby:
             if self._state != RALLY_STATE_STANDBY:
                 self._enter_standby(u)
             self._step_standby(u, y)
-            return
-        if self._state == RALLY_STATE_STANDBY:
-            self._leave_standby(u)
-        if self._state == RALLY_STATE_FLYING:
-            self._step_flying(u, y)
-        elif self._state == RALLY_STATE_LOITERING:
-            self._step_loitering(u, y)
         else:
-            self._step_exited(u, y)
+            if self._state == RALLY_STATE_STANDBY:
+                self._leave_standby(u)
+            if self._state == RALLY_STATE_FLYING:
+                self._step_flying(u, y)
+            elif self._state == RALLY_STATE_LOITERING:
+                self._step_loitering(u, y)
+            else:
+                self._step_exited(u, y)
+        # 指令阶段可能在本拍切换；已有锁存规划时统一在阶段推进后读取当前路线。
+        if self._planned_path_length_m >= 0.0:
+            self._remaining_path_length_m = self._remaining_base_path_m(u.selfState.pos)
 
     def reset(self) -> None:
         """复位 RallyJoinPos 的动态状态。注意：盘旋圆几何（圆心/切出点）由 init 时的任务航向定死，reset 不清除。"""
         self._state = RALLY_STATE_FLYING
-        self._eta_s = 0.0
+        self._planned_path_length_m = -1.0
+        self._remaining_path_length_m = -1.0
+        self._plan_applied = False
+        self._assigned_loops = 0
+        self._remaining_loops = 0
         self._loiter_speed = self._approach_speed
         self._standby_speed = self._approach_speed
         self._standby_center_e = None
@@ -265,6 +300,9 @@ class RallyJoinPos(PosCalcBase):
         self._tangent_length_m = 0.0
         self._last_local_remaining_angle = None
         self._away_from_slot = False
+        # 过点检测跨拍保存状态，复位时必须和圈数计划一起清空。
+        self._last_slot_remaining_angle = None
+        self._slot_near_window_armed = False
         self._entry_point = None
         self._theta_entry = 0.0
         self._reached_slot_once = False
@@ -289,13 +327,17 @@ class RallyJoinPos(PosCalcBase):
         else:
             standby_speed = self._approach_speed
         self._standby_speed = clamp(standby_speed, self._speed_min, self._speed_max)
-        self._eta_s = 0.0
+        self._planned_path_length_m = -1.0
+        self._remaining_path_length_m = -1.0
         self._transit_phase = None
         self._local_exit_point = None
         self._theta_local_exit = 0.0
         self._tangent_length_m = 0.0
         self._last_local_remaining_angle = None
         self._away_from_slot = False
+        # 新待命圆不继承上一轮集结圆的近窗布防状态。
+        self._last_slot_remaining_angle = None
+        self._slot_near_window_armed = False
         self._entry_point = None
         self._theta_entry = 0.0
         self._reached_slot_once = False
@@ -305,9 +347,13 @@ class RallyJoinPos(PosCalcBase):
         """离开本地待命并按本拍位置一次性规划两圆转移路径。"""
         assert self._standby_center_e is not None and self._standby_center_n is not None
         self._state = RALLY_STATE_FLYING
-        self._eta_s = 0.0
+        self._planned_path_length_m = -1.0
+        self._remaining_path_length_m = -1.0
         self._loiter_speed = self._approach_speed
         self._away_from_slot = False
+        # 离开待命重新规划几何时，从未进入集结圆的状态开始记录有向角。
+        self._last_slot_remaining_angle = None
+        self._slot_near_window_armed = False
         self._entry_point = None
         self._theta_entry = 0.0
         self._reached_slot_once = False
@@ -322,10 +368,13 @@ class RallyJoinPos(PosCalcBase):
                 u.selfState.pos.north - self._loiter_center_n,
                 u.selfState.pos.east - self._loiter_center_e,
             )
-            remaining = (u.t_ref - u.t_now) if u.t_ref_valid else float("inf")
-            self._enter_arc(remaining)
+            # 重合圆没有转移线段，基础航程就是当前位置到松散点的集结圆弧。
+            self._planned_path_length_m = self._rally_arc_to_slot_m(self._theta_entry)
+            self._enter_arc()
             return
         self._transit_phase = self._plan_transit(u.selfState.pos)
+        # 规划已锁存，后续剩余航程只随当前位置推进，不随实时几何重算。
+        self._planned_path_length_m = self._remaining_base_path_m(u.selfState.pos)
 
     def _plan_transit(self, current_pos: PosInEarthS) -> str:
         """锁存待命圆到集结圆的 CCW 公切线；无解时退回当前点到集结圆切线。"""
@@ -354,7 +403,7 @@ class RallyJoinPos(PosCalcBase):
             self._entry_point = self._compute_entry_point(current_pos)
             return _TRANSIT_LINE_TO_RALLY_ENTRY
 
-        # 两端切点和角度必须一起锁存，控制、切换判据与 ETA 才能使用同一份几何。
+        # 两端切点和角度必须一起锁存，控制、切换判据与基础航程才能使用同一份几何。
         (local_e, local_n), (entry_e, entry_n) = tangent
         self._local_exit_point = PosInEarthS(east=local_e, north=local_n, h=self._slot.h)
         self._entry_point = PosInEarthS(east=entry_e, north=entry_n, h=self._slot.h)
@@ -382,7 +431,6 @@ class RallyJoinPos(PosCalcBase):
             speed=self._standby_speed,
             target_h=target_h,
         )
-        self._eta_s = 0.0
 
     def _write_ccw_circle_cmd(
         self,
@@ -428,13 +476,10 @@ class RallyJoinPos(PosCalcBase):
         d_horiz = math.sqrt(d_e * d_e + d_n * d_n)
         d_3d = math.sqrt(d_horiz * d_horiz + d_h * d_h)
 
-        speed = self._flying_speed_for_distance(d_horiz)
-
-        # ETA = 直飞 T 的时间 + 沿圆弧从 T 飞到 M_i 的时间（弧长按名义 approach_speed 估算，
-        # 盘旋阶段命中 T_ref 后会用实际调速的 loiter_speed 重新估算，这里只是首次进场的粗估）。
-        arc_angle = (self._theta_slot - self._theta_entry) % _TWO_PI
-        arc_len = self._loiter_radius * arc_angle
-        self._eta_s = u.t_now + d_3d / max(speed, 0.1) + arc_len / max(self._approach_speed, 0.1)
+        if self._plan_applied:
+            speed = self._coordinated_speed(u)
+        else:
+            speed = self._flying_speed_for_distance(d_horiz)
 
         y.selfCmd.pos.east = target.east
         y.selfCmd.pos.north = target.north
@@ -460,8 +505,7 @@ class RallyJoinPos(PosCalcBase):
         # 角度算）的偏差就越大——用 100m 默认 arrival_radius_m 实测过约 26° 的指令航向跳变；且 T 是
         # 静止点，不像旧版直飞 M_i 那样需要较大容差防止绕不拢，收紧没有副作用。
         if d_3d < min(self._arrival_radius_m, self._arc_capture_radius_m):
-            remaining = (u.t_ref - u.t_now) if u.t_ref_valid else float("inf")
-            self._enter_arc(remaining)
+            self._enter_arc()
             # 同一拍内顺势推进圆弧阶段：既让"起点恰好落在 M_i 上"的退化场景无延迟切出，
             # 也避免刚到 T 这一拍还输出已经过期的直飞指令。
             self._step_loitering(u, y)
@@ -491,25 +535,8 @@ class RallyJoinPos(PosCalcBase):
             y,
             center_e=self._standby_center_e,
             center_n=self._standby_center_n,
-            speed=self._standby_speed,
+            speed=self._coordinated_speed(u) if self._plan_applied else self._standby_speed,
             target_h=target_h,
-        )
-        self._update_arc_to_tangent_eta(u, remaining)
-
-    def _update_arc_to_tangent_eta(self, u: RallyJoinPosInputS, remaining_angle: float) -> None:
-        """估算待命圆剩余弧段、公切线和集结圆弧段的总到达时刻。"""
-        # 待命圆段按进入待命时锁存的实际巡航速度估算。
-        local_arc_len = self._loiter_radius * remaining_angle
-        # 直线段沿用 FLYING 的近场降速口径，避免 ETA 与实际控制速度定义分叉。
-        tangent_speed = self._flying_speed_for_distance(self._tangent_length_m)
-        # 集结圆段从锁存切入点沿 CCW 到 M_i，仍按 approach_speed 做首次粗估。
-        rally_arc_angle = (self._theta_slot - self._theta_entry) % _TWO_PI
-        rally_arc_len = self._loiter_radius * rally_arc_angle
-        self._eta_s = (
-            u.t_now
-            + local_arc_len / max(self._standby_speed, 0.1)
-            + self._tangent_length_m / max(tangent_speed, 0.1)
-            + rally_arc_len / max(self._approach_speed, 0.1)
         )
 
     def _flying_speed_for_distance(self, distance_m: float) -> float:
@@ -532,20 +559,58 @@ class RallyJoinPos(PosCalcBase):
         self._theta_entry = theta_t
         return PosInEarthS(east=t_e, north=t_n, h=self._slot.h)
 
-    def _enter_arc(self, remaining: float) -> None:
-        """从切入点顺势转入圆弧飞行（CCW）。注意：圆心/切出点已在 init 时定死，这里只切换状态和盘旋速度。"""
-        self._loiter_speed = self._adjusted_speed(remaining)
-        # ang_dist 是对称弧距，分不清"再飞一小段就到 M_i"和"刚绕过 M_i、实际还要飞近一整圈"——
-        # 只有切入点弧长（CCW，从 T 到 M_i 的真实剩余角度）本身就很小时，才说明确实快到了，
-        # 允许首次路过就评估切出（"最后到达"的飞机场景）；否则必须按标准流程先飞过"远离"窗口，
-        # 避免把"刚越过 M_i"误判成"已到达"，在没有真正沿圆弧飞完一圈的情况下就切出。
+    def _enter_arc(self) -> None:
+        """从切入点顺势转入圆弧飞行（CCW），未执行计划时沿用最低盘旋速度。"""
+        self._loiter_speed = self._speed_min
         entry_arc_angle = (self._theta_slot - self._theta_entry) % _TWO_PI
-        self._away_from_slot = entry_arc_angle < _SLOT_ANG_NEAR
-        self._reached_slot_once = self._away_from_slot  # 同一个"真实弧长很小"判据，切入点本来就快到 M_i
+        # 点前且位于 away 阈值内时，锁存切入几何已提供方向明确的跨零前态；近窗外只预置 away。
+        # 只有点前近窗或恰在 M_i 才预置 armed；点后近窗接近 2π，两项都保持 False。
+        entry_can_start_away = entry_arc_angle <= _SLOT_ANG_AWAY
+        entry_can_arm_crossing = entry_arc_angle < _SLOT_ANG_NEAR
+        self._away_from_slot = entry_can_start_away
+        self._last_slot_remaining_angle = entry_arc_angle if entry_can_start_away else None
+        self._slot_near_window_armed = entry_can_arm_crossing
+        self._reached_slot_once = False
         self._state = RALLY_STATE_LOITERING
 
+    def _rally_arc_to_slot_m(self, theta: float) -> float:
+        """返回集结圆上从指定角度逆时针飞到松散点的弧长。"""
+        return self._loiter_radius * ((self._theta_slot - theta) % _TWO_PI)
+
+    def _remaining_base_path_m(self, pos: PosInEarthS) -> float:
+        """按当前阶段返回锁存基础路线到下一次松散点的剩余水平航程。"""
+        if self._transit_phase == _TRANSIT_ARC_TO_TANGENT:
+            theta = math.atan2(pos.north - self._standby_center_n, pos.east - self._standby_center_e)
+            local_arc = self._loiter_radius * ((self._theta_local_exit - theta) % _TWO_PI)
+            return local_arc + self._tangent_length_m + self._rally_arc_to_slot_m(self._theta_entry)
+        if self._state == RALLY_STATE_FLYING and self._entry_point is not None:
+            line = math.hypot(self._entry_point.east - pos.east, self._entry_point.north - pos.north)
+            return line + self._rally_arc_to_slot_m(self._theta_entry)
+        if self._state == RALLY_STATE_LOITERING:
+            theta = math.atan2(pos.north - self._loiter_center_n, pos.east - self._loiter_center_e)
+            return self._rally_arc_to_slot_m(theta)
+        return 0.0
+
+    def _coordinated_speed(self, u: RallyJoinPosInputS) -> float:
+        """按完整剩余航程和固定计划剩余时间计算水平协调速度。"""
+        # 该函数会在计划生效后的每个 JOINING 子阶段调用，不能只依赖首次计划校验。
+        if not math.isfinite(u.t_ref) or not math.isfinite(u.t_now):
+            raise ValueError("协调调速的 t_ref 和 t_now 必须为有限数")
+        if not self._plan_applied:
+            return self._approach_speed
+        # 基础航程沿锁存几何实时递减，整圈部分只由真实经过 M_i 的事件消费；
+        # 两者相加后统一除以固定计划的剩余时间，三个子阶段不再各用一套速度口径。
+        circumference = _TWO_PI * self._loiter_radius
+        remaining_m = self._remaining_base_path_m(u.selfState.pos) + self._remaining_loops * circumference
+        remaining_s = u.t_ref - u.t_now
+        # 计划时刻已经到达或越过时直接采用上限，避免除零并尽快追赶固定计划。
+        # 此分支只处理有限时间的非正差值，NaN/Inf 已在函数入口拒绝。
+        if remaining_s <= 0.0:
+            return self._speed_max
+        return clamp(remaining_m / remaining_s, self._speed_min, self._speed_max)
+
     def _step_loitering(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
-        """在盘旋阶段更新到点时间、切出判定和圆周飞行指令。"""
+        """在盘旋阶段更新切出判定并生成圆周飞行指令。"""
         pos_e = u.selfState.pos.east
         pos_n = u.selfState.pos.north
 
@@ -554,39 +619,53 @@ class RallyJoinPos(PosCalcBase):
         d_n = pos_n - self._loiter_center_n
         theta = math.atan2(d_n, d_e)
 
-        # CCW 弧长至松散点（用实际半径让 ETA 更准确）
-        arc_angle = (self._theta_slot - theta) % _TWO_PI
-        if arc_angle < 1e-6:
-            arc_angle = _TWO_PI
-        actual_r = math.sqrt(d_e * d_e + d_n * d_n)
-        arc_len = max(actual_r, 1.0) * arc_angle
-        t_to_slot = arc_len / max(self._loiter_speed, 0.1)
-        self._eta_s = u.t_now + t_to_slot
-
-        # 角度判断"远离 / 经过 M_i"：不依赖实际轨道半径，轨道偏差也能可靠检测
-        ang_dist = min(arc_angle, _TWO_PI - arc_angle)  # 到 M_i 的最短弧（0 = 正在经过）
+        # 有向剩余角在点前趋近 0，越过 M_i 后回绕到接近 2π；实际轨道半径不参与判定。
+        slot_remaining_angle = (self._theta_slot - theta) % _TWO_PI
+        ang_dist = min(slot_remaining_angle, _TWO_PI - slot_remaining_angle)
+        # 远区布防阻止刚切入圆弧或带噪声落在 M_i 附近时被当作一次完整经过。
         if not self._away_from_slot and ang_dist > _SLOT_ANG_AWAY:
             self._away_from_slot = True
-        # 不依赖 t_ref_valid：只要几何上真正路过 M_i 附近就算数，供 T_ref 聚合判断本机是否仍需被等待。
-        # 必须同时要求 self._away_from_slot：ang_dist 是对称弧距，分不清"快到 M_i"（arc_angle 小）和
-        # "刚越过 M_i、其实还要绕近一整圈"（arc_angle 接近 2π，ang_dist 同样很小）——刚进弧那一拍如果
-        # entry_arc_angle 很大（_enter_arc 已正确把 away_from_slot/reached_slot_once 都设为 False），
-        # 这里若只看 ang_dist 会在同一拍内立刻把 reached_slot_once 错误地翻回 True，抵消 _enter_arc 的判断。
-        # away_from_slot 已经是"先远离过、再靠近"的正确判据（切出评估复用的就是它），一并复用即可。
-        if self._away_from_slot and ang_dist < _SLOT_ANG_NEAR:
+        # 只在点前有向剩余角进入近窗时 armed；点后虽有相同对称弧距，但不会反向 armed。
+        if self._away_from_slot and slot_remaining_angle < _SLOT_ANG_NEAR:
+            self._slot_near_window_armed = True
+        # 相邻拍按 CCW 前进时，有向剩余角递减；跨零后则从点前小角回绕到点后大角。
+        # 前一拍位于 away 阈值内即可确认跨点来源，不再强制先采到更窄的 near 窗。
+        previous_remaining = self._last_slot_remaining_angle
+        forward_progress = (
+            (previous_remaining - slot_remaining_angle) % _TWO_PI
+            if previous_remaining is not None
+            else 0.0
+        )
+        crossing_candidate = (
+            self._away_from_slot
+            and previous_remaining is not None
+            and previous_remaining <= _SLOT_ANG_AWAY
+            and previous_remaining < math.pi
+            and slot_remaining_angle > math.pi
+            and 0.0 < forward_progress <= math.pi
+        )
+        # 小于水平近零阈值的跨零位移按位置抖动处理，并保留点前样本等待后续真实推进。
+        crossed_slot = crossing_candidate and forward_progress * self._loiter_radius > _EPSILON_HORIZ
+        hold_previous_for_noise = crossing_candidate and not crossed_slot
+        if crossed_slot:
+            # reached、圈数消费和 EXITED 共用同一个真实越点事件，避免三套判据漂移。
             self._reached_slot_once = True
-
-        # 每次经过松散点时做切出评估
-        if self._away_from_slot and ang_dist < _SLOT_ANG_NEAR and u.t_ref_valid:
-            remaining = u.t_ref - u.t_now
-            if self._should_exit(remaining):
+            # 越点后同时撤销远区和近窗布防，下一圈必须重新完整经过两个门槛。
+            self._away_from_slot = False
+            self._slot_near_window_armed = False
+            if self._plan_applied and self._remaining_loops > 0:
+                self._remaining_loops -= 1
+            elif self._plan_applied:
                 self._state = RALLY_STATE_EXITED
-                self._eta_s = u.t_now
                 self._set_exit_cmd(u, y)
                 return
-            # 调整下一圈盘旋速度
-            self._loiter_speed = self._adjusted_speed(remaining)
-            self._away_from_slot = False  # 重置，等下次远离后再判断
+        # 消费后保存点后大角度，下一拍不会重复满足回绕；噪声候选则保留点前样本。
+        if not hold_previous_for_noise:
+            self._last_slot_remaining_angle = slot_remaining_angle
+
+        # 过点事件先更新圈数，再按回绕后的基础弧长计算速度，保证完整剩余航程跨点连续。
+        if self._plan_applied:
+            self._loiter_speed = self._coordinated_speed(u)
 
         # 复用待命阶段的圆上投影、切向速度与曲率前馈口径，避免两套 CCW 圆周公式漂移。
         self._write_ccw_circle_cmd(
@@ -600,7 +679,6 @@ class RallyJoinPos(PosCalcBase):
 
     def _step_exited(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
         """在已切出阶段持续输出沿任务航向飞行的过渡指令。"""
-        self._eta_s = u.t_now
         self._set_exit_cmd(u, y)
 
     def _set_exit_cmd(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
@@ -619,23 +697,6 @@ class RallyJoinPos(PosCalcBase):
         y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = 0.0
         y.selfCmd.v.vTheta = 0.0
-
-    def _should_exit(self, remaining: float) -> bool:
-        """经过松散点时：现在切出是否比再飞一圈更接近 T_ref。"""
-        t_loop_min = _TWO_PI * self._loiter_radius / self._speed_max
-        # 剩余时间小于最快半圈时，现在切出误差更小
-        return remaining < t_loop_min / 2.0
-
-    def _adjusted_speed(self, remaining: float) -> float:
-        """计算下一圈目标盘旋速度，使盘旋周期尽量等于 remaining。"""
-        t_loop_min = _TWO_PI * self._loiter_radius / self._speed_max
-        t_loop_max = _TWO_PI * self._loiter_radius / self._speed_min
-        if remaining <= 0.0 or remaining < t_loop_min:
-            return self._speed_max
-        if remaining > t_loop_max:
-            return self._speed_min
-        return _TWO_PI * self._loiter_radius / remaining
-
 
 def _ccw_entry_tangent(px: float, py: float, cx: float, cy: float, r: float) -> tuple[float, float, float] | None:
     """求外部点 (px,py) 到圆 (cx,cy,r) 上、能顺势接上 CCW 弧线的切点。

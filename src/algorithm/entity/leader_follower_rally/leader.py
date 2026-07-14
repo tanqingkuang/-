@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
@@ -25,7 +26,6 @@ from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
-    RALLY_STATE_FLYING,
     RallyJoinPos,
     RallyJoinPosInitS,
     RallyJoinPosInputS,
@@ -69,6 +69,7 @@ class RallyLeaderEntity(EntityBase):
         self._outbox: list = []
         self._effective_cmd = MotionProfS()
         self._rally_completed = False
+        self._self_id = cfg.selfInit.id
         self._expected_follower_ids: list[str] = list(rally_cfg.expectedFollowerIds)
         self._tight_radius_m: float = rally_cfg.tightRadius_m
         self._stale_timeout_s: float = rally_cfg.staleTimeout_s
@@ -88,7 +89,12 @@ class RallyLeaderEntity(EntityBase):
 
         # 单元初始化
         self._inbound.init(FollowerStatusInitS())
-        self._task.init(rally_cfg)
+        self._task.init(replace(
+            rally_cfg,
+            leaderId=cfg.selfInit.id,
+            loiter_speed_min_mps=loiter_min,
+            loiter_speed_max_mps=loiter_max,
+        ))
         v_up_min = cfg.velCmdLimit.verticalMin if math.isfinite(cfg.velCmdLimit.verticalMin) else -3.0
         v_up_max = cfg.velCmdLimit.verticalMax if math.isfinite(cfg.velCmdLimit.verticalMax) else 3.0
         self._rally_join.init(RallyJoinPosInitS(
@@ -157,17 +163,19 @@ class RallyLeaderEntity(EntityBase):
         self._inbound.step(self._inbound_u, self._inbound_y)
 
         # 将长机自身 RallyJoinPos 状态注入 Rally 任务
-        self._task_u.leader_eta_s = self._rally_join.eta_s
+        self._task_u.leader_path_length_m = self._rally_join.planned_path_length_m
         self._task_u.leader_join_exited = (self._rally_join.state == RALLY_STATE_EXITED)
-        self._task_u.leader_join_flying = (self._rally_join.state == RALLY_STATE_FLYING)
-        self._task_u.leader_join_reached_slot_once = self._rally_join.reached_slot_once
         self._task.step(self._task_u, self._task_y)
 
         # 同步 t_ref 到上下文（供广播）
         self.cxt.rally_t_ref = self._task_y.t_ref
         self.cxt.rally_t_ref_valid = self._task_y.t_ref_valid
+        self.cxt.rally_loop_counts.clear()
+        self.cxt.rally_loop_counts.update(self._task_y.loopCounts)
         self._outbound_u.t_ref = self.cxt.rally_t_ref
         self._outbound_u.t_ref_valid = self.cxt.rally_t_ref_valid
+        self._outbound_u.loop_counts = self._task_y.loopCounts
+        self._rally_join_u.assigned_loops = self._task_y.loopCounts.get(self._self_id, 0)
 
         stage = self.cxt.cmd.stage
         step = self.cxt.cmd.step
@@ -188,7 +196,7 @@ class RallyLeaderEntity(EntityBase):
 
         if stage == FormStageE.STANDBY or (stage == FormStageE.RALLY and step == RallyPhaseE.JOINING):
             # STANDBY/JOINING 都属于 RallyJoinPos 位置解算策略，只由 standby 输入切换内部状态。
-            # 待命没有全队 T_ref，显式压成无效，避免复用上一轮集结锁存值。
+            # 待命阶段没有全队固定计划，显式压成无效；新生命周期由 entity.reset() 隔离。
             self._rally_join_u.standby = stage == FormStageE.STANDBY
             self._rally_join_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
             self._rally_join_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid

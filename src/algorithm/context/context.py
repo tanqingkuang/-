@@ -31,8 +31,9 @@ class FormContextS:
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
     slotScale: RallySlotScaleS = field(default_factory=RallySlotScaleS)  # 槽位缩放因子(Rally写/SlotGeometry读)
     followerStates: list[FollowerStateS] = field(default_factory=list)  # 僚机集结状态(FollowerStatus写/Rally读)
-    rally_t_ref: float = 0.0  # 集结基准时刻：所有 FLYING 参与者中最晚 ETA（秒）
-    rally_t_ref_valid: bool = False  # 基准时刻是否已收齐参与者首个有效汇合状态
+    rally_t_ref: float = 0.0  # 固定公共到达时刻，仅用于 RallyJoinPos 全航程调速（秒）
+    rally_t_ref_valid: bool = False  # 是否已收齐全队基础航程并生成固定协调计划
+    rally_loop_counts: dict[str, int] = field(default_factory=dict)  # 固定计划的节点圈数映射（长机任务写/广播与僚机接线读）
 
 
 def reset_context(dst: FormContextS) -> None:
@@ -57,3 +58,4 @@ def reset_context(dst: FormContextS) -> None:
     dst.followerStates.clear()
     dst.rally_t_ref = 0.0
     dst.rally_t_ref_valid = False
+    dst.rally_loop_counts.clear()

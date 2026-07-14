@@ -1,10 +1,8 @@
-"""长机广播：唯一的出站实现，携带 slot_scale/t_ref 字段。注意：hold 场景写入 Context 默认集结字段
-（scale=1.0/scaleRate=0.0/t_ref_valid=False），接收端按默认值解析，对 hold 无影响；
-payload 格式需与 RallyLeaderFollower 解析约定一致。"""
+"""长机广播：发送槽位缩放与固定协调计划，载荷格式与僚机原子入站解析一致。"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import CommDirE, MotionProfS, RallySlotScaleS
 from src.algorithm.units.process.inbound.rally_leader_follower import LEADER_BROADCAST_TOPIC
@@ -39,8 +37,9 @@ class RallyLeaderBroadcastInputS(OutboundInputS):
     # 继承 cmd: FormSnapshotS, selfState: MotionProfS
     leaderCmd: MotionProfS | None = None  # 长机跟踪指令，供僚机建立槽位坐标系。
     slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale
-    t_ref: float = 0.0  # 集结基准时刻（Rally 任务计算，每帧注入）
-    t_ref_valid: bool = False  # 是否允许接收方使用 t_ref 执行切出判定
+    t_ref: float = 0.0  # 固定公共到达时刻，仅供各机全航程协调调速
+    t_ref_valid: bool = False  # 是否已生成可执行的固定协调计划
+    loop_counts: dict[str, int] = field(default_factory=dict)  # 决定各机跨 M_i 后继续盘旋的完整圈数
 
 
 class RallyLeaderBroadcast(OutboundBase):
@@ -60,9 +59,17 @@ class RallyLeaderBroadcast(OutboundBase):
         """推进 RallyLeaderBroadcast 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.cmd is None or u.selfState is None or u.slotScale is None:
             raise ValueError("RallyLeaderBroadcast input ports must be bound")
+        y.outbox.clear()  # 先清空，异常输入也不能遗留可发送消息
+        if any(
+            not isinstance(node_id, str)
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count < 0
+            for node_id, count in u.loop_counts.items()
+        ):
+            raise ValueError("RallyLeaderBroadcast loop_counts 必须由字符串节点 ID 映射到非负整数")
         leader_cmd = u.leaderCmd or u.selfState
         targets = self._targets()  # 据拓扑解析需要接收广播的跟随机
-        y.outbox.clear()  # 先清空，保证每帧只产出本帧消息
         if not targets:
             return  # 无接收者则不发消息
         y.outbox.append(
@@ -85,6 +92,7 @@ class RallyLeaderBroadcast(OutboundBase):
                     },
                     "t_ref": u.t_ref,
                     "t_ref_valid": u.t_ref_valid,
+                    "loop_counts": dict(u.loop_counts),
                 },
             )
         )
