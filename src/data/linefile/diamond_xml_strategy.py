@@ -14,6 +14,7 @@ DEFAULT_SPEED_MPS = 45.0
 OUTPUT_SKYWAY_NO = "25"
 OUTPUT_SKYPOINT_NO = "1"
 OUTPUT_LINE_NAME = "芜湖自动避障航线"
+OUTPUT_LINE_TYPE = "0"
 DEFAULT_WAYPOINT_TASK = "0010"
 
 _LAT_KEYS = ("latitude_deg", "lat_deg", "lat", "Latitude")
@@ -67,6 +68,7 @@ class DiamondXmlLineFileStrategy(LineFileStrategy):
         _add_text(header, "SkypointNo", OUTPUT_SKYPOINT_NO)
         _add_text(header, "IdAllNum", str(len(waypoints)))
         _add_text(header, "ByLineName", OUTPUT_LINE_NAME)
+        _add_text(header, "StLine_Type", OUTPUT_LINE_TYPE)
         ET.SubElement(header, "StLineExp")
         _add_text(header, "CreatTimer", _format_xml_timestamp(timestamp))
 

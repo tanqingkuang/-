@@ -138,6 +138,7 @@ class LineFileTests(unittest.TestCase):
         self.assertEqual(header.findtext("SkypointNo"), "1")
         self.assertEqual(header.findtext("IdAllNum"), "2")
         self.assertEqual(header.findtext("ByLineName"), "芜湖自动避障航线")
+        self.assertEqual(header.findtext("StLine_Type"), "0")
         self.assertEqual(header.findtext("CreatTimer"), "2025/9/11 20:32:49")
         self.assertEqual(xml_root.find("Item1").attrib["id"], "1")
         self.assertEqual(xml_root.findtext("Item1/Longitude"), "118.722553")
