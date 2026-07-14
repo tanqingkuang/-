@@ -482,7 +482,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertAlmostEqual(extent["max_north_m"] - extent["min_north_m"], 32000.0)
 
     def test_layout_reset_camera_matches_approved_oblique_composition(self) -> None:
-        """验证边界融合后重置视角聚焦任务区，同时保留近景斜俯方向。"""
+        """验证重置视角放大任务区、抬高焦点并采用更陡的斜俯方向。"""
 
         surface = {
             "x": 10500.0,
@@ -495,10 +495,11 @@ class Situation3DSceneDataTests(unittest.TestCase):
         camera = scene_data._layout_camera_payload(surface)
 
         self.assertAlmostEqual(camera["focusX"], surface["x"] - surface["width"] * 0.067)
+        self.assertAlmostEqual(camera["focusY"], 1000.0)
         self.assertAlmostEqual(camera["focusZ"], surface["z"] + surface["depth"] * 0.12)
-        self.assertAlmostEqual(camera["distance"], 32000.0 * 0.53)
-        self.assertAlmostEqual(camera["yaw"], -25.0)
-        self.assertAlmostEqual(camera["pitch"], -39.5)
+        self.assertAlmostEqual(camera["distance"], 32000.0 * 0.45)
+        self.assertAlmostEqual(camera["yaw"], -15.0)
+        self.assertAlmostEqual(camera["pitch"], -55.0)
 
     def test_terrain_heights_keep_metric_semantics(self) -> None:
         """验证高度场米制语义:空布局平坦、低峰不被抬高、风险峰中心贴近声明高度。"""
@@ -2225,7 +2226,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("vertexColorsEnabled: true", qml)
         self.assertNotIn("PrincipledMaterial.NoLighting", qml)
         self.assertNotIn("hillModel", qml)
-        self.assertIn("Math.min(50000", qml)
+        self.assertIn("Math.max(100, Math.min(50000, root.distance * factor))", qml)
         self.assertIn("data.trailRibbons", qml)
         self.assertIn("property real nearViewWidthScale", qml)
         self.assertIn("property real aircraftVisualScale", qml)

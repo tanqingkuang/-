@@ -1098,7 +1098,7 @@ Item {
         }
         onWheel: function(wheel) {
             const factor = wheel.angleDelta.y > 0 ? 0.88 : 1.14
-            root.distance = Math.max(220, Math.min(50000, root.distance * factor))
+            root.distance = Math.max(100, Math.min(50000, root.distance * factor))
             wheel.accepted = true
         }
     }
