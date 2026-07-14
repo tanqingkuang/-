@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from src.ui.gui.status_table_view_model import link_table_rows, node_table_rows, overall_table_row
-from src.ui.gui.view_models import LinkState, NodeState, WORLD_HEIGHT, WORLD_WIDTH
+from src.ui.gui.view_models import LinkState, NodeState
 
 
 class StatusTableViewModelTests(unittest.TestCase):
@@ -105,14 +105,14 @@ class StatusTableViewModelTests(unittest.TestCase):
 
         self.assertEqual(row, ["12", "346", "1200", "20", "-4"])
 
-    def test_overall_table_falls_back_when_route_metrics_are_none(self) -> None:
-        """侧偏和待飞距为 None 时按世界坐标兜底估算，地速只取水平速度。"""
+    def test_overall_table_marks_missing_route_metrics_without_estimation(self) -> None:
+        """侧偏和待飞距缺失时显示破折号，不得用世界坐标伪造业务值。"""
 
         leader = NodeState(
             "A01",
             "leader",
-            WORLD_WIDTH - 10.0,
-            WORLD_HEIGHT / 2 + 5.0,
+            1590.0,
+            265.0,
             3.0,
             4.0,
             1234.4,
@@ -123,7 +123,7 @@ class StatusTableViewModelTests(unittest.TestCase):
 
         row = overall_table_row([leader])
 
-        self.assertEqual(row, ["4", "40", "1234", "5", "10"])
+        self.assertEqual(row, ["—", "—", "1234", "5", "10"])
 
     def test_overall_table_returns_none_without_nodes(self) -> None:
         """无节点时整体表返回 None，供 GUI 清空表格。"""
