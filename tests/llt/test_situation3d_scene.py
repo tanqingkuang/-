@@ -1877,6 +1877,31 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertNotIn("trailModel.clear()", qml)
         self.assertNotIn("data.trailPoints", qml)
 
+    def test_qml_overlay_replaces_scene_summary_with_route_legends(self) -> None:
+        """3D 浮层不再显示数量/视角摘要，并以场景原色说明三类态势元素。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+
+        self.assertNotIn("property string sceneSummary", qml)
+        self.assertNotIn('sceneSummary = "飞机 "', qml)
+        self.assertNotIn('text: root.sceneSummary + " / 视角 "', qml)
+        self.assertIn('objectName: "sceneLegend"', qml)
+        self.assertIn('objectName: "flightRouteLegend"', qml)
+        self.assertIn('label: "飞行航线"', qml)
+        self.assertIn('swatchColor: "#22d3ee"', qml)
+        self.assertIn('objectName: "originalRouteLegend"', qml)
+        self.assertIn('label: "原始航线"', qml)
+        self.assertIn('swatchColor: "#ff5a45"', qml)
+        self.assertIn('objectName: "dangerAreaLegend"', qml)
+        self.assertIn('label: "危险区域"', qml)
+        self.assertIn('swatchColor: "#ff684f"', qml)
+        self.assertIn("areaSwatch: true", qml)
+        self.assertIn("model: legendItem.areaSwatch ? 0 : 3", qml)
+        overlay_block = qml[qml.index("id: overlay") : qml.index("component ControlButton")]
+        self.assertIn("height: overlayContent.implicitHeight + 20", overlay_block)
+        self.assertIn("id: overlayContent", overlay_block)
+        self.assertNotIn("height: 178", overlay_block)
+
     def test_terrain_material_is_matte_with_visible_micro_relief(self) -> None:
         """验证正式地形材质消除塑料高光，并保留足够强的近景岩面细节。"""
 

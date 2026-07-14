@@ -157,7 +157,7 @@ class TrailPayloadState:
 # 18. 相机 bounds 仍由飞机、航线和障碍推导；布局地形范围由 terrain payload 独立声明。
 # 19. 这样无地形配置时相机行为完全沿用旧场景。
 # 20. 有地形配置时 QML 的 terrainSpan 会辅助俯视/侧视按钮拉开距离。
-# 21. riskZones 计数进入 sceneSummary，便于截图时确认布局风险数据已到达 QML。
+# 21. counts 保留为桥接诊断数据；3D 左上浮层只展示场景图例，不再显示数量摘要。
 # 22. 路径字段使用绝对路径传给 QML，避免工作目录变化导致 TerrainGeometry 找不到文件。
 # 23. `terrain_display_file` 可以由 Snapshot 或 build_scene_payload 参数传入，测试可直接覆盖。
 # 24. payload 字段名使用 QML 现有 camelCase 风格，减少绑定样板。
