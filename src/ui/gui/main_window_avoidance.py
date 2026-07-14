@@ -28,6 +28,7 @@ from src.ui.gui.avoidance_panel_view_model import (
     simplify_should_follow,
 )
 from src.ui.gui.avoidance_tools import (
+    AVOIDANCE_PARAM_SPECS,
     AvoidanceParams,
     AvoidanceWindow,
     obstacle_spec_to_view,
@@ -101,100 +102,28 @@ class MainWindowAvoidanceMixin:
         layout = QVBoxLayout(group)
         layout.setContentsMargins(10, 18, 10, 10)
         layout.setSpacing(8)
-        # tooltip 文案直接来自设计文档语义，避免界面标签过长。
-        tips = {
-            "turn_radius_m": (
-                "作用：约束拐点圆弧的最小转弯半径。\n"
-                "影响：越大转弯越平缓，但更容易腿太短或圆弧触障。\n"
-                "建议：按飞机能力给定；无约束时先取 200~300 m。"
-            ),
-            "leg_length_margin_m": (
-                "作用：要求相邻圆弧之间保留额外直线余度。\n"
-                "影响：越大越保守，但更容易触发腿长不足。\n"
-                "建议：R 确定后再调，先试 0.2R~0.5R。"
-            ),
-            "clearance_m": (
-                "作用：A* 搜索时对障碍做外扩，形成安全边界。\n"
-                "影响：越大越安全但绕行更远，窄通道更可能无路。\n"
-                "建议：优先按业务安全距离，常用 80~150 m。"
-            ),
-            "grid.resolution_m": (
-                "作用：决定 A* 栅格离散精度。\n"
-                "影响：越小路径越细但更慢；越大更快但更粗。\n"
-                "建议：先取小于等于 R/10，例如 R=300 m 时 20~30 m。"
-            ),
-            "grid.margin_m": (
-                "作用：扩展起终点和障碍外侧的搜索包围盒。\n"
-                "影响：越大绕行空间越足但网格规模增大。\n"
-                "建议：先取安全间距 + 转弯半径，或直接取 300 m。"
-            ),
-            "simplify_clearance_m": (
-                "作用：A* 后视线去冗余使用的障碍外扩距离。\n"
-                "影响：越小越容易拉直、航段更少，但更贴近障碍。\n"
-                "建议：初始等于安全间距；减少碎段时试 0.5 倍安全间距。"
-            ),
-            "turn_switch_penalty_m": (
-                "作用：惩罚 A* 中每次 8 邻域方向切换。\n"
-                "影响：越大越少频繁换向，但可能绕远或贴边。\n"
-                "建议：减少碎段时从 1 倍栅格间距试起。"
-            ),
-            "turn_angle_weight_m": (
-                "作用：按每 45° 航迹角变化增加线性代价。\n"
-                "影响：可减少硬拐；过大时会和最短路目标拉扯。\n"
-                "建议：最后再调，先试转向切换惩罚的 0.25~0.5 倍。"
-            ),
-        }
-        # 物理约束区：前三项决定可飞性和安全边界。
-        self.turn_radius_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tips["turn_radius_m"])
-        self.leg_margin_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tips["leg_length_margin_m"])
-        self.clearance_spin = self._make_param_spin(maximum=100000.0, step=10.0, tooltip=tips["clearance_m"])
-        # 搜索范围区：分辨率和边界余量直接影响 A* 速度与可达性。
-        self.resolution_spin = self._make_param_spin(maximum=100000.0, step=5.0, tooltip=tips["grid.resolution_m"])
-        self.margin_spin = self._make_param_spin(maximum=100000.0, step=50.0, tooltip=tips["grid.margin_m"])
-        # 去冗余安全距可独立调；旧配置未显式配置时会跟随安全间距。
-        self.simplify_clearance_spin = self._make_param_spin(
-            maximum=100000.0,
-            step=10.0,
-            tooltip=tips["simplify_clearance_m"],
-            on_change=self._on_simplify_clearance_changed,
-        )
-        # 两个惩罚参数的单位不是普通米值，需要在输入框后缀里区分。
-        self.turn_switch_penalty_spin = self._make_param_spin(
-            maximum=100000.0,
-            step=1.0,
-            suffix=" m/次",
-            tooltip=tips["turn_switch_penalty_m"],
-        )
-        self.turn_angle_weight_spin = self._make_param_spin(
-            maximum=100000.0,
-            step=1.0,
-            suffix=" m/45°",
-            tooltip=tips["turn_angle_weight_m"],
-        )
         # 参数表格采用两列：左侧固定标签、右侧输入框吃掉剩余宽度。
         param_grid = QGridLayout()
         param_grid.setContentsMargins(0, 0, 0, 0)
         param_grid.setHorizontalSpacing(10)
         param_grid.setVerticalSpacing(8)
         param_grid.setColumnStretch(1, 1)
-        # rows 顺序必须与 AvoidanceWindow.param_order 保持一致，测试会锁定。
-        rows = [
-            ("转弯半径 R", "turn_radius_m", self.turn_radius_spin),
-            ("航段余度 L", "leg_length_margin_m", self.leg_margin_spin),
-            ("安全间距", "clearance_m", self.clearance_spin),
-            ("栅格间距", "grid.resolution_m", self.resolution_spin),
-            ("搜索边界余量", "grid.margin_m", self.margin_spin),
-            ("拉直安全间距", "simplify_clearance_m", self.simplify_clearance_spin),
-            ("转向切换惩罚", "turn_switch_penalty_m", self.turn_switch_penalty_spin),
-            ("航迹角惩罚", "turn_angle_weight_m", self.turn_angle_weight_spin),
-        ]
-        for row, (caption, key, spin) in enumerate(rows):
-            label = QLabel(caption)
+        # 单一规格同时创建控件、排列顺序与 tooltip，避免平行列表漂移。
+        for row, spec in enumerate(AVOIDANCE_PARAM_SPECS):
+            on_change = getattr(self, spec.on_change_method) if spec.on_change_method else None
+            spin = self._make_param_spin(
+                maximum=spec.maximum,
+                step=spec.step,
+                tooltip=spec.tooltip,
+                suffix=spec.suffix,
+                on_change=on_change,
+            )
+            setattr(self, spec.widget_attr, spin)
+            label = QLabel(spec.caption)
             label.setObjectName("paramLabel")
             # 标签和输入框都挂 tooltip，鼠标停在任一处都能看到解释。
             label.setMinimumWidth(104)
-            label.setToolTip(tips[key])
-            spin.setToolTip(tips[key])
+            label.setToolTip(spec.tooltip)
             param_grid.addWidget(label, row, 0)
             param_grid.addWidget(spin, row, 1)
         layout.addLayout(param_grid)

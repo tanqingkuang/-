@@ -26,7 +26,7 @@ from src.data.geo import GeoOrigin
 from src.data.geo_config import route_to_internal
 from tests.llt._geo_route import geodetic_config, geodetic_route
 from src.runner.sim_control import _build_leader_route
-from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
+from src.ui.gui.avoidance_tools import AVOIDANCE_PARAM_SPECS, _rounded_inflated_polygon_points
 from src.ui.gui.main_window import (
     MainWindow,
     ReferenceRoute,
@@ -375,6 +375,19 @@ class AvoidanceUiFlowTests(unittest.TestCase):
                 "turn_angle_weight_m",
             ],
         )
+
+    def test_single_param_specs_drive_order_widgets_and_tooltips(self) -> None:
+        """单一参数规格同时驱动顺序、控件属性和提示文案。"""
+
+        window = self._window()
+        self.assertEqual(
+            [spec.key for spec in AVOIDANCE_PARAM_SPECS],
+            window.avoidance_window.param_order,
+        )
+        self.assertEqual(len({spec.widget_attr for spec in AVOIDANCE_PARAM_SPECS}), len(AVOIDANCE_PARAM_SPECS))
+        for spec in AVOIDANCE_PARAM_SPECS:
+            spin = getattr(window, spec.widget_attr)
+            self.assertEqual(spin.toolTip(), spec.tooltip)
 
     def test_param_tooltips_focus_on_effect_and_advice(self) -> None:
         # 参数 tooltip 不重复参数名，直接说明作用、影响和建议，方便现场调参。

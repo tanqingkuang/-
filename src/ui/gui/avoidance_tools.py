@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
 from PySide6.QtWidgets import QDialog, QWidget
 
@@ -17,6 +18,106 @@ from src.runner.sim_control import (
 )
 from src.ui.gui.view_models import ObstacleView
 
+
+@dataclass(frozen=True)
+class AvoidanceParamSpec:
+    """单个避障参数的控件与说明规格。"""
+
+    # key 对应配置路径，并共同生成设计文档要求的显示顺序。
+    key: str
+    # caption 和 widget_attr 分别约束标签文案与 MainWindow 上的稳定属性名。
+    caption: str
+    widget_attr: str
+    # 步长、后缀和上限共同表达界面输入单位，不参与算法计算。
+    step: float
+    # 提示文案包含作用、影响和建议，标签与输入框复用同一份文本。
+    tooltip: str
+    suffix: str = " m"
+    maximum: float = 100000.0
+    # 只有拉直安全间距需要专用回调，其余参数共享预览失效逻辑。
+    on_change_method: str | None = None
+
+
+# 规格顺序就是避障设计文档中的调参顺序，不能在构造窗口时再次排序。
+AVOIDANCE_PARAM_SPECS = (
+    # 一、先锁定飞机物理转弯能力。
+    AvoidanceParamSpec(
+        "turn_radius_m",
+        "转弯半径 R",
+        "turn_radius_spin",
+        10.0,
+        "作用：约束拐点圆弧的最小转弯半径。\n影响：越大转弯越平缓，但更容易腿太短或圆弧触障。\n"
+        "建议：按飞机能力给定；无约束时先取 200~300 m。",
+    ),
+    # 二、再确认圆弧之间保留的直线余度。
+    AvoidanceParamSpec(
+        "leg_length_margin_m",
+        "航段余度 L",
+        "leg_margin_spin",
+        10.0,
+        "作用：要求相邻圆弧之间保留额外直线余度。\n影响：越大越保守，但更容易触发腿长不足。\n"
+        "建议：R 确定后再调，先试 0.2R~0.5R。",
+    ),
+    # 三、安全边界优先于搜索质量参数。
+    AvoidanceParamSpec(
+        "clearance_m",
+        "安全间距",
+        "clearance_spin",
+        10.0,
+        "作用：A* 搜索时对障碍做外扩，形成安全边界。\n影响：越大越安全但绕行更远，窄通道更可能无路。\n"
+        "建议：优先按业务安全距离，常用 80~150 m。",
+    ),
+    # 四、栅格精度决定 A* 离散程度与计算量。
+    AvoidanceParamSpec(
+        "grid.resolution_m",
+        "栅格间距",
+        "resolution_spin",
+        5.0,
+        "作用：决定 A* 栅格离散精度。\n影响：越小路径越细但更慢；越大更快但更粗。\n"
+        "建议：先取小于等于 R/10，例如 R=300 m 时 20~30 m。",
+    ),
+    # 五、搜索包围盒大小决定障碍外是否留有可达空间。
+    AvoidanceParamSpec(
+        "grid.margin_m",
+        "搜索边界余量",
+        "margin_spin",
+        50.0,
+        "作用：扩展起终点和障碍外侧的搜索包围盒。\n影响：越大绕行空间越足但网格规模增大。\n"
+        "建议：先取安全间距 + 转弯半径，或直接取 300 m。",
+    ),
+    # 六、去冗余安全距可独立调；旧配置未显式给值时跟随安全间距。
+    AvoidanceParamSpec(
+        "simplify_clearance_m",
+        "拉直安全间距",
+        "simplify_clearance_spin",
+        10.0,
+        "作用：A* 后视线去冗余使用的障碍外扩距离。\n影响：越小越容易拉直、航段更少，但更贴近障碍。\n"
+        "建议：初始等于安全间距；减少碎段时试 0.5 倍安全间距。",
+        on_change_method="_on_simplify_clearance_changed",
+    ),
+    # 七、方向切换惩罚用于减少栅格路径碎段。
+    AvoidanceParamSpec(
+        "turn_switch_penalty_m",
+        "转向切换惩罚",
+        "turn_switch_penalty_spin",
+        1.0,
+        "作用：惩罚 A* 中每次 8 邻域方向切换。\n影响：越大越少频繁换向，但可能绕远或贴边。\n"
+        "建议：减少碎段时从 1 倍栅格间距试起。",
+        suffix=" m/次",
+    ),
+    # 八、航迹角惩罚最后微调硬拐，后缀明确其每 45 度的单位。
+    AvoidanceParamSpec(
+        "turn_angle_weight_m",
+        "航迹角惩罚",
+        "turn_angle_weight_spin",
+        1.0,
+        "作用：按每 45° 航迹角变化增加线性代价。\n影响：可减少硬拐；过大时会和最短路目标拉扯。\n"
+        "建议：最后再调，先试转向切换惩罚的 0.25~0.5 倍。",
+        suffix=" m/45°",
+    ),
+)
+
+
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
     """兼容入口：通过 runner 应用层读取障碍。注意：正式窗口复用 adapter 已缓存结果。"""
 
@@ -27,24 +128,7 @@ def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
 class AvoidanceWindow(QDialog):
     """避障规划子窗口。注意：控件由 MainWindow 填充，本类只固化窗口元数据。"""
 
-    param_order = [
-        # 1. 先锁定飞机物理转弯能力。
-        "turn_radius_m",
-        # 2. 再确认圆弧之间保留的直线余度。
-        "leg_length_margin_m",
-        # 3. 安全边界优先于搜索质量参数。
-        "clearance_m",
-        # 4. 栅格精度决定 A* 离散程度。
-        "grid.resolution_m",
-        # 5. 搜索包围盒大小影响能否绕开障碍。
-        "grid.margin_m",
-        # 6. 去冗余参数只在安全约束稳定后调整。
-        "simplify_clearance_m",
-        # 7. 方向切换惩罚用于减少碎段。
-        "turn_switch_penalty_m",
-        # 8. 航迹角惩罚最后再微调硬拐。
-        "turn_angle_weight_m",
-    ]
+    param_order = [spec.key for spec in AVOIDANCE_PARAM_SPECS]
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化避障规划窗口。注意：非模态窗口，便于对照主画布预览。"""
