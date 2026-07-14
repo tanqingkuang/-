@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
-    QAbstractSpinBox,
     QCheckBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -36,15 +34,13 @@ from PySide6.QtWidgets import (
 from src.runner.sim_control import RunState
 from src.ui.gui.disturbance_view_model import DISTURBANCE_ACTIONS
 
-from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.side_view import SideView
-from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, THEMES, SelectButton
+from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, SelectButton
 from src.ui.gui.top_view import TopView
 from src.ui.gui.view_models import (
     PLAYBACK_RATE_SLIDER_MAX,
     PLAYBACK_RATE_SLIDER_MIN,
     playback_rate_to_slider_value,
-    Snapshot,
 )
 
 

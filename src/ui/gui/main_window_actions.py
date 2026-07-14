@@ -6,7 +6,7 @@ from configparser import ConfigParser
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
 
 from src.runner.sim_control import DisturbanceType, RunState
 from src.ui.gui.config_state_view_model import (
@@ -25,11 +25,8 @@ from src.ui.gui.trail_view_model import TrailControlUpdate
 from src.ui.gui.view_models import (
     APP_CONFIG_KEY_LAST_CONFIG,
     APP_CONFIG_SECTION,
-    LinkState,
-    NodeState,
     Snapshot,
     TIMER_IDLE_RUN_STATES,
-    default_project_root,
 )
 
 

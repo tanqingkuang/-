@@ -9,7 +9,7 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
 from src.runner.sim_control import ObstacleKind
-from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
+from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
 from src.ui.gui.node_card_view_model import (
     CardBoardState,
     CardLayoutConfig,

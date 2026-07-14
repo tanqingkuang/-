@@ -19,7 +19,6 @@ from src.ui.gui.view_models import (
     centroid_of_active_nodes,
     is_major_grid_line,
     is_leader_node,
-    reference_route_points,
 )
 
 # 侧视区比俯视区更扁，略收紧留白可避免有效横向范围被过度压缩。

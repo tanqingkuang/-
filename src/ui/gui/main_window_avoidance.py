@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QSignalBlocker, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -29,7 +29,6 @@ from src.ui.gui.avoidance_panel_view_model import (
 )
 from src.ui.gui.avoidance_tools import (
     AVOIDANCE_PARAM_SPECS,
-    AvoidanceParams,
     AvoidanceWindow,
     obstacle_spec_to_view,
     obstacle_view_to_spec,

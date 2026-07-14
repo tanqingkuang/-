@@ -37,7 +37,6 @@ from src.ui.gui.view_models import (
     RallyGeometryView,
     ReferenceRoute,
     Snapshot,
-    link_direction_label,
     trail_seconds_for_duration,
 )
 
