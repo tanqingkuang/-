@@ -61,8 +61,8 @@
     {
       "node_id": "A01",
       "role": "wingman",
-      "x_m": -90.0,
-      "y_m": 90.0,
+      "x_m": -117.0,
+      "y_m": 117.0,
       "altitude_m": 1000.0,
       "psi_v_deg": 0.0,
       "theta_deg": 0.0,
@@ -71,8 +71,8 @@
     {
       "node_id": "A02",
       "role": "wingman",
-      "x_m": -45.0,
-      "y_m": 45.0,
+      "x_m": -58.5,
+      "y_m": 58.5,
       "altitude_m": 1000.0,
       "psi_v_deg": 0.0,
       "theta_deg": 0.0,
@@ -89,20 +89,20 @@
       "speed_mps": 25.0
     },
     {
-      "node_id": "A04",
+      "node_id": "A05",
       "role": "wingman",
-      "x_m": -45.0,
-      "y_m": -45.0,
+      "x_m": -58.5,
+      "y_m": -58.5,
       "altitude_m": 1000.0,
       "psi_v_deg": 0.0,
       "theta_deg": 0.0,
       "speed_mps": 25.0
     },
     {
-      "node_id": "A05",
+      "node_id": "A04",
       "role": "wingman",
-      "x_m": -90.0,
-      "y_m": -90.0,
+      "x_m": -117.0,
+      "y_m": -117.0,
       "altitude_m": 1000.0,
       "psi_v_deg": 0.0,
       "theta_deg": 0.0,

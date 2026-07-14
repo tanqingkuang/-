@@ -781,7 +781,8 @@ class SimulationControllerTests(unittest.TestCase):
         wingmen = {"A01", "A02", "A04", "A05"}
         min_forward_error = {node_id: 0.0 for node_id in wingmen}
         final_forward_error = {node_id: 0.0 for node_id in wingmen}
-        for index in range(int(30.0 / 0.05)):
+        # 楔形间隔放大 30% 后，最大前向重构距离由 90m 增至 117m；观察窗同步延长，误差门限保持不变。
+        for index in range(int(35.0 / 0.05)):
             self.assertEqual(controller.step(10).code, "OK")
             nodes = {node.node_id: node for node in controller.get_snapshot().nodes if node.node_id in wingmen}
             for node_id, node in nodes.items():
