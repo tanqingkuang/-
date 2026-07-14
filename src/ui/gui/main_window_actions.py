@@ -19,7 +19,7 @@ from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.disturbance_view_model import disturbance_action
 from src.ui.gui.theme_widgets import THEMES
 from src.ui.gui.side_view_control_view_model import geodetic_click_text
-from src.ui.gui.sim_control_view_model import parse_duration_text, rally_button_enabled
+from src.ui.gui.sim_control_view_model import parse_duration_text
 from src.ui.gui.status_table_view_model import link_table_rows, node_table_rows, overall_table_row
 from src.ui.gui.trail_view_model import TrailControlUpdate
 from src.ui.gui.view_models import (
@@ -61,12 +61,6 @@ class MainWindowActionMixin:
         self._sync_side_view_controls()
         self._update_tables(snapshot)
         self.features.on_snapshot_updated(self, snapshot)
-
-    @staticmethod
-    def _rally_button_enabled(snapshot: Snapshot) -> bool:
-        """判断集结按钮是否可用。注意：兼容旧测试入口，实际规则由 ViewModel 承载。"""
-
-        return rally_button_enabled(snapshot.run_state, snapshot.nodes)
 
     def _update_tables(self, snapshot: Snapshot) -> None:
         """更新 tables 状态。注意：保持界面显示和内部数据一致。"""
@@ -330,11 +324,6 @@ class MainWindowActionMixin:
         except OSError as exc:
             # 写盘失败不应中断主流程，记录告警即可。
             self._log("WARN", f"写入 config.ini 失败：{exc}")
-
-    def _relative_to_project_root(self, path: Path) -> str | None:
-        """计算 to project root 相对路径。注意：兼容旧调用入口，规则由 ViewModel 承载。"""
-
-        return relative_config_path(path, self.project_root)
 
     def _on_speed_changed(self, value: int) -> None:
         """处理 speed changed 信号回调。注意：回调内避免耗时操作阻塞界面。"""
