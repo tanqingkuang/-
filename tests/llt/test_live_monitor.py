@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -34,6 +35,27 @@ class LiveMonitorTests(unittest.TestCase):
         self.assertEqual(first, "#888888")
         self.assertEqual(second, first)
         warning.assert_called_once_with("未知控制回报，使用默认颜色：%s", "新状态")
+        window.close()
+
+    def test_poll_orchestrates_strategy_nodes_ingest_and_refresh_stages(self) -> None:
+        """时间推进时轮询入口依次委托四个职责阶段。"""
+
+        window = LiveMonitorWindow()
+        snapshot = SimpleNamespace(time_s=1.0, control_report="保持", nodes=[])
+        window._ctrl = Mock(get_snapshot=Mock(return_value=snapshot))
+
+        with (
+            patch.object(window, "_update_strategy_strip") as update_strategy,
+            patch.object(window, "_maybe_rebuild_for_new_nodes") as rebuild_nodes,
+            patch.object(window, "_ingest_snapshot") as ingest,
+            patch.object(window, "_refresh_series_and_axes") as refresh,
+        ):
+            window._poll()
+
+        update_strategy.assert_called_once_with("保持")
+        rebuild_nodes.assert_called_once_with([])
+        ingest.assert_called_once_with(snapshot)
+        refresh.assert_called_once_with(1.0)
         window.close()
 
 

@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.runner.sim_control import SimulationController
+from src.runner.sim_control import NodeState, SimulationController, SimulationSnapshot
 from src.ui.gui.chart_common import (
     CHART_PALETTE,
     CONTROL_ERROR_CHANNELS,
@@ -411,71 +411,91 @@ class LiveMonitorWindow(QDialog):
             return
         snap = self._ctrl.get_snapshot()
         t = snap.time_s
-
-        if self._strategy_strip is not None:
-            # 策略色条不依赖时间推进，暂停时也应保持最新状态。
-            self._last_report = snap.control_report
-            clr = self._control_report_color(snap.control_report)
-            self._strategy_strip.setText(snap.control_report)
-            self._strategy_strip.setStyleSheet(
-                f"background:{clr}; color:white; font-weight:bold;"
-            )
-
-        for node in snap.nodes:
-            if node.node_id not in self._nodes:
-                # 新节点按发现顺序取色，保证窗口生命周期内颜色稳定。
-                color = CHART_PALETTE[len(self._nodes) % len(CHART_PALETTE)]
-                self._nodes[node.node_id] = {
-                    "color": color, "visible": True, "cb": None,
-                }
-                self._rebuild_needed = True
-
-        if self._rebuild_needed:
-            # 新节点出现后需要同步左侧节点面板和右侧曲线对象。
-            self._rebuild_needed = False
-            self._refresh_node_panel()
-            self._rebuild_charts()
-
+        # 一、策略条不依赖时间推进，暂停态也要先更新。
+        self._update_strategy_strip(snap.control_report)
+        # 二、新节点必须先注册，采集时对应曲线和标签才已存在。
+        self._maybe_rebuild_for_new_nodes(snap.nodes)
+        # 三、注册完成后再按仿真时间去重，暂停期间仍能看到新节点。
         if t <= self._last_t:
             # READY/PAUSED/FINISHED 状态时间可能不变，避免重复追加同一时刻点。
             return
         self._last_t = t
+        # 四、只对新时刻采集一次权威快照数据。
+        self._ingest_snapshot(snap)
+        # 五、最后把滚动窗口数据批量下发到 QtCharts。
+        self._refresh_series_and_axes(t)
 
-        for node in snap.nodes:
-            for ch in CONTROL_ERROR_CHANNELS:
-                v = ch.act(node)
-                if v is not None:
-                    # 不论 visible，所有节点均持续写入缓冲区。
-                    # visible 只控制绘图，不影响数据采集，避免隐藏期间数据丢失。
-                    (self._bufs
-                     .setdefault(ch.key, {})
-                     .setdefault(node.node_id, deque(maxlen=_MAX_PTS))
-                     .append((t, v)))
+    def _update_strategy_strip(self, report: str) -> None:
+        """刷新策略色条。注意：暂停时仍需反映最新控制回报。"""
+
+        if self._strategy_strip is None:
+            return
+        self._last_report = report
+        color = self._control_report_color(report)
+        self._strategy_strip.setText(report)
+        self._strategy_strip.setStyleSheet(
+            f"background:{color}; color:white; font-weight:bold;"
+        )
+
+    def _maybe_rebuild_for_new_nodes(self, nodes: list[NodeState]) -> None:
+        """登记新节点，并在需要时重建节点面板与曲线对象。"""
+
+        for node in nodes:
+            if node.node_id in self._nodes:
+                continue
+            # 新节点按发现顺序取色，保证窗口生命周期内颜色稳定。
+            color = CHART_PALETTE[len(self._nodes) % len(CHART_PALETTE)]
+            self._nodes[node.node_id] = {
+                "color": color, "visible": True, "cb": None,
+            }
+            self._rebuild_needed = True
+        if not self._rebuild_needed:
+            return
+        self._rebuild_needed = False
+        self._refresh_node_panel()
+        self._rebuild_charts()
+
+    def _ingest_snapshot(self, snapshot: SimulationSnapshot) -> None:
+        """把快照有效通道值追加到所有节点的有界缓冲区。"""
+
+        t = snapshot.time_s
+        for node in snapshot.nodes:
+            for channel in CONTROL_ERROR_CHANNELS:
+                value = channel.act(node)
+                if value is None:
+                    continue
+                # 不论 visible，所有节点均持续采集，隐藏期间不会丢失数据。
+                (self._bufs
+                 .setdefault(channel.key, {})
+                 .setdefault(node.node_id, deque(maxlen=_MAX_PTS))
+                 .append((t, value)))
+
+    def _refresh_series_and_axes(self, t: float) -> None:
+        """把当前滚动窗口数据下发到曲线、数值标签和坐标轴。"""
 
         t_min = t - self._win_s
         for ch_key, (_, x_ax, y_ax, val_labels, zero_s) in self._rows.items():
             all_y: list[float] = []
-            for nid, nd in self._nodes.items():
-                if not nd["visible"]:
+            for nid, node_view in self._nodes.items():
+                if not node_view["visible"]:
                     continue
                 series = self._series.get((nid, ch_key))
                 if series is None:
                     continue
                 buf = self._bufs.get(ch_key, {}).get(nid, deque())
                 # 仅将当前滚动窗口内的数据送入 QtCharts，控制刷新成本。
-                pts = [QPointF(tt, vv) for tt, vv in buf if tt >= t_min]
-                series.replace(pts)
-                all_y.extend(p.y() for p in pts)
-
-                lbl = val_labels.get(nid)
-                if lbl and buf:
+                points = [QPointF(tt, value) for tt, value in buf if tt >= t_min]
+                series.replace(points)
+                all_y.extend(point.y() for point in points)
+                label = val_labels.get(nid)
+                if label and buf:
                     # 当前值显示该节点最近一个有效点，便于快速读数。
-                    lbl.setText(f"{nid}\n{buf[-1][1]:.2f}")
-
+                    label.setText(f"{nid}\n{buf[-1][1]:.2f}")
             x_ax.setRange(t_min, t + 2.0)
             # 0 基准线随 X 轴窗口移动，始终覆盖整个可见区间。
             zero_s.replace([QPointF(t_min, 0.0), QPointF(t + 2.0, 0.0)])
             apply_y_range(y_ax, all_y)
+
 
     # ── 工具 ──────────────────────────────────────────────────────────────────
 
