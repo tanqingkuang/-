@@ -8,8 +8,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.data.geo import GeoOrigin
-
 # 世界坐标范围（米）：用于 mock 数据居中、待飞距/侧偏兜底估算等。
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0

@@ -25,9 +25,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QCheckBox, QFileDialog, QHBoxLayout, QMainWindow, QPushButton, QWidget
 
-from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route
+from src.runner.sim_control import AvoidanceParams, GeoReference, PlannedRoute
 from src.ui.gui.avoidance_tools import (
-    AvoidanceParams,
     AvoidanceWindow,
     ObstacleView,
     _inflated_polygon_vertices,
@@ -74,10 +73,6 @@ from src.ui.gui.view_models import (
     leader_node_from,
     reference_route_points,
 )
-from src.data.geo import GeoOrigin
-from src.algorithm.context.leaf_types import WayPointInputS
-
-
 APP_ICON_PATH = Path(__file__).resolve().parent / "assets" / "app_icon.png"
 
 
@@ -143,8 +138,8 @@ class MainWindow(
         self.obstacle_checkboxes: list[QCheckBox] = []
         # 避障规划参数（来自配置）与“生成航线”得到的预览航线（采用前）。
         self._avoidance_params: AvoidanceParams | None = None
-        self._preview_route: list[WayPointInputS] | None = None
-        self._top_view_geo_origin: GeoOrigin | None = None
+        self._preview_route: PlannedRoute | None = None
+        self._top_view_geo_origin: GeoReference | None = None
         self.avoidance_window: AvoidanceWindow | None = None
         # 组装界面 -> 设置手型光标 -> 应用主题 -> 用初始快照刷新一次显示。
         self._build_ui()

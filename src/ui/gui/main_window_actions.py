@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 from configparser import ConfigParser
-import json
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidget
 
-from src.data.geo import enu_to_geodetic
-from src.ui.gui.avoidance_tools import _geo_origin_from_config_for_ui, parse_avoidance_config
 from src.ui.gui.config_state_view_model import (
     dialog_start_dir,
     display_config_path,
@@ -246,8 +243,9 @@ class MainWindowActionMixin:
 
     def _set_top_view_geo_origin_from_config(self, path: str) -> None:
         """刷新俯视图点击坐标 origin。注意：无经纬航线时清空，避免沿用旧配置 origin。"""
+        del path
         # origin 来自基础航线第一个经纬航点；旧 ENU 配置没有 origin，不能反推经纬度。
-        self._top_view_geo_origin = _geo_origin_from_config_for_ui(path)
+        self._top_view_geo_origin = self.sim.gui_config.geo_reference
         self.top_view_coordinate.clear()
         if self._top_view_geo_origin is None:
             self.top_view_coordinate.setPlaceholderText("当前配置无经纬 origin")
@@ -256,10 +254,8 @@ class MainWindowActionMixin:
 
     def _on_top_view_point_clicked(self, east_m: float, north_m: float) -> None:
         """处理俯视图单击坐标。注意：只显示经纬度，不修改仿真状态。"""
-        geodetic = None
-        if self._top_view_geo_origin is not None:
-            # 坐标系转换属于 data 层，ViewModel 只负责缺失提示与复制文案。
-            geodetic = enu_to_geodetic(east_m, north_m, self._top_view_geo_origin)
+        # 坐标系转换由 runner 应用层完成，ViewModel 只负责缺失提示与复制文案。
+        geodetic = self.sim.to_geodetic(east_m, north_m, self._top_view_geo_origin)
         self.top_view_coordinate.setText(geodetic_click_text(geodetic))
         if geodetic is not None:
             # 有效坐标沿用原聚焦行为，用户单击后可直接 Ctrl+C 复制数字。
@@ -408,40 +404,15 @@ class MainWindowActionMixin:
         self._update_snapshot(snapshot)
         if self.sim.last_result_code == "OK":
             try:
-                self._persist_config_duration(duration_s)
-            except Exception as exc:  # noqa: BLE001
+                if self.current_config_path is None:
+                    raise ValueError("未加载配置文件")
+                self.sim.persist_duration(self.current_config_path, duration_s)
+            except (OSError, ValueError) as exc:
                 self._log("WARN", f"写入配置时长失败：{exc}")
             self._log("Config", f"设置仿真时长 {duration_s:g}s")
         else:
             self._log("WARN", f"设置仿真时长失败：{self.sim.last_result_message}")
             self._sync_duration_input(self.sim.snapshot())
-
-    def _persist_config_duration(self, duration_s: float) -> None:
-        """把当前仿真时长写回配置文件。注意：只更新 duration_s 字段。"""
-        if self.current_config_path is None:
-            raise ValueError("未加载配置文件")
-        path = self.current_config_path
-        suffix = path.suffix.lower()
-        text = path.read_text(encoding="utf-8")
-        if suffix == ".json":
-            config = json.loads(text)
-            if not isinstance(config, dict):
-                raise ValueError("config root must be an object")
-            config["duration_s"] = duration_s
-            path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            return
-        if suffix in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError as exc:  # pragma: no cover - 依赖运行环境
-                raise ValueError("YAML config requires PyYAML") from exc
-            config = yaml.safe_load(text)
-            if not isinstance(config, dict):
-                raise ValueError("config root must be an object")
-            config["duration_s"] = duration_s
-            path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            return
-        raise ValueError("config must be .json, .yaml, or .yml")
 
     def _sync_duration_input(self, snapshot: Snapshot) -> None:
         """同步 duration input 显示。注意：加载配置后以控制器快照为准。"""

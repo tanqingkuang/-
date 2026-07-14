@@ -413,7 +413,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._generate_route()
         self.assertIsNotNone(window._preview_route)
         # 绕障产生内部拐点 → 至少一个内部航点拿到交接半径 R>0。
-        self.assertTrue(any(wpi.r > 0.0 for wpi in window._preview_route))
+        self.assertGreater(window._preview_route.transition_radius_count, 0)
 
     def test_widget_value_overrides_config_at_generate(self) -> None:
         # 界面调大 L 到不可飞 → 生成失败，证明用的是控件值而非配置值。
@@ -451,7 +451,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.clearance_spin.setValue(110.0)
 
         with patch(
-            "src.ui.gui.main_window.plan_avoidance_route",
+            "src.ui.gui.simulation_adapter.ControllerSimulationAdapter.plan_avoidance_route",
             return_value=SimpleNamespace(ok=False, route=None, code="ERR_TEST", detail="captured"),
         ) as planner:
             window._generate_route()
@@ -469,7 +469,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.turn_angle_weight_spin.setValue(3.0)
 
         with patch(
-            "src.ui.gui.main_window.plan_avoidance_route",
+            "src.ui.gui.simulation_adapter.ControllerSimulationAdapter.plan_avoidance_route",
             return_value=SimpleNamespace(ok=False, route=None, code="ERR_TEST", detail="captured"),
         ) as planner:
             window._generate_route()

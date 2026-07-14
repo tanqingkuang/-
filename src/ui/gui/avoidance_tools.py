@@ -2,199 +2,26 @@
 
 from __future__ import annotations
 
-import json
 import math
-from dataclasses import dataclass, field
-from pathlib import Path
 
 from PySide6.QtWidgets import QDialog, QWidget
 
-from src.algorithm.context.leaf_types import WayLineS, WayPointInputS, to_display_inputs
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
-from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_swept_rad
-from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_polygon, make_rect
-from src.data.config_loader import _LINE_FILE_MANAGER, resolve_config_references
-from src.data.geo import GeoOrigin
-from src.data.geo_config import geo_origin_from_dict, route_to_external, route_to_internal
+from src.runner.sim_control import (
+    AvoidanceParams,
+    GeoReference,
+    ObstacleSpec,
+    load_gui_config,
+    preview_route_marker_points,
+    route_inputs_to_config,
+    route_to_polyline,
+)
 from src.ui.gui.view_models import ObstacleView
 
-def _safe_float(value: object, default: float = 0.0) -> float:
-    """把任意配置值安全转成 float。注意：非法值（如字符串）返回默认值，避免 UI-only 字段拖垮加载流程。"""
-    try:
-        return float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return default
-
-
-def _load_json_config_for_ui(path: str) -> dict[str, object] | None:
-    """读取 GUI 需要的 JSON 配置。注意：失败返回 None，避免影响主加载流程。"""
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-        if not isinstance(data, dict):
-            return None
-    except (OSError, ValueError):
-        # GUI 侧解析是辅助显示；配置错误由控制器主加载路径给出正式错误。
-        return None
-    return data
-
-
-def _resolve_obstacles_reference_for_ui(data: dict[str, object], path: str) -> dict[str, object] | None:
-    """只展开 avoidance.obstacles_file，避免航线文件错误污染障碍 UI 显示。"""
-    try:
-        # 优先走完整配置展开：经纬度障碍需要基础航线 origin 才能转 ENU。
-        return resolve_config_references(data, Path(path))
-    except (OSError, ValueError):
-        try:
-            resolved = dict(data)
-            avoidance = resolved.get("avoidance")
-            if isinstance(avoidance, dict) and "obstacles_file" in avoidance:
-                # 兼容旧 ENU 障碍：坏 route_file 不应把障碍列表清空。
-                resolved.pop("route_file", None)
-                resolved = resolve_config_references(resolved, Path(path))
-            return resolved
-        except (OSError, ValueError):
-            return None
-
-
-def _resolve_route_reference_for_ui(data: dict[str, object], path: str) -> dict[str, object] | None:
-    """只展开 route_file，供避障规划参数读取航线，避免障碍文件错误污染航线参数。"""
-    try:
-        resolved = dict(data)
-        route_file = resolved.get("route_file")
-        if route_file is not None:
-            # parse_avoidance_params 只需要 route 与 avoidance 参数，不需要读取障碍库。
-            resolved["route"] = _LINE_FILE_MANAGER.load_route(Path(path), route_file)
-        route = resolved.get("route")
-        if isinstance(route, dict):
-            resolved["route"], _origin = route_to_internal(route)
-        return resolved
-    except (OSError, ValueError):
-        return None
-
-
-def _geo_origin_from_config_for_ui(path: str) -> GeoOrigin | None:
-    """从配置 route_file 读取经纬 origin。注意：仅供 GUI 点击坐标显示使用。"""
-    raw_data = _load_json_config_for_ui(path)
-    data = _resolve_route_reference_for_ui(raw_data, path) if raw_data is not None else None
-    route = data.get("route") if isinstance(data, dict) else None
-    return geo_origin_from_dict(route.get("_geo_origin")) if isinstance(route, dict) else None
-
-
-def route_inputs_to_config(
-    route: list[WayPointInputS],
-    speed_mps: float,
-    geo_origin: GeoOrigin | None = None,
-) -> dict[str, object]:
-    """把避障航点转换为航线文件对象。注意：有 origin 时输出经纬高。"""
-    waypoints: list[dict[str, object]] = []
-    for point in route:
-        # 普通字段保持与 configs/element/line.json 一致，方便人工编辑和复用。
-        waypoint: dict[str, object] = {
-            "x_m": point.pos.east,
-            "y_m": point.pos.north,
-            "altitude_m": point.pos.h,
-            "R": point.r,
-        }
-        if point.turnSign != 0.0:
-            # 已烘焙圆弧必须带圆心，否则再次加载时无法恢复同一几何。
-            waypoint["turn_sign"] = point.turnSign
-            waypoint["center"] = {
-                "x_m": point.center.east,
-                "y_m": point.center.north,
-                "altitude_m": point.center.h,
-            }
-        waypoints.append(waypoint)
-    route_config = {"speed_mps": speed_mps, "waypoints": waypoints}
-    return route_to_external(route_config, geo_origin) if geo_origin is not None else route_config
-
-
 def parse_avoidance_config(path: str) -> tuple[list[ObstacleView], float]:
-    """从配置 JSON 解析 avoidance 障碍与膨胀间距，供 UI 显示。
+    """兼容入口：通过 runner 应用层读取障碍。注意：正式窗口复用 adapter 已缓存结果。"""
 
-    注意：仅读取、不校验飞行约束。本函数为“安全解析”——任何缺失/非法字段都退化为默认值或被跳过，
-    绝不抛异常拖垮 _apply_config_path（该流程在控制器加载成功后调用）。
-    约定与文档 §4.2 一致：顶层 enabled=false 或 obstacles 为空 → 完全跳过避障，返回空。
-    """
-    raw_data = _load_json_config_for_ui(path)
-    data = _resolve_obstacles_reference_for_ui(raw_data, path) if raw_data is not None else None
-    if data is None:
-        # 非 JSON（如 YAML）或读取失败时不影响主流程，返回空障碍集。
-        return [], 0.0
-    avoidance = data.get("avoidance") if isinstance(data, dict) else None
-    if not isinstance(avoidance, dict):
-        return [], 0.0
-    # 顶层总开关：显式关闭即完全跳过避障，等价于现状（不显示、不绘制、不可生成）。
-    if not avoidance.get("enabled", True):
-        return [], 0.0
-    clearance = _safe_float(avoidance.get("clearance_m", 0.0))
-    obstacles: list[ObstacleView] = []
-    raw_obstacles = avoidance.get("obstacles", [])
-    if not isinstance(raw_obstacles, list):
-        return [], clearance
-    for index, raw in enumerate(raw_obstacles):
-        if not isinstance(raw, dict):
-            continue
-        obstacle_id = str(raw.get("id", f"OB{index + 1}"))
-        enabled = bool(raw.get("enabled", True))
-        raw_type = str(raw.get("type", "circle"))
-        vertices = raw.get("vertices")
-        if raw_type == "polygon" and isinstance(vertices, list):
-            points: list[tuple[float, float]] = []
-            for point in vertices:
-                if isinstance(point, dict):
-                    points.append((_safe_float(point.get("east_m", 0.0)), _safe_float(point.get("north_m", 0.0))))
-            if len(points) >= 3:
-                obstacles.append(ObstacleView(obstacle_id=obstacle_id, kind="polygon", enabled=enabled, vertices=points))
-        elif raw_type == "rect":
-            lo = raw.get("min", {})
-            hi = raw.get("max", {})
-            lo = lo if isinstance(lo, dict) else {}
-            hi = hi if isinstance(hi, dict) else {}
-            obstacles.append(
-                ObstacleView(
-                    obstacle_id=obstacle_id,
-                    kind="rect",
-                    enabled=enabled,
-                    min_x=_safe_float(lo.get("east_m", 0.0)),
-                    min_y=_safe_float(lo.get("north_m", 0.0)),
-                    max_x=_safe_float(hi.get("east_m", 0.0)),
-                    max_y=_safe_float(hi.get("north_m", 0.0)),
-                )
-            )
-        else:
-            center = raw.get("center", {})
-            center = center if isinstance(center, dict) else {}
-            obstacles.append(
-                ObstacleView(
-                    obstacle_id=obstacle_id,
-                    kind="circle",
-                    enabled=enabled,
-                    center_x=_safe_float(center.get("east_m", 0.0)),
-                    center_y=_safe_float(center.get("north_m", 0.0)),
-                    radius=_safe_float(raw.get("radius_m", 0.0)),
-                )
-            )
-    return obstacles, clearance
-
-
-@dataclass
-class AvoidanceParams:
-    """避障规划参数与长机原航线，从配置 JSON 解析，供 plan_avoidance_route 调用。"""
-
-    turn_radius_m: float = 0.0
-    leg_margin_m: float = 0.0
-    clearance_m: float = 0.0
-    simplify_clearance_m: float = 0.0
-    simplify_clearance_explicit: bool = False
-    turn_switch_penalty_m: float = 0.0
-    turn_angle_weight_m: float = 0.0
-    resolution_m: float = 10.0
-    margin_m: float = 0.0
-    speed_mps: float = 0.0
-    allow_arc: bool = True  # 航段自身是否可为曲线：开启则折叠贴障大弧并把拐点烘焙成圆弧段；关闭只留直线骨架+交接圆弧
-    waypoints: list[tuple[float, float, float]] = field(default_factory=list)  # (east, north, altitude)
-    geo_origin: GeoOrigin | None = None  # 外部经纬高航线 origin；旧 ENU 配置为 None
+    data = load_gui_config(path)
+    return [obstacle_spec_to_view(obstacle) for obstacle in data.obstacles], data.obstacle_clearance_m
 
 
 class AvoidanceWindow(QDialog):
@@ -228,61 +55,51 @@ class AvoidanceWindow(QDialog):
 
 
 def parse_avoidance_params(path: str) -> AvoidanceParams | None:
-    """从配置 JSON 解析避障规划参数与长机航点。注意：安全解析；缺 avoidance/航点不足时返回 None。"""
-    raw_data = _load_json_config_for_ui(path)
-    data = _resolve_route_reference_for_ui(raw_data, path) if raw_data is not None else None
-    if data is None:
-        return None
-    avoidance = data.get("avoidance")
-    if not isinstance(avoidance, dict) or not avoidance.get("enabled", True):
-        return None
-    grid = avoidance.get("grid") if isinstance(avoidance.get("grid"), dict) else {}
-    route = data.get("route") if isinstance(data.get("route"), dict) else {}
-    geo_origin = geo_origin_from_dict(route.get("_geo_origin")) if isinstance(route, dict) else None
-    raw_waypoints = route.get("waypoints", []) if isinstance(route, dict) else []
-    waypoints: list[tuple[float, float, float]] = []
-    if isinstance(raw_waypoints, list):
-        for raw in raw_waypoints:
-            if isinstance(raw, dict):
-                # 与控制器 _route_point_from_config 一致：兼容 x_m/east、y_m/north、altitude_m/h 两套字段名。
-                waypoints.append(
-                    (
-                        _safe_float(raw.get("x_m", raw.get("east", 0.0))),
-                        _safe_float(raw.get("y_m", raw.get("north", 0.0))),
-                        _safe_float(raw.get("altitude_m", raw.get("h", 0.0))),
-                    )
-                )
-    if len(waypoints) < 2:
-        return None
-    clearance_m = _safe_float(avoidance.get("clearance_m", 0.0))
-    simplify_clearance_explicit = "simplify_clearance_m" in avoidance
-    simplify_clearance_m = _safe_float(
-        avoidance.get("simplify_clearance_m", clearance_m)
-    )
-    return AvoidanceParams(
-        turn_radius_m=_safe_float(avoidance.get("turn_radius_m", 0.0)),
-        leg_margin_m=_safe_float(avoidance.get("leg_length_margin_m", 0.0)),
-        clearance_m=clearance_m,
-        simplify_clearance_m=simplify_clearance_m,
-        simplify_clearance_explicit=simplify_clearance_explicit,
-        turn_switch_penalty_m=_safe_float(avoidance.get("turn_switch_penalty_m", 0.0)),
-        turn_angle_weight_m=_safe_float(avoidance.get("turn_angle_weight_m", 0.0)),
-        resolution_m=_safe_float(grid.get("resolution_m", 10.0)) if isinstance(grid, dict) else 10.0,
-        margin_m=_safe_float(grid.get("margin_m", 0.0)) if isinstance(grid, dict) else 0.0,
-        speed_mps=_safe_float(route.get("speed_mps", 0.0)) if isinstance(route, dict) else 0.0,
-        allow_arc=bool(avoidance.get("allow_arc", True)),
-        waypoints=waypoints,
-        geo_origin=geo_origin,
+    """兼容入口：通过 runner 应用层读取规划参数。"""
+
+    return load_gui_config(path).avoidance_params
+
+
+def _geo_origin_from_config_for_ui(path: str) -> GeoReference | None:
+    """兼容入口：返回应用层地理原点。注意：正式窗口使用 adapter 缓存。"""
+
+    return load_gui_config(path).geo_reference
+
+
+def obstacle_view_to_spec(view: ObstacleView) -> ObstacleSpec:
+    """把可变显示障碍复制为应用层规划输入。"""
+
+    return ObstacleSpec(
+        obstacle_id=view.obstacle_id,
+        kind=view.kind,
+        enabled=view.enabled,
+        center_x=view.center_x,
+        center_y=view.center_y,
+        radius=view.radius,
+        min_x=view.min_x,
+        min_y=view.min_y,
+        max_x=view.max_x,
+        max_y=view.max_y,
+        vertices=tuple(view.vertices),
     )
 
 
-def _obstacle_view_to_backend(view: "ObstacleView") -> ObstacleS:
-    """把 UI 障碍转成后端 ObstacleS（供规划调用）。"""
-    if view.kind == "polygon":
-        return make_polygon(view.obstacle_id, view.vertices)
-    if view.kind == "rect":
-        return make_rect(view.obstacle_id, view.min_x, view.min_y, view.max_x, view.max_y)
-    return make_circle(view.obstacle_id, view.center_x, view.center_y, view.radius)
+def obstacle_spec_to_view(spec: ObstacleSpec) -> ObstacleView:
+    """把应用层障碍复制为 GUI 可勾选对象。"""
+
+    return ObstacleView(
+        obstacle_id=spec.obstacle_id,
+        kind=spec.kind,
+        enabled=spec.enabled,
+        center_x=spec.center_x,
+        center_y=spec.center_y,
+        radius=spec.radius,
+        min_x=spec.min_x,
+        min_y=spec.min_y,
+        max_x=spec.max_x,
+        max_y=spec.max_y,
+        vertices=list(spec.vertices),
+    )
 
 
 def _inflated_polygon_vertices(vertices: list[tuple[float, float]], inflate: float) -> list[tuple[float, float]]:
@@ -443,60 +260,3 @@ def _rounded_inflated_polygon_points(
             angle = angle_from + sweep * (step / steps)
             points.append((vertex[0] + math.cos(angle) * inflate, vertex[1] + math.sin(angle) * inflate))
     return points
-
-
-def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[float, float]]:
-    """采样圆弧航段为折线点（含两端）。注意：复用 arc_swept_rad 求扫掠角。"""
-    center = line.start.center
-    radius = _arc_radius_fn(line)
-    a_start = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
-    swept = arc_swept_rad(line)
-    segments = max(1, int(abs(math.degrees(swept)) / step_deg))
-    return [
-        (
-            center.east + radius * math.cos(a_start + swept * (k / segments)),
-            center.north + radius * math.sin(a_start + swept * (k / segments)),
-        )
-        for k in range(segments + 1)
-    ]
-
-
-def route_to_polyline(route: list[WayPointInputS]) -> list[tuple[float, float]]:
-    """把 WayPointInputS 列表展开为折线点，供俯视图绘制预览航线。
-
-    显示只画航段几何：去掉转弯信息（交接半径 r），直线航段画直线、曲率航段（turnSign）画弧。
-    与配置航线/避障采用后的显示规则一致（见 leaf_types.to_display_inputs）。
-    """
-    if len(route) < 2:
-        return []
-    lines = waypoint_inputs_to_waylines(to_display_inputs(route))
-    raw: list[tuple[float, float]] = []
-    for line in lines:
-        if line.start.turnSign != 0.0:
-            raw.extend(_sample_wayline_arc(line))
-        else:
-            raw.append((line.start.pos.east, line.start.pos.north))
-            raw.append((line.end.pos.east, line.end.pos.north))
-    polyline: list[tuple[float, float]] = []
-    for point in raw:
-        if not polyline or math.hypot(point[0] - polyline[-1][0], point[1] - polyline[-1][1]) > 1e-6:
-            polyline.append(point)
-    return polyline
-
-
-def preview_route_marker_points(route: list[WayPointInputS]) -> list[tuple[float, float]]:
-    """把预览航线转换为航点标记坐标。注意：圆弧只标记端点，不标记中间采样点。"""
-    if len(route) < 2:
-        return []
-    # 与预览折线一致先转 display inputs，避免把过渡半径 r 当成真实航点。
-    lines = waypoint_inputs_to_waylines(to_display_inputs(route))
-    if not lines:
-        return []
-    raw = [(lines[0].start.pos.east, lines[0].start.pos.north)]
-    raw.extend((line.end.pos.east, line.end.pos.north) for line in lines)
-    markers: list[tuple[float, float]] = []
-    for point in raw:
-        # 相邻航段共用端点只画一个黑点，避免连接处显得更粗。
-        if not markers or math.hypot(point[0] - markers[-1][0], point[1] - markers[-1][1]) > 1e-6:
-            markers.append(point)
-    return markers

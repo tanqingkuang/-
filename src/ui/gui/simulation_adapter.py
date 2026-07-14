@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import math
 import threading
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import WayPointInputS
+from src.runner.sim_control import (
+    AvoidancePlanOutcome,
+    GeoReference,
+    GuiConfigData,
+    ObstacleSpec,
+    PlannedRoute,
+    apply_planned_route,
+    export_planned_route,
+    geodetic_from_enu,
+    load_gui_config,
+    persist_config_duration,
+    plan_route_for_gui,
+    planned_route_from_waypoints,
+    route_export_defaults,
+)
 from src.runner.sim_control import SimulationController, TimedSnapshotCursor
 from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 from src.ui.gui.playback_view_model import PlaybackViewModel
@@ -250,6 +263,8 @@ class ControllerSimulationAdapter:
         self._processed_event_count = 0
         # 3D 态势显示用地形文件，只由 GUI 读取，不传入控制器算法闭环。
         self.terrain_display_file: str | None = None
+        # 控制器成功加载后由 runner 应用层提供 GUI 辅助配置，界面不再自行读配置文件。
+        self.gui_config = GuiConfigData()
         # 缓存最近一次控制器调用的返回码/消息，供 UI 记录日志与判断成败。
         self.last_result_code = "OK"
         self.last_result_message = ""
@@ -288,7 +303,8 @@ class ControllerSimulationAdapter:
         self.last_result_message = result.message
         # 仅在加载成功时重置缓存：清空旧尾迹/速度缓存，扰动复位为“无”。
         if result.code == "OK":
-            self.terrain_display_file = _terrain_display_file_from_config(path)
+            self.gui_config = load_gui_config(path)
+            self.terrain_display_file = self.gui_config.terrain_display_file
             # 后台预热 3D 高度场缓存:用户打开 3D 窗口时直接命中,避免主线程卡数秒。
             _warm_terrain_field_cache(self.terrain_display_file)
             self._trail_by_node.clear()
@@ -378,9 +394,53 @@ class ControllerSimulationAdapter:
             }[kind]
         return self.snapshot()
 
-    def apply_avoidance_route(self, route: list[WayPointInputS]) -> Snapshot:
+    def plan_avoidance_route(
+        self,
+        waypoints: list[tuple[float, float, float]],
+        obstacles: list[ObstacleSpec],
+        **kwargs: object,
+    ) -> AvoidancePlanOutcome:
+        """规划避障航线。注意：算法类型与转换全部封装在 runner 应用层。"""
+
+        return plan_route_for_gui(waypoints, obstacles, **kwargs)
+
+    def route_export_defaults(self, config_path: Path) -> tuple[Path, str]:
+        """获取航线导出默认路径与过滤器。"""
+
+        return route_export_defaults(config_path)
+
+    def export_route(
+        self,
+        config_path: Path,
+        route_path: Path,
+        route: PlannedRoute,
+        speed_mps: float,
+        geo_reference: GeoReference | None,
+    ) -> Path:
+        """输出规划航线。注意：具体格式与数据转换由 runner 应用层负责。"""
+
+        normalized_route = route if isinstance(route, PlannedRoute) else planned_route_from_waypoints(route)
+        return export_planned_route(config_path, route_path, normalized_route, speed_mps, geo_reference)
+
+    def persist_duration(self, config_path: Path, duration_s: float) -> None:
+        """把时长写回主配置。注意：只更新 duration_s 字段。"""
+
+        persist_config_duration(config_path, duration_s)
+
+    def to_geodetic(
+        self,
+        east_m: float,
+        north_m: float,
+        reference: GeoReference | None = None,
+    ) -> tuple[float, float] | None:
+        """把 ENU 点击坐标转换为经纬度。注意：无地理原点时返回 None。"""
+
+        return geodetic_from_enu(east_m, north_m, reference or self.gui_config.geo_reference)
+
+    def apply_avoidance_route(self, route: PlannedRoute) -> Snapshot:
         """采用一条避障规划航线，替换长机航线。注意：成功后清空尾迹缓存（航线已变）。"""
-        result = self.controller.apply_avoidance_route(route)
+        normalized_route = route if isinstance(route, PlannedRoute) else planned_route_from_waypoints(route)
+        result = apply_planned_route(self.controller, normalized_route)
         self.last_result_code = result.code
         self.last_result_message = result.message
         if result.code == "OK":
@@ -652,35 +712,6 @@ def node_altitude(index: int, time_value: float) -> float:
 
     # 基准高度 1200m，按机序错开 35m 层差，再叠加随时间起伏的正弦扰动。
     return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
-
-
-def _terrain_display_file_from_config(path: str) -> str | None:
-    """从主配置读取 3D 地形文件路径。注意：该字段只影响显示层。"""
-
-    config_path = Path(path)
-    try:
-        text = config_path.read_text(encoding="utf-8")
-        if config_path.suffix.lower() == ".json":
-            data = json.loads(text)
-        elif config_path.suffix.lower() in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError:
-                return None
-            data = yaml.safe_load(text)
-        else:
-            return None
-    except (OSError, json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    raw_file = data.get("terrain_display_file")
-    if not isinstance(raw_file, str) or not raw_file.strip():
-        return None
-    display_path = Path(raw_file)
-    if not display_path.is_absolute():
-        display_path = config_path.parent / display_path
-    return str(display_path.resolve())
 
 
 def _warm_terrain_field_cache(display_file: str | None) -> None:
