@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -20,6 +21,9 @@ from src.data.geo_config import geo_origin_from_dict, route_to_external, route_t
 
 if TYPE_CHECKING:
     from src.runner.sim_controller import SimulationController
+
+# 辅助配置失败只记 debug；面向用户的正式加载错误仍由控制器结果码负责。
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -287,11 +291,13 @@ def terrain_display_file_from_config(path: str) -> str | None:
             try:
                 import yaml
             except ImportError:
+                LOGGER.debug("解析地形显示配置失败：缺少 YAML 依赖，path=%s", path, exc_info=True)
                 return None
             data = yaml.safe_load(text)
         else:
             return None
     except (OSError, json.JSONDecodeError, ValueError):
+        LOGGER.debug("解析地形显示配置失败，path=%s", path, exc_info=True)
         return None
     if not isinstance(data, dict):
         return None
@@ -374,6 +380,7 @@ def _load_json_config(path: str) -> dict[str, object] | None:
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        LOGGER.debug("读取 GUI 辅助 JSON 配置失败，path=%s", path, exc_info=True)
         return None
     return data if isinstance(data, dict) else None
 
@@ -385,6 +392,7 @@ def _resolve_obstacles(data: dict[str, object], path: str) -> dict[str, object] 
     try:
         return resolve_config_references(data, Path(path))
     except (OSError, ValueError):
+        LOGGER.debug("完整展开障碍配置失败，尝试仅保留障碍链路，path=%s", path, exc_info=True)
         try:
             # 回退路径移除坏 route_file，只保住旧 ENU 障碍的显示能力。
             resolved = dict(data)
@@ -394,6 +402,7 @@ def _resolve_obstacles(data: dict[str, object], path: str) -> dict[str, object] 
                 resolved = resolve_config_references(resolved, Path(path))
             return resolved
         except (OSError, ValueError):
+            LOGGER.debug("障碍配置回退展开失败，path=%s", path, exc_info=True)
             return None
 
 
@@ -411,6 +420,7 @@ def _resolve_route(data: dict[str, object], path: str) -> dict[str, object] | No
             resolved["route"], _origin_value = route_to_internal(route)
         return resolved
     except (OSError, ValueError):
+        LOGGER.debug("展开 GUI 航线配置失败，path=%s", path, exc_info=True)
         return None
 
 
