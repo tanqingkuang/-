@@ -24,13 +24,13 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-gui.txt
+          cache-dependency-path: pyproject.toml
 
       - name: 安装静态检查工具
         run: |
           python -m pip install --upgrade pip
           # mypy 需要依赖的类型信息，装上运行依赖减少 ignore_missing_imports 盲区。
-          python -m pip install -r requirements-gui.txt ruff mypy
+          python -m pip install ".[lint]"
 
       - name: 运行 ruff
         run: python -m ruff check src tests scripts
@@ -56,7 +56,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-gui.txt
+          cache-dependency-path: pyproject.toml
 
       - name: 安装 Qt 运行库
         run: |
@@ -94,7 +94,7 @@ jobs:
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-gui.txt pytest pytest-cov numpy
+          python -m pip install ".[test]"
 
       - name: 运行 LLT（含覆盖率）
         # 覆盖率只统计 LLT；ST 是黑盒验收，刻意不计入（见 pyproject.toml [tool.coverage]）。

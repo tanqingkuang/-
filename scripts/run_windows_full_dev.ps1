@@ -11,7 +11,7 @@ $ProjectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $ProjectRoot
 
 if ($InstallDependencies) {
-    & $Python -m pip install -r requirements-gui.txt
+    & $Python -m pip install .
 }
 
 $env:SIMU_GUI_FEATURE_PROFILE = "full"

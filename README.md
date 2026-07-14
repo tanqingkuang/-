@@ -47,11 +47,21 @@ tests/st/                 端到端场景、检查器和回归基线
 
 ## 快速开始
 
-CI 当前以 Python 3.12 为基线。先安装 GUI 依赖：
+CI 当前以 Python 3.12 为基线。项目元数据、运行依赖和工具依赖统一维护在 `pyproject.toml`。先安装 GUI 运行依赖：
 
 ```bash
-python -m pip install -r requirements-gui.txt
+python -m pip install .
 ```
+
+测试、静态检查和发布构建依赖分别按需安装：
+
+```bash
+python -m pip install ".[test]"
+python -m pip install ".[lint]"
+python -m pip install ".[build]"
+```
+
+`requirements-gui.txt` 仅为旧安装命令保留兼容入口，等价于安装项目及 `build` 依赖；新增或升级依赖时只修改 `pyproject.toml`。
 
 在 Windows 上推荐使用开发启动脚本，直接运行源码，不执行耗时的 PyInstaller 打包：
 
@@ -159,7 +169,7 @@ macOS 发布构建入口为：
 运行 LLT：
 
 ```bash
-python -m pip install pytest
+python -m pip install ".[test]"
 pytest tests/llt -q
 ```
 

@@ -1,5 +1,57 @@
-# 目前仅承载工具配置（ruff / mypy / coverage），不含 [project] 元数据，
-# 以免改变现有 pip / PyInstaller 打包行为。依赖仍以 requirements-gui.txt 为准。
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formation-simulation-platform"
+version = "1.0.0"
+description = "面向固定翼与无人机编队的仿真、评测和可视化平台"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy==2.3.4",
+    "PySide6==6.11.1",
+    "PySide6-Addons==6.11.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+lint = [
+    "mypy",
+    "ruff",
+]
+build = [
+    "PyInstaller>=6.0",
+]
+
+[project.urls]
+repository = "https://github.com/tanqingkuang/-.git"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.setuptools.package-data]
+"src.data.linefile" = ["*.md"]
+"src.data.obstaclefile" = ["*.md"]
+"src.ui.gui" = [
+    "assets/*.ico",
+    "assets/*.png",
+    "situation3d/qml/*.qml",
+    "situation3d/qml/assets/*.glb",
+    "situation3d/qml/assets/*.md",
+    "situation3d/qml/assets/*.png",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/llt"]
+python_files = ["test_*.py"]
 
 [tool.ruff]
 target-version = "py312"

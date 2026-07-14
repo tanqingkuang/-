@@ -28,7 +28,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$install_dependencies" == true ]]; then
-    "$python_bin" -m pip install -r "$project_root/requirements-gui.txt"
+    "$python_bin" -m pip install "$project_root"
 fi
 
 cd "$project_root"
