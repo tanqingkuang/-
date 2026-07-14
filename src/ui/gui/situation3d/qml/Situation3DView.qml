@@ -49,6 +49,8 @@ Item {
     property double terrainLoadingStartedMs: 0
     property string terrainLoadingKey: ""
     property int terrainLoadingResolution: 0
+    // 外围地面末端、距离雾和天空天际线共用唯一色值，避免三层交界再次出现色阶。
+    readonly property color horizonColor: "#354e65"
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -726,7 +728,7 @@ Item {
         gradient: Gradient {
             GradientStop { position: 0.0; color: "#16263c" }
             GradientStop { position: 0.16; color: "#22405c" }
-            GradientStop { position: 0.22; color: "#3a6a8c" }
+            GradientStop { position: 0.22; color: root.horizonColor }
             GradientStop { position: 0.34; color: "#2a4a66" }
             GradientStop { position: 1.0; color: "#2e4458" }
         }
@@ -750,12 +752,13 @@ Item {
             aoBias: 24
             fog: Fog {
                 enabled: true
-                // 清晨薄雾:雾色取天际亮蓝灰(比地面亮),密度减半、消隐距离推远,远景保持轮廓可辨。
-                color: "#3d5876"
+                // 距离雾与二维天空共用天际色；远端低密地面在进入天空前完成同色融合。
+                color: root.horizonColor
                 density: 0.16
                 depthEnabled: true
-                depthNear: Math.max(3200, root.distance * 1.45)
-                depthFar: Math.max(11000, root.distance * 3.10)
+                // 雾距只跟地图物理跨度关联，不随相机缩放一起后退，否则重置全图时边界永远进不了雾。
+                depthNear: Math.max(8000, root.terrainEffectiveSpan * 0.55)
+                depthFar: Math.max(32000, root.terrainEffectiveSpan * 2.0)
                 depthCurve: 1.18
                 heightEnabled: false
             }

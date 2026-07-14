@@ -1578,7 +1578,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(list(history._stream_points), [])
 
     def test_terrain_geometry_builds_connected_heightfield(self) -> None:
-        """验证 3D 地形使用一张连续 mesh，而不是多个独立山体模型。"""
+        """验证 3D 地形使用连续 mesh，并以低密外围地面隐藏主地图硬边。"""
 
         geometry = TerrainGeometry()
         geometry.widthValue = DEFAULT_TERRAIN_SPAN_M
@@ -1593,6 +1593,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(geometry.stride(), 72)
         self.assertGreater(geometry.vertexData().size(), 0)
         self.assertGreater(geometry.indexData().size(), 0)
+        self.assertAlmostEqual(geometry.boundsMin().x(), -120000.0)
+        self.assertAlmostEqual(geometry.boundsMax().x(), 120000.0)
+        self.assertAlmostEqual(geometry.boundsMin().z(), -120000.0)
+        self.assertAlmostEqual(geometry.boundsMax().z(), 120000.0)
         self.assertLessEqual(geometry.boundsMin().y(), 0.0)
         self.assertGreater(geometry.boundsMax().y(), 760.0)
         self.assertGreater(max(y_values) - min(y_values), 450.0)
@@ -1709,7 +1713,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         layout_vertex_size = geometry.vertexData().size()
 
         self.assertEqual(geometry.stride(), 72)
-        self.assertEqual(layout_vertex_size, 128 * 128 * geometry.stride())
+        self.assertEqual(layout_vertex_size, (128 + 80) ** 2 * geometry.stride())
         self.assertGreater(geometry.indexData().size(), 0)
         self.assertGreater(geometry.generationTimeMs, 0.0)
         self.assertGreater(geometry.boundsMax().y(), 2000.0)
@@ -1740,7 +1744,15 @@ class Situation3DSceneDataTests(unittest.TestCase):
         geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
         displacement = np.abs(field.display_heights_m - field.heights_m)
         vertex_index = int(np.argmax(displacement))
-        values = struct.unpack_from("<18f", bytes(geometry.vertexData()), vertex_index * geometry.stride())
+        core_row, core_column = np.unravel_index(vertex_index, displacement.shape)
+        surface_side = field.resolution + 80
+        ring_steps = (surface_side - field.resolution) // 2
+        surface_vertices = np.frombuffer(bytes(geometry.vertexData()), dtype="<f4").reshape(
+            surface_side,
+            surface_side,
+            18,
+        )
+        values = surface_vertices[core_row + ring_steps, core_column + ring_steps]
 
         normal = np.array(values[3:6])
         tangent = np.array(values[8:11])
@@ -1754,6 +1766,35 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.dot(normal, tangent)), 0.0, places=4)
         self.assertAlmostEqual(float(np.dot(normal, binormal)), 0.0, places=4)
         self.assertAlmostEqual(float(np.dot(tangent, binormal)), 0.0, places=4)
+
+    def test_layout_geometry_adds_opaque_low_density_horizon_ring(self) -> None:
+        """验证主地形外追加不透明低密环，边界越过远裁剪面且不破坏深度遮挡。"""
+
+        field = terrain_field_module.get_terrain_field(TERRAIN_LAYOUT_PATH, resolution=128)
+        geometry = TerrainGeometry()
+        geometry.resolutionValue = 128
+        geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
+        vertices = np.frombuffer(bytes(geometry.vertexData()), dtype="<f4").reshape(-1, 18)
+        unique_x = np.unique(vertices[:, 0])
+        unique_z = np.unique(vertices[:, 2])
+
+        # 每侧只增加 40 个径向采样，主地形仍保留原 128 网格，不用放大整张高精高度场。
+        self.assertEqual(len(unique_x), field.resolution + 80)
+        self.assertEqual(len(unique_z), field.resolution + 80)
+        self.assertEqual(len(vertices), (field.resolution + 80) ** 2)
+        self.assertAlmostEqual(float(unique_x[0]), -field.width_m * 4.0, places=3)
+        self.assertAlmostEqual(float(unique_x[-1]), field.width_m * 4.0, places=3)
+        self.assertAlmostEqual(float(unique_z[0]), -field.depth_m * 4.0, places=3)
+        self.assertAlmostEqual(float(unique_z[-1]), field.depth_m * 4.0, places=3)
+        self.assertGreater(float(unique_x[-1]), 100000.0)
+        # 外围环必须保持不透明，避免整张地形进入透明队列后让山后的飞机穿透可见。
+        np.testing.assert_allclose(vertices[:, 17], 1.0, atol=1e-6)
+
+        outer_mask = np.isclose(np.abs(vertices[:, 0]), field.width_m * 4.0, atol=1e-3) | np.isclose(
+            np.abs(vertices[:, 2]), field.depth_m * 4.0, atol=1e-3
+        )
+        self.assertTrue(bool(np.any(outer_mask)))
+        np.testing.assert_allclose(vertices[outer_mask, 1], 0.0, atol=1e-4)
 
     def test_trail_ribbon_geometry_builds_single_continuous_mesh(self) -> None:
         """验证尾迹 ribbon 使用一张连续三角带，而不是离散点或分段圆柱。"""
@@ -2273,6 +2314,26 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertIn("aoStrength:", environment_block)
         self.assertIn("castsShadow: true", key_light_block)
         self.assertIn("shadowMapQuality: Light.ShadowMapQualityUltra", key_light_block)
+
+    def test_horizon_ground_fog_and_background_share_one_transition_palette(self) -> None:
+        """验证外围地面、距离雾和二维天空共用天际色，且雾距不再随相机一起后退。"""
+
+        qml = QML_VIEW_PATH.read_text(encoding="utf-8")
+        environment_start = qml.index("environment: SceneEnvironment")
+        environment_block = qml[environment_start : qml.index("Node {", environment_start)]
+        terrain_start = qml.index("id: terrainSurfaceModel")
+        terrain_block = qml[terrain_start : qml.index("Repeater3D", terrain_start)]
+
+        self.assertIn('readonly property color horizonColor: "#354e65"', qml)
+        self.assertGreaterEqual(qml.count("color: root.horizonColor"), 2)
+        self.assertIn("depthNear: Math.max(8000, root.terrainEffectiveSpan * 0.55)", environment_block)
+        self.assertIn(
+            "depthFar: Math.max(32000, root.terrainEffectiveSpan * 2.0)",
+            environment_block,
+        )
+        self.assertNotIn("root.distance * 1.45", environment_block)
+        self.assertNotIn("root.distance * 3.10", environment_block)
+        self.assertNotIn("alphaMode: PrincipledMaterial.Blend", terrain_block)
 
     def test_aircraft_model_stays_recognizable_but_distance_visible(self) -> None:
         """飞机应按真实尺寸渲染无人机模型，并随相机距离自适应缩放以免缩远后消失。"""
