@@ -344,8 +344,7 @@ class MainWindowAvoidanceMixin:
         if not enabled:
             # 未选择任何障碍：等价于维持原航线，不生成 R 圆弧航线，也不允许采用。
             self._invalidate_preview()
-            self.avoidance_status.setText("未选择障碍 · 维持原航线")
-            self._log("Avoid", "未选择障碍，跳过生成（维持原航线）")
+            self._report_avoidance_result("未选择障碍 · 维持原航线", "未选择障碍，跳过生成（维持原航线）")
             return
         # 规划参数以界面控件为准（用户可现场调），覆盖配置解析值。
         # 旧配置未显式配置 simplify_clearance_m 时，让去冗余安全距跟随当前安全间距控件，保持旧行为。
@@ -369,8 +368,7 @@ class MainWindowAvoidanceMixin:
             )
         except ValueError as exc:
             self._invalidate_preview()
-            self.avoidance_status.setText(f"参数错误：{exc}")
-            self._log("WARN", f"生成航线参数错误：{exc}")
+            self._report_avoidance_result(f"参数错误：{exc}", f"生成航线参数错误：{exc}", level="WARN")
             return
         if result.ok and result.route is not None:
             self._preview_route = result.route
@@ -380,12 +378,23 @@ class MainWindowAvoidanceMixin:
             arcs = result.route.arc_count
             self.adopt_route_button.setEnabled(True)
             self.export_route_button.setEnabled(True)
-            self.avoidance_status.setText(f"预览就绪：{segment_count} 段（{arcs} 圆弧）· 可采用")
-            self._log("Avoid", f"生成航线成功：{segment_count} 段，{arcs} 圆弧")
+            self._report_avoidance_result(
+                f"预览就绪：{segment_count} 段（{arcs} 圆弧）· 可采用",
+                f"生成航线成功：{segment_count} 段，{arcs} 圆弧",
+            )
         else:
             self._invalidate_preview()
-            self.avoidance_status.setText(f"{result.code}：{result.detail}")
-            self._log("Avoid", f"生成航线失败 {result.code}: {result.detail}")
+            self._report_avoidance_result(
+                f"{result.code}：{result.detail}",
+                f"生成航线失败 {result.code}: {result.detail}",
+            )
+
+    def _report_avoidance_result(self, status: str, log_message: str, *, level: str = "Avoid") -> None:
+        """同步避障状态文本与对应日志。"""
+
+        # 状态先落到当前窗口，再把同一结果写入可追溯日志。
+        self.avoidance_status.setText(status)
+        self._log(level, log_message)
 
     def _export_route(self) -> None:
         """响应“航线输出”：把当前预览航线写成 route_file 文件。注意：只输出已生成但未失效的预览。"""
@@ -414,11 +423,9 @@ class MainWindowAvoidanceMixin:
             # 通过 runner 应用层保存，确保格式策略与控制器加载链路一致。
             written = self.sim.export_route(config_path, route_path, self._preview_route, speed_mps, geo_reference)
         except (OSError, ValueError) as exc:
-            self.avoidance_status.setText(f"航线输出失败：{exc}")
-            self._log("WARN", f"航线输出失败：{exc}")
+            self._report_avoidance_result(f"航线输出失败：{exc}", f"航线输出失败：{exc}", level="WARN")
             return
-        self.avoidance_status.setText(f"已输出航线：{written}")
-        self._log("Avoid", f"已输出避障航线：{written}")
+        self._report_avoidance_result(f"已输出航线：{written}", f"已输出避障航线：{written}")
 
     def _adopt_route(self) -> None:
         """响应“采用航线”：把预览航线下发控制器替换长机航线（采用后点播放仿真）。"""
@@ -431,11 +438,13 @@ class MainWindowAvoidanceMixin:
             self._invalidate_preview()
         self._update_snapshot(snapshot, fit_top_view=False)
         if self.sim.last_result_code == "OK":
-            self.avoidance_status.setText("已采用避障航线 · 点播放仿真")
-            self._log("Avoid", "已采用避障航线，长机航线已替换")
+            self._report_avoidance_result("已采用避障航线 · 点播放仿真", "已采用避障航线，长机航线已替换")
         else:
-            self.avoidance_status.setText(f"采用失败 {self.sim.last_result_code}")
-            self._log("WARN", f"采用航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}")
+            self._report_avoidance_result(
+                f"采用失败 {self.sim.last_result_code}",
+                f"采用航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}",
+                level="WARN",
+            )
 
     def _reset_avoidance_route(self) -> None:
         """响应“重置”：清除已采用避障航线，恢复配置默认长机航线。"""
@@ -444,11 +453,13 @@ class MainWindowAvoidanceMixin:
         self._update_snapshot(snapshot, fit_top_view=False)
         if self.sim.last_result_code == "OK":
             # 控制器已回到配置航线，画布快照也同步刷新。
-            self.avoidance_status.setText("已恢复默认航线")
-            self._log("Avoid", "已清除避障航线，恢复默认航线")
+            self._report_avoidance_result("已恢复默认航线", "已清除避障航线，恢复默认航线")
         else:
-            self.avoidance_status.setText(f"重置失败 {self.sim.last_result_code}")
-            self._log("WARN", f"重置航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}")
+            self._report_avoidance_result(
+                f"重置失败 {self.sim.last_result_code}",
+                f"重置航线失败 {self.sim.last_result_code}: {self.sim.last_result_message}",
+                level="WARN",
+            )
 
     def _open_avoidance_window(self) -> None:
         """打开避障规划子窗口。注意：重复触发只激活已有窗口。"""

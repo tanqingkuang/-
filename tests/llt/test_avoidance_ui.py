@@ -389,6 +389,16 @@ class AvoidanceUiFlowTests(unittest.TestCase):
             spin = getattr(window, spec.widget_attr)
             self.assertEqual(spin.toolTip(), spec.tooltip)
 
+    def test_avoidance_report_updates_status_and_one_log_together(self) -> None:
+        """统一回报入口应同步状态文本并只记录一条指定等级日志。"""
+
+        window = self._window()
+        with patch.object(window, "_log") as log:
+            window._report_avoidance_result("规划失败", "详细原因", level="WARN")
+
+        self.assertEqual(window.avoidance_status.text(), "规划失败")
+        log.assert_called_once_with("WARN", "详细原因")
+
     def test_param_tooltips_focus_on_effect_and_advice(self) -> None:
         # 参数 tooltip 不重复参数名，直接说明作用、影响和建议，方便现场调参。
         window = self._window()
