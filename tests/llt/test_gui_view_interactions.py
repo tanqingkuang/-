@@ -45,7 +45,7 @@ from src.ui.gui.view_models import (
     is_major_grid_line,
     trail_seconds_for_duration,
 )
-from src.ui.gui.node_card_view_model import card_rect_for
+from src.ui.gui.node_card_view_model import CardLayoutConfig, card_rect_for
 from src.ui.gui.side_view import SideView
 from src.ui.gui.top_view import NODE_CARD_GAP_X, NODE_CARD_GAP_Y, NODE_CARD_HEIGHT, NODE_CARD_WIDTH, TopView
 
@@ -182,7 +182,15 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertTrue(top_view.cards.is_card_shown("A01"))
 
         rect = card_rect_for(
-            point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_GAP_X, NODE_CARD_GAP_Y, 640.0, 420.0
+            point,
+            CardLayoutConfig(
+                NODE_CARD_WIDTH,
+                NODE_CARD_HEIGHT,
+                NODE_CARD_GAP_X,
+                NODE_CARD_GAP_Y,
+                viewport_width=640.0,
+                viewport_height=420.0,
+            ),
         )
         contains_owner = rect.x <= point.x <= rect.x + rect.w and rect.y <= point.y <= rect.y + rect.h
         self.assertFalse(contains_owner, "贴边节点的卡片矩形不得覆盖属主飞机本体")

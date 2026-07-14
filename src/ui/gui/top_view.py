@@ -9,7 +9,13 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
 from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
-from src.ui.gui.node_card_view_model import CardBoardState, CardRect, ScreenPoint, card_rect_for
+from src.ui.gui.node_card_view_model import (
+    CardBoardState,
+    CardLayoutConfig,
+    CardRect,
+    ScreenPoint,
+    card_rect_for,
+)
 from src.ui.gui.theme_widgets import THEMES, Theme
 from src.ui.gui.trail_path_cache import TrailPathCache
 from src.ui.gui.view_models import (
@@ -342,19 +348,22 @@ class TopView(QGraphicsView):
 
         if self.snapshot is not self._card_snapshot:
             return
-        # 遮挡检测与实际绘制共用同一视口尺寸，保证锚点选择与离屏判定完全一致。
-        viewport_size = self.viewport().size()
-        if self.cards.update_visibility(
-            self._node_screen_points(),
-            NODE_CARD_WIDTH,
-            NODE_CARD_HEIGHT,
-            NODE_CARD_GAP_X,
-            NODE_CARD_GAP_Y,
-            icon_size=NODE_ICON_ENVELOPE,
-            viewport_w=float(viewport_size.width()),
-            viewport_h=float(viewport_size.height()),
-        ):
+        if self.cards.update_visibility(self._node_screen_points(), self._card_layout_config()):
             self.viewport().update()
+
+    def _card_layout_config(self) -> CardLayoutConfig:
+        """返回遮挡判定与绘制共用的当前卡片布局。"""
+
+        viewport_size = self.viewport().size()
+        return CardLayoutConfig(
+            card_width=NODE_CARD_WIDTH,
+            card_height=NODE_CARD_HEIGHT,
+            gap_x=NODE_CARD_GAP_X,
+            gap_y=NODE_CARD_GAP_Y,
+            icon_size=NODE_ICON_ENVELOPE,
+            viewport_width=float(viewport_size.width()),
+            viewport_height=float(viewport_size.height()),
+        )
 
     def _draw_screen_text(self, painter: QPainter, x: float, y: float, dx: float, dy: float, text: str) -> None:
         """按屏幕坐标绘制文本。注意：避免世界 y 轴翻转导致文字倒置。"""
@@ -746,18 +755,14 @@ class TopView(QGraphicsView):
 
         if snapshot is not self._card_snapshot:
             return
-        # 与遮挡检测共用同一视口尺寸，保证绘制矩形和判定矩形（含锚点选择、离屏判定）完全一致。
-        viewport_size = self.viewport().size()
-        viewport_w = float(viewport_size.width())
-        viewport_h = float(viewport_size.height())
+        # 与遮挡检测共用同一配置，保证绘制矩形和判定矩形完全一致。
+        layout = self._card_layout_config()
         points = {point.node_id: point for point in self._node_screen_points()}
         for node in snapshot.nodes:
             if not self.cards.is_card_shown(node.node_id):
                 continue
             point = points[node.node_id]
-            rect = card_rect_for(
-                point, NODE_CARD_WIDTH, NODE_CARD_HEIGHT, NODE_CARD_GAP_X, NODE_CARD_GAP_Y, viewport_w, viewport_h
-            )
+            rect = card_rect_for(point, layout)
             self._draw_node_card(painter, node, point, rect)
 
     def _draw_node_card(
