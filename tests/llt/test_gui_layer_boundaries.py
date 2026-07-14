@@ -36,6 +36,42 @@ class GuiLayerBoundaryTests(unittest.TestCase):
                     violations.append(f"{relative_path}:{node.lineno} -> {node.module}")
         self.assertEqual(violations, [])
 
+    def test_fullscreen_actions_use_layout_owned_stage_interface(self) -> None:
+        """全屏动作不得直接读写布局索引、拉伸系数和占位控件。"""
+
+        path = _PROJECT_ROOT / "src/ui/gui/main_window_actions.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        action_nodes = (
+            methods["_enter_stage_fullscreen"],
+            methods["_exit_stage_fullscreen"],
+        )
+        attributes = {
+            node.attr
+            for method in action_nodes
+            for node in ast.walk(method)
+            if isinstance(node, ast.Attribute)
+        }
+
+        self.assertTrue(
+            {
+                "_take_stage_for_fullscreen",
+                "_restore_stage_from_fullscreen",
+            }.issubset(attributes)
+        )
+        self.assertTrue(
+            {
+                "main_layout",
+                "_stage_layout_index",
+                "_stage_layout_stretch",
+                "_stage_placeholder",
+            }.isdisjoint(attributes)
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

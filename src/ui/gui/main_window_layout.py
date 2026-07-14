@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import sys
 
 from PySide6.QtCore import Qt
@@ -44,11 +45,21 @@ from src.ui.gui.view_models import (
 )
 
 
+@dataclass(frozen=True)
+class _StageLayoutSlot:
+    """记录实时显示区在主布局中的位置。注意：只由布局 Mixin 创建和恢复。"""
+
+    index: int
+    stretch: int
+    placeholder: QWidget
+
+
 class MainWindowLayoutMixin:
     """拆分主窗口布局构建逻辑。注意：由 MainWindow 继承使用。"""
 
     def _build_ui(self) -> None:
         """构建主窗口全部 UI 区域。注意：控件引用需保存供后续事件更新使用。"""
+        self._stage_layout_slot: _StageLayoutSlot | None = None
         self._build_menus()
         root = QWidget()
         self.setCentralWidget(root)
@@ -69,6 +80,37 @@ class MainWindowLayoutMixin:
         main.addWidget(self.stage, 1)
         main.addWidget(self._build_right_panel(), 0)
         self._build_avoidance_window()
+
+    def _take_stage_for_fullscreen(self) -> bool:
+        """从主布局取出实时显示区并留下占位控件，供全屏动作接管。"""
+
+        if self.stage is None or self.main_layout is None or self._stage_layout_slot is not None:
+            return False
+        index = self.main_layout.indexOf(self.stage)
+        if index < 0:
+            return False
+        stretch = self.main_layout.stretch(index)
+        placeholder = QWidget()
+        self.main_layout.removeWidget(self.stage)
+        self.main_layout.insertWidget(index, placeholder, stretch)
+        self._stage_layout_slot = _StageLayoutSlot(index, stretch, placeholder)
+        return True
+
+    def _restore_stage_from_fullscreen(self) -> bool:
+        """移除占位控件并把实时显示区恢复到原布局位置和拉伸系数。"""
+
+        slot = self._stage_layout_slot
+        if self.stage is None or self.main_layout is None or slot is None:
+            return False
+        placeholder_index = self.main_layout.indexOf(slot.placeholder)
+        if placeholder_index >= 0:
+            self.main_layout.removeWidget(slot.placeholder)
+        slot.placeholder.deleteLater()
+        # 其他布局项可能在全屏期间变化，恢复索引需要限制在当前有效范围内。
+        insert_index = min(slot.index, self.main_layout.count())
+        self.main_layout.insertWidget(insert_index, self.stage, slot.stretch)
+        self._stage_layout_slot = None
+        return True
 
     def _build_menus(self) -> None:
         """构建菜单栏入口。注意：常驻控制集中到菜单，避免占用主界面高度。"""

@@ -6,7 +6,7 @@ from configparser import ConfigParser
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt
-from PySide6.QtWidgets import QFileDialog, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QVBoxLayout
 
 from src.runner.sim_control import DisturbanceType, RunState
 from src.ui.gui.config_state_view_model import (
@@ -501,22 +501,11 @@ class MainWindowActionMixin:
 
     def _enter_stage_fullscreen(self) -> None:
         """进入 stage fullscreen 模式。注意：需要保存退出时恢复的界面状态。"""
-        # 前置条件：stage/布局存在且当前未全屏。
-        if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is not None:
+        # 前置条件：stage 存在且当前未全屏；布局细节由布局 Mixin 自己维护。
+        if self.stage is None or self._stage_fullscreen_dialog is not None:
             return
-
-        index = self.main_layout.indexOf(self.stage)
-        if index < 0:
+        if not self._take_stage_for_fullscreen():
             return
-
-        # 记录 stage 在主布局中的位置与拉伸系数，供退出时原样还原。
-        self._stage_layout_index = index
-        self._stage_layout_stretch = self.main_layout.stretch(index)
-        self.main_layout.removeWidget(self.stage)
-
-        # 用占位控件顶住原位，避免左右面板布局塌陷。
-        self._stage_placeholder = QWidget()
-        self.main_layout.insertWidget(self._stage_layout_index, self._stage_placeholder, self._stage_layout_stretch)
 
         # 把 stage 移入无边框全屏对话框（reparent 到对话框布局）。
         dialog = StageFullscreenDialog(self)
@@ -531,7 +520,7 @@ class MainWindowActionMixin:
     def _exit_stage_fullscreen(self) -> None:
         """退出 stage fullscreen 模式。注意：需要恢复进入前的布局状态。"""
         # 前置条件：处于全屏态。
-        if self.stage is None or self.main_layout is None or self._stage_fullscreen_dialog is None:
+        if self.stage is None or self._stage_fullscreen_dialog is None:
             return
 
         # 先把 stage 从对话框取出，再销毁对话框。
@@ -540,18 +529,7 @@ class MainWindowActionMixin:
         dialog.hide()
         dialog.deleteLater()
         self._stage_fullscreen_dialog = None
-
-        # 移除并销毁占位控件。
-        if self._stage_placeholder is not None:
-            placeholder_index = self.main_layout.indexOf(self._stage_placeholder)
-            if placeholder_index >= 0:
-                self.main_layout.removeWidget(self._stage_placeholder)
-            self._stage_placeholder.deleteLater()
-            self._stage_placeholder = None
-
-        # 把 stage 插回原位置（用 min 兜底防止索引越界）并还原拉伸系数。
-        insert_index = min(self._stage_layout_index, self.main_layout.count())
-        self.main_layout.insertWidget(insert_index, self.stage, self._stage_layout_stretch)
+        self._restore_stage_from_fullscreen()
         self._set_fullscreen_button_state(False)
         self.stage.show()
         # reparent 后强制重绘两视图，避免残留旧画面。

@@ -125,11 +125,7 @@ class MainWindow(
         self.main_layout: QHBoxLayout | None = None
         self.stage: QWidget | None = None
         self.fullscreen_button: QPushButton | None = None
-        # 全屏时用占位控件顶替原位置，退出时据此还原布局位置与拉伸系数。
-        self._stage_placeholder: QWidget | None = None
         self._stage_fullscreen_dialog: StageFullscreenDialog | None = None
-        self._stage_layout_index = 1
-        self._stage_layout_stretch = 1
         self.disturbance_buttons: list[QPushButton] = []
         # 避障障碍（来自配置）与其勾选框，加载配置后填充。
         self.obstacles: list[ObstacleView] = []
