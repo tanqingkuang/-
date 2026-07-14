@@ -1987,19 +1987,31 @@ class Situation3DBridgeMeshDedupTests(unittest.TestCase):
         payload = json.loads(bridge.sceneData())
         self.assertIn("meshValue", payload["riskZoneFills"][0])
 
-    def test_empty_fills_do_not_crash_and_reset_tracking(self) -> None:
-        """空填充列表(如无避障障碍)不应报错，也不能残留旧签名影响后续裁剪判断。"""
+    def test_empty_fills_do_not_crash(self) -> None:
+        """空填充列表(如无避障障碍)应原样通过，不报错也不参与裁剪。"""
 
         bridge = self._bridge()
         bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": []})
         payload = json.loads(bridge.sceneData())
         self.assertEqual(payload["riskZoneFills"], [])
 
+    def test_mesh_value_resent_after_toggling_through_empty_fills(self) -> None:
+        """A → 全部关闭障碍(空填充,签名变 B) → 再恢复同一批障碍(签名回到 A)，
+        第三帧必须带上完整 meshValue，不能被误判为"签名未变"而裁掉。
+
+        QML 侧 A→B 的 staticChanged 会先用空列表清空 riskFillModel；B→A 再次
+        staticChanged 时必须重新拿到完整网格才能重建，否则恢复后填充会凭空消失。
+        """
+
+        bridge = self._bridge()
         fills = [{"color": "#ff5a45", "meshValue": "X" * 2000}]
+
         bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
-        refilled = json.loads(bridge.sceneData())
-        # 上一帧是空列表时未记录“已发送过 A 的网格”，因此 staticKey 相同也要带上完整数据。
-        self.assertIn("meshValue", refilled["riskZoneFills"][0])
+        bridge.set_scene_payload({"staticKey": "B", "riskZoneFills": []})
+        bridge.set_scene_payload({"staticKey": "A", "riskZoneFills": fills})
+
+        restored = json.loads(bridge.sceneData())
+        self.assertIn("meshValue", restored["riskZoneFills"][0])
 
 
 if __name__ == "__main__":
