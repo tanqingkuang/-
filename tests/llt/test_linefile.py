@@ -12,7 +12,6 @@ from pathlib import Path
 from src.data.linefile import LineFileManager, LineFileStrategyFactory
 from src.data.linefile.diamond_xml_strategy import DiamondXmlLineFileStrategy
 from src.data.config_loader import resolve_config_references
-from tests.llt._geo_route import geodetic_route
 
 
 class LineFileTests(unittest.TestCase):

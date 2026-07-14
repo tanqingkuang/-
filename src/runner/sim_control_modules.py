@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from src.algorithm.context.leaf_types import (
+    FormCommInitS,
     FormSelfInitS,
     FormStageE,
-    FormationAnalysisS,
     MotionProfS,
     PosTrackDiagS,
     RallyPhaseE,

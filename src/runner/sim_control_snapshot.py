@@ -9,6 +9,7 @@ from src.algorithm.context.leaf_types import FormStageE, PosTrackDiagS
 from src.environment.model import AircraftState
 from src.runner.sim_control_routes import _route_state_from_wayline
 from src.runner.sim_control_types import (
+    ControlReport,
     LinkState,
     NodeState,
     RouteState,

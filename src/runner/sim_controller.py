@@ -34,7 +34,6 @@ from src.runner.sim_control_routes import (
     _build_vel_cmd_limit,
     _leader_id_from_nodes,
     _motion_from_aircraft_state,
-    _route_state_from_wayline,
 )
 from src.runner.sim_control_snapshot import SimulationControllerSnapshotMixin
 from src.runner.sim_control_types import (
@@ -43,9 +42,6 @@ from src.runner.sim_control_types import (
     DisturbanceCommand,
     DisturbanceType,
     EventLevel,
-    LinkState,
-    NodeState,
-    RouteState,
     RunState,
     SimulationEvent,
     SimulationSnapshot,

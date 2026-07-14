@@ -33,7 +33,6 @@ from src.ui.gui.main_window import (
     NodeState,
     ReferenceRoute,
     Snapshot,
-    TOP_VIEW_ORIGIN_MARGIN,
     TrailPoint,
     default_project_root,
     run_gui,
@@ -1953,7 +1952,7 @@ class GuiViewInteractionTests(unittest.TestCase):
     def test_startup_loads_last_relative_config_from_ini(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
-            config_path = self._write_config_file(project_root / "configs" / "startup.json")
+            self._write_config_file(project_root / "configs" / "startup.json")
             state_path = project_root / "config.ini"
             state_path.write_text("[config]\nlast_config = configs/startup.json\n", encoding="utf-8")
 
@@ -2009,7 +2008,7 @@ class GuiViewInteractionTests(unittest.TestCase):
     def test_packaged_startup_loads_config_ini_next_to_exe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             app_dir = Path(tmp).resolve()  # macOS: /var → /private/var，与 default_project_root() 的真实路径对齐
-            config_path = self._write_config_file(app_dir / "configs" / "packaged.json")
+            self._write_config_file(app_dir / "configs" / "packaged.json")
             state_path = app_dir / "config.ini"
             state_path.write_text("[config]\nlast_config = configs/packaged.json\n", encoding="utf-8")
 
@@ -2122,7 +2121,7 @@ class GuiViewInteractionTests(unittest.TestCase):
     def test_successful_config_load_updates_ini_with_relative_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
-            first_config = self._write_config_file(project_root / "configs" / "first.json")
+            self._write_config_file(project_root / "configs" / "first.json")
             second_config = self._write_config_file(project_root / "configs" / "second.json")
             state_path = project_root / "config.ini"
             state_path.write_text("[config]\nlast_config = configs/first.json\n", encoding="utf-8")

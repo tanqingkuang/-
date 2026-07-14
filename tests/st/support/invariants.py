@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Iterable
+from typing import Any
 
 from tests.st.support import thresholds
 from tests.st.support.metrics import _distance3d, _leader_id, _node_by_id, _obstacle_margin, _obstacles, _route_end

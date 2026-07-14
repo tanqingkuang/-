@@ -18,7 +18,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from src.algorithm.context.leaf_types import PosInEarthS, WayPointInputS
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import assign_transition_radius, points_to_route
 from src.data.linefile import LineFileManager

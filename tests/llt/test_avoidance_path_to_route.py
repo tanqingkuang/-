@@ -11,7 +11,6 @@ from src.algorithm.units.process.tra_plan.avoidance.astar import plan_path
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import (
     blocked,
     make_circle,
-    make_rect,
 )
 from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS
 from src.algorithm.units.algo.arc_path import arc_swept_rad
