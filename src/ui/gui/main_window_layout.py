@@ -44,6 +44,16 @@ from src.ui.gui.view_models import (
     playback_rate_to_slider_value,
 )
 
+# 演示入口只在文案、提示和配置文件上有差异，统一规格避免新增场景时复制控件样板。
+DEMO_CONFIG_ACTIONS: tuple[tuple[str, str, str], ...] = (
+    ("编队保持", "加载 configs/base.json — 三机楔形保持队形演示", "base.json"),
+    (
+        "集结演示",
+        "加载 configs/rally_demo_5_aircraft.json — 五机分散后集结演示",
+        "rally_demo_5_aircraft.json",
+    ),
+)
+
 
 @dataclass(frozen=True)
 class _StageLayoutSlot:
@@ -249,14 +259,15 @@ class MainWindowLayoutMixin:
         demo_layout = QVBoxLayout(demo_group)
         demo_layout.setContentsMargins(10, 18, 10, 10)
         demo_layout.setSpacing(8)
-        btn_hold = QPushButton("编队保持")
-        btn_hold.setToolTip("加载 configs/base.json — 三机楔形保持队形演示")
-        btn_hold.clicked.connect(lambda: self._load_demo_config("base.json"))
-        btn_rally = QPushButton("集结演示")
-        btn_rally.setToolTip("加载 configs/rally_demo_5_aircraft.json — 五机分散后集结演示")
-        btn_rally.clicked.connect(lambda: self._load_demo_config("rally_demo_5_aircraft.json"))
-        demo_layout.addWidget(btn_hold)
-        demo_layout.addWidget(btn_rally)
+        for button_text, tooltip, filename in DEMO_CONFIG_ACTIONS:
+            button = QPushButton(button_text)
+            button.setToolTip(tooltip)
+            button.clicked.connect(
+                lambda checked=False, config_filename=filename: self._load_demo_config(
+                    config_filename
+                )
+            )
+            demo_layout.addWidget(button)
         layout.addWidget(demo_group)
 
         # 底部弹性占位把上面各分组顶到面板顶部。
