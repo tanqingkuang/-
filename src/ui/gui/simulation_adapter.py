@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import threading
 from pathlib import Path
 
@@ -26,8 +25,6 @@ from src.runner.sim_control import SimulationSnapshot as ControllerSnapshot
 from src.ui.gui.playback_view_model import PlaybackViewModel
 from src.ui.gui.trail_view_model import TrailBuffer
 from src.ui.gui.view_models import (
-    WORLD_HEIGHT,
-    WORLD_WIDTH,
     LinkState,
     NodeState,
     RallyGeometryView,
@@ -36,211 +33,6 @@ from src.ui.gui.view_models import (
     link_direction_label,
     trail_seconds_for_duration,
 )
-
-
-class MockSimulation:
-    """真实控制器接入前使用的小型 UI 演示数据源。注意：仅作为界面兜底。"""
-
-    def __init__(self) -> None:
-        """初始化 MockSimulation 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
-        self.duration = 120.0
-        self.step = 0.1
-        self.playback_vm = PlaybackViewModel()
-        self.speed = 1.0
-        self.time = 0.0
-        self.running = False
-        self.paused = False
-        self.disturbance = "无"
-        self.disturbance_until = 0.0
-        self.fault_node: str | None = None
-        self.loss_until = 0.0
-        self.trail_seconds = trail_seconds_for_duration(self.duration)
-        self.nodes: list[NodeState] = []
-        self.links: list[LinkState] = []
-        self.reset()
-
-    def set_trail_seconds(self, seconds: float) -> None:
-        """设置尾迹保留时长。注意：0 表示关闭尾迹缓存与显示。"""
-        # 负数输入按关闭处理，保证外部控件和脚本调用都落到同一边界。
-        self.trail_seconds = max(0.0, seconds)
-        if self.trail_seconds <= 0.0:
-            # Mock 节点直接持有 trail，关闭时逐节点清空即可让下一帧无尾迹。
-            for node in self.nodes:
-                node.trail.clear()
-            return
-        for node in self.nodes:
-            # Mock 内部节点统一持有 TrailBuffer，缩短窗口时只从队首弹出过期点。
-            if isinstance(node.trail, TrailBuffer):
-                node.trail.expire(self.time, self.trail_seconds)
-
-    def reset(self) -> Snapshot:
-        """复位 MockSimulation 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
-        # 时间归零并清空所有扰动相关计时器，回到“待命”初始态。
-        self.time = 0.0
-        self.running = False
-        self.paused = False
-        self.disturbance = "无"
-        self.disturbance_until = 0.0
-        self.fault_node = None
-        self.loss_until = 0.0
-        # 预置三机楔形编队：1 长机 + 2 僚机，坐标为演示用初值。
-        self.nodes = [
-            NodeState("A01", "leader", 140.0, 260.0, 5.2, -0.1, trail=TrailBuffer()),
-            NodeState("A02", "wing", 92.0, 318.0, 5.0, 0.0, trail=TrailBuffer()),
-            NodeState("A03", "wing", 88.0, 202.0, 5.0, 0.0, trail=TrailBuffer()),
-        ]
-        self.links = [
-            LinkState("A01", "A02", "duplex", 18, 0.01),
-            LinkState("A01", "A03", "duplex", 21, 0.01),
-            LinkState("A02", "A03", "duplex", 30, 0.02),
-        ]
-        return self.snapshot()
-
-    def start(self) -> Snapshot:
-        """启动或继续 MockSimulation 的运行流程。注意：重复调用应保持状态一致。"""
-        self.running = True
-        self.paused = False
-        return self.snapshot()
-
-    def pause(self) -> Snapshot:
-        """暂停 MockSimulation 的运行流程。注意：只暂停调度，不清空当前状态。"""
-        decision = self.playback_vm.command_for_pause_request(self.snapshot().run_state)
-        if decision.should_pause and self.running:
-            self.paused = True
-        return self.snapshot()
-
-    def set_speed(self, speed: float) -> None:
-        """设置 MockSimulation 播放速度。注意：与真实 adapter 保持同名接口。"""
-        playback_update = self.playback_vm.on_rate_requested(speed)
-        self.speed = playback_update.display_rate
-
-    def single_step(self) -> Snapshot:
-        """执行单步推进。注意：仅在暂停或可单步状态下使用。"""
-        # 进入“运行且暂停”态后只推进一拍，模拟逐帧调试。
-        self.running = True
-        self.paused = True
-        self.advance()
-        return self.snapshot()
-
-    def inject_disturbance(self, kind: str) -> Snapshot:
-        """向仿真注入扰动。注意：调用方需提供合法扰动类型和参数。"""
-        # 各扰动设置“持续到 disturbance_until 时刻”的窗口，到期后自动恢复。
-        if kind == "wind":
-            self.disturbance = "风场"
-            self.disturbance_until = self.time + 8.0
-        elif kind == "fault":
-            # 节点故障锁定 A02：advance 中对该节点用更弱的控制增益模拟失效。
-            self.disturbance = "节点故障"
-            self.fault_node = "A02"
-            self.disturbance_until = self.time + 10.0
-        elif kind == "loss":
-            # 链路丢包额外维护 loss_until，供链路退化判断使用。
-            self.disturbance = "链路丢包"
-            self.loss_until = self.time + 12.0
-            self.disturbance_until = self.time + 12.0
-        elif kind == "clear":
-            # 清除：复位所有扰动计时器与故障节点标记。
-            self.disturbance = "无"
-            self.disturbance_until = 0.0
-            self.loss_until = 0.0
-            self.fault_node = None
-        return self.snapshot()
-
-    def advance(self) -> Snapshot:
-        """推进仿真显示或数据状态。注意：步长应与调用方传入时间一致。"""
-        # 到达总时长则停机，不再推进时间。
-        if self.time >= self.duration:
-            self.running = False
-            self.paused = False
-            return self.snapshot()
-
-        # 按播放倍率推进仿真时间，并夹在 duration 内防止越界。
-        self.time = min(self.duration, self.time + self.step * self.speed)
-        # 风场扰动时给出非零侧向风强度，否则为 0。
-        wind = 1.8 if self.disturbance == "风场" else 0.0
-        # 楔形队形相对长机的横/纵偏置：长机在前，两僚机在后两侧。
-        formation = [(0.0, 0.0), (-54.0, 58.0), (-54.0, -58.0)]
-        leader = self.nodes[0]
-
-        for index, node in enumerate(self.nodes):
-            _, dy = formation[index]
-            # 长机沿正弦轨迹机动，僚机则跟随长机纵向位置加各自队形偏移。
-            target_y = 238.0 + math.sin(self.time / 8.0) * 34.0 if index == 0 else leader.y + dy
-            # 故障节点用更小的跟踪增益，表现为“跟不上、收敛慢”。
-            gain = 0.012 if self.fault_node == node.node_id else 0.04
-            node.vx = 4.8 + index * 0.12
-            # 纵向速度向目标 y 收敛，并叠加随相位变化的风扰。
-            node.vy += (target_y - node.y) * gain + wind * math.sin(self.time + index)
-            # x 方向额外乘 3.2 让画面横向推进更明显（纯演示系数）。
-            node.x += node.vx * self.step * self.speed * 3.2
-            node.y += node.vy * self.step * self.speed
-            # 飞出右边界后从左侧重新进入，并清空尾迹避免横贯屏幕的连线。
-            if node.x > WORLD_WIDTH + 60.0:
-                node.x = -30.0
-                node.trail.clear()
-            # 0 秒代表关闭尾迹：演示数据源也必须立即清空已有线段。
-            if self.trail_seconds <= 0.0:
-                node.trail.clear()
-            else:
-                # 每架飞机只追加一个新 ENU 点，并从队首弹出时间窗外节点。
-                trail = node.trail
-                if not isinstance(trail, TrailBuffer):
-                    trail = TrailBuffer()
-                    node.trail = trail
-                trail.append_position(node.x, node.y, node_altitude(index, self.time), self.time)
-                trail.expire(self.time, self.trail_seconds)
-
-        # 扰动窗口到期后自动清除，恢复正常显示。
-        if self.disturbance != "无" and self.time > self.disturbance_until:
-            self.disturbance = "无"
-            self.fault_node = None
-
-        for index, link in enumerate(self.links):
-            # 丢包扰动期内除第三条外的链路进入退化态（高丢包高延迟）。
-            degraded = self.time < self.loss_until and index != 2
-            link.loss = 0.26 + index * 0.05 if degraded else 0.01 + index * 0.006
-            link.latency_ms = 76 + index * 8 if degraded else 18 + index * 5 + round(math.sin(self.time + index) * 3)
-            # 丢包率超过 20% 视为链路异常。
-            link.ok = link.loss < 0.2
-
-        return self.snapshot()
-
-    def snapshot(self) -> Snapshot:
-        """返回当前快照。注意：返回数据用于显示，不应被调用方回写。"""
-        # 运行状态与“控制回报”文案根据当前是否运行/暂停/扰动类型联合决定。
-        if not self.running:
-            run_state = "READY"
-            report = "待命"
-        elif self.paused:
-            run_state = "PAUSED"
-            report = "保持"
-        elif self.disturbance == "风场":
-            # 运行中且处于各类扰动时，给出对应的控制策略回报文案。
-            run_state = "RUNNING"
-            report = "抗风"
-        elif self.disturbance == "节点故障":
-            run_state = "RUNNING"
-            report = "重构"
-        elif self.disturbance == "链路丢包":
-            run_state = "RUNNING"
-            report = "保链"
-        else:
-            # 无扰动的正常运行：集结。
-            run_state = "RUNNING"
-            report = "集结"
-        return Snapshot(
-            time=self.time,
-            duration=self.duration,
-            step=self.step,
-            run_state=run_state,
-            control_report=report,
-            disturbance=self.disturbance,
-            nodes=self.nodes,
-            links=self.links,
-            route=ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0),
-            route_segments=[ReferenceRoute(40.0, 238.0, 1200.0, WORLD_WIDTH - 40.0, 238.0, 1200.0)],
-            cpu_utilization=0.0,
-        )
 
 
 class ControllerSimulationAdapter:
@@ -706,13 +498,6 @@ class ControllerSimulationAdapter:
             return {"type": "link_loss", "target": "A01-A02", "duration_s": 12.0, "params": {"loss_rate": 0.3}}
         # 其余（clear）统一下发清除命令。
         return {"type": "clear"}
-
-def node_altitude(index: int, time_value: float) -> float:
-    """读取节点高度用于侧视图显示。注意：缺省时使用 0 作为兜底。"""
-
-    # 基准高度 1200m，按机序错开 35m 层差，再叠加随时间起伏的正弦扰动。
-    return 1200.0 + index * 35.0 + math.sin(time_value / 6.0 + index) * 12.0
-
 
 def _warm_terrain_field_cache(display_file: str | None) -> None:
     """后台线程预热高度场缓存。注意：失败静默,正式回退诊断由 scene_data 负责。"""

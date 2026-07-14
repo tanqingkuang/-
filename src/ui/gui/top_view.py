@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
@@ -24,7 +24,6 @@ from src.ui.gui.view_models import (
     adaptive_world_grid_spacing,
     is_major_grid_line,
     is_leader_node,
-    leader_node_from,
     reference_route_points,
 )
 

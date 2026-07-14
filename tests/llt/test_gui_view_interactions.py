@@ -2075,7 +2075,7 @@ class GuiViewInteractionTests(unittest.TestCase):
             )
             try:
                 with patch(
-                    "src.ui.gui.main_window.QFileDialog.getOpenFileName",
+                    "src.ui.gui.main_window_actions.QFileDialog.getOpenFileName",
                     return_value=(str(new_config), "Config (*.json)"),
                 ) as get_open_file_name:
                     window._choose_config()

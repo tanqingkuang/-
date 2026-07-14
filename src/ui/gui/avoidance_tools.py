@@ -102,62 +102,6 @@ def obstacle_spec_to_view(spec: ObstacleSpec) -> ObstacleView:
     )
 
 
-def _inflated_polygon_vertices(vertices: list[tuple[float, float]], inflate: float) -> list[tuple[float, float]]:
-    """返回用于 GUI 显示的多边形外扩顶点。注意：面向旋转矩形/凸多边形显示近似。"""
-    if inflate <= 0.0 or len(vertices) < 3:
-        return list(vertices)
-    signed_area = 0.0
-    # 用有向面积判断顶点绕序，从而确定每条边的外法线方向。
-    for (x0, y0), (x1, y1) in zip(vertices, vertices[1:] + vertices[:1]):
-        signed_area += x0 * y1 - y0 * x1
-    if abs(signed_area) <= 1e-9:
-        return _inflate_polygon_from_centroid(vertices, inflate)
-
-    edge_lines: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    for start, end in zip(vertices, vertices[1:] + vertices[:1]):
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-        length = math.hypot(dx, dy)
-        if length <= 1e-9:
-            return _inflate_polygon_from_centroid(vertices, inflate)
-        # Qt 画布使用 east/north 世界坐标，外扩只影响显示，不改变后端 inside(clearance) 语义。
-        if signed_area > 0.0:
-            normal = (dy / length, -dx / length)
-        else:
-            normal = (-dy / length, dx / length)
-        # 每条边沿外法线平移 inflate，再取相邻平移边交点作为新的角点。
-        point = (start[0] + normal[0] * inflate, start[1] + normal[1] * inflate)
-        edge_lines.append((point, (dx, dy)))
-
-    inflated: list[tuple[float, float]] = []
-    for index, _ in enumerate(vertices):
-        previous_point, previous_dir = edge_lines[index - 1]
-        current_point, current_dir = edge_lines[index]
-        # 相邻外移边的交点就是凸多边形的外扩角点；平行退化时改用径向兜底。
-        intersection = _line_intersection(previous_point, previous_dir, current_point, current_dir)
-        if intersection is None:
-            return _inflate_polygon_from_centroid(vertices, inflate)
-        inflated.append(intersection)
-    return inflated
-
-
-def _line_intersection(
-    point_a: tuple[float, float],
-    dir_a: tuple[float, float],
-    point_b: tuple[float, float],
-    dir_b: tuple[float, float],
-) -> tuple[float, float] | None:
-    """求两条参数直线交点。注意：平行或近似平行时返回 None。"""
-    # 二维叉积接近 0 表示两条外移边平行，无法稳定求 miter 角点。
-    cross = dir_a[0] * dir_b[1] - dir_a[1] * dir_b[0]
-    if abs(cross) <= 1e-9:
-        return None
-    # 解 point_a + dir_a * t = point_b + dir_b * u，只需要 t 即可还原交点。
-    delta = (point_b[0] - point_a[0], point_b[1] - point_a[1])
-    t = (delta[0] * dir_b[1] - delta[1] * dir_b[0]) / cross
-    return point_a[0] + dir_a[0] * t, point_a[1] + dir_a[1] * t
-
-
 def _inflate_polygon_from_centroid(vertices: list[tuple[float, float]], inflate: float) -> list[tuple[float, float]]:
     """退化多边形的显示兜底：各顶点沿几何中心径向外推。"""
     center_x = sum(point[0] for point in vertices) / len(vertices)
@@ -182,14 +126,13 @@ def _rounded_inflated_polygon_points(
     """返回用于 GUI 显示的多边形圆角外扩折线点，与后端 inside() 的圆角膨胀语义一致。
 
     每条边沿外法线平移 inflate，相邻边在凸顶点用半径 = inflate 的圆弧衔接，凹顶点则连接
-    两条偏移边的交点。这样凸角是圆角（等价 Minkowski 和），而不像
-    _inflated_polygon_vertices 的 miter 尖角向外凸出。inflate<=0 或退化时回退到原始顶点/
-    径向兜底。
+    两条偏移边的交点。这样凸角保持与后端一致的圆角（等价 Minkowski 和）。
+    inflate<=0 或退化时回退到原始顶点/径向兜底。
     """
     if inflate <= 0.0 or len(vertices) < 3:
         return list(vertices)
     signed_area = 0.0
-    # 有向面积定绕序，进而确定每条边的外法线方向（与 _inflated_polygon_vertices 保持一致）。
+    # 有向面积定绕序，进而确定每条边的外法线方向。
     for (x0, y0), (x1, y1) in zip(vertices, vertices[1:] + vertices[:1]):
         signed_area += x0 * y1 - y0 * x1
     if abs(signed_area) <= 1e-9:

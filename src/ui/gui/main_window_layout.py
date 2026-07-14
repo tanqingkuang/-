@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,

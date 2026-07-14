@@ -30,7 +30,6 @@ from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points
 from src.ui.gui.main_window import (
     MainWindow,
     ReferenceRoute,
-    _inflated_polygon_vertices,
     parse_avoidance_params,
     preview_route_marker_points,
     reference_route_points,
@@ -146,13 +145,15 @@ class ParseAvoidanceParamsTests(unittest.TestCase):
     def test_polygon_clearance_display_expands_rotated_rect(self) -> None:
         vertices = [(0.0, 100.0), (100.0, 0.0), (200.0, 100.0), (100.0, 200.0)]
 
-        inflated = _inflated_polygon_vertices(vertices, 20.0)
+        inflated = _rounded_inflated_polygon_points(vertices, 20.0)
 
-        self.assertEqual(len(inflated), len(vertices))
+        self.assertGreater(len(inflated), len(vertices))
         self.assertNotEqual(inflated, vertices)
-        self.assertLess(inflated[0][0], vertices[0][0])
-        self.assertGreater(inflated[2][0], vertices[2][0])
-        self.assertGreater(inflated[3][1], vertices[3][1])
+        xs = [point[0] for point in inflated]
+        ys = [point[1] for point in inflated]
+        self.assertLess(min(xs), min(point[0] for point in vertices))
+        self.assertGreater(max(xs), max(point[0] for point in vertices))
+        self.assertGreater(max(ys), max(point[1] for point in vertices))
 
     def test_polygon_clearance_display_does_not_draw_circle_at_concave_corner(self) -> None:
         vertices = [
@@ -524,7 +525,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
         window.export_route_button.setEnabled(True)
 
-        with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=(str(output), "JSON 文件 (*.json)")) as dialog:
+        with patch("src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName", return_value=(str(output), "JSON 文件 (*.json)")) as dialog:
             window._export_route()
 
         saved = output.with_suffix(".json")
@@ -559,7 +560,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.export_route_button.setEnabled(True)
 
         with patch(
-            "src.ui.gui.main_window.QFileDialog.getSaveFileName",
+            "src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName",
             return_value=(str(output), "钻石 XML (*.XML *.xml)"),
         ):
             window._export_route()
@@ -590,7 +591,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
             WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
         ]
 
-        with patch("src.ui.gui.main_window.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
+        with patch("src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
             window._export_route()
 
         default_path = Path(dialog.call_args.args[2])
@@ -617,7 +618,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window.export_route_button.setEnabled(True)
 
         with patch(
-            "src.ui.gui.main_window.QFileDialog.getSaveFileName",
+            "src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName",
             return_value=(str(output), "钻石 XML (*.XML *.xml)"),
         ):
             window._export_route()
