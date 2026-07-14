@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import math
 import unittest
+from copy import deepcopy
+from fractions import Fraction
+from itertools import product
 from unittest.mock import patch
 
 from src.algorithm.context.context import FormContextS, reset_context
@@ -104,7 +107,7 @@ def _follower_state(
     valid: bool = True,
     last_update_s: float = 0.0,
     rally_state: str = "EXITED",
-    eta_s: float = 0.0,
+    planned_path_length_m: float = -1.0,
     reached_slot_once: bool = False,
 ) -> FollowerStateS:
     """构造长机侧保存的僚机状态。"""
@@ -117,7 +120,7 @@ def _follower_state(
         valid=valid,
         lastUpdate_s=last_update_s,
         rally_state=rally_state,
-        eta_s=eta_s,
+        plannedPathLength_m=planned_path_length_m,
         reachedSlotOnce=reached_slot_once,
     )
 
@@ -131,7 +134,7 @@ def _follower_status_msg(
     pos_err_m: float = 0.0,
     arrived: int = 0,
     rally_state: str = "EXITED",
-    eta_s: float = 0.0,
+    planned_path_length_m: float = -1.0,
 ) -> MessageEnvelope:
     """构造僚机回报消息。"""
 
@@ -148,7 +151,7 @@ def _follower_status_msg(
             "pos_err_m": pos_err_m,
             "arrived": arrived,
             "rally_state": rally_state,
-            "eta_s": eta_s,
+            "planned_path_length_m": planned_path_length_m,
         },
     )
 
@@ -163,6 +166,7 @@ def _leader_msg(
     leader_state: MotionProfS | None = None,
     t_ref: float = 0.0,
     t_ref_valid: bool = True,
+    loop_counts: dict[str, int] | None = None,
 ) -> MessageEnvelope:
     """构造集结长机广播消息。"""
 
@@ -178,6 +182,7 @@ def _leader_msg(
             "slot_scale": {"scale": scale, "scale_rate": scale_rate},
             "t_ref": t_ref,
             "t_ref_valid": t_ref_valid,
+            "loop_counts": dict(loop_counts) if loop_counts is not None else {"R02": 0},
         },
     )
 
@@ -185,17 +190,22 @@ def _leader_msg(
 def _rally_task(
     expected: tuple[str, ...] = ("R02", "R03"),
     *,
+    leader_id: str = "R01",
     dt_s: float = 0.1,
     stable_hold_s: float = 0.2,
     compress_time_s: float = 1.0,
     catchup_radius_m: float = 200.0,
     catchup_stable_s: float = 0.0,
+    loiter_radius_m: float = 200.0,
+    loiter_speed_min_mps: float = 14.0,
+    loiter_speed_max_mps: float = 25.0,
 ) -> Rally:
     """构造测试用 Rally 任务单元。"""
 
     task = Rally()
     task.init(
         RallyTaskInitS(
+            leaderId=leader_id,
             looseScale=3.0,
             convergenceRadius_m=5.0,
             stableHold_s=stable_hold_s,
@@ -207,6 +217,9 @@ def _rally_task(
             dt_s=dt_s,
             catchup_radius_m=catchup_radius_m,
             catchup_stable_s=catchup_stable_s,
+            loiter_radius_m=loiter_radius_m,
+            loiter_speed_min_mps=loiter_speed_min_mps,
+            loiter_speed_max_mps=loiter_speed_max_mps,
         )
     )
     return task
@@ -220,9 +233,7 @@ def _task_step(
     states: list[FollowerStateS] | None = None,
     now_s: float = 0.0,
     leader_join_exited: bool = True,
-    leader_join_flying: bool = False,
-    leader_join_reached_slot_once: bool = False,
-    leader_eta_s: float = 0.0,
+    leader_path_length_m: float = -1.0,
 ) -> RallyTaskOutputS:
     """推进 Rally 任务一拍并返回输出端口。"""
 
@@ -234,13 +245,42 @@ def _task_step(
             followerStates=states or [],
             now_s=now_s,
             leader_join_exited=leader_join_exited,
-            leader_join_flying=leader_join_flying,
-            leader_join_reached_slot_once=leader_join_reached_slot_once,
-            leader_eta_s=leader_eta_s,
+            leader_path_length_m=leader_path_length_m,
         ),
         output,
     )
     return output
+
+
+def _step_with_paths(
+    task: Rally,
+    *,
+    now_s: float,
+    leader_path: float,
+    follower_paths: dict[str, float],
+    ctx: FormContextS | None = None,
+) -> RallyTaskOutputS:
+    """用全队基础航程推进 Rally 任务一拍。"""
+
+    bound_ctx = ctx if ctx is not None else FormContextS()
+    states = [
+        _follower_state(
+            node_id,
+            rally_state=RALLY_STATE_FLYING,
+            planned_path_length_m=path_length,
+            last_update_s=now_s,
+        )
+        for node_id, path_length in follower_paths.items()
+    ]
+    return _task_step(
+        task,
+        bound_ctx,
+        remote=FormStageE.RALLY,
+        states=states,
+        now_s=now_s,
+        leader_join_exited=False,
+        leader_path_length_m=leader_path,
+    )
 
 
 def _comm_init() -> FormCommInitS:
@@ -257,6 +297,25 @@ def _comm_init() -> FormCommInitS:
                 FormPosS("R01", 0.0, 0.0, 0.0),
                 FormPosS("R02", -10.0, 0.0, -5.0),
                 FormPosS("R03", -10.0, 0.0, 5.0),
+            ]
+        ],
+    )
+
+
+def _comm_init_five() -> FormCommInitS:
+    """构造五机集结通信和单队形槽位。"""
+
+    node_ids = ("A01", "A02", "A03", "A04", "A05")
+    return FormCommInitS(
+        netWork=[NetWorkS("A01", node_id, CommDirE.DUPLEX) for node_id in node_ids[1:]],
+        formPat=[0],
+        formPos=[
+            [
+                FormPosS("A01", 0.0, 0.0, 0.0),
+                FormPosS("A02", -10.0, 0.0, -10.0),
+                FormPosS("A03", -20.0, 0.0, -20.0),
+                FormPosS("A04", -30.0, 0.0, 10.0),
+                FormPosS("A05", -40.0, 0.0, 20.0),
             ]
         ],
     )
@@ -315,7 +374,7 @@ def _rally_cfg(
     )
 
 
-class RallyLeafTypesAndContextTests(unittest.TestCase):
+class FollowerStateTests(unittest.TestCase):
     """验证集结扩展叶类型和上下文字段。"""
 
     def test_rally_leaf_type_defaults_and_copy_helpers(self) -> None:
@@ -412,13 +471,16 @@ class RallyTaskTests(unittest.TestCase):
     """验证集结任务状态机和遥控语义。"""
 
     def test_init_rejects_invalid_parameters(self) -> None:
-        """验证 Rally 初始化拒绝无效缩放、压缩时长、超时和周期。"""
+        """验证 Rally 初始化拒绝无效任务参数和盘旋时间区间参数。"""
 
         invalid_cases = [
             RallyTaskInitS(looseScale=0.9),
             RallyTaskInitS(compressTime_s=0.0),
             RallyTaskInitS(staleTimeout_s=0.0),
             RallyTaskInitS(dt_s=0.0),
+            RallyTaskInitS(loiter_radius_m=0.0),
+            RallyTaskInitS(loiter_speed_min_mps=0.0),
+            RallyTaskInitS(loiter_speed_min_mps=20.0, loiter_speed_max_mps=20.0),
         ]
         for cfg in invalid_cases:
             with self.subTest(cfg=cfg):
@@ -455,8 +517,8 @@ class RallyTaskTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.slotScale.scale, 1.0)
         self.assertFalse(output.rallyCompleted)
 
-    def test_remote_rally_from_standby_resets_as_first_entry(self) -> None:
-        """验证 STANDBY→RALLY 按首次进入集结处理，不沿用待命前残留的子阶段和计时器。"""
+    def test_remote_rally_from_standby_resets_phase_timers_only(self) -> None:
+        """验证 STANDBY→RALLY 重置子阶段计时器，但保留已锁存协调计划。"""
 
         task = _rally_task(expected=("R02",), dt_s=0.1)
         ctx = FormContextS()
@@ -466,12 +528,16 @@ class RallyTaskTests(unittest.TestCase):
         task._catchup_stable_timer = 7.0
         task._compress_elapsed = 6.0
         task._t_ref = 123.0
+        task._plan_ready = True
+        task._loop_counts = {"R01": 4, "R02": 2}
 
         output = _task_step(task, ctx, remote=FormStageE.RALLY, states=[], now_s=5.0)
 
         self.assertEqual(ctx.cmd.stage, FormStageE.RALLY)
         self.assertEqual(ctx.cmd.step, RallyPhaseE.JOINING)
-        self.assertAlmostEqual(output.t_ref, 5.0)
+        self.assertTrue(output.t_ref_valid)
+        self.assertAlmostEqual(output.t_ref, 123.0)
+        self.assertEqual(output.loopCounts, {"R01": 4, "R02": 2})
         self.assertAlmostEqual(task._stable_timer, 0.0)
         self.assertAlmostEqual(task._catchup_stable_timer, 0.0)
         self.assertAlmostEqual(task._compress_elapsed, 0.0)
@@ -544,128 +610,331 @@ class RallyTaskTests(unittest.TestCase):
         # EXITED 是终态，过期不应阻止推进
         self.assertEqual(ctx.cmd.step, 1, "stale EXITED entry should not block JOINING→CATCHUP transition")
 
-    def test_t_ref_stays_invalid_until_all_join_states_are_initialized(self) -> None:
-        """验证参与者首个有效 ETA 未收齐时，不发布可用于切出的集结基准时刻。"""
-        task = _rally_task(expected=("R02", "R03"))
-        ctx = FormContextS()
-        uninitialized = [
-            _follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=20.0),
-            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=0.0),
-        ]
+    def assert_common_time_is_inside_assigned_intervals(
+        self,
+        output: RallyTaskOutputS,
+        path_lengths: dict[str, float],
+        *,
+        plan_start_s: float = 10.0,
+    ) -> None:
+        """验证公共相对到达时间落在每架飞机分配圈数的可达区间内。"""
 
-        cold_start = _task_step(
+        circumference_m = 2.0 * math.pi * 200.0
+        duration_s = output.t_ref - plan_start_s
+        for node_id, length_m in path_lengths.items():
+            assigned_length_m = length_m + output.loopCounts[node_id] * circumference_m
+            self.assertGreaterEqual(duration_s + 1e-9, assigned_length_m / 25.0)
+            self.assertLessEqual(duration_s - 1e-9, assigned_length_m / 14.0)
+
+    def assert_exact_assigned_intervals_have_common_time(
+        self,
+        loop_counts: dict[str, int],
+        path_lengths: dict[str, float],
+        task: Rally,
+    ) -> Fraction:
+        """用输入浮点数的精确有理值验证分配存在真实公共时刻。"""
+
+        circumference = Fraction.from_float(task._loiter_circumference_m)
+        speed_min = Fraction.from_float(task._speed_min)
+        speed_max = Fraction.from_float(task._speed_max)
+        lower_bounds: list[Fraction] = []
+        upper_bounds: list[Fraction] = []
+        for node_id, length_m in path_lengths.items():
+            distance = Fraction.from_float(length_m) + loop_counts[node_id] * circumference
+            lower_bounds.append(distance / speed_max)
+            upper_bounds.append(distance / speed_min)
+        common_time = max(lower_bounds)
+        self.assertLessEqual(common_time, min(upper_bounds), msg="精确物理区间无公共时刻")
+        return common_time
+
+    def test_path_coordinator_assigns_zero_loops_when_base_intervals_intersect(self) -> None:
+        """基础区间已有交集时不应增加盘旋圈。"""
+
+        task = _rally_task(expected=("A02",), leader_id="A01")
+        output = _step_with_paths(
             task,
-            ctx,
-            remote=FormStageE.RALLY,
-            states=uninitialized,
-            now_s=0.0,
-            leader_join_exited=False,
-            leader_join_flying=True,
-            leader_eta_s=10.0,
+            now_s=10.0,
+            leader_path=2000.0,
+            follower_paths={"A02": 1800.0},
         )
 
-        self.assertFalse(cold_start.t_ref_valid)
+        self.assertTrue(output.t_ref_valid)
+        self.assertEqual(output.loopCounts, {"A01": 0, "A02": 0})
 
-        uninitialized[1].eta_s = 30.0
-        ready = _task_step(
+    def test_path_coordinator_assigns_integer_loops_to_shorter_route(self) -> None:
+        """基础区间无交集时应给短航程飞机分配完整圈。"""
+
+        task = _rally_task(expected=("A02",), leader_id="A01")
+        output = _step_with_paths(
             task,
-            ctx,
-            remote=FormStageE.RALLY,
-            states=uninitialized,
-            now_s=0.1,
-            leader_join_exited=False,
-            leader_join_flying=True,
-            leader_eta_s=10.0,
+            now_s=10.0,
+            leader_path=3000.0,
+            follower_paths={"A02": 500.0},
         )
 
-        self.assertTrue(ready.t_ref_valid)
-        self.assertAlmostEqual(ready.t_ref, 30.0)
+        self.assertTrue(output.t_ref_valid)
+        self.assertEqual(output.loopCounts["A01"], 0)
+        self.assertGreater(output.loopCounts["A02"], 0)
+        self.assert_common_time_is_inside_assigned_intervals(
+            output,
+            {"A01": 3000.0, "A02": 500.0},
+        )
 
-    def test_t_ref_locked_after_last_flyer_departs(self) -> None:
-        """T_ref 在最后一架飞机离开 FLYING 后应锁存，而非塌缩为 now_s。"""
-        task = _rally_task(expected=("R02",), dt_s=0.1)
+    def test_path_coordinator_handles_narrow_speed_interval_with_bounded_jump(self) -> None:
+        """极窄合法速度区间应直接跳到最早公共时间，不受固定迭代次数限制。"""
+
+        speed_min = 20.0
+        speed_max = 20.0001
+        radius_m = 200.0
+        circumference_m = 2.0 * math.pi * radius_m
+        task = _rally_task(
+            expected=("A02",),
+            leader_id="A01",
+            loiter_radius_m=radius_m,
+            loiter_speed_min_mps=speed_min,
+            loiter_speed_max_mps=speed_max,
+        )
+
+        output = _step_with_paths(
+            task,
+            now_s=10.0,
+            leader_path=0.0,
+            follower_paths={"A02": 100.0},
+        )
+
+        relative_width = (speed_max - speed_min) / speed_max
+        expected_loops = math.ceil((100.0 / relative_width - 100.0) / circumference_m)
+        expected_duration_s = (100.0 + expected_loops * circumference_m) / speed_max
+        self.assertTrue(output.t_ref_valid)
+        self.assertEqual(output.loopCounts, {"A01": expected_loops, "A02": expected_loops})
+        self.assertAlmostEqual(output.t_ref - 10.0, expected_duration_s, places=6)
+
+    def test_path_coordinator_keeps_exact_interval_at_one_ulp_speed_width(self) -> None:
+        """一 ULP 合法速度窗不得用放大的浮点容差接受真实区间外圈数。"""
+
+        task = _rally_task(
+            expected=("B",),
+            leader_id="A",
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=math.nextafter(20.0, 0.0),
+            loiter_speed_max_mps=20.0,
+        )
+        path_lengths = {"A": 0.0, "B": 600.0}
+
+        duration_s, loop_counts = task._coordinate_paths(path_lengths)
+
+        exact_common_time = self.assert_exact_assigned_intervals_have_common_time(
+            loop_counts,
+            path_lengths,
+            task,
+        )
+        self.assertGreaterEqual(Fraction.from_float(duration_s), exact_common_time)
+        self.assertEqual(loop_counts, {"A": 2687888034010621, "B": 2687888034010621})
+
+    def test_path_coordinator_matches_exact_bounded_bruteforce(self) -> None:
+        """四节点小规模场景应与精确有理数穷举得到的最早公共区间一致。"""
+
+        task = _rally_task(
+            expected=("B", "C", "D"),
+            leader_id="A",
+            loiter_radius_m=20.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+        )
+        path_lengths = {"A": 100.0, "B": 180.0, "C": 260.0, "D": 330.0}
+        circumference = Fraction.from_float(task._loiter_circumference_m)
+        speed_min = Fraction.from_float(task._speed_min)
+        speed_max = Fraction.from_float(task._speed_max)
+        exact_lengths = {node_id: Fraction.from_float(length) for node_id, length in path_lengths.items()}
+        feasible: list[tuple[Fraction, dict[str, int]]] = []
+        for loop_values in product(range(6), repeat=len(path_lengths)):
+            loop_counts = dict(zip(path_lengths, loop_values, strict=True))
+            distances = {
+                node_id: exact_lengths[node_id] + loop_counts[node_id] * circumference
+                for node_id in path_lengths
+            }
+            lower = max(distance / speed_max for distance in distances.values())
+            upper = min(distance / speed_min for distance in distances.values())
+            if lower <= upper:
+                feasible.append((lower, loop_counts))
+        expected_lower, expected_loops = min(
+            feasible,
+            key=lambda item: (item[0], sum(item[1].values()), tuple(item[1].values())),
+        )
+
+        duration_s, loop_counts = task._coordinate_paths(path_lengths)
+
+        self.assertEqual(loop_counts, expected_loops)
+        self.assertGreaterEqual(Fraction.from_float(duration_s), expected_lower)
+        self.assert_exact_assigned_intervals_have_common_time(
+            loop_counts,
+            path_lengths,
+            task,
+        )
+
+    def test_path_coordinator_rejects_invalid_path_length(self) -> None:
+        """搜索边界应明确拒绝负值与非有限航程，不能返回非法公共时间。"""
+
+        task = _rally_task(expected=(), leader_id="A01")
+        for invalid_length in (-1.0, float("nan"), float("inf"), float("-inf")):
+            with self.subTest(path_length=invalid_length):
+                with self.assertRaises(ValueError):
+                    task._coordinate_paths({"A01": invalid_length})
+
+    def test_path_coordinator_reports_unrepresentable_common_time(self) -> None:
+        """若最早公共时间超出有限浮点范围，搜索应明确失败而不是溢出或假收敛。"""
+
+        radius_m = 1.0e307
+        task = _rally_task(
+            expected=("A02",),
+            leader_id="A01",
+            loiter_radius_m=radius_m,
+            loiter_speed_min_mps=1.0,
+            loiter_speed_max_mps=math.nextafter(1.0, math.inf),
+        )
+        half_circumference_m = task._loiter_circumference_m / 2.0
+
+        with self.assertRaises(RuntimeError):
+            task._coordinate_paths({"A01": 0.0, "A02": half_circumference_m})
+
+    def test_path_plan_is_locked_after_first_valid_result(self) -> None:
+        """后续航程回报变化和阶段推进不得移动已确认计划。"""
+
+        task = _rally_task(expected=("A02",), leader_id="A01")
         ctx = FormContextS()
-
-        # 拍 1：R02 FLYING，ETA=50s，长机也 FLYING，ETA=40s → t_ref = 50.0
-        flying = [_follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=50.0, last_update_s=0.0)]
-        out1 = _task_step(
-            task, ctx, remote=FormStageE.RALLY, states=flying, now_s=0.0,
-            leader_join_exited=False, leader_join_flying=True, leader_eta_s=40.0,
+        first = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=10.0,
+            leader_path=3000.0,
+            follower_paths={"A02": 500.0},
         )
-        self.assertAlmostEqual(out1.t_ref, 50.0)
 
-        # 拍 2：R02 进入 LOITERING（flying_etas 空），长机也已 EXITED
-        loitering = [_follower_state("R02", rally_state=RALLY_STATE_LOITERING, last_update_s=2.0)]
-        out2 = _task_step(
-            task, ctx, remote=FormStageE.RALLY, states=loitering, now_s=2.0,
-            leader_join_exited=False, leader_join_flying=False, leader_eta_s=0.0,
+        for phase in (
+            RallyPhaseE.JOINING,
+            RallyPhaseE.CATCHUP,
+            RallyPhaseE.LOOSE,
+            RallyPhaseE.COMPRESS,
+        ):
+            ctx.cmd.stage = FormStageE.RALLY
+            ctx.cmd.step = phase
+            later = _step_with_paths(
+                task,
+                ctx=ctx,
+                now_s=20.0,
+                leader_path=100.0,
+                follower_paths={"A02": 9000.0},
+            )
+            self.assertEqual(later.t_ref, first.t_ref)
+            self.assertEqual(later.loopCounts, first.loopCounts)
+
+        ctx.cmd.stage = FormStageE.HOLD
+        hold = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=30.0,
+            leader_path=100.0,
+            follower_paths={"A02": 9000.0},
         )
-        # t_ref 不应塌缩为 now_s=2.0，应锁存为上一拍的 50.0
-        self.assertAlmostEqual(out2.t_ref, 50.0,
-            msg="t_ref should remain locked at last valid value, not collapse to now_s")
+        self.assertEqual(hold.t_ref, first.t_ref)
+        self.assertEqual(hold.loopCounts, first.loopCounts)
 
-    def test_cold_start_follower_eta_zero_cannot_overwrite_locked_t_ref(self) -> None:
-        """冷启动僚机 FLYING/eta=0 不应在主机报文过期后把已锁存的 T_ref 覆盖为 0。"""
-        task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
+    def test_started_task_rejects_reverse_standby_and_restart_until_reset(self) -> None:
+        """任务进入 RALLY 后应拒绝反向 STANDBY 及 NONE 后重启，显式 reset 才开启新任务。"""
+
+        task = _rally_task(expected=("A02",), leader_id="A01")
         ctx = FormContextS()
-
-        # 拍 1：R02 FLYING/eta=50（now=0），R03 FLYING/eta=0 → t_ref 锁存 50.0
-        states_tick1 = [
-            _follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=50.0, last_update_s=0.0),
-            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=0.0,  last_update_s=0.0),
-        ]
-        out1 = _task_step(task, ctx, remote=FormStageE.RALLY, states=states_tick1, now_s=0.0)
-        self.assertAlmostEqual(out1.t_ref, 50.0)
-
-        # 拍 2：R02 数据过期，只剩 R03 FLYING/eta=0
-        # 若 eta=0 被计入 flying_etas，max([0.0])=0 会覆盖已锁存的 50.0
-        states_tick2 = [
-            _follower_state("R02", rally_state=RALLY_STATE_FLYING, eta_s=50.0, last_update_s=0.0),  # stale at now=5
-            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=0.0,  last_update_s=5.0),
-        ]
-        out2 = _task_step(task, ctx, remote=FormStageE.RALLY, states=states_tick2, now_s=5.0)
-        # eta=0 不应进入 flying_etas，锁存的 t_ref 应保持 50.0 不变
-        self.assertAlmostEqual(out2.t_ref, 50.0,
-            msg="zero-ETA cold-start must not overwrite locked t_ref when valid flyer expires")
-
-    def test_t_ref_counts_loitering_follower_that_has_not_reached_slot_once(self) -> None:
-        """回归用例：切入点 T 到 M_i 之间弧长很长时，刚进 LOITERING（尚未首次路过 M_i）的僚机
-        ETA 仍应计入 T_ref 聚合，不能因为状态从 FLYING 变成 LOITERING 就被立即剔除，
-        否则 T_ref 会塌缩到更快参与者的 ETA，导致同步提前（本次"切线进圆"重构引入的新问题）。"""
-        task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
-        ctx = FormContextS()
-
-        # R02 刚到切入点 T、进入 LOITERING，但离 M_i 还有约 61s 圆弧（尚未首次路过，reached_slot_once=False）。
-        # R03 仍在 FLYING，ETA 更短（30s）。若 R02 被错误剔除，t_ref 会塌缩为 30.0 而不是 63.59。
-        states = [
-            _follower_state("R02", rally_state=RALLY_STATE_LOITERING, eta_s=63.59, reached_slot_once=False, last_update_s=0.0),
-            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=30.0, last_update_s=0.0),
-        ]
-        out = _task_step(
-            task, ctx, remote=FormStageE.RALLY, states=states, now_s=0.0,
-            leader_join_exited=True, leader_join_flying=False, leader_eta_s=0.0,
+        first = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=10.0,
+            leader_path=3000.0,
+            follower_paths={"A02": 500.0},
         )
-        self.assertAlmostEqual(out.t_ref, 63.59,
-            msg="LOITERING follower that has not reached M_i once must still count toward T_ref")
+        locked_t_ref = first.t_ref
+        locked_loops = first.loopCounts
 
-    def test_t_ref_excludes_loitering_follower_after_reaching_slot_once(self) -> None:
-        """验证已经首次路过 M_i、纯粹在盘旋等待的僚机不再计入 T_ref 聚合，
-        避免其每圈波动的 ETA（下一次路过所需时间）反复推高/拉低 T_ref。"""
-        task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
-        ctx = FormContextS()
+        reverse_standby = _task_step(task, ctx, remote=FormStageE.STANDBY, now_s=20.0)
+        self.assertEqual(ctx.cmd.stage, FormStageE.RALLY)
+        self.assertEqual(reverse_standby.t_ref, locked_t_ref)
+        self.assertEqual(reverse_standby.loopCounts, locked_loops)
 
-        # R02 已经路过 M_i 一次，正在等待 T_ref（"下一圈还要飞的时间"，这里故意给一个很大的值验证被排除）。
-        # R03 仍在 FLYING，ETA=30s。若 R02 未被排除，max(90, 30)=90 会覆盖掉正确的 30。
-        states = [
-            _follower_state("R02", rally_state=RALLY_STATE_LOITERING, eta_s=90.0, reached_slot_once=True, last_update_s=0.0),
-            _follower_state("R03", rally_state=RALLY_STATE_FLYING, eta_s=30.0, last_update_s=0.0),
-        ]
-        out = _task_step(
-            task, ctx, remote=FormStageE.RALLY, states=states, now_s=0.0,
-            leader_join_exited=True, leader_join_flying=False, leader_eta_s=0.0,
+        stopped = _task_step(task, ctx, remote=FormStageE.NONE, now_s=30.0)
+        self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
+        rejected_rally = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=40.0,
+            leader_path=100.0,
+            follower_paths={"A02": 9000.0},
         )
-        self.assertAlmostEqual(out.t_ref, 30.0,
-            msg="LOITERING follower that already reached M_i once must not count toward T_ref")
+        self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
+        rejected_standby = _task_step(task, ctx, remote=FormStageE.STANDBY, now_s=45.0)
+        self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
+        for output in (stopped, rejected_rally, rejected_standby):
+            self.assertTrue(output.t_ref_valid)
+            self.assertEqual(output.t_ref, locked_t_ref)
+            self.assertEqual(output.loopCounts, locked_loops)
+
+        task.reset()
+        reset_output = _task_step(task, ctx, remote=FormStageE.STANDBY, now_s=50.0)
+        self.assertEqual(ctx.cmd.stage, FormStageE.STANDBY)
+        self.assertFalse(reset_output.t_ref_valid)
+        self.assertEqual(reset_output.t_ref, 0.0)
+        self.assertEqual(reset_output.loopCounts, {})
+
+        replanned = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=60.0,
+            leader_path=100.0,
+            follower_paths={"A02": 9000.0},
+        )
+        self.assertTrue(replanned.t_ref_valid)
+        self.assertNotEqual(replanned.t_ref, locked_t_ref)
+        self.assertNotEqual(replanned.loopCounts, locked_loops)
+
+    def test_path_plan_waits_for_every_expected_follower(self) -> None:
+        """缺少任一期望僚机基础航程时计划必须保持无效。"""
+
+        task = _rally_task(expected=("A02", "A03"), leader_id="A01")
+        output = _step_with_paths(
+            task,
+            now_s=10.0,
+            leader_path=3000.0,
+            follower_paths={"A02": 500.0},
+        )
+
+        self.assertFalse(output.t_ref_valid)
+        self.assertEqual(output.loopCounts, {})
+
+    def test_path_plan_uses_all_paths_received_time_as_start(self) -> None:
+        """固定计划应以全队航程收齐时刻为时间基准，而不是首次进入 RALLY 的时刻。"""
+
+        task = _rally_task(expected=("A02", "A03"), leader_id="A01")
+        ctx = FormContextS()
+        path_lengths = {"A01": 3000.0, "A02": 500.0, "A03": 700.0}
+        expected_duration_s, _ = task._coordinate_paths(path_lengths)
+
+        incomplete = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=10.0,
+            leader_path=path_lengths["A01"],
+            follower_paths={"A02": path_lengths["A02"]},
+        )
+        self.assertFalse(incomplete.t_ref_valid)
+
+        completed = _step_with_paths(
+            task,
+            ctx=ctx,
+            now_s=30.0,
+            leader_path=path_lengths["A01"],
+            follower_paths={"A02": path_lengths["A02"], "A03": path_lengths["A03"]},
+        )
+
+        self.assertTrue(completed.t_ref_valid)
+        self.assertAlmostEqual(completed.t_ref, 30.0 + expected_duration_s)
 
     def test_loose_and_compress_gate_on_position_error(self) -> None:
         """验证 CATCHUP/LOOSE/COMPRESS 使用位置误差阈值依次推进到 HOLD 并只在转换拍置完成标志。"""
@@ -716,8 +985,8 @@ class RallyTaskTests(unittest.TestCase):
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
         self.assertFalse(next_frame.rallyCompleted)
 
-    def test_none_then_rally_allows_restart_after_completed_hold(self) -> None:
-        """验证完成后 remote=RALLY 不重启，但先 NONE 再 RALLY 可重新进入 APPROACH。"""
+    def test_none_then_rally_is_rejected_after_completed_hold_until_reset(self) -> None:
+        """完成 HOLD 后进入 NONE，未经显式 reset 的 RALLY/STANDBY 都不得重启任务。"""
 
         task = _rally_task(
             expected=("R02",),
@@ -738,8 +1007,15 @@ class RallyTaskTests(unittest.TestCase):
 
         _task_step(task, ctx, remote=FormStageE.NONE)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=[])
-        self.assertEqual(ctx.cmd.stage, FormStageE.RALLY)
-        self.assertEqual(ctx.cmd.step, 0)
+        self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
+        _task_step(task, ctx, remote=FormStageE.STANDBY, states=[])
+        self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
+
+        task.reset()
+        reset_output = _task_step(task, ctx, remote=FormStageE.STANDBY, states=[])
+        self.assertEqual(ctx.cmd.stage, FormStageE.STANDBY)
+        self.assertFalse(reset_output.t_ref_valid)
+        self.assertEqual(reset_output.loopCounts, {})
 
     def test_non_finite_errors_do_not_advance_rally_gates(self) -> None:
         """验证非有限位置或航向误差不能绕过 CATCHUP/LOOSE 门限。"""
@@ -769,7 +1045,7 @@ class RallyTaskTests(unittest.TestCase):
         self.assertEqual(ctx.cmd.step, 2)
 
 
-class FollowerBroadcastAndStatusTests(unittest.TestCase):
+class FollowerStatusTests(unittest.TestCase):
     """验证僚机回报发送与长机入站解析。"""
 
     def test_follower_broadcast_targets_leader_and_reports_error(self) -> None:
@@ -813,6 +1089,78 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
         )
 
         self.assertEqual(output.outbox[0].payload["rally_state"], RALLY_STATE_STANDBY)
+
+    def test_follower_status_round_trip_carries_planned_path_length(self) -> None:
+        """僚机基础航程应通过现有状态 topic 原子写入长机黑板。"""
+
+        outbound = FollowerBroadcast()
+        outbound.init(FollowerBroadcastInitS(selfId="R02", leaderId="R01"))
+        outbound_input = FollowerBroadcastInputS(
+            selfState=_motion(east=1.0, north=2.0, h=3.0),
+            selfCmd=_motion(east=4.0, north=5.0, h=6.0),
+            planned_path_length_m=3210.5,
+        )
+        outbound_output = OutboundOutputS()
+        outbound.step(outbound_input, outbound_output)
+
+        assert outbound_output.outbox is not None
+        payload = outbound_output.outbox[0].payload
+        self.assertNotIn("eta_s", payload)
+        self.assertNotIn("eta_min_s", payload)
+        self.assertNotIn("eta_max_s", payload)
+        self.assertEqual(payload["planned_path_length_m"], 3210.5)
+
+        states: list[FollowerStateS] = []
+        inbound = FollowerStatus()
+        inbound.init(None)
+        inbound.step(
+            FollowerStatusInputS(inbox=outbound_output.outbox, now_s=5.0),
+            FollowerStatusOutputS(followerStates=states),
+        )
+
+        self.assertEqual(len(states), 1)
+        self.assertEqual(states[0].plannedPathLength_m, 3210.5)
+
+    def test_follower_status_rejects_invalid_planned_path_length(self) -> None:
+        """小于待规划哨兵值的航程不能覆盖上一份有效规划数据。"""
+
+        states: list[FollowerStateS] = []
+        inbound = FollowerStatus()
+        inbound.init(None)
+        valid = _follower_status_msg("R02")
+        valid.payload["planned_path_length_m"] = 1000.0
+        inbound.step(
+            FollowerStatusInputS(inbox=[valid], now_s=5.0),
+            FollowerStatusOutputS(followerStates=states),
+        )
+        invalid = _follower_status_msg("R02", pos_east=99.0)
+        invalid.payload["planned_path_length_m"] = -2.0
+        inbound.step(
+            FollowerStatusInputS(inbox=[invalid], now_s=6.0),
+            FollowerStatusOutputS(followerStates=states),
+        )
+
+        self.assertEqual(len(states), 1)
+        self.assertEqual(states[0].plannedPathLength_m, 1000.0)
+        self.assertAlmostEqual(states[0].pos.east, 0.0)
+        self.assertAlmostEqual(states[0].lastUpdate_s, 5.0)
+
+    def test_follower_status_accepts_unplanned_sentinel_during_standby(self) -> None:
+        """STANDBY 的 -1 哨兵不应阻断其他状态字段更新。"""
+
+        states: list[FollowerStateS] = []
+        inbound = FollowerStatus()
+        inbound.init(None)
+        message = _follower_status_msg("R02", rally_state=RALLY_STATE_STANDBY, pos_east=8.0)
+        message.payload["planned_path_length_m"] = -1.0
+        inbound.step(
+            FollowerStatusInputS(inbox=[message], now_s=5.0),
+            FollowerStatusOutputS(followerStates=states),
+        )
+
+        self.assertEqual(states[0].plannedPathLength_m, -1.0)
+        self.assertEqual(states[0].rally_state, RALLY_STATE_STANDBY)
+        self.assertAlmostEqual(states[0].pos.east, 8.0)
 
     def test_follower_broadcast_rejects_empty_leader_id_and_missing_ports(self) -> None:
         """验证显式 leaderId 和端口绑定是必需条件。"""
@@ -889,7 +1237,6 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
                 "pos_north": 2.0,
                 "pos_h": 3.0,
                 "pos_err_m": 4.0,
-                "eta_s": 12.0,
             },
         )
 
@@ -909,14 +1256,14 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
             "pos_h": float("-inf"),
             "pos_err_m": float("nan"),
             "heading_err_rad": float("inf"),
-            "eta_s": float("-inf"),
+            "planned_path_length_m": float("-inf"),
         }
         for field_name, invalid_value in invalid_fields.items():
             with self.subTest(field=field_name):
                 baseline = _follower_state("R02", pos_err_m=4.0, arrived=1, valid=True, last_update_s=10.0)
                 baseline.pos = _pos(1.0, 2.0, 3.0)
                 baseline.headingErr_rad = 0.2
-                baseline.eta_s = 20.0
+                baseline.plannedPathLength_m = 20.0
                 states = [baseline]
                 msg = _follower_status_msg("R02", pos_east=99.0, pos_err_m=1.0)
                 msg.payload[field_name] = invalid_value
@@ -943,7 +1290,8 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
         self.assertEqual(baseline.pos, _pos(1.0, 2.0, 3.0))
         self.assertEqual(baseline.lastUpdate_s, 10.0)
 
-        new_invalid = _follower_status_msg("R03", eta_s=float("inf"))
+        new_invalid = _follower_status_msg("R03")
+        new_invalid.payload["planned_path_length_m"] = float("inf")
         inbound.step(
             FollowerStatusInputS(inbox=[new_invalid], now_s=11.0),
             FollowerStatusOutputS(followerStates=states),
@@ -957,8 +1305,224 @@ class FollowerBroadcastAndStatusTests(unittest.TestCase):
             FollowerStatus().step(FollowerStatusInputS(inbox=[]), FollowerStatusOutputS())
 
 
-class RallyLeaderBroadcastAndInboundTests(unittest.TestCase):
+class RallyCommunicationTests(unittest.TestCase):
     """验证集结长机广播扩展和僚机解析。"""
+
+    def test_leader_inbound_rejects_invalid_motion_atomically(self) -> None:
+        """有效报文后若新报文的中途运动字段非法，应静默拒绝且保留完整旧快照。"""
+
+        ctx = FormContextS()
+        leader_cmd = MotionProfS()
+        inbound = RallyLeaderFollower()
+        parsed = RallyLeaderFollowerOutputS(
+            leaderState=ctx.leaderState,
+            leaderCmd=leader_cmd,
+            cmd=ctx.cmd,
+            slotScale=ctx.slotScale,
+        )
+        valid = _leader_msg(
+            stage=FormStageE.HOLD,
+            pattern=1,
+            step=3,
+            scale=1.5,
+            scale_rate=-0.1,
+            leader_state=_motion(east=1.0, north=2.0, h=3.0, v_east=4.0, v_north=5.0),
+            t_ref=12.0,
+            loop_counts={"R02": 1},
+        )
+        inbound.step(InboundInputS(inbox=[valid]), parsed)
+        baseline = deepcopy((ctx.leaderState, leader_cmd, ctx.cmd, ctx.slotScale, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts))
+
+        malformed = _leader_msg(
+            stage=FormStageE.RALLY,
+            pattern=2,
+            step=4,
+            scale=2.5,
+            scale_rate=-0.2,
+            leader_state=_motion(east=91.0, north=92.0, h=93.0, v_east=94.0, v_north=95.0),
+            t_ref=180.0,
+            loop_counts={"R02": 2},
+        )
+        malformed.payload["leader_state"]["vd"]["vNorth"] = "非法速度"
+
+        inbound.step(InboundInputS(inbox=[malformed]), parsed)
+
+        self.assertEqual(
+            (ctx.leaderState, leader_cmd, ctx.cmd, ctx.slotScale, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts),
+            baseline,
+        )
+
+    def test_leader_inbound_rejects_invalid_cmd_atomically(self) -> None:
+        """有效报文后若新报文的 cmd 枚举非法，应静默拒绝且保留完整旧快照。"""
+
+        ctx = FormContextS()
+        leader_cmd = MotionProfS()
+        inbound = RallyLeaderFollower()
+        parsed = RallyLeaderFollowerOutputS(
+            leaderState=ctx.leaderState,
+            leaderCmd=leader_cmd,
+            cmd=ctx.cmd,
+            slotScale=ctx.slotScale,
+        )
+        valid = _leader_msg(
+            stage=FormStageE.HOLD,
+            pattern=1,
+            step=3,
+            scale=1.5,
+            scale_rate=-0.1,
+            leader_state=_motion(east=1.0, north=2.0, h=3.0, v_east=4.0),
+            t_ref=12.0,
+            loop_counts={"R02": 1},
+        )
+        inbound.step(InboundInputS(inbox=[valid]), parsed)
+        baseline = deepcopy((ctx.leaderState, leader_cmd, ctx.cmd, ctx.slotScale, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts))
+
+        malformed = _leader_msg(
+            stage=FormStageE.RALLY,
+            pattern=2,
+            step=4,
+            scale=2.5,
+            scale_rate=-0.2,
+            leader_state=_motion(east=91.0, north=92.0, h=93.0, v_east=94.0),
+            t_ref=180.0,
+            loop_counts={"R02": 2},
+        )
+        malformed.payload["cmd"]["stage"] = 999
+
+        inbound.step(InboundInputS(inbox=[malformed]), parsed)
+
+        self.assertEqual(
+            (ctx.leaderState, leader_cmd, ctx.cmd, ctx.slotScale, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts),
+            baseline,
+        )
+
+    def test_leader_inbound_reset_clears_latched_output(self) -> None:
+        """入站 reset 应把全部绑定输出恢复默认值，不能保留上一份长机广播。"""
+
+        ctx = FormContextS()
+        leader_cmd = MotionProfS()
+        inbound = RallyLeaderFollower()
+        parsed = RallyLeaderFollowerOutputS(
+            leaderState=ctx.leaderState,
+            leaderCmd=leader_cmd,
+            cmd=ctx.cmd,
+            slotScale=ctx.slotScale,
+        )
+        inbound.step(
+            InboundInputS(
+                inbox=[
+                    _leader_msg(
+                        stage=FormStageE.RALLY,
+                        pattern=2,
+                        step=3,
+                        scale=2.5,
+                        scale_rate=-0.2,
+                        leader_state=_motion(east=91.0, north=92.0, h=93.0, v_east=94.0),
+                        t_ref=180.0,
+                        loop_counts={"R02": 2},
+                    )
+                ]
+            ),
+            parsed,
+        )
+
+        inbound.reset()
+
+        self.assertEqual(ctx.leaderState, MotionProfS())
+        self.assertEqual(leader_cmd, MotionProfS())
+        self.assertEqual(ctx.cmd, FormSnapshotS())
+        self.assertEqual(ctx.slotScale, RallySlotScaleS())
+        self.assertEqual((parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts), (0.0, False, {}))
+
+    def test_leader_plan_round_trip_carries_fixed_loop_counts(self) -> None:
+        """长机广播应原样传递固定 T_ref 与节点圈数映射。"""
+
+        outbound = RallyLeaderBroadcast()
+        outbound.init(OutboundInitS(selfId="R01", netWork=[NetWorkS("R01", "R02", CommDirE.DUPLEX)]))
+        broadcast_input = RallyLeaderBroadcastInputS(
+            cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=0),
+            selfState=_motion(),
+            slotScale=RallySlotScaleS(),
+            t_ref=180.0,
+            t_ref_valid=True,
+            loop_counts={"A01": 0, "A02": 2},
+        )
+        broadcast_output = OutboundOutputS()
+        outbound.step(broadcast_input, broadcast_output)
+
+        payload = broadcast_output.outbox[0].payload
+        self.assertEqual(payload.get("loop_counts"), {"A01": 0, "A02": 2})
+
+        ctx = FormContextS()
+        parsed = RallyLeaderFollowerOutputS(
+            leaderState=ctx.leaderState,
+            cmd=ctx.cmd,
+            slotScale=ctx.slotScale,
+        )
+        RallyLeaderFollower().step(InboundInputS(inbox=broadcast_output.outbox), parsed)
+
+        self.assertTrue(parsed.t_ref_valid)
+        self.assertEqual(parsed.t_ref, 180.0)
+        self.assertEqual(parsed.loopCounts, {"A01": 0, "A02": 2})
+
+    def test_leader_plan_rejects_invalid_loop_counts_atomically(self) -> None:
+        """圈数映射包含非法键值时应拒绝整条入站消息，不提交任何计划字段。"""
+
+        invalid_plans: list[tuple[str, dict[object, object]]] = [
+            ("数值键", {2: 1}),
+            ("布尔值", {"R02": True}),
+            ("负整数", {"R02": -1}),
+            ("浮点数", {"R02": 1.8}),
+        ]
+        for case_name, invalid_plan in invalid_plans:
+            with self.subTest(case=case_name):
+                ctx = FormContextS()
+                ctx.cmd.stage = FormStageE.HOLD
+                ctx.cmd.pattern = 3
+                ctx.cmd.step = 7
+                parsed = RallyLeaderFollowerOutputS(
+                    leaderState=ctx.leaderState,
+                    cmd=ctx.cmd,
+                    slotScale=ctx.slotScale,
+                    t_ref=12.0,
+                    t_ref_valid=True,
+                    loopCounts={"BASE": 4},
+                )
+                message = _leader_msg(stage=FormStageE.RALLY, pattern=0, step=2, t_ref=180.0)
+                message.payload["loop_counts"] = invalid_plan
+
+                RallyLeaderFollower().step(InboundInputS(inbox=[message]), parsed)
+
+                self.assertEqual((ctx.cmd.stage, ctx.cmd.pattern, ctx.cmd.step), (FormStageE.HOLD, 3, 7))
+                self.assertEqual((parsed.t_ref, parsed.t_ref_valid), (12.0, True))
+                self.assertEqual(parsed.loopCounts, {"BASE": 4})
+
+    def test_leader_broadcast_rejects_invalid_loop_counts(self) -> None:
+        """出站端口包含非法键值时应明确失败，且不得生成广播消息。"""
+
+        invalid_plans: list[tuple[str, dict[object, object]]] = [
+            ("数值键", {2: 1}),
+            ("布尔值", {"R02": True}),
+            ("负整数", {"R02": -1}),
+            ("浮点数", {"R02": 1.8}),
+        ]
+        outbound = RallyLeaderBroadcast()
+        outbound.init(OutboundInitS(selfId="R01", netWork=[NetWorkS("R01", "R02", CommDirE.DUPLEX)]))
+        for case_name, invalid_plan in invalid_plans:
+            with self.subTest(case=case_name):
+                output = OutboundOutputS()
+                broadcast_input = RallyLeaderBroadcastInputS(
+                    cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=0),
+                    selfState=_motion(),
+                    slotScale=RallySlotScaleS(),
+                    t_ref=180.0,
+                    t_ref_valid=True,
+                    loop_counts=invalid_plan,  # type: ignore[arg-type]
+                )
+
+                with self.assertRaises(ValueError):
+                    outbound.step(broadcast_input, output)
+                self.assertEqual(output.outbox, [])
 
     def test_rally_leader_broadcast_adds_slot_scale_and_preserves_contract(self) -> None:
         """验证长机广播保留 leader_state/cmd，并新增 slot_scale。"""
@@ -1054,6 +1618,42 @@ class RallyLeaderBroadcastAndInboundTests(unittest.TestCase):
             msg="bad t_ref must not commit cmd.step change (partial state)")
         self.assertFalse(out.t_ref_valid)
 
+    def test_non_finite_t_ref_is_rejected_atomically(self) -> None:
+        """NaN 和正负 Inf 的 t_ref 应整条拒绝，不得提交任何同帧计划字段。"""
+
+        for invalid_t_ref in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(t_ref=invalid_t_ref):
+                ctx = FormContextS()
+                ctx.leaderState = _motion(east=1.0, north=2.0, h=3.0)
+                ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=3, step=7)
+                ctx.slotScale = RallySlotScaleS(scale=1.5, scaleRate=-0.1)
+                out = RallyLeaderFollowerOutputS(
+                    leaderState=ctx.leaderState,
+                    cmd=ctx.cmd,
+                    slotScale=ctx.slotScale,
+                    t_ref=12.0,
+                    t_ref_valid=True,
+                    loopCounts={"BASE": 4},
+                )
+                message = _leader_msg(
+                    stage=FormStageE.RALLY,
+                    pattern=0,
+                    step=2,
+                    leader_state=_motion(east=99.0, north=98.0, h=97.0),
+                    t_ref=180.0,
+                    t_ref_valid=True,
+                    loop_counts={"R02": 2},
+                )
+                message.payload["t_ref"] = invalid_t_ref
+
+                RallyLeaderFollower().step(InboundInputS(inbox=[message]), out)
+
+                self.assertEqual(ctx.leaderState.pos, _pos(1.0, 2.0, 3.0))
+                self.assertEqual((ctx.cmd.stage, ctx.cmd.pattern, ctx.cmd.step), (FormStageE.HOLD, 3, 7))
+                self.assertEqual(ctx.slotScale, RallySlotScaleS(scale=1.5, scaleRate=-0.1))
+                self.assertEqual((out.t_ref, out.t_ref_valid), (12.0, True))
+                self.assertEqual(out.loopCounts, {"BASE": 4})
+
     def test_rally_leader_follower_requires_all_output_ports(self) -> None:
         """验证三类输出端口必须同时绑定。"""
 
@@ -1147,45 +1747,738 @@ class RallyLoiterSpeedBoundsTests(unittest.TestCase):
         self.assertEqual((loiter_min, loiter_max), (18.0, 22.0))
 
 
-class RallyPosCalcTests(unittest.TestCase):
+def _new_join_for_transit() -> RallyJoinPos:
+    """构造用于公切线转移测试的 RallyJoinPos。"""
+    join = RallyJoinPos()
+    join.init(RallyJoinPosInitS(
+        loose_slot=_pos(1000.0, 0.0, 560.0),
+        approach_speed_mps=20.0,
+        slow_radius_m=100.0,
+        arrival_radius_m=20.0,
+        loiter_radius_m=200.0,
+        loiter_speed_min_mps=14.0,
+        loiter_speed_max_mps=25.0,
+        mission_heading_rad=0.0,
+        mission_speed_mps=20.0,
+        control_period_s=0.05,
+        standby_altitude_m=560.0,
+    ))
+    return join
+
+
+def _make_standby_join_for_transit() -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+    """构造两个分离等半径圆，并把飞机放在待命圆顶部等待切出。"""
+
+    join = _new_join_for_transit()
+    output = PosCalcOutputS(selfCmd=MotionProfS())
+    enter_state = _motion(
+        east=0.0,
+        north=0.0,
+        h=560.0,
+        v_east=20.0,
+        vd=20.0,
+        v_psi=0.0,
+    )
+    join.step(RallyJoinPosInputS(selfState=enter_state, standby=True), output)
+    transit_state = _motion(
+        east=0.0,
+        north=400.0,
+        h=560.0,
+        v_east=-20.0,
+        vd=20.0,
+        v_psi=math.pi,
+    )
+    return join, transit_state, output
+
+
+def _started_join_with_two_circles() -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+    """启动分离两圆的公切线汇合路径。"""
+
+    join, state, output = _make_standby_join_for_transit()
+    join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+    return join, state, output
+
+
+def _started_join_with_point_fallback() -> tuple[RallyJoinPos, float]:
+    """启动公切线无解时的点到集结圆退化路径，并返回独立计算的水平航程。"""
+
+    join, state, output = _make_standby_join_for_transit()
+    with patch(
+        "src.algorithm.units.algo.pos_calc.rally_join_pos.common_tangent",
+        return_value=None,
+    ):
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+    assert join._entry_point is not None
+    line_length = math.hypot(
+        join._entry_point.east - state.pos.east,
+        join._entry_point.north - state.pos.north,
+    )
+    rally_arc = join._loiter_radius * ((join._theta_slot - join._theta_entry) % (2.0 * math.pi))
+    return join, line_length + rally_arc
+
+
+def _started_join_with_coincident_circles() -> tuple[RallyJoinPos, float]:
+    """启动待命圆与集结圆重合的汇合路径，并返回独立计算的 CCW 圆弧。"""
+
+    join = RallyJoinPos()
+    join.init(RallyJoinPosInitS(
+        loose_slot=_pos(0.0, 0.0, 560.0),
+        approach_speed_mps=20.0,
+        arrival_radius_m=20.0,
+        loiter_radius_m=200.0,
+        loiter_speed_min_mps=14.0,
+        loiter_speed_max_mps=25.0,
+        mission_heading_rad=0.0,
+        mission_speed_mps=20.0,
+        control_period_s=0.05,
+        standby_altitude_m=560.0,
+    ))
+    output = PosCalcOutputS(selfCmd=MotionProfS())
+    join.step(
+        RallyJoinPosInputS(
+            selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
+            standby=True,
+        ),
+        output,
+    )
+    state = _motion(east=0.0, north=400.0, h=560.0, v_east=-20.0, vd=20.0, v_psi=math.pi)
+    theta = math.atan2(state.pos.north - join._loiter_center_n, state.pos.east - join._loiter_center_e)
+    expected_arc = join._loiter_radius * ((join._theta_slot - theta) % (2.0 * math.pi))
+    join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=5.0), output)
+    return join, expected_arc
+
+
+def _join_at_transit_phase(phase: str) -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+    """把汇合解算器推进到指定转移子阶段，并返回该阶段内的代表位置。"""
+
+    join, state, output = _started_join_with_two_circles()
+    if phase == "ARC_TO_TANGENT":
+        theta = join._theta_local_exit - math.pi / 2.0
+        state.pos.east = join._standby_center_e + join._loiter_radius * math.cos(theta)
+        state.pos.north = join._standby_center_n + join._loiter_radius * math.sin(theta)
+        state.v.vPsi = theta + math.pi / 2.0
+        return join, state, output
+
+    assert join._local_exit_point is not None
+    assert join._entry_point is not None
+    state.pos.east = join._local_exit_point.east
+    state.pos.north = join._local_exit_point.north
+    state.v.vPsi = join._theta_local_exit + math.pi / 2.0
+    join.step(RallyJoinPosInputS(selfState=state, t_now=10.1), output)
+    if phase == "LINE_TO_RALLY_ENTRY":
+        state.pos.east = (join._local_exit_point.east + join._entry_point.east) / 2.0
+        state.pos.north = (join._local_exit_point.north + join._entry_point.north) / 2.0
+        return join, state, output
+
+    if phase == "LOITERING":
+        state.pos.east = join._entry_point.east
+        state.pos.north = join._entry_point.north
+        state.pos.h = join._entry_point.h
+        join.step(RallyJoinPosInputS(selfState=state, t_now=10.2), output)
+        theta = join._theta_slot - math.pi
+        state.pos.east = join._loiter_center_e + join._loiter_radius * math.cos(theta)
+        state.pos.north = join._loiter_center_n + join._loiter_radius * math.sin(theta)
+        state.v.vPsi = theta + math.pi / 2.0
+        return join, state, output
+
+    raise ValueError(f"未知转移子阶段: {phase}")
+
+
+def _join_loitering_with_plan(assigned_loops: int) -> tuple[RallyJoinPos, PosCalcOutputS]:
+    """构造已锁存固定计划且位于 M_i 远角窗的盘旋状态。"""
+
+    join = _new_join_for_transit()
+    join._state = RALLY_STATE_LOITERING
+    join._transit_phase = None
+    join._theta_entry = join._theta_slot - math.pi
+    output = PosCalcOutputS(selfCmd=MotionProfS())
+    theta = join._theta_slot - math.pi
+    state = _motion(
+        east=join._loiter_center_e + join._loiter_radius * math.cos(theta),
+        north=join._loiter_center_n + join._loiter_radius * math.sin(theta),
+        h=join._slot.h,
+        vd=20.0,
+        v_psi=theta + math.pi / 2.0,
+    )
+    join.step(
+        RallyJoinPosInputS(
+            selfState=state,
+            t_ref=200.0,
+            t_ref_valid=True,
+            t_now=100.0,
+            assigned_loops=assigned_loops,
+        ),
+        output,
+    )
+    return join, output
+
+
+def _rally_circle_state(join: RallyJoinPos, slot_remaining_angle: float) -> MotionProfS:
+    """按到 M_i 的有向剩余角构造集结圆上的运动状态，负值表示刚越过 M_i。"""
+
+    theta = join._theta_slot - slot_remaining_angle
+    return _motion(
+        east=join._loiter_center_e + join._loiter_radius * math.cos(theta),
+        north=join._loiter_center_n + join._loiter_radius * math.sin(theta),
+        h=join._slot.h,
+        vd=20.0,
+        v_psi=theta + math.pi / 2.0,
+    )
+
+
+def _cross_rally_slot(
+    join: RallyJoinPos,
+    output: PosCalcOutputS,
+    *,
+    assigned_loops: int,
+    t_ref: float = 200.0,
+    t_now: float = 100.0,
+    t_ref_valid: bool = True,
+) -> None:
+    """先进入远角窗再真实经过 M_i，复用重复广播的同一圈数。"""
+
+    far_theta = join._theta_slot - math.pi
+    far_state = _motion(
+        east=join._loiter_center_e + join._loiter_radius * math.cos(far_theta),
+        north=join._loiter_center_n + join._loiter_radius * math.sin(far_theta),
+        h=join._slot.h,
+        vd=20.0,
+        v_psi=far_theta + math.pi / 2.0,
+    )
+    join.step(
+        RallyJoinPosInputS(
+            selfState=far_state,
+            t_ref=t_ref,
+            t_ref_valid=t_ref_valid,
+            t_now=t_now - 0.1,
+            assigned_loops=assigned_loops,
+        ),
+        output,
+    )
+    near_state = _rally_circle_state(join, 0.1)
+    join.step(
+        RallyJoinPosInputS(
+            selfState=near_state,
+            t_ref=t_ref,
+            t_ref_valid=t_ref_valid,
+            t_now=t_now - 0.05,
+            assigned_loops=assigned_loops,
+        ),
+        output,
+    )
+    crossed_state = _rally_circle_state(join, -0.1)
+    join.step(
+        RallyJoinPosInputS(
+            selfState=crossed_state,
+            t_ref=t_ref,
+            t_ref_valid=t_ref_valid,
+            t_now=t_now,
+            assigned_loops=assigned_loops,
+        ),
+        output,
+    )
+
+
+def _drive_follower_across_rally_slot(
+    follower: RallyFollowerEntity,
+    *,
+    scale: float = 3.0,
+    start_now_s: float = 0.0,
+) -> EntityOutputS:
+    """从入圆开始驱动僚机完成远区布防、近窗确认和 M_i 跨零。"""
+
+    join = follower._rally_join
+    states = (
+        _rally_circle_state(join, 0.0),
+        _rally_circle_state(join, math.pi),
+        _rally_circle_state(join, 0.1),
+        _rally_circle_state(join, -0.1),
+    )
+    output = EntityOutputS()
+    for index, state in enumerate(states):
+        output = EntityOutputS()
+        follower.step(
+            EntityInputS(
+                selfState=state,
+                inbox=[_leader_msg(step=0, scale=scale, t_ref=1000.0, loop_counts={"R02": 0})],
+                now_s=start_now_s + index * 0.1,
+            ),
+            output,
+        )
+    return output
+
+
+class RallyJoinPosTests(unittest.TestCase):
     """验证集结专用位置解算单元。"""
 
     def _make_standby_join_for_transit(self) -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
         """构造两个分离等半径圆，并把飞机放在待命圆顶部等待切出。"""
 
-        join = RallyJoinPos()
-        join.init(RallyJoinPosInitS(
-            loose_slot=_pos(1000.0, 0.0, 560.0),
-            approach_speed_mps=20.0,
-            slow_radius_m=100.0,
-            arrival_radius_m=20.0,
-            loiter_radius_m=200.0,
-            loiter_speed_min_mps=14.0,
-            loiter_speed_max_mps=25.0,
-            mission_heading_rad=0.0,
-            mission_speed_mps=20.0,
-            control_period_s=0.05,
-            standby_altitude_m=560.0,
-        ))
+        return _make_standby_join_for_transit()
+
+    def test_path_lengths_stay_unplanned_initially_during_standby_and_after_reset(self) -> None:
+        """未开始规划、保持待命或复位后，基础航程及剩余航程都应保留未规划哨兵值。"""
+
+        join = _new_join_for_transit()
         output = PosCalcOutputS(selfCmd=MotionProfS())
-        enter_state = _motion(
-            east=0.0,
-            north=0.0,
-            h=560.0,
-            v_east=20.0,
-            vd=20.0,
-            v_psi=0.0,
+        self.assertEqual(join.planned_path_length_m, -1.0)
+        self.assertEqual(join.remaining_path_length_m, -1.0)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
+                standby=True,
+            ),
+            output,
         )
-        join.step(RallyJoinPosInputS(selfState=enter_state, standby=True), output)
-        transit_state = _motion(
-            east=0.0,
-            north=400.0,
-            h=560.0,
-            v_east=-20.0,
-            vd=20.0,
-            v_psi=math.pi,
+
+        self.assertEqual(join.state, RALLY_STATE_STANDBY)
+        self.assertEqual(join.planned_path_length_m, -1.0)
+        self.assertEqual(join.remaining_path_length_m, -1.0)
+
+        join.reset()
+
+        self.assertEqual(join.planned_path_length_m, -1.0)
+        self.assertEqual(join.remaining_path_length_m, -1.0)
+
+    def test_coordinated_speed_is_used_on_local_arc_tangent_line_and_rally_circle(self) -> None:
+        """计划有效后完整剩余航程都应使用同一时间协调速度口径。"""
+
+        for phase in ("ARC_TO_TANGENT", "LINE_TO_RALLY_ENTRY", "LOITERING"):
+            with self.subTest(phase=phase):
+                join, state, output = _join_at_transit_phase(phase)
+                base_remaining = join._remaining_base_path_m(state.pos)
+                circumference = 2.0 * math.pi * join._loiter_radius
+                expected = max(14.0, min(25.0, (base_remaining + circumference) / 100.0))
+
+                join.step(
+                    RallyJoinPosInputS(
+                        selfState=state,
+                        t_ref=200.0,
+                        t_ref_valid=True,
+                        t_now=100.0,
+                        assigned_loops=1,
+                    ),
+                    output,
+                )
+
+                self.assertAlmostEqual(output.selfCmd.v.vd, expected, places=6)
+
+    def test_unplanned_transit_preserves_legacy_phase_speeds(self) -> None:
+        """未锁存计划时待命圆、近场直飞和集结圆应保留既有速度行为。"""
+
+        arc_join, arc_state, arc_output = _join_at_transit_phase("ARC_TO_TANGENT")
+        arc_join._standby_speed = 22.0
+        arc_join.step(RallyJoinPosInputS(selfState=arc_state, t_ref_valid=False), arc_output)
+        self.assertAlmostEqual(arc_output.selfCmd.v.vd, 22.0)
+
+        line_join, line_state, line_output = _join_at_transit_phase("LINE_TO_RALLY_ENTRY")
+        assert line_join._entry_point is not None
+        line_e = line_join._entry_point.east - line_state.pos.east
+        line_n = line_join._entry_point.north - line_state.pos.north
+        line_length = math.hypot(line_e, line_n)
+        line_state.pos.east = line_join._entry_point.east - 50.0 * line_e / line_length
+        line_state.pos.north = line_join._entry_point.north - 50.0 * line_n / line_length
+        line_join.step(RallyJoinPosInputS(selfState=line_state, t_ref_valid=False), line_output)
+        self.assertAlmostEqual(line_output.selfCmd.v.vd, 14.0)
+
+        loiter_join, loiter_state, loiter_output = _join_at_transit_phase("LOITERING")
+        loiter_join._loiter_speed = 18.0
+        loiter_join.step(RallyJoinPosInputS(selfState=loiter_state, t_ref_valid=False), loiter_output)
+        self.assertAlmostEqual(loiter_output.selfCmd.v.vd, 18.0)
+
+    def test_slot_crossing_keeps_total_remaining_path_and_speed_continuous(self) -> None:
+        """点前进入近窗不得扣圈，跨零后总剩余航程和协调速度只能按实际飞行量连续下降。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=1)
+        circumference = 2.0 * math.pi * join._loiter_radius
+        samples: list[tuple[float, float]] = []
+        for index, remaining_angle in enumerate((0.4, 0.2, -0.1)):
+            state = _rally_circle_state(join, remaining_angle)
+            t_now = 100.0 + index * 0.1
+            join.step(
+                RallyJoinPosInputS(
+                    selfState=state,
+                    t_ref=160.0,
+                    t_ref_valid=True,
+                    t_now=t_now,
+                    assigned_loops=1,
+                ),
+                output,
+            )
+            total_remaining = join._remaining_base_path_m(state.pos) + join.remaining_loops * circumference
+            expected_speed = max(14.0, min(25.0, total_remaining / (160.0 - t_now)))
+            self.assertAlmostEqual(output.selfCmd.v.vd, expected_speed, places=6)
+            samples.append((total_remaining, output.selfCmd.v.vd))
+
+        self.assertAlmostEqual(samples[0][0] - samples[1][0], 0.2 * join._loiter_radius, places=6)
+        self.assertAlmostEqual(samples[1][0] - samples[2][0], 0.3 * join._loiter_radius, places=6)
+        self.assertLess(abs(samples[1][1] - samples[2][1]), 2.0)
+        self.assertEqual(join.remaining_loops, 0)
+
+    def test_slot_crossing_consumes_once_after_multiple_near_window_steps(self) -> None:
+        """近窗内连续多拍不得提前扣圈，越点回绕只消费一次。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=2)
+        for index, remaining_angle in enumerate((0.3, 0.2, 0.1)):
+            join.step(
+                RallyJoinPosInputS(
+                    selfState=_rally_circle_state(join, remaining_angle),
+                    t_ref=200.0,
+                    t_ref_valid=True,
+                    t_now=100.1 + index * 0.1,
+                    assigned_loops=2,
+                ),
+                output,
+            )
+            self.assertEqual(join.remaining_loops, 2)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, -0.05),
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.4,
+                assigned_loops=2,
+            ),
+            output,
         )
-        return join, transit_state, output
+        self.assertEqual(join.remaining_loops, 1)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, -0.1),
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.5,
+                assigned_loops=2,
+            ),
+            output,
+        )
+        self.assertEqual(join.remaining_loops, 1)
+
+    def test_single_tick_crossing_from_outside_near_window_exits_with_zero_loops(self) -> None:
+        """零圈计划从 0.4rad 单拍推进到 -0.1rad 时，应识别真实跨零并立即切出。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=0)
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, 0.4),
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.1,
+                assigned_loops=0,
+            ),
+            output,
+        )
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, -0.1),
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.2,
+                assigned_loops=0,
+            ),
+            output,
+        )
+
+        self.assertEqual(join.state, RALLY_STATE_EXITED)
+        self.assertTrue(join.reached_slot_once)
+
+    def test_single_tick_crossing_from_outside_near_window_consumes_one_loop(self) -> None:
+        """多圈计划从 0.4rad 单拍跨到 -0.1rad 时，每拍只消费一圈。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=2)
+        for index, remaining_angle in enumerate((0.4, -0.1, -0.15)):
+            join.step(
+                RallyJoinPosInputS(
+                    selfState=_rally_circle_state(join, remaining_angle),
+                    t_ref=200.0,
+                    t_ref_valid=True,
+                    t_now=100.1 + index * 0.1,
+                    assigned_loops=2,
+                ),
+                output,
+            )
+
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+        self.assertEqual(join.remaining_loops, 1)
+
+    def test_slot_crossing_rejects_after_slot_entry_reverse_jump_and_near_noise(self) -> None:
+        """点后近窗切入、反向跨零和近点抖动都不得伪造 CCW 真实越点事件。"""
+
+        after_slot = _new_join_for_transit()
+        after_slot._theta_entry = after_slot._theta_slot + 0.1
+        after_slot._enter_arc()
+        output = PosCalcOutputS(selfCmd=MotionProfS())
+        for index, remaining_angle in enumerate((-0.1, -0.04, -0.08)):
+            after_slot.step(
+                RallyJoinPosInputS(
+                    selfState=_rally_circle_state(after_slot, remaining_angle),
+                    t_ref=200.0,
+                    t_ref_valid=True,
+                    t_now=100.0 + index * 0.1,
+                    assigned_loops=1,
+                ),
+                output,
+            )
+        self.assertFalse(after_slot.reached_slot_once)
+        self.assertEqual(after_slot.remaining_loops, 1)
+
+        noise, noise_output = _join_loitering_with_plan(assigned_loops=1)
+        for index, remaining_angle in enumerate((0.001, -0.001, 0.001)):
+            noise.step(
+                RallyJoinPosInputS(
+                    selfState=_rally_circle_state(noise, remaining_angle),
+                    t_ref=200.0,
+                    t_ref_valid=True,
+                    t_now=100.1 + index * 0.1,
+                    assigned_loops=1,
+                ),
+                noise_output,
+            )
+        self.assertFalse(noise.reached_slot_once)
+        self.assertEqual(noise.remaining_loops, 1)
+
+        reverse, reverse_output = _join_loitering_with_plan(assigned_loops=2)
+        for index, remaining_angle in enumerate((0.4, -0.1, 0.1)):
+            reverse.step(
+                RallyJoinPosInputS(
+                    selfState=_rally_circle_state(reverse, remaining_angle),
+                    t_ref=200.0,
+                    t_ref_valid=True,
+                    t_now=100.1 + index * 0.1,
+                    assigned_loops=2,
+                ),
+                reverse_output,
+            )
+        self.assertEqual(reverse.remaining_loops, 1)
+        self.assertEqual(reverse.state, RALLY_STATE_LOITERING)
+
+    def test_assigned_loops_are_latched_once_and_consumed_once_per_slot_crossing(self) -> None:
+        """重复广播不得重置圈数，每次 M_i 穿越只消耗一圈。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=2)
+        self.assertEqual(join.remaining_loops, 2)
+
+        _cross_rally_slot(join, output, assigned_loops=2)
+        self.assertEqual(join.remaining_loops, 1)
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+
+        # 仍停留在近角窗的重复拍不构成第二次真实经过，也不能被重复计划重置。
+        slot_state = _motion(east=join._slot.east, north=join._slot.north, h=join._slot.h)
+        join.step(
+            RallyJoinPosInputS(
+                selfState=slot_state,
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.1,
+                assigned_loops=2,
+            ),
+            output,
+        )
+        self.assertEqual(join.remaining_loops, 1)
+
+        _cross_rally_slot(join, output, assigned_loops=2, t_now=101.0)
+        self.assertEqual(join.remaining_loops, 0)
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+
+        _cross_rally_slot(join, output, assigned_loops=2, t_now=102.0)
+        self.assertEqual(join.state, RALLY_STATE_EXITED)
+
+    def test_first_valid_plan_ignores_later_loop_assignment_changes(self) -> None:
+        """首次有效计划锁存后，后续报文不得替换已分配圈数。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=2)
+        far_theta = join._theta_slot - math.pi
+        far_state = _motion(
+            east=join._loiter_center_e + join._loiter_radius * math.cos(far_theta),
+            north=join._loiter_center_n + join._loiter_radius * math.sin(far_theta),
+            h=join._slot.h,
+        )
+        join.step(
+            RallyJoinPosInputS(
+                selfState=far_state,
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.1,
+                assigned_loops=7,
+            ),
+            output,
+        )
+
+        self.assertEqual(join.remaining_loops, 2)
+
+    def test_final_slot_crossing_does_not_depend_on_dynamic_eta_freshness(self) -> None:
+        """固定计划零圈时应在 M_i 可靠切出，不再依赖当前时刻是否越过 T_ref。"""
+
+        join, output = _join_loitering_with_plan(assigned_loops=0)
+        _cross_rally_slot(
+            join,
+            output,
+            assigned_loops=0,
+            t_ref=1000.0,
+            t_now=100.2,
+        )
+
+        self.assertEqual(join.state, RALLY_STATE_EXITED)
+
+    def test_slot_crossing_before_plan_does_not_consume_later_assignment(self) -> None:
+        """计划生效前经过 M_i 不得提前消费之后下发的固定圈数。"""
+
+        join, state, output = _join_at_transit_phase("LOITERING")
+        join.step(RallyJoinPosInputS(selfState=state, t_ref_valid=False), output)
+        _cross_rally_slot(join, output, assigned_loops=0, t_ref_valid=False)
+
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, math.pi),
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=100.0,
+                assigned_loops=1,
+            ),
+            output,
+        )
+
+        self.assertEqual(join.remaining_loops, 1)
+        _cross_rally_slot(join, output, assigned_loops=1, t_now=101.0)
+        self.assertEqual(join.remaining_loops, 0)
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+
+    def test_first_valid_plan_rejects_non_finite_times_without_latching(self) -> None:
+        """首次有效计划要求 t_ref 和 t_now 都有限，失败后不得锁存圈数。"""
+
+        invalid_times = (
+            (float("nan"), 100.0),
+            (float("inf"), 100.0),
+            (float("-inf"), 100.0),
+            (200.0, float("nan")),
+            (200.0, float("inf")),
+            (200.0, float("-inf")),
+        )
+        for t_ref, t_now in invalid_times:
+            with self.subTest(t_ref=t_ref, t_now=t_now):
+                join, state, output = _join_at_transit_phase("ARC_TO_TANGENT")
+                with self.assertRaises(ValueError):
+                    join.step(
+                        RallyJoinPosInputS(
+                            selfState=state,
+                            t_ref=t_ref,
+                            t_ref_valid=True,
+                            t_now=t_now,
+                            assigned_loops=2,
+                        ),
+                        output,
+                    )
+                self.assertEqual(join.remaining_loops, 0)
+
+    def test_applied_plan_rejects_non_finite_times_on_every_coordinated_step(self) -> None:
+        """计划生效后每次协调调速仍须拒绝非有限 t_ref 或 t_now。"""
+
+        invalid_times = (
+            (float("nan"), 100.1),
+            (float("inf"), 100.1),
+            (float("-inf"), 100.1),
+            (200.0, float("nan")),
+            (200.0, float("inf")),
+            (200.0, float("-inf")),
+        )
+        for t_ref, t_now in invalid_times:
+            with self.subTest(t_ref=t_ref, t_now=t_now):
+                join, output = _join_loitering_with_plan(assigned_loops=2)
+                with self.assertRaises(ValueError):
+                    join.step(
+                        RallyJoinPosInputS(
+                            selfState=_rally_circle_state(join, math.pi),
+                            t_ref=t_ref,
+                            t_ref_valid=True,
+                            t_now=t_now,
+                            assigned_loops=2,
+                        ),
+                        output,
+                    )
+                self.assertEqual(join.remaining_loops, 2)
+
+    def test_invalid_assigned_loops_are_rejected_by_first_valid_plan(self) -> None:
+        """首次有效计划只接受非 bool 的非负整数圈数。"""
+
+        for invalid_loops in (-1, 1.9, True):
+            with self.subTest(assigned_loops=invalid_loops):
+                join, state, output = _join_at_transit_phase("ARC_TO_TANGENT")
+                with self.assertRaises(ValueError):
+                    join.step(
+                        RallyJoinPosInputS(
+                            selfState=state,
+                            t_ref=200.0,
+                            t_ref_valid=True,
+                            t_now=100.0,
+                            assigned_loops=invalid_loops,  # type: ignore[arg-type]
+                        ),
+                        output,
+                    )
+                self.assertEqual(join.remaining_loops, 0)
+
+    def test_remaining_path_length_updates_through_all_locked_transit_phases(self) -> None:
+        """正常公切线路径应在三阶段保持非负剩余航程，并随沿途位置推进而更新。"""
+
+        join, state, output = _started_join_with_two_circles()
+        self.assertEqual(join._transit_phase, "ARC_TO_TANGENT")
+        arc_start = join.remaining_path_length_m
+
+        arc_theta = join._theta_local_exit - math.pi / 2.0
+        state.pos.east = join._standby_center_e + join._loiter_radius * math.cos(arc_theta)
+        state.pos.north = join._standby_center_n + join._loiter_radius * math.sin(arc_theta)
+        state.v.vPsi = arc_theta + math.pi / 2.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.1), output)
+        arc_progress = join.remaining_path_length_m
+
+        assert join._local_exit_point is not None
+        assert join._entry_point is not None
+        state.pos.east = join._local_exit_point.east
+        state.pos.north = join._local_exit_point.north
+        state.v.vPsi = join._theta_local_exit + math.pi / 2.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.2), output)
+        self.assertEqual(join._transit_phase, "LINE_TO_RALLY_ENTRY")
+        line_start = join.remaining_path_length_m
+
+        state.pos.east = (join._local_exit_point.east + join._entry_point.east) / 2.0
+        state.pos.north = (join._local_exit_point.north + join._entry_point.north) / 2.0
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.3), output)
+        line_progress = join.remaining_path_length_m
+
+        state.pos.east = join._entry_point.east
+        state.pos.north = join._entry_point.north
+        state.pos.h = join._entry_point.h
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.4), output)
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+
+        loiter_far_theta = join._theta_slot - math.pi
+        state.pos.east = join._loiter_center_e + join._loiter_radius * math.cos(loiter_far_theta)
+        state.pos.north = join._loiter_center_n + join._loiter_radius * math.sin(loiter_far_theta)
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.5), output)
+        loiter_far = join.remaining_path_length_m
+
+        loiter_near_theta = join._theta_slot - math.pi / 2.0
+        state.pos.east = join._loiter_center_e + join._loiter_radius * math.cos(loiter_near_theta)
+        state.pos.north = join._loiter_center_n + join._loiter_radius * math.sin(loiter_near_theta)
+        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.6), output)
+        loiter_near = join.remaining_path_length_m
+
+        for remaining in (arc_start, arc_progress, line_start, line_progress, loiter_far, loiter_near):
+            self.assertGreaterEqual(remaining, 0.0)
+        self.assertLess(arc_progress, arc_start)
+        self.assertLess(line_progress, line_start)
+        self.assertLess(loiter_near, loiter_far)
+
+        join.reset()
+
+        self.assertEqual(join.planned_path_length_m, -1.0)
+        self.assertEqual(join.remaining_path_length_m, -1.0)
 
     def test_rally_join_pos_waits_for_local_tangent_before_flying_line(self) -> None:
         """验证开始集结后先沿待命圆飞向切出点，不从当前位置直接追集结圆。"""
@@ -1205,18 +2498,21 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(output.selfCmd.v.vNorth, 0.0, places=6)
         self.assertAlmostEqual(output.selfCmd.v.dVPsi, 0.1)
 
-    def test_rally_join_pos_arc_to_tangent_eta_includes_local_arc_and_tangent(self) -> None:
-        """验证待命圆切出阶段 ETA 包含剩余圆弧与公切线，供全队同步使用。"""
+    def test_planned_path_length_contains_local_arc_tangent_and_rally_arc(self) -> None:
+        """两圆公切线方案应锁存完整基础水平航程。"""
+        join, state, output = _started_join_with_two_circles()
+        self.assertGreater(join.planned_path_length_m, join._tangent_length_m)
+        self.assertAlmostEqual(join.remaining_path_length_m, join.planned_path_length_m, delta=1e-6)
 
-        join, state, output = self._make_standby_join_for_transit()
+    def test_planned_path_length_uses_point_to_circle_fallback(self) -> None:
+        """公切线无解时基础航程应与实际点到圆退化路线一致。"""
+        join, expected_length = _started_join_with_point_fallback()
+        self.assertAlmostEqual(join.planned_path_length_m, expected_length, places=6)
 
-        join.step(
-            RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0),
-            output,
-        )
-
-        expected_eta = 10.0 + math.pi * 200.0 / 20.0 + 1000.0 / 20.0
-        self.assertAlmostEqual(join.eta_s, expected_eta)
+    def test_planned_path_length_for_coincident_circles_is_rally_arc_only(self) -> None:
+        """两圆重合时只保留当前位置到 M_i 的 CCW 圆弧。"""
+        join, expected_arc = _started_join_with_coincident_circles()
+        self.assertAlmostEqual(join.planned_path_length_m, expected_arc, places=6)
 
     def test_rally_join_pos_same_circle_enters_loitering_directly(self) -> None:
         """验证待命圆与集结圆重合时直接继续盘旋，不退化为直飞 M_i。"""
@@ -1366,12 +2662,23 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertEqual(entry, (join._entry_point.east, join._entry_point.north))
 
     def test_rally_join_pos_reset_clears_locked_transit_plan(self) -> None:
-        """验证 reset 清除公切线计划，下一轮开始集结时能够重新规划。"""
+        """验证 reset 清除公切线和圈数计划，下一轮开始集结时能够重新规划。"""
 
         join, state, output = self._make_standby_join_for_transit()
-        join.step(RallyJoinPosInputS(selfState=state, standby=False, t_now=10.0), output)
+        join.step(
+            RallyJoinPosInputS(
+                selfState=state,
+                standby=False,
+                t_ref=200.0,
+                t_ref_valid=True,
+                t_now=10.0,
+                assigned_loops=2,
+            ),
+            output,
+        )
         self.assertIsNotNone(join._local_exit_point)
         self.assertIsNotNone(join._entry_point)
+        self.assertEqual(join.remaining_loops, 2)
 
         join.reset()
 
@@ -1380,6 +2687,20 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertIsNone(join._entry_point)
         self.assertEqual(join._tangent_length_m, 0.0)
         self.assertIsNone(join._last_local_remaining_angle)
+        self.assertEqual(join.remaining_loops, 0)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=state,
+                t_ref=300.0,
+                t_ref_valid=True,
+                t_now=20.0,
+                assigned_loops=1,
+            ),
+            output,
+        )
+
+        self.assertEqual(join.remaining_loops, 1)
 
     def test_rally_join_pos_standby_outputs_ccw_local_loiter_command(self) -> None:
         """验证 STANDBY 是 RallyJoinPos 内部状态，输出本地圆盘旋目标。"""
@@ -1868,9 +3189,374 @@ class RallyPosCalcTests(unittest.TestCase):
         self.assertEqual(join._entry_point.east, 10.0)
         self.assertEqual(join._entry_point.north, 20.0)
 
+    def test_point_fallback_at_slot_exits_on_first_real_crossing(self) -> None:
+        """点到圆退化到 M_i 时首拍不得误切，下一拍真实跨零应立即按零圈计划切出。"""
+
+        join = RallyJoinPos()
+        join.init(RallyJoinPosInitS(
+            loose_slot=_pos(10.0, 20.0, 500.0),
+            approach_speed_mps=20.0,
+            arrival_radius_m=60.0,
+            loiter_radius_m=200.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
+            mission_heading_rad=0.0,
+        ))
+        output = PosCalcOutputS(selfCmd=MotionProfS())
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
+                t_ref=100.0,
+                t_ref_valid=True,
+                t_now=0.0,
+                assigned_loops=0,
+            ),
+            output,
+        )
+
+        assert join._entry_point is not None
+        self.assertEqual(join._entry_point, join._slot)
+        self.assertEqual(join.state, RALLY_STATE_LOITERING)
+        self.assertFalse(join.reached_slot_once)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, -0.1),
+                t_ref=100.0,
+                t_ref_valid=True,
+                t_now=0.1,
+                assigned_loops=0,
+            ),
+            output,
+        )
+
+        self.assertEqual(join.state, RALLY_STATE_EXITED)
+        self.assertTrue(join.reached_slot_once)
+
+    def test_point_before_near_window_exits_on_first_real_crossing(self) -> None:
+        """点前约 0.5rad 切入时应保留 away 布防，并在首次真实跨零按零圈计划切出。"""
+
+        join = _new_join_for_transit()
+        join._theta_entry = join._theta_slot - 0.5
+        join._enter_arc()
+        output = PosCalcOutputS(selfCmd=MotionProfS())
+
+        for index, remaining_angle in enumerate((0.5, 0.2)):
+            join.step(
+                RallyJoinPosInputS(
+                    selfState=_rally_circle_state(join, remaining_angle),
+                    t_ref=100.0,
+                    t_ref_valid=True,
+                    t_now=index * 0.1,
+                    assigned_loops=0,
+                ),
+                output,
+            )
+            self.assertEqual(join.state, RALLY_STATE_LOITERING)
+            self.assertFalse(join.reached_slot_once)
+
+        join.step(
+            RallyJoinPosInputS(
+                selfState=_rally_circle_state(join, -0.05),
+                t_ref=100.0,
+                t_ref_valid=True,
+                t_now=0.2,
+                assigned_loops=0,
+            ),
+            output,
+        )
+
+        self.assertEqual(join.state, RALLY_STATE_EXITED)
+        self.assertTrue(join.reached_slot_once)
+
 
 class RallyEntityTests(unittest.TestCase):
     """验证集结长机和僚机实体的主链路。"""
+
+    def test_follower_reset_does_not_restore_plan_from_empty_inbox(self) -> None:
+        """有效计划后复位僚机实体，下一拍空 inbox 不得回灌旧 T_ref 和圈数。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+            )
+        )
+        state = _motion(east=10.0, north=20.0, h=500.0, v_east=20.0)
+        follower.step(
+            EntityInputS(
+                selfState=state,
+                inbox=[_leader_msg(t_ref=180.0, t_ref_valid=True, loop_counts={"R02": 2})],
+            ),
+            EntityOutputS(),
+        )
+        self.assertTrue(follower.cxt.rally_t_ref_valid)
+        self.assertEqual(follower._rally_join_u.assigned_loops, 2)
+
+        follower.reset()
+        follower.step(EntityInputS(selfState=state, inbox=[]), EntityOutputS())
+
+        self.assertEqual(follower.cxt.rally_t_ref, 0.0)
+        self.assertFalse(follower.cxt.rally_t_ref_valid)
+        self.assertEqual(follower.cxt.rally_loop_counts, {})
+        self.assertEqual(follower._rally_join_u.assigned_loops, 0)
+
+    def test_five_aircraft_entities_lock_plan_consume_loops_and_enter_catchup(self) -> None:
+        """五实体应经真实消息链路锁存计划、按圈切出并用回传推进 CATCHUP。"""
+
+        node_ids = ("A01", "A02", "A03", "A04", "A05")
+        comm_init = _comm_init_five()
+        route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
+        rally_cfg = _rally_cfg(expected=node_ids[1:], dt_s=0.1)
+        states = {
+            "A01": _motion(east=0.0, north=0.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
+            "A02": _motion(east=-500.0, north=100.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
+            "A03": _motion(east=-1500.0, north=-100.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
+            "A04": _motion(east=-2500.0, north=200.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
+            "A05": _motion(east=-3500.0, north=-200.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
+        }
+        leader = RallyLeaderEntity()
+        leader.init(EntityInitS(
+            selfInit=FormSelfInitS("A01"), commInit=comm_init, route=route, rally_cfg=rally_cfg,
+        ))
+        followers: dict[str, RallyFollowerEntity] = {}
+        for node_id in node_ids[1:]:
+            follower = RallyFollowerEntity()
+            follower.init(EntityInitS(
+                selfInit=FormSelfInitS(node_id), commInit=comm_init, route=route,
+                rally_cfg=rally_cfg, rally_leader_id="A01",
+            ))
+            followers[node_id] = follower
+
+        leader.step(EntityInputS(
+            selfState=states["A01"], remote=RemoteCmdS(FormStageE.STANDBY), now_s=0.0,
+        ), EntityOutputS())
+        for node_id, follower in followers.items():
+            follower.step(EntityInputS(
+                selfState=states[node_id], remote=RemoteCmdS(FormStageE.STANDBY), now_s=0.0,
+            ), EntityOutputS())
+
+        leader_join = EntityOutputS()
+        leader.step(EntityInputS(
+            selfState=states["A01"], remote=RemoteCmdS(FormStageE.RALLY), now_s=0.1,
+        ), leader_join)
+        follower_reports = []
+        for node_id, follower in followers.items():
+            output = EntityOutputS()
+            follower.step(EntityInputS(
+                selfState=states[node_id], inbox=list(leader_join.outbox), now_s=0.1,
+            ), output)
+            follower_reports.extend(output.outbox)
+            self.assertGreaterEqual(follower._rally_join.planned_path_length_m, 0.0, msg=node_id)
+
+        plan_output = EntityOutputS()
+        leader.step(EntityInputS(
+            selfState=states["A01"], inbox=follower_reports,
+            remote=RemoteCmdS(FormStageE.RALLY), now_s=0.2,
+        ), plan_output)
+        self.assertEqual(len(plan_output.outbox), 1)
+        plan_message = list(plan_output.outbox)
+        plan_payload = plan_message[0].payload
+        self.assertTrue(plan_payload["t_ref_valid"])
+        self.assertEqual(plan_payload["loop_counts"], {"A01": 3, "A02": 1, "A03": 0, "A04": 0, "A05": 0})
+        self.assertIsNot(leader._outbound_u.loop_counts, leader._task_y.loopCounts)
+        locked_t_ref = plan_payload["t_ref"]
+        locked_loop_counts = dict(plan_payload["loop_counts"])
+
+        follower_exit_reports = []
+        for index, node_id in enumerate(node_ids[1:]):
+            follower = followers[node_id]
+            join = follower._rally_join
+            assert join._entry_point is not None
+            assert join._local_exit_point is not None
+            follower.step(EntityInputS(
+                selfState=_motion(
+                    east=join._local_exit_point.east, north=join._local_exit_point.north,
+                    h=join._local_exit_point.h, v_east=20.0, vd=20.0,
+                    v_psi=join._theta_local_exit + math.pi / 2.0,
+                ),
+                inbox=plan_message,
+                now_s=0.9 + index * 10.0,
+            ), EntityOutputS())
+            entry_output = EntityOutputS()
+            follower.step(EntityInputS(
+                selfState=_motion(
+                    east=join._entry_point.east, north=join._entry_point.north, h=join._entry_point.h,
+                    v_east=20.0, vd=20.0,
+                ),
+                inbox=plan_message,
+                now_s=1.0 + index * 10.0,
+            ), entry_output)
+            self.assertTrue(follower.cxt.rally_t_ref_valid, msg=node_id)
+            self.assertEqual(join.remaining_loops, locked_loop_counts[node_id], msg=node_id)
+            self.assertEqual(join.state, RALLY_STATE_LOITERING, msg=node_id)
+
+            for crossing in range(locked_loop_counts[node_id] + 1):
+                now_s = 1.1 + index * 10.0 + crossing
+                for offset, angle in ((0.0, math.pi), (0.1, 0.1), (0.2, -0.1)):
+                    crossing_output = EntityOutputS()
+                    follower.step(EntityInputS(
+                        selfState=_rally_circle_state(join, angle), inbox=plan_message, now_s=now_s + offset,
+                    ), crossing_output)
+                expected_remaining = locked_loop_counts[node_id] - crossing - 1
+                if expected_remaining >= 0:
+                    self.assertEqual(join.remaining_loops, expected_remaining, msg=node_id)
+                    self.assertEqual(join.state, RALLY_STATE_LOITERING, msg=node_id)
+                else:
+                    self.assertEqual(join.state, RALLY_STATE_EXITED, msg=node_id)
+                    self.assertEqual(crossing_output.outbox[0].payload["rally_state"], RALLY_STATE_EXITED)
+            follower_exit_reports.extend(crossing_output.outbox)
+
+        leader_join_state = leader._rally_join
+        self.assertEqual(leader_join_state.state, RALLY_STATE_LOITERING)
+        for crossing in range(locked_loop_counts["A01"] + 1):
+            now_s = 50.0 + crossing
+            for offset, angle in ((0.0, math.pi), (0.1, 0.1), (0.2, -0.1)):
+                leader_crossing = EntityOutputS()
+                leader.step(EntityInputS(
+                    selfState=_rally_circle_state(leader_join_state, angle), inbox=follower_exit_reports,
+                    remote=RemoteCmdS(FormStageE.RALLY), now_s=now_s + offset,
+                ), leader_crossing)
+            expected_remaining = locked_loop_counts["A01"] - crossing - 1
+            if expected_remaining >= 0:
+                self.assertEqual(leader_join_state.remaining_loops, expected_remaining)
+                self.assertEqual(leader_join_state.state, RALLY_STATE_LOITERING)
+            else:
+                self.assertEqual(leader_join_state.state, RALLY_STATE_EXITED)
+
+        completed = EntityOutputS()
+        leader.step(EntityInputS(
+            selfState=_rally_circle_state(leader_join_state, 0.0), inbox=follower_exit_reports,
+            remote=RemoteCmdS(FormStageE.RALLY), now_s=60.0,
+        ), completed)
+        self.assertEqual(leader.cxt.cmd.step, RallyPhaseE.CATCHUP)
+        self.assertTrue(completed.outbox[0].payload["t_ref_valid"])
+        self.assertEqual(completed.outbox[0].payload["t_ref"], locked_t_ref)
+        self.assertEqual(completed.outbox[0].payload["loop_counts"], locked_loop_counts)
+
+    def test_follower_does_not_accept_plan_without_own_loop_assignment(self) -> None:
+        """广播缺少本机圈数时僚机不得把计划视为可执行。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+            )
+        )
+        leader_plan = _leader_msg(t_ref=180.0, t_ref_valid=True)
+        leader_plan.payload["loop_counts"] = {"R01": 0}
+
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
+                inbox=[leader_plan],
+            ),
+            EntityOutputS(),
+        )
+
+        self.assertFalse(follower.cxt.rally_t_ref_valid)
+        self.assertEqual(follower._rally_join_u.assigned_loops, 0)
+
+    def test_follower_receives_own_fixed_loop_assignment(self) -> None:
+        """僚机仅在收到本机非负圈数时启用同步计划并接线到位置解算。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                route=_route((40.0, 5.0, 500.0), (100.0, 5.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+            )
+        )
+        leader_plan = _leader_msg(t_ref=180.0, t_ref_valid=True)
+        leader_plan.payload["loop_counts"] = {"R01": 0, "R02": 2}
+
+        follower.step(
+            EntityInputS(
+                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
+                inbox=[leader_plan],
+            ),
+            EntityOutputS(),
+        )
+
+        self.assertTrue(follower.cxt.rally_t_ref_valid)
+        self.assertEqual(follower._rally_join_u.assigned_loops, 2)
+
+    def test_rally_follower_joining_uses_speed_only_forward_control(self) -> None:
+        """JOINING 前向通道只跟踪协调速度，进入 CATCHUP 后恢复位置跟踪。"""
+
+        follower = RallyFollowerEntity()
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                commInit=_comm_init(),
+                route=_route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0)),
+                rally_cfg=_rally_cfg(expected=("R02",)),
+                rally_leader_id="R01",
+            )
+        )
+        state = _motion(
+            east=-2000.0,
+            north=0.0,
+            h=500.0,
+            v_east=20.0,
+            vd=20.0,
+            v_psi=0.0,
+        )
+
+        joining = EntityOutputS()
+        follower.step(
+            EntityInputS(
+                selfState=state,
+                inbox=[_leader_msg(t_ref=500.0, loop_counts={"R02": 0})],
+                now_s=0.0,
+            ),
+            joining,
+        )
+
+        assert joining.selfCmd is not None
+        assert joining.selfAccCmd is not None
+        joining_heading = joining.selfCmd.v.vPsi
+        joining_acc_forward = (
+            joining.selfAccCmd.accEast * math.cos(joining_heading)
+            + joining.selfAccCmd.accNorth * math.sin(joining_heading)
+        )
+        self.assertLess(joining.selfCmd.v.vd, state.v.vd)
+        self.assertLess(joining_acc_forward, 0.0)
+
+        catchup = EntityOutputS()
+        follower.step(
+            EntityInputS(
+                selfState=state,
+                inbox=[
+                    _leader_msg(
+                        step=int(RallyPhaseE.CATCHUP),
+                        leader_state=_motion(east=100.0, north=0.0, h=500.0, v_east=20.0),
+                    )
+                ],
+                now_s=0.1,
+            ),
+            catchup,
+        )
+
+        assert catchup.selfCmd is not None
+        assert catchup.selfAccCmd is not None
+        catchup_heading = catchup.selfCmd.v.vPsi
+        catchup_acc_forward = (
+            catchup.selfAccCmd.accEast * math.cos(catchup_heading)
+            + catchup.selfAccCmd.accNorth * math.sin(catchup_heading)
+        )
+        self.assertGreater(catchup_acc_forward, 0.0)
 
     def test_rally_follower_standby_loiters_and_broadcasts_from_entity_layer(self) -> None:
         """验证僚机实体在 STANDBY 阶段自行本地盘旋，并继续发送待命回报。"""
@@ -2000,16 +3686,8 @@ class RallyEntityTests(unittest.TestCase):
             )
         )
 
-        first = EntityOutputS()
-        follower.step(
-            EntityInputS(
-                selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
-                inbox=[_leader_msg(step=0, scale=3.0)],
-                now_s=0.0,
-            ),
-            first,
-        )
-        # 僚机位于目标点且 T_ref 已有效 → RallyJoinPos 进入 EXITED，上报 arrived=1
+        first = _drive_follower_across_rally_slot(follower, scale=3.0)
+        # 僚机真实越过目标点且固定计划为零圈 → RallyJoinPos 进入 EXITED，上报 arrived=1。
         self.assertEqual(follower._rally_join.state, RALLY_STATE_EXITED)
         self.assertEqual(first.outbox[0].payload["arrived"], 1)
         self.assertEqual(first.outbox[0].payload["rally_state"], RALLY_STATE_EXITED)
@@ -2064,8 +3742,8 @@ class RallyEntityTests(unittest.TestCase):
         self.assertEqual(follower._rally_join.state, RALLY_STATE_LOITERING)
         self.assertEqual(output.outbox[0].payload["arrived"], 0)
 
-    def test_rally_follower_none_resets_join_state_for_restart(self) -> None:
-        """验证僚机退出到 NONE 时清除 EXITED 锁存，下一轮可重新执行 JOINING。"""
+    def test_rally_follower_none_clears_join_state_for_compatible_stop(self) -> None:
+        """验证僚机进入兼容 NONE 停控时清除 EXITED 位置状态，但不声明新任务生命周期。"""
         follower = RallyFollowerEntity()
         follower.init(
             EntityInitS(
@@ -2076,13 +3754,10 @@ class RallyEntityTests(unittest.TestCase):
                 rally_leader_id="R01",
             )
         )
-        state = _motion(east=10.0, north=20.0, h=500.0, v_east=20.0)
-        follower.step(
-            EntityInputS(selfState=state, inbox=[_leader_msg(t_ref_valid=True)]),
-            EntityOutputS(),
-        )
+        _drive_follower_across_rally_slot(follower)
         self.assertEqual(follower._rally_join.state, RALLY_STATE_EXITED)
 
+        state = _motion(east=10.0, north=20.0, h=500.0, v_east=20.0)
         none_output = EntityOutputS()
         follower.step(
             EntityInputS(
@@ -2160,8 +3835,8 @@ class RallyEntityTests(unittest.TestCase):
         self.assertEqual(analysis.inPositionCount, 1)
         self.assertEqual(analysis.totalCount, 1)
 
-    def test_rally_leader_none_resets_join_and_completion_latches(self) -> None:
-        """验证长机退出到 NONE 时复位汇合状态和完成锁存，允许重新集结。"""
+    def test_rally_leader_none_clears_join_and_completion_latches(self) -> None:
+        """验证长机进入兼容 NONE 停控时清理位置与完成显示锁存。"""
         leader = RallyLeaderEntity()
         leader.init(
             EntityInitS(

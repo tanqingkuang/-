@@ -248,16 +248,16 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "集结已结束，请重置后重试")
             if self._run_state not in {"RUNNING", "PAUSED"}:
                 return CommandResult("ERR_INVALID_STATE", "当前状态不能开始集结")
-            rally_algorithms = [
-                algorithm
-                for algorithm in self._node_algorithms.values()
+            rally_algorithms = {
+                node_id: algorithm
+                for node_id, algorithm in self._node_algorithms.items()
                 if algorithm.is_rally_role()
-            ]
+            }
             if not rally_algorithms:
                 return CommandResult("ERR_INVALID_STATE", "当前配置没有集结节点")
             # 首 tick 立即点击时先建立待命圆，避免 RallyJoinPos 直接沿旧点到圆切线启动。
             self._prime_rally_standby_unlocked(rally_algorithms)
-            results = [algorithm.start_rally() for algorithm in rally_algorithms]
+            results = [algorithm.start_rally() for algorithm in rally_algorithms.values()]
             if not any(ok for ok, _message in results):
                 message = next((message for _ok, message in results if message), "当前状态不能开始集结")
                 return CommandResult("ERR_INVALID_STATE", message)
@@ -608,18 +608,18 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._config is None:
                 return CommandResult("ERR_NO_CONFIG", "load config before run")
             self._run_state = "RUNNING"
-            rally_algorithms = [
-                algorithm
-                for algorithm in self._node_algorithms.values()
+            rally_algorithms = {
+                node_id: algorithm
+                for node_id, algorithm in self._node_algorithms.items()
                 if algorithm.is_rally_role()
-            ]
+            }
             if rally_algorithms:
                 # 批处理没有 GUI 按钮可点，集结配置进入 RUNNING 后自动触发一次开始集结。
                 # 自动触发发生在首 tick 之前，必须与 GUI 等待一拍后的待命圆合同保持一致。
                 self._prime_rally_standby_unlocked(rally_algorithms)
                 results = [
                     algorithm.start_rally()
-                    for algorithm in rally_algorithms
+                    for algorithm in rally_algorithms.values()
                 ]
                 if any(ok for ok, _message in results):
                     # 与 GUI start_rally() 保持同类事件，方便日志侧统一检索。
@@ -898,8 +898,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         if any(status != "forming" for status in status_values):
             self._control_report = "重构"
 
-    def _prime_rally_standby_unlocked(self, rally_algorithms: list[_NodeAlgorithm]) -> None:
-        """在首个仿真 tick 前预热一次待命算法，确保开始集结时已有本地盘旋圆。"""
+    def _prime_rally_standby_unlocked(self, rally_algorithms: dict[str, _NodeAlgorithm]) -> None:
+        """在首个仿真 tick 前只预热集结节点待命算法，不触碰通信和全局控制状态。"""
         # 已产生真实 tick 时，各实体已经通过正常调度建立待命几何，无需重复执行。
         if self._tick_index != 0:
             return
@@ -907,11 +907,16 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # 重复 start_rally() 时节点已切到 ACTIVE，不能在同一仿真时刻额外推进一次算法。
         if not any(
             algorithm.current_rally_phase_str() == "LOCAL_LOITER"
-            for algorithm in rally_algorithms
+            for algorithm in rally_algorithms.values()
         ):
             return
-        # 只更新算法状态和控制缓存，不推进通信时钟、模型或仿真时间。
-        self._run_formation_algorithms_unlocked()
+        states = self._model.read_states()
+        health_map = self._disturbance.read_health()
+        # 临时空 inbox 只供本次待命初始化；输出直接丢弃，不消费真实收件箱、不发送消息。
+        for node_id, algorithm in rally_algorithms.items():
+            if algorithm.current_rally_phase_str() != "LOCAL_LOITER":
+                continue
+            algorithm.step(states[node_id], [], self._time_s, health_map.get(node_id, "normal"))
 
     def _notify_subscribers(self, snapshot: SimulationSnapshot) -> None:
         """通知所有快照订阅者。注意：回调异常不应破坏控制器状态。"""

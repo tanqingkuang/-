@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import tempfile
@@ -11,6 +12,7 @@ from pathlib import Path
 from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS, PosInEarthS, WayPointInputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
+from src.common.envelope import MessageEnvelope
 from tests.llt._geo_route import geodetic_config
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
@@ -350,6 +352,62 @@ class SimControlRallyTests(unittest.TestCase):
                 join = algorithm._entity._rally_join
                 self.assertIsNotNone(join._standby_center_e, msg=node_id)
                 self.assertIsNotNone(join._standby_center_n, msg=node_id)
+
+    def test_start_rally_first_tick_prime_does_not_advance_ordinary_nodes_or_communication(self) -> None:
+        """验证首 tick 预热只初始化集结节点，不推进普通节点或通信状态。"""
+
+        config = _rally_config()
+        config["nodes"].append({
+            "node_id": "W01",
+            "role": "wingman",
+            "x_m": -80.0,
+            "y_m": 40.0,
+            "altitude_m": 500.0,
+            "speed_mps": 20.0,
+        })
+        config["formation"]["formations"][0]["slots"].append({
+            "node_id": "W01",
+            "x_m": -20.0,
+            "y_m": 0.0,
+            "z_m": 10.0,
+        })
+        config["links"].append({
+            "link_id": "R01-W01",
+            "direction": "duplex",
+            "latency_ms": 1.0,
+            "loss_rate": 0.25,
+        })
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            self.assertEqual(controller.load_config(str(_write_json(Path(tmp), config))).code, "OK")
+            controller._run_state = "PAUSED"
+
+            ordinary_algorithm = controller._node_algorithms["W01"]
+            ordinary_step_calls = 0
+            original_step = ordinary_algorithm.step
+
+            def wrapped_step(*args: object, **kwargs: object) -> object:
+                nonlocal ordinary_step_calls
+                ordinary_step_calls += 1
+                return original_step(*args, **kwargs)
+
+            ordinary_algorithm.step = wrapped_step  # type: ignore[method-assign]
+            sentinel = MessageEnvelope("test.prime", "R01", "W01", 0.0, {"value": 1})
+            controller._comm._inbox["W01"].append(sentinel)
+            inbox_before = {node_id: list(messages) for node_id, messages in controller._comm._inbox.items()}
+            in_flight_before = {link: list(messages) for link, messages in controller._comm._in_flight.items()}
+            rng_before = copy.deepcopy(controller._comm._rng.bit_generator.state)
+
+            result = controller.start_rally()
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(controller._tick_index, 0)
+            self.assertEqual(ordinary_step_calls, 0)
+            self.assertEqual(controller._comm._inbox, inbox_before)
+            self.assertEqual(controller._comm._in_flight, in_flight_before)
+            self.assertEqual(controller._comm._rng.bit_generator.state, rng_before)
 
     def test_rally_scenario_supports_runtime_formation_switch_entry(self) -> None:
         """验证集结场景复用现有队形重构入口，运行期切换 rally_leader 的目标队形索引。"""

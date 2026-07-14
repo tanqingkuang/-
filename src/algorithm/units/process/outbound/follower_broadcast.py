@@ -29,8 +29,8 @@ class FollowerBroadcastInputS(OutboundInputS):
     selfCmd: MotionProfS | None = None  # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
     selfArrived: int = 0  # 兼容旧协议；新协议使用 rally_state
     rally_state: str = RALLY_STATE_STANDBY  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
-    eta_s: float = 0.0  # 预计到达松散点的仿真时刻（秒）
-    reached_slot_once: bool = False  # 是否已至少一次路过 M_i；LOITERING 但尚未路过时仍应计入长机 T_ref 聚合
+    planned_path_length_m: float = -1.0  # 本次集结不含额外整圈的基础水平航程；-1 表示尚未规划
+    reached_slot_once: bool = False  # 是否已至少一次路过 M_i，作为汇合过程诊断量广播
 
 
 class FollowerBroadcast(OutboundBase):
@@ -74,7 +74,7 @@ class FollowerBroadcast(OutboundBase):
                     "heading_err_rad": heading_err_rad,
                     "arrived": int(u.selfArrived),
                     "rally_state": u.rally_state,
-                    "eta_s": float(u.eta_s),
+                    "planned_path_length_m": float(u.planned_path_length_m),
                     "reached_slot_once": bool(u.reached_slot_once),
                 },
             )

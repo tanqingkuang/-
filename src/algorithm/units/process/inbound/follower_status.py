@@ -65,13 +65,16 @@ class FollowerStatus(InboundBase):
                 pos_err_m = float(payload["pos_err_m"])
                 heading_err_rad = float(payload.get("heading_err_rad", 0.0))
                 arrived = int(payload.get("arrived", 0))
-                eta_s = float(payload.get("eta_s", 0.0))
+                planned_path_length_m = float(payload.get("planned_path_length_m", -1.0))
                 rally_state = str(payload.get("rally_state", RALLY_STATE_FLYING))
                 reached_slot_once = bool(payload.get("reached_slot_once", False))
             except (TypeError, ValueError):
                 continue
-            numeric_fields = (pos_east, pos_north, pos_h, pos_err_m, heading_err_rad, eta_s)
+            # 航程与运动字段必须一起通过校验，避免半条异常消息覆盖现有状态。
+            numeric_fields = (pos_east, pos_north, pos_h, pos_err_m, heading_err_rad, planned_path_length_m)
             if not all(math.isfinite(value) for value in numeric_fields):
+                continue
+            if planned_path_length_m < 0.0 and planned_path_length_m != -1.0:
                 continue
             # 以 envelope.source 作为节点 ID，不信任 payload 中的 id 字段。
             node_id = msg.source
@@ -86,7 +89,7 @@ class FollowerStatus(InboundBase):
             entry.posErr_m = pos_err_m
             entry.headingErr_rad = heading_err_rad
             entry.arrived = arrived
-            entry.eta_s = eta_s
+            entry.plannedPathLength_m = planned_path_length_m
             entry.rally_state = rally_state
             entry.reachedSlotOnce = reached_slot_once
             entry.id = node_id
