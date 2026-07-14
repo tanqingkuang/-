@@ -1,0 +1,67 @@
+# 目前仅承载工具配置（ruff / mypy / coverage），不含 [project] 元数据，
+# 以免改变现有 pip / PyInstaller 打包行为。依赖仍以 requirements-gui.txt 为准。
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+# 宽松起步：只用 ruff 默认规则集（E4/E7/E9/F，均为真实缺陷类），
+# 风格类规则（如行宽 E501、import 排序 I）后续再逐步收紧。
+ignore = [
+    "E731", # lambda 赋值在 GUI 回调/测试桩里属于惯用写法，暂不强制改 def
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 兼容门面模块：整个文件就是 re-export，import 即接口。
+"src/runner/sim_control.py" = ["F401"]
+# main_window 同时是测试的 re-export 入口（tests/llt 从这里 import 视图模型与工具函数）。
+"src/ui/gui/main_window.py" = ["F401", "E402"]
+# avoidance_tools 的部分 import 经 main_window 转手 re-export 给测试。
+"src/ui/gui/avoidance_tools.py" = ["F401"]
+# 脚本需先自举 sys.path 再 import 项目包，E402 属合法模式。
+"scripts/*.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+# 宽松起步：门禁先保证全绿，拦住未定义名字、错误 import、调用签名不匹配
+# （name-defined / import / call-arg 等）这类 AI 生成代码最常见的低级错误。
+ignore_missing_imports = true
+check_untyped_defs = false
+warn_unused_ignores = false
+warn_redundant_casts = true
+no_implicit_optional = true
+exclude = ["build/", "dist/"]
+# 存量豁免清单（2026-07 基线共 232 个非 GUI 错误）：每修完一类就从这里删掉，
+# 收紧顺序建议：union-attr / arg-type（多为 Optional 未判空）→ override（LSP 违反）→ 其余。
+disable_error_code = [
+    "arg-type",
+    "union-attr",
+    "attr-defined",
+    "override",
+    "call-overload",
+    "no-redef",
+    "assignment",
+    "var-annotated",
+    "has-type",
+    "misc",
+    "return-value",
+    "operator",
+    "index",
+]
+
+[[tool.mypy.overrides]]
+# GUI 采用 Mixin 拼装主窗口，mypy 无法理解宿主类属性（436 个误报），
+# 需要 Protocol 化改造后才能纳入检查，第二阶段处理。
+module = "src.ui.gui.*"
+ignore_errors = true
+
+[tool.coverage.run]
+# 覆盖率只统计 LLT（白盒）；ST 是黑盒验收，刻意不计入，避免稀释 LLT 的覆盖信号。
+source = ["src"]
+omit = ["src/main.py"]
+
+[tool.coverage.report]
+precision = 1

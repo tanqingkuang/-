@@ -33,7 +33,6 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
-from src.algorithm.units.process.formation_task.base import FormationTaskOutputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInitS, FollowerStatusInputS, FollowerStatusOutputS
 from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS

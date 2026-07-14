@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import (
     FormationAnalysisS,
     FormSelfInitS,
     MotionProfS,
-    PosInEarthS,
     PosTrackDiagS,
     RemoteCmdS,
     WayPointInputS,

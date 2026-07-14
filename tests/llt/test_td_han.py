@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 import unittest
 
 from src.algorithm.context.leaf_types import (

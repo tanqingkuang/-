@@ -25,7 +25,6 @@ from src.ui.gui.situation3d.scene_data import (
 from src.ui.gui.situation3d import terrain_field as terrain_field_module
 from src.ui.gui.situation3d import terrain_geometry as terrain_geometry_module
 from src.ui.gui.situation3d.terrain_field import (
-    DEFAULT_TERRAIN_RESOLUTION,
     generate_terrain_field,
     generate_terrain_field_from_file,
 )
@@ -663,7 +662,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         from PySide6.QtWidgets import QApplication
         from src.ui.gui.situation3d.window import Situation3DWindow
 
-        app = QApplication.instance() or QApplication([])
+        # 仅需确保 QApplication 存在；实例由 Qt 单例持有，无需局部引用。
+        _ = QApplication.instance() or QApplication([])
         window = Situation3DWindow()
         try:
             window._schedule_terrain_refresh(

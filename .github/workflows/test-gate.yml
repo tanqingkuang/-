@@ -11,6 +11,34 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    name: 静态检查
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-gui.txt
+
+      - name: 安装静态检查工具
+        run: |
+          python -m pip install --upgrade pip
+          # mypy 需要依赖的类型信息，装上运行依赖减少 ignore_missing_imports 盲区。
+          python -m pip install -r requirements-gui.txt ruff mypy
+
+      - name: 运行 ruff
+        run: python -m ruff check src tests scripts
+
+      - name: 运行 mypy
+        # 宽松基线配置见 pyproject.toml [tool.mypy]，收紧计划以注释形式写在配置旁。
+        run: python -m mypy
+
   llt-st:
     name: LLT 与 ST
     runs-on: ubuntu-latest
@@ -66,10 +94,20 @@ jobs:
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-gui.txt pytest numpy
+          python -m pip install -r requirements-gui.txt pytest pytest-cov numpy
 
-      - name: 运行 LLT
-        run: pytest tests/llt -q
+      - name: 运行 LLT（含覆盖率）
+        # 覆盖率只统计 LLT；ST 是黑盒验收，刻意不计入（见 pyproject.toml [tool.coverage]）。
+        # 2026-07 基线 91.9%，阈值取 90 防倒退；阈值只写在 CI 命令行，
+        # 避免本地跑单个测试文件时被 fail-under 误伤。
+        run: pytest tests/llt -q --cov --cov-report=term --cov-report=xml --cov-fail-under=90
+
+      - name: 覆盖率写入 Job Summary
+        if: always()
+        run: |
+          if [ -f coverage.xml ]; then
+            python -c "import xml.etree.ElementTree as ET; r = ET.parse('coverage.xml').getroot(); print(f'### LLT 行覆盖率：{float(r.get(\"line-rate\", 0)) * 100:.1f}%')" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 运行 ST
         run: |

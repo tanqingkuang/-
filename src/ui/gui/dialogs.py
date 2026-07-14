@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QPushButton, QTextEdit, QVBoxLayout, QWidget
+
+if TYPE_CHECKING:
+    # 仅类型标注使用；运行期导入会与 main_window 形成循环依赖。
+    from src.ui.gui.main_window import MainWindow
 
 LOG_MAX_BLOCKS = 1000
 

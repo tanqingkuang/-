@@ -30,6 +30,7 @@ from src.ui.gui.avoidance_panel_view_model import (
 from src.ui.gui.avoidance_tools import (
     AVOIDANCE_PARAM_SPECS,
     AvoidanceWindow,
+    ObstacleView,
     obstacle_spec_to_view,
     obstacle_view_to_spec,
 )

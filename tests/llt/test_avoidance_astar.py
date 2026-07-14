@@ -8,7 +8,6 @@ import unittest
 from src.algorithm.units.process.tra_plan.avoidance.astar import (
     _DIRECTION_DELTA_DEG,
     _heading_transition_penalty,
-    MAX_GRID_CELLS,
     compute_bounds,
     plan_path,
 )
