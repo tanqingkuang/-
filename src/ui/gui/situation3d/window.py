@@ -135,6 +135,10 @@ class Situation3DWindow(QDialog):
         没有这条重推链路的话,后台生成完成的山地永远替换不进 3D 场景(显示旧占位小图)。"""
 
         surface = payload.get("terrain", {}).get("surface", {}) if isinstance(payload, dict) else {}
+        if surface.get("fieldError"):
+            # 同一文件版本已确定失败，不再每 500ms 重启后台任务；QML 保持明确失败提示。
+            self._terrain_refresh_timer.stop()
+            return
         pending = surface.get("mode") == "layout" and not surface.get("fieldReady", True)
         if not pending or self._terrain_refresh_timer.isActive():
             return

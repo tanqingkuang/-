@@ -34,6 +34,16 @@ Item {
     property real trailWidthScale: Math.min(0.17, aircraftVisualScale * aircraftUnitWingspan / 5.0 / 44.0)
     property real terrainSpan: 20000
     property real terrainEffectiveSpan: 20000
+    // 山地冷启动过场的唯一时长入口；单位毫秒，调整这里即可改变默认 6.8 秒。
+    property int terrainTransitionDurationMs: 6800
+    property bool terrainLoadingVisible: false
+    property bool terrainFieldReady: true
+    property bool terrainLoadingFinishing: false
+    property string terrainLoadingError: ""
+    property real terrainLoadingProgress: 0.0
+    property double terrainLoadingStartedMs: 0
+    property string terrainLoadingKey: ""
+    property int terrainLoadingResolution: 0
     property real lastMouseX: 0
     property real lastMouseY: 0
     property bool cameraInitialized: false
@@ -106,6 +116,109 @@ Item {
         duration: 90
         easing.type: Easing.Linear
         onFinished: root.consumePendingSceneUpdate()
+    }
+
+    NumberAnimation {
+        id: terrainLoadingProgressAnimation
+        target: root
+        property: "terrainLoadingProgress"
+        from: 0.0
+        to: 0.92
+        duration: Math.max(1, root.terrainTransitionDurationMs)
+        easing.type: Easing.OutCubic
+    }
+
+    Timer {
+        id: terrainLoadingMinimumTimer
+        repeat: false
+        onTriggered: Qt.callLater(function() { root.finishTerrainLoadingIfReady() })
+    }
+
+    NumberAnimation {
+        id: terrainLoadingFade
+        target: terrainLoadingLayer
+        property: "opacity"
+        from: 1.0
+        to: 0.0
+        duration: 260
+        easing.type: Easing.InOutQuad
+        onFinished: {
+            root.terrainLoadingFinishing = false
+            if (root.terrainFieldReady) {
+                root.terrainLoadingVisible = false
+                terrainLoadingLayer.opacity = 1.0
+            } else {
+                terrainLoadingLayer.opacity = 1.0
+            }
+        }
+    }
+
+    function terrainLayoutLoadingKey(surface) {
+        const revision = String(surface.revision || "")
+        // revision 末尾的 :0/:1 只表示未就绪/已就绪，不能把同一轮加载误判成两个场景。
+        const stableRevision = revision.replace(/:[01]$/, "")
+        return String(surface.layoutFile || "") + "|" + stableRevision
+    }
+
+    function beginTerrainLoading(loadingKey, resolution) {
+        const normalizedKey = String(loadingKey || "")
+        const isNewLoad = !terrainLoadingVisible || terrainLoadingKey !== normalizedKey || terrainLoadingFinishing
+        terrainFieldReady = false
+        terrainLoadingResolution = Number(resolution || 0)
+        if (!isNewLoad) {
+            return
+        }
+        terrainLoadingMinimumTimer.stop()
+        terrainLoadingFade.stop()
+        terrainLoadingProgressAnimation.stop()
+        terrainLoadingKey = normalizedKey
+        terrainLoadingFinishing = false
+        terrainLoadingError = ""
+        terrainLoadingStartedMs = Date.now()
+        terrainLoadingProgress = 0.0
+        terrainLoadingLayer.opacity = 1.0
+        terrainLoadingVisible = true
+        terrainLoadingProgressAnimation.restart()
+    }
+
+    function markTerrainReady() {
+        terrainFieldReady = true
+        terrainLoadingError = ""
+        if (!terrainLoadingVisible || terrainLoadingFinishing) {
+            return
+        }
+        const elapsedMs = Math.max(0, Date.now() - terrainLoadingStartedMs)
+        const remainingMs = Math.max(0, terrainTransitionDurationMs - elapsedMs)
+        if (remainingMs <= 0) {
+            terrainLoadingMinimumTimer.stop()
+            Qt.callLater(function() { root.finishTerrainLoadingIfReady() })
+            return
+        }
+        terrainLoadingMinimumTimer.interval = remainingMs
+        terrainLoadingMinimumTimer.restart()
+    }
+
+    function finishTerrainLoadingIfReady() {
+        if (!terrainLoadingVisible || !terrainFieldReady || terrainLoadingFinishing) {
+            return
+        }
+        terrainLoadingFinishing = true
+        terrainLoadingProgressAnimation.stop()
+        terrainLoadingProgress = 1.0
+        terrainLoadingFade.restart()
+    }
+
+    function cancelTerrainLoading() {
+        terrainLoadingMinimumTimer.stop()
+        terrainLoadingProgressAnimation.stop()
+        terrainLoadingFade.stop()
+        terrainFieldReady = true
+        terrainLoadingFinishing = false
+        terrainLoadingVisible = false
+        terrainLoadingProgress = 0.0
+        terrainLoadingKey = ""
+        terrainLoadingError = ""
+        terrainLoadingLayer.opacity = 1.0
     }
 
     function clampPitch(value) {
@@ -472,16 +585,33 @@ Item {
         }
         const surface = data.terrain && data.terrain.surface ? data.terrain.surface : null
         if (surface) {
-            terrainSurfaceModel.visible = true
             terrainSurfaceModel.position = Qt.vector3d(surface.x, surface.y, surface.z)
             root.terrainSpan = Math.max(surface.width || 0, surface.depth || 0, 20000)
             root.terrainEffectiveSpan = Math.max(surface.effectiveSpan || 0, 20000)
             if (surface.mode === "layout") {
-                terrainGeometry.resolutionValue = surface.resolution || 641
-                terrainGeometry.layoutFile = surface.layoutFile || ""
-                // revision 含 mtime 和高度场就绪标志:原地改文件或后台生成完成都会触发重建。
-                terrainGeometry.layoutRevision = String(surface.revision || "")
+                const fieldReady = surface.fieldReady === true
+                // 先隐藏旧 mesh，再原子提交完整布局版本；正式 768 mesh 就绪后才重新显示。
+                terrainSurfaceModel.visible = fieldReady
+                if (!fieldReady) {
+                    beginTerrainLoading(terrainLayoutLoadingKey(surface), surface.resolution || 641)
+                    terrainLoadingError = String(surface.fieldError || "")
+                    if (terrainLoadingError) {
+                        terrainLoadingMinimumTimer.stop()
+                        terrainLoadingProgressAnimation.stop()
+                    }
+                }
+                // revision 含 mtime 和高度场就绪标志：原地改文件或后台生成完成都会触发一次重建。
+                terrainGeometry.configureLayout(
+                    surface.layoutFile || "",
+                    surface.resolution || 641,
+                    String(surface.revision || "")
+                )
+                if (fieldReady) {
+                    markTerrainReady()
+                }
             } else {
+                cancelTerrainLoading()
+                terrainSurfaceModel.visible = true
                 terrainGeometry.layoutFile = ""
                 terrainGeometry.widthValue = surface.width
                 terrainGeometry.depthValue = surface.depth
@@ -492,6 +622,7 @@ Item {
                 terrainGeometry.riskAreasValue = JSON.stringify(data.terrainRiskAreas || [])
             }
         } else {
+            cancelTerrainLoading()
             terrainSurfaceModel.visible = false
             terrainGeometry.layoutFile = ""
             terrainGeometry.riskAreasValue = "[]"
@@ -678,6 +809,7 @@ Item {
 
         Model {
             id: terrainSurfaceModel
+            objectName: "terrainSurfaceModel"
             geometry: TerrainGeometry {
                 id: terrainGeometry
             }
@@ -1083,6 +1215,91 @@ Item {
                 ControlButton { label: "侧视"; onClicked: root.setSideView() }
                 ControlButton { label: "跟随"; active: root.followEnabled; onClicked: root.setFollowView() }
             }
+        }
+    }
+
+    Rectangle {
+        id: terrainLoadingLayer
+        objectName: "terrainLoadingLayer"
+        z: 1000
+        anchors.fill: parent
+        visible: root.terrainLoadingVisible
+        color: "#07111e"
+
+        Image {
+            anchors.fill: parent
+            source: "assets/terrain_loading_guide.png"
+            fillMode: Image.PreserveAspectCrop
+            smooth: true
+            cache: true
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: "#3d04101d" }
+                GradientStop { position: 0.58; color: "#7207111e" }
+                GradientStop { position: 1.0; color: "#d907111e" }
+            }
+        }
+
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Math.max(48, parent.height * 0.09)
+            width: Math.min(560, parent.width - 48)
+            height: 126
+            radius: 12
+            color: "#e60b1725"
+            border.width: 1
+            border.color: "#48657b8f"
+
+            Column {
+                anchors.fill: parent
+                anchors.margins: 20
+                spacing: 9
+
+                Text {
+                    text: root.terrainLoadingError ? "三维地形生成失败" : "正在构建三维山地态势"
+                    color: "#edf8ff"
+                    font.pixelSize: 19
+                    font.bold: true
+                }
+
+                Text {
+                    width: parent.width
+                    text: root.terrainLoadingError
+                        ? root.terrainLoadingError
+                        : (root.terrainLoadingResolution > 0
+                            ? "正在生成 " + root.terrainLoadingResolution + " × " + root.terrainLoadingResolution + " 高度场，请稍候…"
+                            : "正在生成大型地形，请稍候…")
+                    color: "#a9c5d5"
+                    font.pixelSize: 13
+                    elide: Text.ElideRight
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 5
+                    radius: 2.5
+                    color: "#26384a"
+                    visible: !root.terrainLoadingError
+
+                    Rectangle {
+                        width: parent.width * Math.max(0.0, Math.min(1.0, root.terrainLoadingProgress))
+                        height: parent.height
+                        radius: parent.radius
+                        color: "#42d7e8"
+                    }
+                }
+            }
+        }
+
+        // 过场期间吞掉鼠标/滚轮，避免用户在不可见旧场景上误操作相机。
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            onWheel: function(wheel) { wheel.accepted = true }
         }
     }
 

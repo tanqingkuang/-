@@ -23,6 +23,8 @@ _FIELD_CACHE_LOCK = threading.Lock()
 _PENDING_LOCK = threading.Lock()
 _PENDING_KEYS: set[tuple[str, int, int]] = set()
 _READY_FIELDS: dict[tuple[str, int, int], "TerrainField"] = {}
+# 失败表按文件版本与分辨率记忆诊断，避免窗口轮询时无限重启同一失败任务。
+_FAILED_FIELDS: dict[tuple[str, int, int], str] = {}
 _MIN_RESOLUTION = 96
 _MAX_RESOLUTION = 1024
 _SRGB_LOW = np.array([0.045, 0.082, 0.105], dtype=np.float32)
@@ -150,6 +152,7 @@ def get_terrain_field(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RES
     # 阻塞入口同样登记就绪表,预热完成后 peek 立即命中。
     with _PENDING_LOCK:
         _READY_FIELDS[key] = field
+        _FAILED_FIELDS.pop(key, None)
     return field
 
 
@@ -163,6 +166,8 @@ def peek_terrain_field(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RE
     with _PENDING_LOCK:
         if key in _READY_FIELDS:
             return _READY_FIELDS[key]
+        if key in _FAILED_FIELDS:
+            return None
         if key not in _PENDING_KEYS:
             _PENDING_KEYS.add(key)
             threading.Thread(target=_background_generate, args=(key,), name="terrain-field-async", daemon=True).start()
@@ -177,10 +182,21 @@ def _background_generate(key: tuple[str, int, int]) -> None:
         with _PENDING_LOCK:
             _READY_FIELDS[key] = field
     except Exception as error:  # noqa: BLE001
+        with _PENDING_LOCK:
+            _FAILED_FIELDS[key] = f"{type(error).__name__}: {error}"
         logging.getLogger(__name__).warning("后台生成高度场失败 %s: %s", key[0], error)
     finally:
         with _PENDING_LOCK:
             _PENDING_KEYS.discard(key)
+
+
+def terrain_field_error(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> str | None:
+    """返回当前文件版本的后台生成错误。注意：文件或分辨率变化后会形成新键并允许重试。"""
+
+    resolved = Path(path).resolve()
+    key = (str(resolved), resolved.stat().st_mtime_ns, _normalized_resolution(resolution))
+    with _PENDING_LOCK:
+        return _FAILED_FIELDS.get(key)
 
 
 @lru_cache(maxsize=4)

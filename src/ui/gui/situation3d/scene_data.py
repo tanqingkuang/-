@@ -25,6 +25,7 @@ from src.ui.gui.situation3d.terrain_field import (
     TerrainRiskZone,
     peek_terrain_field,
     risk_zones_from_layout,
+    terrain_field_error,
     terrain_extent_from_layout,
     load_terrain_layout,
 )
@@ -1376,6 +1377,7 @@ def _layout_terrain_payload(
         if not math.isfinite(effective_span) or effective_span <= 0.0:
             raise ValueError("effective_extent_km 非法")
         field = _cached_terrain_field(layout_path, resolution)
+        field_error = terrain_field_error(layout_path, resolution=resolution)
         center_east = (extent["min_east_m"] + extent["max_east_m"]) / 2.0
         center_north = (extent["min_north_m"] + extent["max_north_m"]) / 2.0
         obstacle_views = list(obstacles)
@@ -1419,6 +1421,7 @@ def _layout_terrain_payload(
                 # revision 用字符串传递:mtime_ns 超出 QML double 精度(2^53)会丢位。
                 "revision": f"{revision}:{1 if field is not None else 0}",
                 "fieldReady": field is not None,
+                "fieldError": field_error or "",
                 "effectiveSpan": effective_span,
             },
             "riskZones": risk_zones,
