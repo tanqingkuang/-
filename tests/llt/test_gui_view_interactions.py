@@ -73,6 +73,23 @@ class GuiViewInteractionTests(unittest.TestCase):
         """主窗口标题栏应显示项目图标，而不是 Qt 默认图标。"""
         self.assertFalse(self.window.windowIcon().isNull())
 
+    def test_main_window_defaults_to_dark_theme_and_platform_color_scheme(self) -> None:
+        """主窗口默认使用深色主题，并同步请求原生窗口采用深色外观。"""
+        self.assertEqual(self.window.theme_key, "dark")
+        self.assertTrue(self.window.dark_theme_action.isChecked())
+        self.assertFalse(self.window.light_theme_action.isChecked())
+
+        with patch("src.ui.gui.main_window_style.QGuiApplication.styleHints") as style_hints:
+            self.window._apply_theme()
+        style_hints.return_value.setColorScheme.assert_called_once_with(Qt.ColorScheme.Dark)
+
+        with patch("src.ui.gui.main_window_style.QGuiApplication.styleHints") as style_hints:
+            self.window.light_theme_action.trigger()
+        self.app.processEvents()
+
+        self.assertEqual(self.window.theme_key, "light")
+        style_hints.return_value.setColorScheme.assert_called_once_with(Qt.ColorScheme.Light)
+
     def test_stage_fullscreen_reparents_only_realtime_display(self) -> None:
         self.window._enter_stage_fullscreen()
         self.app.processEvents()

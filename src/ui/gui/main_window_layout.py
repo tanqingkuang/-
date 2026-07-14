@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from src.ui.gui.dialogs import StageFullscreenDialog
 from src.ui.gui.side_view import SideView
-from src.ui.gui.theme_widgets import THEMES, SelectButton
+from src.ui.gui.theme_widgets import DEFAULT_THEME_KEY, THEMES, SelectButton
 from src.ui.gui.top_view import TopView
 from src.ui.gui.view_models import (
     PLAYBACK_RATE_SLIDER_MAX,
@@ -97,10 +97,11 @@ class MainWindowLayoutMixin:
         self.theme_action_group.setExclusive(True)
         self.light_theme_action = QAction("浅色模式", self)
         self.light_theme_action.setCheckable(True)
-        self.light_theme_action.setChecked(True)
+        self.light_theme_action.setChecked(DEFAULT_THEME_KEY == "light")
         self.light_theme_action.triggered.connect(lambda checked=False: self._set_theme("light"))
         self.dark_theme_action = QAction("深色模式", self)
         self.dark_theme_action.setCheckable(True)
+        self.dark_theme_action.setChecked(DEFAULT_THEME_KEY == "dark")
         self.dark_theme_action.triggered.connect(lambda checked=False: self._set_theme("dark"))
         self.theme_action_group.addAction(self.light_theme_action)
         self.theme_action_group.addAction(self.dark_theme_action)

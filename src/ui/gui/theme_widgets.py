@@ -6,6 +6,11 @@ from PySide6.QtCore import QPoint, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 
+
+# 主窗口初始配色与主题菜单勾选状态共用这一处默认值，避免两边出现分歧。
+DEFAULT_THEME_KEY = "dark"
+
+
 class Theme:
     """单个 UI 主题的集中配色。注意：主题切换时画布和控件共用这些颜色。"""
 
