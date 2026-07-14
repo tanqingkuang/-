@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.runner.sim_control import RunState
+from src.runner.sim_control import ObstacleKind, RunState
 
 # GUI 命名状态集合集中描述交互语义；控制器仍独立裁决命令是否合法。
 # 已加载集合包含结束态，用于“可重置”这类不要求继续运行的入口。
@@ -262,7 +262,7 @@ class ObstacleView:
     """俯视图显示用的二维障碍（无限高柱体）。注意：当前仅供 UI 显示与勾选，规划后端后续接入。"""
 
     obstacle_id: str  # 障碍唯一标识，列表显示/勾选用
-    kind: str  # "circle" | "rect" | "polygon"
+    kind: ObstacleKind
     enabled: bool = True  # 是否启用（参与避障）
     center_x: float = 0.0  # 圆心 east（kind=circle）
     center_y: float = 0.0  # 圆心 north
@@ -273,11 +273,16 @@ class ObstacleView:
     max_y: float = 0.0  # 矩形 north 上界
     vertices: list[tuple[float, float]] = field(default_factory=list)  # 旋转矩形/多边形顶点
 
+    def __post_init__(self) -> None:
+        """把外部配置字符串归一化为应用层共享枚举。"""
+
+        self.kind = ObstacleKind(self.kind)
+
     def label(self) -> str:
         """生成左面板勾选列表的显示文本。注意：仅用于界面展示。"""
-        if self.kind == "polygon":
+        if self.kind is ObstacleKind.POLYGON:
             return f"{self.obstacle_id}  矩形 {len(self.vertices)}点"
-        if self.kind == "rect":
+        if self.kind is ObstacleKind.RECT:
             return f"{self.obstacle_id}  矩形 ({self.min_x:.0f},{self.min_y:.0f})-({self.max_x:.0f},{self.max_y:.0f})"
         return f"{self.obstacle_id}  圆 ({self.center_x:.0f},{self.center_y:.0f}) r{self.radius:.0f}"
 

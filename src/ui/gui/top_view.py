@@ -8,6 +8,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QGraphicsView, QWidget
 
+from src.runner.sim_control import ObstacleKind
 from src.ui.gui.avoidance_tools import _rounded_inflated_polygon_points, preview_route_marker_points, route_to_polyline
 from src.ui.gui.node_card_view_model import (
     CardBoardState,
@@ -498,10 +499,10 @@ class TopView(QGraphicsView):
         for obstacle in self.obstacles:
             if not obstacle.enabled:
                 continue
-            if obstacle.kind == "polygon":
+            if obstacle.kind is ObstacleKind.POLYGON:
                 xs.extend(point[0] for point in obstacle.vertices)
                 ys.extend(point[1] for point in obstacle.vertices)
-            elif obstacle.kind == "rect":
+            elif obstacle.kind is ObstacleKind.RECT:
                 xs.extend([obstacle.min_x, obstacle.max_x])
                 ys.extend([obstacle.min_y, obstacle.max_y])
             else:
@@ -554,24 +555,24 @@ class TopView(QGraphicsView):
 
     def _obstacle_center(self, obstacle: ObstacleView) -> tuple[float, float]:
         """返回障碍中心世界坐标。注意：矩形取几何中心，圆取圆心。"""
-        if obstacle.kind == "polygon" and obstacle.vertices:
+        if obstacle.kind is ObstacleKind.POLYGON and obstacle.vertices:
             return (
                 sum(point[0] for point in obstacle.vertices) / len(obstacle.vertices),
                 sum(point[1] for point in obstacle.vertices) / len(obstacle.vertices),
             )
-        if obstacle.kind == "rect":
+        if obstacle.kind is ObstacleKind.RECT:
             return (obstacle.min_x + obstacle.max_x) / 2.0, (obstacle.min_y + obstacle.max_y) / 2.0
         return obstacle.center_x, obstacle.center_y
 
     def _stroke_obstacle_shape(self, painter: QPainter, obstacle: ObstacleView, inflate: float) -> None:
         """按当前画笔/画刷描绘障碍轮廓。注意：inflate>0 时整体外扩（polygon 为显示近似）。"""
-        if obstacle.kind == "polygon" and obstacle.vertices:
+        if obstacle.kind is ObstacleKind.POLYGON and obstacle.vertices:
             # polygon 安全间距按圆角外扩显示，与后端 inside() 的“点到边距离≤clearance”边界一致，
             # 避免 miter 尖角在角部凸出、令折线看上去擦过所画膨胀框。
             vertices = _rounded_inflated_polygon_points(obstacle.vertices, inflate)
             polygon = QPolygonF([QPointF(east, north) for east, north in vertices])
             painter.drawPolygon(polygon)
-        elif obstacle.kind == "rect":
+        elif obstacle.kind is ObstacleKind.RECT:
             painter.drawRect(
                 QRectF(
                     obstacle.min_x - inflate,

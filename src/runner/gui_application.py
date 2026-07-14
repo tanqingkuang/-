@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,13 +30,22 @@ class GeoReference:
     longitude_deg: float
 
 
+class ObstacleKind(StrEnum):
+    """应用层与 GUI 共用的障碍类型。"""
+
+    # 枚举值属于 JSON 配置兼容契约，不能随 Python 成员名重命名。
+    CIRCLE = "circle"
+    RECT = "rect"
+    POLYGON = "polygon"
+
+
 @dataclass(frozen=True)
 class ObstacleSpec:
     """应用层障碍描述。注意：只承载规划和显示共同需要的稳定字段。"""
 
     # 标识与类型供列表、规划和导出三条链路共同使用。
     obstacle_id: str
-    kind: str
+    kind: ObstacleKind
     enabled: bool = True
     # 圆形障碍只使用中心与半径字段。
     center_x: float = 0.0
@@ -48,6 +58,11 @@ class ObstacleSpec:
     max_y: float = 0.0
     # 任意多边形使用不可变顶点快照，避免 GUI 勾选之外的意外回写。
     vertices: tuple[tuple[float, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        """把配置边界传入的字符串归一化为共享枚举。"""
+
+        object.__setattr__(self, "kind", ObstacleKind(self.kind))
 
 
 @dataclass
@@ -420,9 +435,9 @@ def _parse_obstacles(path: str) -> tuple[list[ObstacleSpec], float]:
             continue
         obstacle_id = str(raw.get("id", f"OB{index + 1}"))
         enabled = bool(raw.get("enabled", True))
-        raw_type = str(raw.get("type", "circle"))
+        raw_type = str(raw.get("type", ObstacleKind.CIRCLE))
         vertices = raw.get("vertices")
-        if raw_type == "polygon" and isinstance(vertices, list):
+        if raw_type == ObstacleKind.POLYGON and isinstance(vertices, list):
             # 多边形至少三个有效顶点才有面积语义。
             points = tuple(
                 (_safe_float(point.get("east_m", 0.0)), _safe_float(point.get("north_m", 0.0)))
@@ -430,8 +445,8 @@ def _parse_obstacles(path: str) -> tuple[list[ObstacleSpec], float]:
                 if isinstance(point, dict)
             )
             if len(points) >= 3:
-                obstacles.append(ObstacleSpec(obstacle_id, "polygon", enabled, vertices=points))
-        elif raw_type == "rect":
+                obstacles.append(ObstacleSpec(obstacle_id, ObstacleKind.POLYGON, enabled, vertices=points))
+        elif raw_type == ObstacleKind.RECT:
             # 矩形上下界允许缺字段，缺失值按零保持旧兼容行为。
             lo = raw.get("min", {})
             hi = raw.get("max", {})
@@ -440,7 +455,7 @@ def _parse_obstacles(path: str) -> tuple[list[ObstacleSpec], float]:
             obstacles.append(
                 ObstacleSpec(
                     obstacle_id,
-                    "rect",
+                    ObstacleKind.RECT,
                     enabled,
                     min_x=_safe_float(lo.get("east_m", 0.0)),
                     min_y=_safe_float(lo.get("north_m", 0.0)),
@@ -450,12 +465,13 @@ def _parse_obstacles(path: str) -> tuple[list[ObstacleSpec], float]:
             )
         else:
             # 未知类型沿用旧规则退化为圆形，而不是阻断整个配置。
+            # 该兼容降级只存在于配置入口，内部 ObstacleSpec 不接受未知类型。
             center = raw.get("center", {})
             center = center if isinstance(center, dict) else {}
             obstacles.append(
                 ObstacleSpec(
                     obstacle_id,
-                    "circle",
+                    ObstacleKind.CIRCLE,
                     enabled,
                     center_x=_safe_float(center.get("east_m", 0.0)),
                     center_y=_safe_float(center.get("north_m", 0.0)),
@@ -532,10 +548,10 @@ def _route_file_from_config(path: Path) -> str | None:
 def _obstacle_to_backend(obstacle: ObstacleSpec) -> ObstacleS:
     """把应用层障碍转换为算法对象。注意：转换仅发生在 runner 边界内。"""
 
-    if obstacle.kind == "polygon":
+    if obstacle.kind is ObstacleKind.POLYGON:
         # 顶点 tuple 在边界处复制为算法期望的可变列表。
         return make_polygon(obstacle.obstacle_id, list(obstacle.vertices))
-    if obstacle.kind == "rect":
+    if obstacle.kind is ObstacleKind.RECT:
         return make_rect(obstacle.obstacle_id, obstacle.min_x, obstacle.min_y, obstacle.max_x, obstacle.max_y)
     return make_circle(obstacle.obstacle_id, obstacle.center_x, obstacle.center_y, obstacle.radius)
 

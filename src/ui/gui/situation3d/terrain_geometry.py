@@ -12,6 +12,7 @@ from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 import numpy as np
 
+from src.runner.sim_control import ObstacleKind
 from src.ui.gui.situation3d.terrain_field import (
     DEFAULT_TERRAIN_RESOLUTION,
     TerrainField,
@@ -77,7 +78,7 @@ _COLOR_SPLIT = 0.38
 _RISK_TINT_SRGB = (0.44, 0.22, 0.20)
 _RISK_TINT_STRENGTH = 0.30
 
-_RiskArea = tuple[str, float, float, float, tuple[tuple[float, float], ...], float]
+_RiskArea = tuple[ObstacleKind, float, float, float, tuple[tuple[float, float], ...], float]
 
 
 class _TerrainGeometryBase(QQuick3DGeometry):
@@ -765,9 +766,9 @@ def _parse_risk_areas(value: str) -> tuple[_RiskArea, ...]:
         # payload 允许以后混入额外元数据，非对象项不应影响当前障碍。
         if not isinstance(raw, dict):
             continue
-        kind = str(raw.get("kind", ""))
         try:
-            if kind == "circle":
+            kind = ObstacleKind(str(raw.get("kind", "")))
+            if kind is ObstacleKind.CIRCLE:
                 center = raw.get("center", [])
                 # 圆心必须是地形局部 x/z 二元坐标。
                 if not isinstance(center, list) or len(center) != 2:
@@ -780,7 +781,7 @@ def _parse_risk_areas(value: str) -> tuple[_RiskArea, ...]:
                 # 圆形已经在 scene_data 中并入安全间距，这里无需再保存 clearance。
                 areas.append((kind, center_x, center_z, radius, (), 0.0))
                 continue
-            if kind != "polygon":
+            if kind is not ObstacleKind.POLYGON:
                 continue
             raw_points = raw.get("points", [])
             if not isinstance(raw_points, list):
@@ -814,7 +815,7 @@ def _risk_weight_grid(
     # 柔化宽度至少 1m，防止极小测试网格产生除零或硬锯齿。
     feather = max(1.0, float(feather_m))
     for kind, center_x, center_z, radius, points, clearance in areas:
-        if kind == "circle":
+        if kind is ObstacleKind.CIRCLE:
             # 正值位于圆内，负值位于圆外，可直接进入统一平滑函数。
             signed_distance = radius - np.hypot(x_grid - center_x, z_grid - center_z)
             weights = np.maximum(weights, _smooth_risk_weight(signed_distance, feather))

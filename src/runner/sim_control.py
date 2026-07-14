@@ -69,6 +69,7 @@ from src.runner.gui_application import (
     AvoidancePlanOutcome,
     GeoReference,
     GuiConfigData,
+    ObstacleKind,
     ObstacleSpec,
     PlannedRoute,
     apply_planned_route,

@@ -29,6 +29,7 @@ from src.ui.gui.situation3d.terrain_field import (
     terrain_extent_from_layout,
     load_terrain_layout,
 )
+from src.runner.sim_control import ObstacleKind
 from src.ui.gui.view_models import (
     ObstacleView,
     ReferenceRoute,
@@ -690,7 +691,7 @@ def _obstacle_payload(obstacle: ObstacleView, clearance_m: float) -> dict[str, o
 
     # 安全间距并入相机边界，使风险填充不会在初始取景时被裁掉。
     safe_clearance = max(0.0, float(clearance_m))
-    if obstacle.kind == "circle":
+    if obstacle.kind is ObstacleKind.CIRCLE:
         radius = max(1.0, obstacle.radius + safe_clearance)
         min_x = obstacle.center_x - radius
         max_x = obstacle.center_x + radius
@@ -731,12 +732,12 @@ def _terrain_risk_area_payloads(
     for obstacle in obstacles:
         if not obstacle.enabled:
             continue
-        if obstacle.kind == "circle":
+        if obstacle.kind is ObstacleKind.CIRCLE:
             # 圆形直接把规划安全间距并入半径，着色边界与旧柱体表达的膨胀范围一致。
             areas.append(
                 {
                     "id": obstacle.obstacle_id,
-                    "kind": "circle",
+                    "kind": ObstacleKind.CIRCLE.value,
                     "center": [obstacle.center_x - origin_x, -obstacle.center_y - origin_z],
                     "radius": max(1.0, obstacle.radius + safe_clearance),
                 }
@@ -747,7 +748,7 @@ def _terrain_risk_area_payloads(
         areas.append(
             {
                 "id": obstacle.obstacle_id,
-                "kind": "polygon",
+                "kind": ObstacleKind.POLYGON.value,
                 "points": [[east - origin_x, -north - origin_z] for east, north in vertices],
                 "clearance": safe_clearance,
             }
@@ -760,7 +761,7 @@ def _terrain_risk_area_payloads(
         areas.append(
             {
                 "id": str(zone.get("id", "风险区")),
-                "kind": "circle",
+                "kind": ObstacleKind.CIRCLE.value,
                 "center": [float(zone.get("x", 0.0)) - origin_x, float(zone.get("z", 0.0)) - origin_z],
                 "radius": max(1.0, float(zone.get("radius", 1.0))),
             }
@@ -806,7 +807,7 @@ def _obstacle_boundary_payloads(
 def _obstacle_boundary_points(obstacle: ObstacleView, clearance_m: float) -> list[tuple[float, float]]:
     """返回障碍安全区的水平边界。注意：坐标仍为 ENU east/north，末点暂不闭合。"""
 
-    if obstacle.kind == "circle":
+    if obstacle.kind is ObstacleKind.CIRCLE:
         radius = max(1.0, float(obstacle.radius) + clearance_m)
         # 圆周按周长自适应采样，同时保留最低 48 段，近看不会呈现明显多边形折角。
         segment_count = max(48, min(160, int(math.ceil(math.tau * radius / 80.0))))
@@ -1221,7 +1222,7 @@ def _obstacle_bounds(obstacle: ObstacleView) -> tuple[float, float, float, float
 def _obstacle_corner_points(obstacle: ObstacleView) -> list[tuple[float, float]]:
     """把非多边形障碍近似为顶点集合。注意：统一后续风险区的质心和半径计算。"""
 
-    if obstacle.kind == "circle":
+    if obstacle.kind is ObstacleKind.CIRCLE:
         # 圆没有原生顶点；用八边形近似换取和 polygon/rect 共用同一套质心+最大半径公式，
         # 不必为圆再写一条独立的风险区分支。
         return [
@@ -1250,7 +1251,7 @@ def _risk_zones_from_obstacles(
         # 禁用障碍不参与规划，风险罩面也不应该继续显示，否则用户取消勾选后画面对不上。
         if not obstacle.enabled:
             continue
-        vertices = obstacle.vertices if obstacle.kind == "polygon" else _obstacle_corner_points(obstacle)
+        vertices = obstacle.vertices if obstacle.kind is ObstacleKind.POLYGON else _obstacle_corner_points(obstacle)
         if not vertices:
             continue
         center_x = sum(point[0] for point in vertices) / len(vertices)
