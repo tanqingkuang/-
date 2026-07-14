@@ -146,11 +146,14 @@ class RallyLeaderFollower(InboundBase):
     def init(self, cfg: InboundInitS) -> None:
         """按配置初始化 RallyLeaderFollower。注意：调用方需先准备好必要依赖和输入数据。"""
         del cfg
+        # 输出端口由 step 的 y 参数绑定；首次 step 前 reset 明确定义为无输出可清理的 no-op。
+        self._latched_output: RallyLeaderFollowerOutputS | None = None
 
     def step(self, u: InboundInputS, y: RallyLeaderFollowerOutputS) -> None:
         """推进 RallyLeaderFollower 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if y.leaderState is None or y.cmd is None or y.slotScale is None:
             raise ValueError("RallyLeaderFollower output ports must be bound")
+        # 每拍更新为最近一次绑定端口；reset 只负责清理该对象，不假设端口终身不变。
         self._latched_output = y
         # leaderState、cmd、slotScale 必须来自同一条 formation.leader 消息，不能跨消息拼接。
         # 这样僚机不会在“新阶段 + 旧缩放”或“旧阶段 + 新长机位置”的组合状态下解算槽位。
@@ -176,7 +179,7 @@ class RallyLeaderFollower(InboundBase):
             y.loopCounts.update(parsed.loop_counts)
 
     def reset(self) -> None:
-        """复位最近绑定的全部入站输出，防止空 inbox 回灌上一轮计划。"""
+        """复位最近一次 step 绑定的入站输出；尚未执行 step 时无操作。"""
 
         output = getattr(self, "_latched_output", None)
         if output is None:

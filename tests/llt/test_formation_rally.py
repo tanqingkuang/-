@@ -6,6 +6,7 @@ import math
 import unittest
 from copy import deepcopy
 from fractions import Fraction
+from itertools import product
 from unittest.mock import patch
 
 from src.algorithm.context.context import FormContextS, reset_context
@@ -731,33 +732,35 @@ class RallyTaskTests(unittest.TestCase):
         self.assertEqual(loop_counts, {"A": 2687888034010621, "B": 2687888034010621})
 
     def test_path_coordinator_matches_exact_bounded_bruteforce(self) -> None:
-        """小规模边界场景应与精确有理数穷举得到的最早公共区间一致。"""
+        """四节点小规模场景应与精确有理数穷举得到的最早公共区间一致。"""
 
         task = _rally_task(
-            expected=("B",),
+            expected=("B", "C", "D"),
             leader_id="A",
-            loiter_radius_m=200.0,
-            loiter_speed_min_mps=19.5,
-            loiter_speed_max_mps=20.0,
+            loiter_radius_m=20.0,
+            loiter_speed_min_mps=14.0,
+            loiter_speed_max_mps=25.0,
         )
-        path_lengths = {"A": 0.0, "B": 600.0}
+        path_lengths = {"A": 100.0, "B": 180.0, "C": 260.0, "D": 330.0}
         circumference = Fraction.from_float(task._loiter_circumference_m)
         speed_min = Fraction.from_float(task._speed_min)
         speed_max = Fraction.from_float(task._speed_max)
         exact_lengths = {node_id: Fraction.from_float(length) for node_id, length in path_lengths.items()}
         feasible: list[tuple[Fraction, dict[str, int]]] = []
-        for loops_a in range(40):
-            for loops_b in range(40):
-                loop_counts = {"A": loops_a, "B": loops_b}
-                distances = {
-                    node_id: exact_lengths[node_id] + loop_counts[node_id] * circumference
-                    for node_id in path_lengths
-                }
-                lower = max(distance / speed_max for distance in distances.values())
-                upper = min(distance / speed_min for distance in distances.values())
-                if lower <= upper:
-                    feasible.append((lower, loop_counts))
-        expected_lower, expected_loops = min(feasible, key=lambda item: item[0])
+        for loop_values in product(range(6), repeat=len(path_lengths)):
+            loop_counts = dict(zip(path_lengths, loop_values, strict=True))
+            distances = {
+                node_id: exact_lengths[node_id] + loop_counts[node_id] * circumference
+                for node_id in path_lengths
+            }
+            lower = max(distance / speed_max for distance in distances.values())
+            upper = min(distance / speed_min for distance in distances.values())
+            if lower <= upper:
+                feasible.append((lower, loop_counts))
+        expected_lower, expected_loops = min(
+            feasible,
+            key=lambda item: (item[0], sum(item[1].values()), tuple(item[1].values())),
+        )
 
         duration_s, loop_counts = task._coordinate_paths(path_lengths)
 
@@ -3360,6 +3363,7 @@ class RallyEntityTests(unittest.TestCase):
         plan_payload = plan_message[0].payload
         self.assertTrue(plan_payload["t_ref_valid"])
         self.assertEqual(plan_payload["loop_counts"], {"A01": 3, "A02": 1, "A03": 0, "A04": 0, "A05": 0})
+        self.assertIsNot(leader._outbound_u.loop_counts, leader._task_y.loopCounts)
         locked_t_ref = plan_payload["t_ref"]
         locked_loop_counts = dict(plan_payload["loop_counts"])
 

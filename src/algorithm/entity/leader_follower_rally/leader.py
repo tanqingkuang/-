@@ -174,7 +174,7 @@ class RallyLeaderEntity(EntityBase):
         self.cxt.rally_loop_counts.update(self._task_y.loopCounts)
         self._outbound_u.t_ref = self.cxt.rally_t_ref
         self._outbound_u.t_ref_valid = self.cxt.rally_t_ref_valid
-        self._outbound_u.loop_counts = self._task_y.loopCounts
+        self._outbound_u.loop_counts = dict(self._task_y.loopCounts)
         self._rally_join_u.assigned_loops = self._task_y.loopCounts.get(self._self_id, 0)
 
         stage = self.cxt.cmd.stage
