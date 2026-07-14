@@ -1636,16 +1636,16 @@ def _layout_camera_payload(surface: dict[str, object]) -> dict[str, float]:
     width = max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)))
     depth = max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)))
     # 低密外围地面和距离雾已经消除地图硬边，重置时不必再为了隐藏四角而大幅拉远。
-    # 按参考构图把距离收至跨度 53%，焦点只向近侧偏 12%；偏航和俯角保持不变，
-    # 让机群、主航线、任务山群和南侧前景山链同时进入画面。
-    distance = max(12000.0, max(width, depth) * 0.53)
+    # 按参考构图把距离收至跨度 45%，焦点向上抬高并向近侧偏 12%；
+    # 同时采用更正的水平偏航和更陡俯角，让任务区在放大后仍保持完整构图。
+    distance = max(12000.0, max(width, depth) * 0.45)
     return {
         "focusX": float(surface.get("x", 0.0)) - width * 0.067,
-        "focusY": 900.0,
+        "focusY": 1000.0,
         "focusZ": float(surface.get("z", 0.0)) + depth * 0.12,
         "distance": distance,
-        "yaw": -25.0,
-        "pitch": -39.5,
+        "yaw": -15.0,
+        "pitch": -55.0,
     }
 
 
