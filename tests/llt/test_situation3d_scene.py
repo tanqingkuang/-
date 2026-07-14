@@ -460,7 +460,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertAlmostEqual(extent["max_north_m"] - extent["min_north_m"], 32000.0)
 
     def test_layout_reset_camera_matches_approved_oblique_composition(self) -> None:
-        """验证布局地图重置后复现已确认的近景斜俯构图。"""
+        """验证边界融合后重置视角聚焦任务区，同时保留近景斜俯方向。"""
 
         surface = {
             "x": 10500.0,
@@ -473,8 +473,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         camera = scene_data._layout_camera_payload(surface)
 
         self.assertAlmostEqual(camera["focusX"], surface["x"] - surface["width"] * 0.067)
-        self.assertAlmostEqual(camera["focusZ"], surface["z"] + surface["depth"] * 0.25)
-        self.assertAlmostEqual(camera["distance"], 32000.0 * 0.915)
+        self.assertAlmostEqual(camera["focusZ"], surface["z"] + surface["depth"] * 0.12)
+        self.assertAlmostEqual(camera["distance"], 32000.0 * 0.53)
         self.assertAlmostEqual(camera["yaw"], -25.0)
         self.assertAlmostEqual(camera["pitch"], -39.5)
 
