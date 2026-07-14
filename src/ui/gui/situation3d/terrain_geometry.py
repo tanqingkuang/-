@@ -25,6 +25,31 @@ _SURFACE_STRIDE = _SURFACE_COMPONENTS * _FLOAT_SIZE
 # 192 格在 20km 地图下约 104m 一个采样点，最小丘陵也有 20 个以上采样跨度。
 _SURFACE_COLUMNS = 192
 _SURFACE_ROWS = 192
+# 主地形每侧补四十个低密径向采样，把 32km 高精区域延伸到 256km；
+# 约 2.8km 的外围格距避免超大三角形在 D3D 阴影/远裁剪面附近产生黑块。
+_HORIZON_RING_STEPS = 40
+_HORIZON_SPAN_SCALE = 8.0
+# 普通 20km 场景也要越过 100km 远裁剪面，不能只对 32km 山地演示生效。
+_HORIZON_MIN_HALF_SPAN_M = 120000.0
+# 天际色与 QML 的 horizonColor 共用同一 sRGB 色值，外环末端进入距离雾时不产生色阶。
+_HORIZON_COLOR_SRGB = (0x35 / 255.0, 0x4E / 255.0, 0x65 / 255.0)
+# 天际融合实现约束：
+# 1. 配置范围内的高精顶点必须逐值保留，不能为了隐藏边界重新缩放米制地形。
+# 2. 外围采样只能追加在核心四周，正式 768 网格的物理采样间距不得改变。
+# 3. 外围终点至少离中心 120km，不能依赖某一个默认相机角度把边界藏住。
+# 4. 距离雾在外围终点之前完成融合；外环跨度和雾距分别承担几何覆盖与视觉过渡。
+# 5. 主地形与外围环保持同一不透明模型，避免透明队列破坏山体深度遮挡。
+# 6. 扩展顶点继续使用 18 个 float 的既有布局，不能引入第二套材质属性契约。
+# 7. procedural 的 z 行递增、布局地形的 z 行递减，两种轴序都必须保持原方向。
+# 8. UV 允许在 0..1 外继续增长并交给 Repeat 贴图，保证单位世界距离的纹理密度不变。
+# 9. 外围颜色从核心边界色平滑收敛到天际色，不能在 32km 接缝处直接换色。
+# 10. 外围高度最终收敛到零，核心边缘残余起伏不能延伸成方形台阶。
+# 11. 法线、切线和副切线随融合权重回到水平面正交基，防止法线贴图出现黑三角。
+# 12. 索引绕序由 z 行方向决定，禁止用同一固定绕序覆盖两种坐标方向。
+# 13. 风险着色仍在核心网格计算，外围只继承接缝颜色，不扩张障碍物理范围。
+# 14. 几何包围盒必须包含外围环，否则 Quick3D 会在相机旋转时错误裁掉远端地面。
+# 15. 外围顶点 alpha 固定为一；任何透明羽化都应拆成独立模型后再评估深度行为。
+# 16. 参数调整必须同时检查重置、斜俯和俯视真实截图，offscreen 构造不能替代视觉验收。
 # 山体按 20km x 20km 基准地图定义，地图变大时按比例整体拉伸布局。
 _HILL_LAYOUT_SPAN_M = 20000.0
 # 元组字段依次为局部 x、局部 z、长半轴、短半轴、旋转角、相对高度。
@@ -317,7 +342,6 @@ class TerrainGeometry(_TerrainGeometryBase):
         risk_weights = _risk_weight_grid(x_grid, z_grid, self._risk_areas, max(step_x, step_z) * 1.35)
 
         vertices = bytearray()
-        indices = bytearray()
         for row in range(_SURFACE_ROWS):
             z = -depth / 2.0 + step_z * row
             v_coord = row / (_SURFACE_ROWS - 1)
@@ -338,10 +362,13 @@ class TerrainGeometry(_TerrainGeometryBase):
                     float(risk_weights[row, column]),
                 )
 
-        # 每个网格单元拆成两个三角面，保持地表是一张连续 mesh。
-        for row in range(_SURFACE_ROWS - 1):
-            for column in range(_SURFACE_COLUMNS - 1):
-                self._append_cell(indices, row, column)
+        core_vertices = np.frombuffer(bytes(vertices), dtype="<f4").reshape(
+            _SURFACE_ROWS,
+            _SURFACE_COLUMNS,
+            _SURFACE_COMPONENTS,
+        )
+        surface_vertices = _extend_surface_grid(core_vertices)
+        indices = _surface_grid_indices(surface_vertices)
 
         # clear 会移除上一帧属性和数据，避免尺寸更新后残留旧布局。
         self.clear()
@@ -389,8 +416,8 @@ class TerrainGeometry(_TerrainGeometryBase):
         )
         # 先设置包围盒再提交数据，保证首帧视锥裁剪拿到最新范围。
         self._apply_bounds(min_height, max_height)
-        self.setVertexData(QByteArray(bytes(vertices)))
-        self.setIndexData(QByteArray(bytes(indices)))
+        self.setVertexData(QByteArray(surface_vertices.reshape(-1, _SURFACE_COMPONENTS).tobytes()))
+        self.setIndexData(QByteArray(indices.reshape(-1).tobytes()))
         self.update()
 
     def _rebuild_from_field(self, field: TerrainField) -> None:
@@ -438,13 +465,8 @@ class TerrainGeometry(_TerrainGeometryBase):
         vertices[:, :, 14:17] = _tint_risk_colors(field.colors, risk_weights)
         vertices[:, :, 17] = 1.0
 
-        top_left = (np.arange(rows - 1, dtype=np.uint32)[:, None] * columns) + np.arange(columns - 1, dtype=np.uint32)[None, :]
-        top_right = top_left + 1
-        bottom_left = top_left + columns
-        bottom_right = bottom_left + 1
-        # 行方向 z 递减(北向),绕序必须与之匹配保持上表面为正面;
-        # 绕序反了会让双面光照按取反法线着色,整张地形呈"从背面照亮"的均匀暗色。
-        indices = np.stack((top_left, top_right, bottom_left, top_right, bottom_right, bottom_left), axis=2).astype(np.uint32)
+        surface_vertices = _extend_surface_grid(vertices)
+        indices = _surface_grid_indices(surface_vertices)
 
         self.clear()
         self.setPrimitiveType(QQuick3DGeometry.PrimitiveType.Triangles)
@@ -485,10 +507,18 @@ class TerrainGeometry(_TerrainGeometryBase):
             QQuick3DGeometry.Attribute.ComponentType.U32Type,
         )
         self.setBounds(
-            QVector3D(-field.width_m / 2.0, min(0.0, float(np.min(display_heights)) - 4.0), -field.depth_m / 2.0),
-            QVector3D(field.width_m / 2.0, float(np.max(display_heights)) + 16.0, field.depth_m / 2.0),
+            QVector3D(
+                -_horizon_half_span(field.width_m),
+                min(0.0, float(np.min(display_heights)) - 4.0),
+                -_horizon_half_span(field.depth_m),
+            ),
+            QVector3D(
+                _horizon_half_span(field.width_m),
+                float(np.max(display_heights)) + 16.0,
+                _horizon_half_span(field.depth_m),
+            ),
         )
-        self.setVertexData(QByteArray(vertices.reshape(-1, _SURFACE_COMPONENTS).tobytes()))
+        self.setVertexData(QByteArray(surface_vertices.reshape(-1, _SURFACE_COMPONENTS).tobytes()))
         self.setIndexData(QByteArray(indices.reshape(-1).tobytes()))
         self._width_value = field.width_m
         self._depth_value = field.depth_m
@@ -569,33 +599,146 @@ class TerrainGeometry(_TerrainGeometryBase):
             )
         )
 
-    def _append_cell(self, indices: bytearray, row: int, column: int) -> None:
-        """追加一个网格单元的两个三角面。注意：索引顺序保持法线朝上。"""
-
-        top_left = row * _SURFACE_COLUMNS + column
-        top_right = top_left + 1
-        bottom_left = top_left + _SURFACE_COLUMNS
-        bottom_right = bottom_left + 1
-        # Qt Quick 3D 使用顶点绕序做背面剔除，三角面必须从上方可见。
-        indices.extend(
-            struct.pack(
-                "<IIIIII",
-                top_left,
-                bottom_left,
-                top_right,
-                top_right,
-                bottom_left,
-                bottom_right,
-            )
-        )
-
     def _apply_bounds(self, min_height: float, max_height: float) -> None:
         """按实测高度设置包围盒。注意：包围盒影响 Qt Quick 3D 视锥裁剪。"""
 
         self.setBounds(
-            QVector3D(-self._width_value / 2.0, min(0.0, min_height - 4.0), -self._depth_value / 2.0),
-            QVector3D(self._width_value / 2.0, max_height + 16.0, self._depth_value / 2.0),
+            QVector3D(
+                -_horizon_half_span(self._width_value),
+                min(0.0, min_height - 4.0),
+                -_horizon_half_span(self._depth_value),
+            ),
+            QVector3D(
+                _horizon_half_span(self._width_value),
+                max_height + 16.0,
+                _horizon_half_span(self._depth_value),
+            ),
         )
+
+
+def _extend_surface_grid(core_vertices: np.ndarray) -> np.ndarray:
+    """在主地形四周追加低密过渡环。注意：中心顶点逐值保留，外围始终不透明。"""
+
+    rows, columns, components = core_vertices.shape
+    if rows < 2 or columns < 2 or components != _SURFACE_COMPONENTS:
+        raise ValueError("主地形顶点网格尺寸非法")
+    core_x = core_vertices[0, :, 0]
+    core_z = core_vertices[:, 0, 2]
+    extended_x = _extend_surface_axis(core_x)
+    extended_z = _extend_surface_axis(core_z)
+    x_grid, z_grid = np.meshgrid(extended_x, extended_z)
+    padding = (
+        (_HORIZON_RING_STEPS, _HORIZON_RING_STEPS),
+        (_HORIZON_RING_STEPS, _HORIZON_RING_STEPS),
+        (0, 0),
+    )
+    vertices = np.pad(core_vertices, padding, mode="edge").astype(np.float32, copy=False)
+    vertices[:, :, 0] = x_grid
+    vertices[:, :, 2] = z_grid
+
+    blend = _horizon_blend_grid(x_grid, z_grid, core_x, core_z)
+    blend3 = blend[..., None]
+    # 主地形已有高度淡出；外环继续把边缘残余高度压到零，避免远处出现方形台阶。
+    vertices[:, :, 1] *= 1.0 - blend
+    up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    normals = vertices[:, :, 3:6] * (1.0 - blend3) + up * blend3
+    normals /= np.maximum(np.linalg.norm(normals, axis=2, keepdims=True), 1e-6)
+    vertices[:, :, 3:6] = normals
+
+    tangent_target = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    tangents = vertices[:, :, 8:11] * (1.0 - blend3) + tangent_target * blend3
+    tangents -= normals * np.sum(tangents * normals, axis=2, keepdims=True)
+    tangents /= np.maximum(np.linalg.norm(tangents, axis=2, keepdims=True), 1e-6)
+    vertices[:, :, 8:11] = tangents
+    # v 坐标的世界方向由主网格首末 z 决定；同一规则同时覆盖 procedural(+z)和布局地形(-z)。
+    z_direction = 1.0 if float(core_z[-1]) > float(core_z[0]) else -1.0
+    binormals = -z_direction * np.cross(normals, tangents)
+    binormals /= np.maximum(np.linalg.norm(binormals, axis=2, keepdims=True), 1e-6)
+    vertices[:, :, 11:14] = binormals
+
+    width = float(core_x[-1] - core_x[0])
+    depth = float(core_z[-1] - core_z[0])
+    vertices[:, :, 6] = (x_grid - float(core_x[0])) / width
+    vertices[:, :, 7] = (z_grid - float(core_z[0])) / depth
+    horizon_color = np.asarray(
+        [_srgb_to_linear(component) for component in _HORIZON_COLOR_SRGB],
+        dtype=np.float32,
+    )
+    vertices[:, :, 14:17] = vertices[:, :, 14:17] * (1.0 - blend3) + horizon_color * blend3
+    # 保持整张地形进入不透明深度队列，山体才能继续正确遮挡其后的飞机与航迹。
+    vertices[:, :, 17] = 1.0
+    return vertices
+
+
+def _extend_surface_axis(core_axis: np.ndarray) -> np.ndarray:
+    """把单轴主网格向两侧稀疏延伸。注意：主网格坐标及其顺序保持不变。"""
+
+    start = float(core_axis[0])
+    end = float(core_axis[-1])
+    center = (start + end) / 2.0
+    outer_half_span = _horizon_half_span(abs(end - start))
+    if end > start:
+        before = np.linspace(center - outer_half_span, start, _HORIZON_RING_STEPS + 1, dtype=np.float32)[:-1]
+        after = np.linspace(end, center + outer_half_span, _HORIZON_RING_STEPS + 1, dtype=np.float32)[1:]
+    else:
+        before = np.linspace(center + outer_half_span, start, _HORIZON_RING_STEPS + 1, dtype=np.float32)[:-1]
+        after = np.linspace(end, center - outer_half_span, _HORIZON_RING_STEPS + 1, dtype=np.float32)[1:]
+    return np.concatenate((before, np.asarray(core_axis, dtype=np.float32), after))
+
+
+def _horizon_half_span(core_span: float) -> float:
+    """返回外围地面半径。注意：同时满足相对倍率与远裁剪面外的绝对下限。"""
+
+    return max(float(core_span) * _HORIZON_SPAN_SCALE / 2.0, _HORIZON_MIN_HALF_SPAN_M)
+
+
+def _horizon_blend_grid(
+    x_grid: np.ndarray,
+    z_grid: np.ndarray,
+    core_x: np.ndarray,
+    core_z: np.ndarray,
+) -> np.ndarray:
+    """计算主地图外的平滑融合权重。注意：主地图内严格为零，外边界严格为一。"""
+
+    center_x = (float(core_x[0]) + float(core_x[-1])) / 2.0
+    center_z = (float(core_z[0]) + float(core_z[-1])) / 2.0
+    half_width = abs(float(core_x[-1]) - float(core_x[0])) / 2.0
+    half_depth = abs(float(core_z[-1]) - float(core_z[0])) / 2.0
+    outer_width = half_width * _HORIZON_SPAN_SCALE
+    outer_depth = half_depth * _HORIZON_SPAN_SCALE
+    outside_x = np.clip(
+        (np.abs(x_grid - center_x) - half_width) / max(outer_width - half_width, 1e-6),
+        0.0,
+        1.0,
+    )
+    outside_z = np.clip(
+        (np.abs(z_grid - center_z) - half_depth) / max(outer_depth - half_depth, 1e-6),
+        0.0,
+        1.0,
+    )
+    ratio = np.maximum(outside_x, outside_z)
+    return (ratio * ratio * (3.0 - 2.0 * ratio)).astype(np.float32)
+
+
+def _surface_grid_indices(vertices: np.ndarray) -> np.ndarray:
+    """生成扩展网格索引。注意：按 z 行方向选择绕序，保证所有三角面朝上。"""
+
+    rows, columns = vertices.shape[:2]
+    if rows < 2 or columns < 2:
+        raise ValueError("扩展地形至少需要两行两列")
+    z_axis = vertices[:, 0, 2]
+    top_left = (np.arange(rows - 1, dtype=np.uint32)[:, None] * columns) + np.arange(
+        columns - 1,
+        dtype=np.uint32,
+    )[None, :]
+    top_right = top_left + 1
+    bottom_left = top_left + columns
+    bottom_right = bottom_left + 1
+    if float(z_axis[-1]) > float(z_axis[0]):
+        order = (top_left, bottom_left, top_right, top_right, bottom_left, bottom_right)
+    else:
+        order = (top_left, top_right, bottom_left, top_right, bottom_right, bottom_left)
+    return np.stack(order, axis=2).astype(np.uint32)
 
 
 def _parse_risk_areas(value: str) -> tuple[_RiskArea, ...]:
