@@ -6,7 +6,7 @@ from collections import deque
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from heapq import heappop, heappush
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from PySide6.QtCore import QPointF
 from PySide6.QtGui import QPainterPath
@@ -31,6 +31,18 @@ DEFAULT_TRAIL_SIMPLIFY_TOLERANCE = 0.75
 # 七、批次路径可以重组稳定块，但每帧 drawPath 数量必须有固定上界。
 # 八、每块显示锚点只由该块原始点决定，不读取全局点数或其它块内容。
 # 九、每块显示线段有硬上限，QPainter 不再栅格化全部原始采样段。
+
+
+@runtime_checkable
+class TrailPointLike(Protocol):
+    """缓存消费的尾迹点字段契约。"""
+
+    # point_id 只用于新数据的增量身份优化，旧点没有该字段时仍按以下数值字段比对。
+    x: float
+    y: float
+    altitude: float
+    time: float
+    path_distance: float
 
 
 @dataclass(frozen=True)
@@ -63,7 +75,7 @@ class TrailRenderBatch:
 class _ProjectedVertex:
     """缓存中的稳定尾迹顶点。注意：point 始终引用数据层原始点。"""
 
-    point: Any
+    point: TrailPointLike
     key: Hashable
     projected: QPointF
     time: float
@@ -193,17 +205,17 @@ def opacity_bucket(age: float, trail_seconds: float, bucket_count: int) -> int:
     return min(safe_bucket_count - 1, int(freshness * safe_bucket_count))
 
 
-def stable_trail_point_key(point: Any) -> Hashable:
+def stable_trail_point_key(point: TrailPointLike) -> Hashable:
     """生成尾迹点稳定键。注意：无 point_id 的旧数据也能按值进行增量比对。"""
 
     # point_id 可区分同一时刻的重复坐标；其余字段则能识别普通列表中的中间改写。
     return (
         getattr(point, "point_id", None),
-        float(getattr(point, "time")),
-        float(getattr(point, "x")),
-        float(getattr(point, "y")),
-        float(getattr(point, "altitude")),
-        float(getattr(point, "path_distance", 0.0)),
+        float(point.time),
+        float(point.x),
+        float(point.y),
+        float(point.altitude),
+        float(point.path_distance),
     )
 
 
@@ -226,7 +238,7 @@ class TrailPathCache:
         self.simplify_tolerance = max(0.0, float(simplify_tolerance))
         self._vertices: deque[_ProjectedVertex] = deque()
         self._chunks: deque[_PathChunk] = deque()
-        self._projector: Callable[[Any], tuple[float, float]] | None = None
+        self._projector: Callable[[TrailPointLike], tuple[float, float]] | None = None
         self._semantic_key: Hashable | None = None
         self._next_chunk_uid = 0
         self._chunk_path_builds = 0
@@ -290,9 +302,9 @@ class TrailPathCache:
 
     def synchronize(
         self,
-        points: Sequence[Any],
+        points: Sequence[TrailPointLike],
         *,
-        projector: Callable[[Any], tuple[float, float]],
+        projector: Callable[[TrailPointLike], tuple[float, float]],
         semantic_key: Hashable,
     ) -> None:
         """同步有序尾迹。注意：正常路径只允许删头、加尾；中间变化会安全地全量重建。"""
@@ -386,7 +398,7 @@ class TrailPathCache:
             )
         return tuple(batches)
 
-    def _sequence_metadata(self, points: Sequence[Any]) -> tuple[Any, int, int, int] | None:
+    def _sequence_metadata(self, points: Sequence[TrailPointLike]) -> tuple[Any, int, int, int] | None:
         """读取共享队列逻辑序号。注意：普通 list 没有这些字段时返回 None。"""
 
         names = ("generation", "revision", "first_sequence", "end_sequence")
@@ -401,7 +413,7 @@ class TrailPathCache:
 
     def _synchronize_numbered_sequence(
         self,
-        points: Sequence[Any],
+        points: Sequence[TrailPointLike],
         metadata: tuple[Any, int, int, int],
     ) -> bool:
         """按逻辑序号增量同步共享队列。注意：复杂度只与本帧首删尾增数量有关。"""
@@ -448,7 +460,7 @@ class TrailPathCache:
         self._set_source_metadata(metadata)
         return False
 
-    def _synchronize_plain_sequence(self, points: Sequence[Any]) -> bool:
+    def _synchronize_plain_sequence(self, points: Sequence[TrailPointLike]) -> bool:
         """同步普通序列。注意：此兼容路径需扫描稳定键，正式共享队列不走这里。"""
 
         signature = self._plain_signature(points)
@@ -492,7 +504,7 @@ class TrailPathCache:
         return False
 
     @staticmethod
-    def _plain_signature(points: Sequence[Any]) -> tuple[int, Hashable | None, Hashable | None]:
+    def _plain_signature(points: Sequence[TrailPointLike]) -> tuple[int, Hashable | None, Hashable | None]:
         """返回普通序列的 O(1) 首尾签名。注意：依赖历史点只删头、加尾且中间不改写。"""
 
         point_count = len(points)
@@ -500,7 +512,7 @@ class TrailPathCache:
             return 0, None, None
         return point_count, stable_trail_point_key(points[0]), stable_trail_point_key(points[-1])
 
-    def _full_rebuild(self, points: Sequence[Any]) -> None:
+    def _full_rebuild(self, points: Sequence[TrailPointLike]) -> None:
         """从输入序列重建全部块。注意：只用于首次同步、重置或规则被破坏时。"""
 
         self._vertices = deque(self._new_vertex(point) for point in points)
@@ -517,7 +529,7 @@ class TrailPathCache:
         self._last_appended_points = len(vertices)
         self._last_removed_points = 0
 
-    def _append_points(self, points: Sequence[Any]) -> None:
+    def _append_points(self, points: Sequence[TrailPointLike]) -> None:
         """把新点追加到末块。注意：最多只重建一个不超过 chunk_size 的活动末块。"""
 
         for point in points:
@@ -565,7 +577,7 @@ class TrailPathCache:
                 self._rebuild_trimmed_head_chunk(first_chunk)
             break
 
-    def _new_vertex(self, point: Any) -> _ProjectedVertex:
+    def _new_vertex(self, point: TrailPointLike) -> _ProjectedVertex:
         """创建投影顶点。注意：projector 必须在 synchronize 开始时设置。"""
 
         if self._projector is None:
@@ -575,8 +587,8 @@ class TrailPathCache:
             point=point,
             key=stable_trail_point_key(point),
             projected=QPointF(float(x), float(y)),
-            time=float(getattr(point, "time")),
-            path_distance=float(getattr(point, "path_distance", 0.0)),
+            time=float(point.time),
+            path_distance=float(point.path_distance),
         )
 
     def _new_chunk(self, vertices: list[_ProjectedVertex]) -> _PathChunk:

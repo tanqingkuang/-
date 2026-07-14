@@ -19,6 +19,7 @@ from src.ui.gui.top_view import TopView
 from src.ui.gui.trail_path_cache import (
     DEFAULT_TRAIL_MAX_SEGMENTS_PER_CHUNK,
     TrailPathCache,
+    TrailPointLike,
     _farthest_point_from_segment,
     opacity_bucket,
     simplify_polyline_indices,
@@ -78,6 +79,12 @@ class 二维尾迹路径缓存测试(unittest.TestCase):
         """建立离屏 Qt 应用，供路径和视图构造使用。"""
 
         cls.app = QApplication.instance() or QApplication([])
+
+    def test_尾迹点以显式协议约束必需字段(self) -> None:
+        """缓存接受结构化点对象，并公开可供静态检查复用的字段契约。"""
+
+        point = _测试点(1.0, 2.0, 3.0, 4.0, 5.0)
+        self.assertIsInstance(point, TrailPointLike)
 
     def test_六千点删头加尾时中间块对象保持不变(self) -> None:
         """滑动窗口只允许首尾块重建，不能搬动既有中间路径。"""
