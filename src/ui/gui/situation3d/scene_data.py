@@ -1627,17 +1627,18 @@ def _camera_payload(bounds: dict[str, float], aircraft: list[dict[str, object]])
 
 
 def _layout_camera_payload(surface: dict[str, object]) -> dict[str, float]:
-    """生成布局地形相机。注意：重置视角需要覆盖完整渲染地图。"""
+    """生成布局地形相机。注意：重置视角聚焦任务区，不按外围天际环取景。"""
 
     width = max(1.0, float(surface.get("width", DEFAULT_TERRAIN_SPAN_M)))
     depth = max(1.0, float(surface.get("depth", DEFAULT_TERRAIN_SPAN_M)))
-    # 按已确认截图的地图四角反推构图：距离约为跨度 91.5%，焦点向西偏 6.7%、
-    # 向近侧偏 25%。比例随布局尺寸缩放，避免只对 32km 演示地图硬编码绝对坐标。
-    distance = max(12000.0, max(width, depth) * 0.915)
+    # 低密外围地面和距离雾已经消除地图硬边，重置时不必再为了隐藏四角而大幅拉远。
+    # 按参考构图把距离收至跨度 53%，焦点只向近侧偏 12%；偏航和俯角保持不变，
+    # 让机群、主航线、任务山群和南侧前景山链同时进入画面。
+    distance = max(12000.0, max(width, depth) * 0.53)
     return {
         "focusX": float(surface.get("x", 0.0)) - width * 0.067,
         "focusY": 900.0,
-        "focusZ": float(surface.get("z", 0.0)) + depth * 0.25,
+        "focusZ": float(surface.get("z", 0.0)) + depth * 0.12,
         "distance": distance,
         "yaw": -25.0,
         "pitch": -39.5,
