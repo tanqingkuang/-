@@ -9,6 +9,12 @@ from PySide6.QtCore import QByteArray, Property, Signal
 from PySide6.QtGui import QVector3D
 from PySide6.QtQuick3D import QQuick3DGeometry
 
+from src.ui.gui.situation3d._xz_segment_geometry import (
+    edge_positions,
+    segment_direction,
+    segment_normal,
+)
+
 _FLOAT_SIZE = 4
 _VERTEX_COMPONENTS = 12
 _VERTEX_STRIDE = _VERTEX_COMPONENTS * _FLOAT_SIZE
@@ -189,9 +195,10 @@ class TrailTipGeometry(QQuick3DGeometry):
         positions = [start] * _VERTEX_COUNT
         indices = [0] * _INDEX_COUNT
         if math.dist(start, end) > _EPSILON:
-            current_normal = self._segment_normal(start, end)
-            start_left, start_right = self._edge_positions(start, current_normal)
-            end_left, end_right = self._edge_positions(end, current_normal)
+            current_normal = segment_normal(start, end, fallback=(1.0, 0.0))
+            half_width = self._width_value / 2.0
+            start_left, start_right = edge_positions(start, current_normal, half_width)
+            end_left, end_right = edge_positions(end, current_normal, half_width)
             positions[:4] = [start_left, start_right, end_left, end_right]
             positions[4] = start
             indices[:6] = [0, 2, 1, 1, 2, 3]
@@ -244,43 +251,17 @@ class TrailTipGeometry(QQuick3DGeometry):
         current_length = math.hypot(*current_delta)
         if previous_length <= _EPSILON or current_length <= _EPSILON:
             return None
-        previous_direction = (previous_delta[0] / previous_length, previous_delta[1] / previous_length)
-        current_direction = (current_delta[0] / current_length, current_delta[1] / current_length)
+        previous_direction = segment_direction(previous, start)
+        current_direction = segment_direction(start, end)
         turn = previous_direction[0] * current_direction[1] - previous_direction[1] * current_direction[0]
         if abs(turn) <= _EPSILON:
             return None
-        previous_normal = (-previous_direction[1], previous_direction[0])
-        previous_left, previous_right = self._edge_positions(start, previous_normal)
+        previous_normal = segment_normal(previous, start)
+        previous_left, previous_right = edge_positions(start, previous_normal, self._width_value / 2.0)
         # 与历史线带的 bevel 约定一致：正转连接 left，反转连接 right。
         if turn >= 0.0:
             return previous_left, 0
         return previous_right, 1
-
-    def _edge_positions(
-        self,
-        point: Point3D,
-        normal: tuple[float, float],
-    ) -> tuple[Point3D, Point3D]:
-        """按当前半宽返回中心点两侧边缘。"""
-
-        half_width = self._width_value / 2.0
-        offset_x = normal[0] * half_width
-        offset_z = normal[1] * half_width
-        return (
-            (point[0] - offset_x, point[1], point[2] - offset_z),
-            (point[0] + offset_x, point[1], point[2] + offset_z),
-        )
-
-    @staticmethod
-    def _segment_normal(start: Point3D, end: Point3D) -> tuple[float, float]:
-        """返回活动段在 XZ 平面的单位侧向；纯竖直段使用固定 +X 侧向。"""
-
-        delta_x = end[0] - start[0]
-        delta_z = end[2] - start[2]
-        length = math.hypot(delta_x, delta_z)
-        if length <= _EPSILON:
-            return 1.0, 0.0
-        return -delta_z / length, delta_x / length
 
     @staticmethod
     def _point(value: QVector3D) -> Point3D:
