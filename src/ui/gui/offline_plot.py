@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import fields as dc_fields
 from pathlib import Path
 
@@ -33,6 +34,8 @@ from src.ui.gui.chart_common import (
 
 _NODE_STATE_FIELDS = {f.name for f in dc_fields(NodeState)}
 _X_MARGIN_S = 0.5  # X 轴右侧留白，避免末尾点被裁剪
+# 文件错误既显示在窗口中，也进入日志供窗口关闭后继续排查。
+LOGGER = logging.getLogger(__name__)
 
 class OfflinePlotWindow(QDialog):
     """离线控制误差回放绘图窗口。从 snapshots.jsonl 加载仿真记录并绘制完整时序曲线。"""
@@ -188,6 +191,7 @@ class OfflinePlotWindow(QDialog):
                     if stripped:
                         records.append(json.loads(stripped))
         except (OSError, json.JSONDecodeError) as exc:
+            LOGGER.warning("加载离线回放文件失败：%s", path, exc_info=True)
             self._path_label.setText(f"加载失败: {exc}")
             self._refresh_node_panel()
             self._rebuild_charts()
