@@ -28,6 +28,7 @@ _SURFACE_ROWS = 192
 # 主地形每侧补四十个低密径向采样，把 32km 高精区域延伸到 256km；
 # 约 2.8km 的外围格距避免超大三角形在 D3D 阴影/远裁剪面附近产生黑块。
 _HORIZON_RING_STEPS = 40
+# 视觉融合终点与相对几何范围共用这一倍率；绝对下限只额外延长纯天际色安全地面。
 _HORIZON_SPAN_SCALE = 8.0
 # 普通 20km 场景也要越过 100km 远裁剪面，不能只对 32km 山地演示生效。
 _HORIZON_MIN_HALF_SPAN_M = 120000.0
@@ -508,14 +509,14 @@ class TerrainGeometry(_TerrainGeometryBase):
         )
         self.setBounds(
             QVector3D(
-                -_horizon_half_span(field.width_m),
+                -_horizon_geometry_half_span(field.width_m),
                 min(0.0, float(np.min(display_heights)) - 4.0),
-                -_horizon_half_span(field.depth_m),
+                -_horizon_geometry_half_span(field.depth_m),
             ),
             QVector3D(
-                _horizon_half_span(field.width_m),
+                _horizon_geometry_half_span(field.width_m),
                 float(np.max(display_heights)) + 16.0,
-                _horizon_half_span(field.depth_m),
+                _horizon_geometry_half_span(field.depth_m),
             ),
         )
         self.setVertexData(QByteArray(surface_vertices.reshape(-1, _SURFACE_COMPONENTS).tobytes()))
@@ -604,14 +605,14 @@ class TerrainGeometry(_TerrainGeometryBase):
 
         self.setBounds(
             QVector3D(
-                -_horizon_half_span(self._width_value),
+                -_horizon_geometry_half_span(self._width_value),
                 min(0.0, min_height - 4.0),
-                -_horizon_half_span(self._depth_value),
+                -_horizon_geometry_half_span(self._depth_value),
             ),
             QVector3D(
-                _horizon_half_span(self._width_value),
+                _horizon_geometry_half_span(self._width_value),
                 max_height + 16.0,
-                _horizon_half_span(self._depth_value),
+                _horizon_geometry_half_span(self._depth_value),
             ),
         )
 
@@ -676,7 +677,7 @@ def _extend_surface_axis(core_axis: np.ndarray) -> np.ndarray:
     start = float(core_axis[0])
     end = float(core_axis[-1])
     center = (start + end) / 2.0
-    outer_half_span = _horizon_half_span(abs(end - start))
+    outer_half_span = _horizon_geometry_half_span(abs(end - start))
     if end > start:
         before = np.linspace(center - outer_half_span, start, _HORIZON_RING_STEPS + 1, dtype=np.float32)[:-1]
         after = np.linspace(end, center + outer_half_span, _HORIZON_RING_STEPS + 1, dtype=np.float32)[1:]
@@ -686,10 +687,16 @@ def _extend_surface_axis(core_axis: np.ndarray) -> np.ndarray:
     return np.concatenate((before, np.asarray(core_axis, dtype=np.float32), after))
 
 
-def _horizon_half_span(core_span: float) -> float:
-    """返回外围地面半径。注意：同时满足相对倍率与远裁剪面外的绝对下限。"""
+def _scaled_horizon_half_span(core_span: float) -> float:
+    """返回倍率融合半径。注意：视觉融合与相对几何范围只从此处读取倍率公式。"""
 
-    return max(float(core_span) * _HORIZON_SPAN_SCALE / 2.0, _HORIZON_MIN_HALF_SPAN_M)
+    return float(core_span) * _HORIZON_SPAN_SCALE / 2.0
+
+
+def _horizon_geometry_half_span(core_span: float) -> float:
+    """返回几何覆盖半径。注意：倍率半径外再满足远裁剪面外的绝对下限。"""
+
+    return max(_scaled_horizon_half_span(core_span), _HORIZON_MIN_HALF_SPAN_M)
 
 
 def _horizon_blend_grid(
@@ -698,21 +705,23 @@ def _horizon_blend_grid(
     core_x: np.ndarray,
     core_z: np.ndarray,
 ) -> np.ndarray:
-    """计算主地图外的平滑融合权重。注意：主地图内严格为零，外边界严格为一。"""
+    """计算主地图外的平滑融合权重。注意：倍率终点后为一，不受几何安全下限拖后。"""
 
     center_x = (float(core_x[0]) + float(core_x[-1])) / 2.0
     center_z = (float(core_z[0]) + float(core_z[-1])) / 2.0
-    half_width = abs(float(core_x[-1]) - float(core_x[0])) / 2.0
-    half_depth = abs(float(core_z[-1]) - float(core_z[0])) / 2.0
-    outer_width = half_width * _HORIZON_SPAN_SCALE
-    outer_depth = half_depth * _HORIZON_SPAN_SCALE
+    core_width = abs(float(core_x[-1]) - float(core_x[0]))
+    core_depth = abs(float(core_z[-1]) - float(core_z[0]))
+    half_width = core_width / 2.0
+    half_depth = core_depth / 2.0
+    blend_half_width = _scaled_horizon_half_span(core_width)
+    blend_half_depth = _scaled_horizon_half_span(core_depth)
     outside_x = np.clip(
-        (np.abs(x_grid - center_x) - half_width) / max(outer_width - half_width, 1e-6),
+        (np.abs(x_grid - center_x) - half_width) / max(blend_half_width - half_width, 1e-6),
         0.0,
         1.0,
     )
     outside_z = np.clip(
-        (np.abs(z_grid - center_z) - half_depth) / max(outer_depth - half_depth, 1e-6),
+        (np.abs(z_grid - center_z) - half_depth) / max(blend_half_depth - half_depth, 1e-6),
         0.0,
         1.0,
     )
