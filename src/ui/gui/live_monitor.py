@@ -27,6 +27,8 @@ from src.ui.gui.chart_common import (
     CONTROL_ERROR_CHANNELS,
     ChannelSpec,
     apply_y_range,
+    build_chart_sidebar,
+    refresh_chart_node_panel,
 )
 
 # ── 常量 ─────────────────────────────────────────────────────────────────────
@@ -178,37 +180,6 @@ class LiveMonitorWindow(QDialog):
 
     def _build_sidebar(self) -> QWidget:
         """构建左侧边栏：节点列表（动态）、通道 checkbox、时间窗口选择。"""
-        # 侧边栏固定宽度，窗口缩放时优先把空间留给曲线图区。
-        sb = QWidget()
-        sb.setFixedWidth(170)
-        lay = QVBoxLayout(sb)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
-
-        node_box = QGroupBox("节点")
-        self._node_lay = QVBoxLayout(node_box)
-        self._node_lay.setSpacing(2)
-        self._node_lay.addWidget(QLabel("（等待数据）"))
-        lay.addWidget(node_box)
-
-        ch_box = QGroupBox("通道")
-        ch_lay = QVBoxLayout(ch_box)
-        ch_lay.setSpacing(1)
-        cur_grp = ""
-        for ch in CONTROL_ERROR_CHANNELS:
-            if ch.group != cur_grp:
-                # 分组标题只是视觉分隔，不参与通道开关逻辑。
-                cur_grp = ch.group
-                sep = QLabel(f"  {ch.group}")
-                sep.setStyleSheet("color:#888; font-size:11px;")
-                ch_lay.addWidget(sep)
-            cb = QCheckBox(ch.label)
-            cb.setChecked(ch.on)
-            cb.toggled.connect(self._rebuild_charts)
-            self._ch_cbs[ch.key] = cb
-            ch_lay.addWidget(cb)
-        lay.addWidget(ch_box)
-
         win_box = QGroupBox("时间窗口")
         win_lay = QHBoxLayout(win_box)
         combo = QComboBox()
@@ -219,35 +190,24 @@ class LiveMonitorWindow(QDialog):
             lambda i, c=combo: self._set_win(c.itemData(i))
         )
         win_lay.addWidget(combo)
-        lay.addWidget(win_box)
-
-        lay.addStretch()
-        return sb
+        sidebar = build_chart_sidebar(
+            empty_text="（等待数据）",
+            rebuild_charts=self._rebuild_charts,
+            extra_widgets=(win_box,),
+        )
+        self._node_lay = sidebar.node_layout
+        self._ch_cbs = sidebar.channel_checkboxes
+        return sidebar.widget
 
     def _refresh_node_panel(self) -> None:
         """清空节点面板并按当前 _nodes 重新填充 checkbox。"""
         # 节点列表整体重建，避免旧节点控件在配置或数据源变化后残留。
-        while self._node_lay.count():
-            w = self._node_lay.takeAt(0).widget()
-            if w:
-                w.deleteLater()
-        if not self._nodes:
-            self._node_lay.addWidget(QLabel("（等待数据）"))
-            return
-        for nid, nd in self._nodes.items():
-            cb = QCheckBox(nid)
-            cb.setChecked(nd["visible"])
-            # 复选框文字使用节点曲线色，兼作轻量图例。
-            cb.setStyleSheet(f"color:{nd['color']}; font-weight:bold;")
-            cb.toggled.connect(lambda v, n=nid: self._toggle_node(n, v))
-            nd["cb"] = cb
-            self._node_lay.addWidget(cb)
-
-    def _toggle_node(self, nid: str, visible: bool) -> None:
-        """切换节点可见性并重建图表。"""
-        if nid in self._nodes:
-            self._nodes[nid]["visible"] = visible
-        self._rebuild_charts()
+        refresh_chart_node_panel(
+            self._node_lay,
+            self._nodes,
+            empty_text="（等待数据）",
+            rebuild_charts=self._rebuild_charts,
+        )
 
     # ── 图表 ──────────────────────────────────────────────────────────────────
 

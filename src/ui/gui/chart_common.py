@@ -7,6 +7,7 @@ import math
 from typing import Callable
 
 from PySide6.QtCharts import QValueAxis
+from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QVBoxLayout, QWidget
 
 from src.runner.sim_control import NodeState
 
@@ -34,6 +35,15 @@ class ChannelSpec:
     on: bool
     # act 只读取快照节点，不保存窗口状态，因此同一规格可安全供实时和离线复用。
     act: Callable[[NodeState], float | None]
+
+
+@dataclass(frozen=True)
+class ChartSidebar:
+    """公共图表侧栏控件集合。注意：调用方仍负责窗口特有控件的生命周期。"""
+
+    widget: QWidget
+    node_layout: QVBoxLayout
+    channel_checkboxes: dict[str, QCheckBox]
 
 
 def heading_deviation(node: NodeState) -> float | None:
@@ -106,6 +116,97 @@ CONTROL_ERROR_CHANNELS: tuple[ChannelSpec, ...] = (
     ),
     ChannelSpec("hdg_dev", "航迹角偏差", "°", "侧向轴 z", False, heading_deviation),
 )
+
+
+def build_chart_sidebar(
+    *,
+    empty_text: str,
+    rebuild_charts: Callable[[], None],
+    extra_widgets: tuple[QWidget, ...] = (),
+) -> ChartSidebar:
+    """构建控制图表公共侧栏，并在通道区之后追加窗口专属控件。"""
+
+    sidebar = QWidget()
+    sidebar.setFixedWidth(170)
+    layout = QVBoxLayout(sidebar)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(4)
+
+    node_box = QGroupBox("节点")
+    node_layout = QVBoxLayout(node_box)
+    node_layout.setSpacing(2)
+    node_layout.addWidget(QLabel(empty_text))
+    layout.addWidget(node_box)
+
+    channel_box = QGroupBox("通道")
+    channel_layout = QVBoxLayout(channel_box)
+    channel_layout.setSpacing(1)
+    current_group = ""
+    channel_checkboxes: dict[str, QCheckBox] = {}
+    for channel in CONTROL_ERROR_CHANNELS:
+        if channel.group != current_group:
+            # 分组标题只承担视觉分隔，复选框的键仍由公共通道规格唯一决定。
+            current_group = channel.group
+            separator = QLabel(f"  {channel.group}")
+            separator.setStyleSheet("color:#888; font-size:11px;")
+            channel_layout.addWidget(separator)
+        checkbox = QCheckBox(channel.label)
+        checkbox.setChecked(channel.on)
+        checkbox.toggled.connect(rebuild_charts)
+        channel_checkboxes[channel.key] = checkbox
+        channel_layout.addWidget(checkbox)
+    layout.addWidget(channel_box)
+
+    for widget in extra_widgets:
+        layout.addWidget(widget)
+    layout.addStretch()
+    return ChartSidebar(sidebar, node_layout, channel_checkboxes)
+
+
+def refresh_chart_node_panel(
+    node_layout: QVBoxLayout,
+    nodes: dict[str, dict],
+    *,
+    empty_text: str,
+    rebuild_charts: Callable[[], None],
+) -> None:
+    """按节点显隐状态重建公共复选框面板，并绑定统一切换行为。"""
+
+    while node_layout.count():
+        widget = node_layout.takeAt(0).widget()
+        if widget is not None:
+            widget.deleteLater()
+    if not nodes:
+        node_layout.addWidget(QLabel(empty_text))
+        return
+    for node_id, state in nodes.items():
+        checkbox = QCheckBox(node_id)
+        checkbox.setChecked(bool(state["visible"]))
+        # 节点文字沿用曲线色，两个窗口共享同一种轻量图例表达。
+        checkbox.setStyleSheet(f"color:{state['color']}; font-weight:bold;")
+        checkbox.toggled.connect(
+            lambda visible, current_id=node_id: _set_chart_node_visibility(
+                nodes,
+                current_id,
+                visible,
+                rebuild_charts,
+            )
+        )
+        state["cb"] = checkbox
+        node_layout.addWidget(checkbox)
+
+
+def _set_chart_node_visibility(
+    nodes: dict[str, dict],
+    node_id: str,
+    visible: bool,
+    rebuild_charts: Callable[[], None],
+) -> None:
+    """更新一个图表节点的显隐状态，并触发曲线重建。"""
+
+    if node_id in nodes:
+        nodes[node_id]["visible"] = visible
+    rebuild_charts()
 
 
 def apply_y_range(y_axis: QValueAxis, values: list[float]) -> None:
