@@ -939,6 +939,48 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(str(root.property("followNodeId")), "")
         window.close()
 
+    def test_view_compass_tracks_camera_yaw_and_pitch(self) -> None:
+        """右下角指北针应随相机航向旋转，并随俯仰角呈现俯视或侧视投影。"""
+
+        from PySide6.QtCore import QObject
+        from PySide6.QtWidgets import QApplication
+        from src.ui.gui.situation3d.window import Situation3DWindow
+
+        app = QApplication.instance() or QApplication([])
+        window = Situation3DWindow()
+        try:
+            root = window.quick_view.rootObject()
+            self.assertIsNotNone(root)
+            compass = root.findChild(QObject, "viewCompass")
+            self.assertIsNotNone(compass)
+            self.assertGreater(float(compass.property("opacity")), 0.0)
+            self.assertLess(float(compass.property("opacity")), 1.0)
+            self.assertGreater(float(compass.property("x")), float(root.property("width")) / 2.0)
+            self.assertGreater(float(compass.property("y")), float(root.property("height")) / 2.0)
+
+            root.setTopView()
+            app.processEvents()
+            top_scale = float(root.property("compassPitchScale"))
+            self.assertAlmostEqual(float(compass.property("headingDeg")), 0.0)
+            self.assertGreater(top_scale, 0.9)
+
+            root.setProperty("yaw", 42.0)
+            root.setProperty("pitch", -34.0)
+            app.processEvents()
+            oblique_scale = float(root.property("compassPitchScale"))
+            self.assertAlmostEqual(float(compass.property("headingDeg")), 42.0)
+            self.assertGreater(oblique_scale, 0.5)
+            self.assertLess(oblique_scale, top_scale)
+
+            root.setSideView()
+            app.processEvents()
+            side_scale = float(root.property("compassPitchScale"))
+            self.assertAlmostEqual(float(compass.property("headingDeg")), -90.0)
+            self.assertLess(side_scale, 0.3)
+            self.assertLess(side_scale, oblique_scale)
+        finally:
+            window.close()
+
     def test_follow_focus_matches_leader_during_qml_interpolation(self) -> None:
         """跟随焦点必须与长机共用展示时钟，不能在快照间相对前后抖动。"""
 
