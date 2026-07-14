@@ -5,6 +5,7 @@
     <SkypointNo>1</SkypointNo>
     <IdAllNum>10</IdAllNum>
     <ByLineName>钻石默认航线</ByLineName>
+    <StLine_Type>0</StLine_Type>
     <StLineExp />
     <CreatTimer>2026/7/6 10:08:18</CreatTimer>
   </Item>
