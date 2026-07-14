@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
@@ -34,13 +35,16 @@ _POLL_MS = 100
 _WIN_OPTIONS_S = [30.0, 60.0, 120.0]
 _WIN_DEFAULT = 60.0
 _MAX_PTS = int(120 * 10 * 1.2)
+_DEFAULT_CTRL_COLOR = "#888888"
 
 _CTRL_COLORS = {
-    "待命": "#888888",
+    "待命": _DEFAULT_CTRL_COLOR,
     "集结": "#2ecc71",
     "保持": "#4c8ef5",
     "重构": "#c0392b",
 }
+# 控制器可以扩展回报文本，因此映射之外必须保留可诊断的默认颜色路径。
+LOGGER = logging.getLogger(__name__)
 
 # ── 主窗口 ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +82,8 @@ class LiveMonitorWindow(QDialog):
 
         self._strategy_strip: QLabel | None = None
         self._last_report: str = "待命"
+        # 未知回报按值去重，避免 10Hz 轮询对同一扩展状态反复告警。
+        self._unknown_control_reports: set[str] = set()
         self._rebuild_needed = False
         self._ch_cbs: dict[str, QCheckBox] = {}
         self._node_lay: QVBoxLayout
@@ -117,6 +123,17 @@ class LiveMonitorWindow(QDialog):
         self._bufs.clear()
         self._refresh_node_panel()
         self._rebuild_charts()
+
+    def _control_report_color(self, report: str) -> str:
+        """返回控制回报颜色，未知值只记录一次告警。"""
+
+        color = _CTRL_COLORS.get(report)
+        if color is not None:
+            return color
+        if report not in self._unknown_control_reports:
+            self._unknown_control_reports.add(report)
+            LOGGER.warning("未知控制回报，使用默认颜色：%s", report)
+        return _DEFAULT_CTRL_COLOR
 
     def reset_stream(self, ctrl: SimulationController) -> None:
         """重置监控曲线并保持控制器绑定。注意：仿真 reset 后节点面板仍应显示当前配置节点。"""
@@ -247,7 +264,7 @@ class LiveMonitorWindow(QDialog):
         self._strategy_strip = QLabel(self._last_report)
         self._strategy_strip.setFixedHeight(26)
         self._strategy_strip.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        clr = _CTRL_COLORS.get(self._last_report, "#888")
+        clr = self._control_report_color(self._last_report)
         self._strategy_strip.setStyleSheet(
             f"background:{clr}; color:white; font-weight:bold;"
         )
@@ -398,7 +415,7 @@ class LiveMonitorWindow(QDialog):
         if self._strategy_strip is not None:
             # 策略色条不依赖时间推进，暂停时也应保持最新状态。
             self._last_report = snap.control_report
-            clr = _CTRL_COLORS.get(snap.control_report, "#888")
+            clr = self._control_report_color(snap.control_report)
             self._strategy_strip.setText(snap.control_report)
             self._strategy_strip.setStyleSheet(
                 f"background:{clr}; color:white; font-weight:bold;"
