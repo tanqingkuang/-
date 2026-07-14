@@ -8,6 +8,36 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from src.runner.sim_control import RunState
+
+# GUI 命名状态集合集中描述交互语义；控制器仍独立裁决命令是否合法。
+# 已加载集合包含结束态，用于“可重置”这类不要求继续运行的入口。
+LOADED_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.READY, RunState.RUNNING, RunState.PAUSED, RunState.FINISHED}
+)
+# 可交互集合排除未加载和结束态，统一驱动播放与扰动按钮。
+INTERACTIVE_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.READY, RunState.RUNNING, RunState.PAUSED}
+)
+# 单步和时长编辑共享待命/暂停约束，避免两处集合逐渐分叉。
+EDITABLE_RUN_STATES: frozenset[RunState] = frozenset({RunState.READY, RunState.PAUSED})
+# 轮询定时器只在真正运行时保持启动，其余稳定态都应停止。
+TIMER_IDLE_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.READY, RunState.PAUSED, RunState.FINISHED}
+)
+# 集结入口还需结合节点角色和阶段判断，这里只表达运行态硬阻断。
+RALLY_BLOCKED_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.UNLOADED, RunState.READY, RunState.FINISHED}
+)
+# 播放切换在待命/暂停时请求 start；未加载虽会被按钮禁用，纯逻辑仍返回稳定语义。
+TOGGLE_START_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.UNLOADED, RunState.READY, RunState.PAUSED}
+)
+# 显式 pause 在暂停态保持幂等，不能误解释成恢复运行。
+PAUSE_REQUEST_RUN_STATES: frozenset[RunState] = frozenset(
+    {RunState.RUNNING, RunState.PAUSED}
+)
+
 # 世界坐标范围（米）：用于 mock 数据居中、待飞距/侧偏兜底估算等。
 WORLD_WIDTH = 1600.0
 WORLD_HEIGHT = 520.0
@@ -244,7 +274,7 @@ class Snapshot:
     time: float
     duration: float
     step: float
-    run_state: str
+    run_state: RunState | str
     control_report: str
     disturbance: str
     nodes: list[NodeState]

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from src.runner.sim_control import RunState
+
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QMenu
 
@@ -46,7 +48,7 @@ class FullControlMonitorFeature:
         if self.live_monitor is None:
             self.live_monitor = LiveMonitorWindow(window)
         # READY 状态已经有真实控制器，打开监控时应立即 follow。
-        if window.sim.snapshot().run_state != "UNLOADED":
+        if window.sim.snapshot().run_state != RunState.UNLOADED:
             self.live_monitor.follow(window.sim.controller)
         self.live_monitor.show()
         self.live_monitor.raise_()

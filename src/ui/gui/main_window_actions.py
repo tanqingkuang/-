@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import QFileDialog, QTableWidgetItem, QVBoxLayout, QWidget
 
-from src.runner.sim_control import DisturbanceType
+from src.runner.sim_control import DisturbanceType, RunState
 from src.ui.gui.config_state_view_model import (
     dialog_start_dir,
     display_config_path,
@@ -28,6 +28,7 @@ from src.ui.gui.view_models import (
     LinkState,
     NodeState,
     Snapshot,
+    TIMER_IDLE_RUN_STATES,
     default_project_root,
 )
 
@@ -118,9 +119,9 @@ class MainWindowActionMixin:
         """响应暂停按钮并切换暂停状态。注意：暂停不清空当前快照。"""
         snapshot = self.sim.pause()
         # 暂停/继续切换：停或起刷新定时器与运行态保持一致。
-        if snapshot.run_state == "PAUSED":
+        if snapshot.run_state == RunState.PAUSED:
             self.timer.stop()
-        elif snapshot.run_state == "RUNNING":
+        elif snapshot.run_state == RunState.RUNNING:
             self.timer.start()
         self._update_snapshot(snapshot)
         self._log("UI", f"pause/start -> {self.sim.last_result_code}, state={snapshot.run_state}")
@@ -153,7 +154,7 @@ class MainWindowActionMixin:
         snapshot = self.sim.poll()
         self._update_snapshot(snapshot)
         # 进入非运行态(就绪/暂停/结束)就停掉定时器，省去无谓刷新。
-        if snapshot.run_state in {"READY", "PAUSED", "FINISHED"}:
+        if snapshot.run_state in TIMER_IDLE_RUN_STATES:
             self.timer.stop()
 
     def _refresh_formation_options(self) -> None:

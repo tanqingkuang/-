@@ -6,7 +6,15 @@ import math
 from dataclasses import dataclass
 from typing import Iterable
 
-from src.ui.gui.view_models import NodeState, Snapshot
+from src.ui.gui.view_models import (
+    EDITABLE_RUN_STATES,
+    INTERACTIVE_RUN_STATES,
+    LOADED_RUN_STATES,
+    RALLY_BLOCKED_RUN_STATES,
+    NodeState,
+    RunState,
+    Snapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -40,12 +48,12 @@ class SimControlViewModel:
             cpu_text=f"CPU {snapshot.cpu_utilization * 100:.0f}%",
             progress_permille=progress_permille(snapshot.time, snapshot.duration),
             # 这里只决定按钮是否可点，真正的 start/pause 合法性仍由控制器裁决。
-            play_enabled=snapshot.run_state != "UNLOADED" and snapshot.run_state != "FINISHED",
+            play_enabled=snapshot.run_state in INTERACTIVE_RUN_STATES,
             play_text=play_button_text(snapshot.run_state),
-            step_enabled=snapshot.run_state in {"READY", "PAUSED"},
-            reset_enabled=snapshot.run_state != "UNLOADED",
+            step_enabled=snapshot.run_state in EDITABLE_RUN_STATES,
+            reset_enabled=snapshot.run_state in LOADED_RUN_STATES,
             # 扰动按钮与播放按钮沿用同一加载/结束态显示守卫。
-            disturbance_enabled=snapshot.run_state != "UNLOADED" and snapshot.run_state != "FINISHED",
+            disturbance_enabled=snapshot.run_state in INTERACTIVE_RUN_STATES,
             rally_enabled=rally_button_enabled(snapshot.run_state, snapshot.nodes),
             duration_text=duration_text_for_snapshot(snapshot),
             duration_enabled=duration_input_enabled(snapshot.run_state),
@@ -63,21 +71,21 @@ def play_button_text(run_state: str) -> str:
     """生成播放按钮文案。注意：文案表示点击后会发生的动作。"""
 
     # RUNNING/PAUSED 是唯二改变按钮文案的状态，其余状态统一显示“开始”。
-    return {"RUNNING": "暂停", "PAUSED": "继续"}.get(run_state, "开始")
+    return {RunState.RUNNING: "暂停", RunState.PAUSED: "继续"}.get(run_state, "开始")
 
 
 def duration_input_enabled(run_state: str) -> bool:
     """判断时长输入框是否可编辑。注意：只有待命和暂停态允许编辑。"""
 
     # 运行中修改时长由控制器拒绝；输入框只在可编辑态开放。
-    return run_state in {"READY", "PAUSED"}
+    return run_state in EDITABLE_RUN_STATES
 
 
 def duration_text_for_snapshot(snapshot: Snapshot) -> str | None:
     """生成时长输入框回填文本。注意：未加载配置时不回填，避免覆盖占位状态。"""
 
     # 未加载态不回填文本，避免把默认时长误显示为已加载配置。
-    if snapshot.run_state == "UNLOADED":
+    if snapshot.run_state == RunState.UNLOADED:
         return None
     return format_duration_text(snapshot.duration)
 
@@ -105,7 +113,7 @@ def rally_button_enabled(run_state: str, nodes: Iterable[NodeState]) -> bool:
     """判断集结按钮是否可用。注意：集结中保持可点，用于返回明确提示。"""
 
     # READY 阶段只显示几何预览，算法还没开始本地盘旋，因此不能发开始集结。
-    if run_state in {"UNLOADED", "READY", "FINISHED"}:
+    if run_state in RALLY_BLOCKED_RUN_STATES:
         return False
     # 普通保持/避障等非集结配置不显示可执行入口，避免按钮语义混淆。
     rally_nodes = [

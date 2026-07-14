@@ -5,7 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from src.ui.gui.view_models import playback_rate_to_slider_value, slider_value_to_playback_rate
+from src.ui.gui.view_models import (
+    PAUSE_REQUEST_RUN_STATES,
+    TOGGLE_START_RUN_STATES,
+    RunState,
+    playback_rate_to_slider_value,
+    slider_value_to_playback_rate,
+)
 
 PlaybackSliderSource = Literal["user", "program"]
 PlaybackCommand = Literal["start", "pause", "none"]
@@ -135,10 +141,10 @@ class PlaybackViewModel:
         """判断播放按钮点击后的动作。注意：按钮语义由当前运行态决定。"""
 
         # 播放按钮显示下一步动作：运行中点击才是暂停。
-        if run_state == "RUNNING":
+        if run_state == RunState.RUNNING:
             return PlaybackPauseDecision("pause")
         # READY/PAUSED 下按钮语义都是开始或继续，具体合法性由控制器兜底。
-        if run_state in {"READY", "PAUSED", "UNLOADED"}:
+        if run_state in TOGGLE_START_RUN_STATES:
             return PlaybackPauseDecision("start")
         return PlaybackPauseDecision("none")
 
@@ -146,7 +152,7 @@ class PlaybackViewModel:
         """判断直接 pause 请求的动作。注意：PAUSED 下不得被解释为恢复运行。"""
 
         # 直接 pause 请求保持幂等，PAUSED 不会被翻译成 start。
-        if run_state in {"RUNNING", "PAUSED"}:
+        if run_state in PAUSE_REQUEST_RUN_STATES:
             return PlaybackPauseDecision("pause")
         return PlaybackPauseDecision("none")
 
@@ -154,4 +160,4 @@ class PlaybackViewModel:
         """根据快照运行态同步暂停标记。注意：仅记录状态，不触发外部动作。"""
 
         # 该标记服务纯函数层断言，不抢控制器状态机的职责。
-        self.paused = run_state == "PAUSED"
+        self.paused = run_state == RunState.PAUSED

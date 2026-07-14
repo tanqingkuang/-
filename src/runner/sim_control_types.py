@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import PosTrackDiagS
 from src.common.envelope import MessageEnvelope
 from src.environment.model import AccelerationCommand
 
-RunState = Literal["UNLOADED", "READY", "RUNNING", "PAUSED", "FINISHED"]
 ControlReport = Literal["待命", "集结", "保持", "重构"]
 EventLevel = Literal["DEBUG", "INFO", "WARN", "ERROR"]
 ResultCode = Literal[
@@ -26,6 +25,16 @@ ResultCode = Literal[
     "ERR_LOG_FAILED",
     "ERR_INTERNAL",
 ]
+
+
+class RunState(StrEnum):
+    """仿真运行状态。注意：枚举值保持既有快照与日志字符串契约。"""
+
+    UNLOADED = "UNLOADED"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    FINISHED = "FINISHED"
 
 
 class DisturbanceType(StrEnum):

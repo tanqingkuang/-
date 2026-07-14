@@ -8,7 +8,14 @@ import time
 from src.algorithm.context.leaf_types import FormStageE, PosTrackDiagS
 from src.environment.model import AircraftState
 from src.runner.sim_control_routes import _route_state_from_wayline
-from src.runner.sim_control_types import LinkState, NodeState, RouteState, SimulationSnapshot, _ConfiguredLink
+from src.runner.sim_control_types import (
+    LinkState,
+    NodeState,
+    RouteState,
+    RunState,
+    SimulationSnapshot,
+    _ConfiguredLink,
+)
 
 
 class SimulationControllerSnapshotMixin:
@@ -24,7 +31,7 @@ class SimulationControllerSnapshotMixin:
         nodes: list[NodeState] = []
         rally_phases = (
             {}
-            if self._run_state == "READY"
+            if self._run_state == RunState.READY
             else {nid: alg.current_rally_phase_str() for nid, alg in self._node_algorithms.items()}
         )
         for state in self._model.read_states().values():

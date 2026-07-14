@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.runner.sim_control import RunState
 from src.ui.gui.disturbance_view_model import DISTURBANCE_ACTIONS
 
 from src.ui.gui.dialogs import StageFullscreenDialog
@@ -119,7 +120,7 @@ class MainWindowLayoutMixin:
         layout.setContentsMargins(10, 18, 10, 10)
         layout.setSpacing(8)
         # 高频变化的运行状态保留为独立胶囊，便于一眼确认当前生命周期。
-        self.run_state_label = QLabel("READY")
+        self.run_state_label = QLabel(RunState.READY)
         self.run_state_label.setObjectName("statusPill")
         # 控制回报跟随状态放在左侧栏，删除顶部 header 后仍保持可见。
         self.report_label = QLabel("回报：待命")
