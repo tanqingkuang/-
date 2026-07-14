@@ -448,6 +448,34 @@ class Situation3DSceneDataTests(unittest.TestCase):
         buffer_points = json.loads(payload["riskZoneBuffers"][0]["pathValue"])
         self.assertGreater(buffer_points[0][1], 0.0)
 
+    def test_mountain_demo_render_extent_is_cropped_to_content_area(self) -> None:
+        """验证山地演示只保留有效内容区，不再渲染外围大面积空地图。"""
+
+        layout = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(layout["map"]["render_extent_km"], 32)
+        extent = terrain_field_module.terrain_extent_from_layout(layout)
+        self.assertAlmostEqual(extent["max_east_m"] - extent["min_east_m"], 32000.0)
+        self.assertAlmostEqual(extent["max_north_m"] - extent["min_north_m"], 32000.0)
+
+    def test_layout_reset_camera_matches_approved_oblique_composition(self) -> None:
+        """验证布局地图重置后复现已确认的近景斜俯构图。"""
+
+        surface = {
+            "x": 10500.0,
+            "y": 0.0,
+            "z": 300.0,
+            "width": 32000.0,
+            "depth": 32000.0,
+            "effectiveSpan": 32000.0,
+        }
+        camera = scene_data._layout_camera_payload(surface)
+
+        self.assertAlmostEqual(camera["focusX"], surface["x"] - surface["width"] * 0.067)
+        self.assertAlmostEqual(camera["focusZ"], surface["z"] + surface["depth"] * 0.25)
+        self.assertAlmostEqual(camera["distance"], 32000.0 * 0.915)
+        self.assertAlmostEqual(camera["yaw"], -25.0)
+        self.assertAlmostEqual(camera["pitch"], -39.5)
+
     def test_terrain_heights_keep_metric_semantics(self) -> None:
         """验证高度场米制语义:空布局平坦、低峰不被抬高、风险峰中心贴近声明高度。"""
 

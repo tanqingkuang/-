@@ -28,7 +28,7 @@
   },
   "map": {
     "effective_extent_km": 32,
-    "render_extent_km": 52
+    "render_extent_km": 32
   },
   "flight": {
     "cruise_altitude_m": 900,
