@@ -26,8 +26,8 @@ from src.algorithm.entity.types import (
 )
 from src.algorithm.units.algo.arc_path import corner_arc
 from src.algorithm.units.algo.ctrl.ppi import PPIInitS
-from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
+from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
@@ -88,7 +88,7 @@ class LeaderEntity(EntityBase):
         # 航路规划读编队指令与本机状态，输出当前航段写回黑板的 wayLine
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine)
-        self._pos_calc_u = RouteInterpInputS(
+        self._pos_calc_u = PosCalcInputS(
             selfState=self.cxt.selfState, wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
@@ -99,14 +99,11 @@ class LeaderEntity(EntityBase):
             diag=self._pos_track_diag,
             effectiveCmd=self._effective_cmd,
         )
-        # slotScale/t_ref 端口必须绑定（RallyLeaderBroadcast 强制校验 slotScale 非 None）；
-        # hold 场景广播默认集结字段：scale=1.0/scaleRate=0.0/t_ref_valid=False 恒定不变，
-        # 僚机用 RallyLeaderFollower 统一解析后仍按普通保持编队执行。
+        # 保持场景复用统一长机广播，固定协调计划保持默认无效值。
         self._outbound_u = RallyLeaderBroadcastInputS(
             cmd=self.cxt.cmd,
             selfState=self.cxt.selfState,
             leaderCmd=self._effective_cmd,
-            slotScale=self.cxt.slotScale,
             t_ref=self.cxt.rally_t_ref,
             t_ref_valid=self.cxt.rally_t_ref_valid,
         )

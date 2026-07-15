@@ -9,7 +9,6 @@ from src.algorithm.context.leaf_types import (
     FollowerStateS,
     FormSnapshotS,
     MotionProfS,
-    RallySlotScaleS,
     WayLineS,
     copy_motion,
     copy_snapshot,
@@ -29,7 +28,6 @@ class FormContextS:
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
-    slotScale: RallySlotScaleS = field(default_factory=RallySlotScaleS)  # 槽位缩放因子(Rally写/SlotGeometry读)
     followerStates: list[FollowerStateS] = field(default_factory=list)  # 僚机集结状态(FollowerStatus写/Rally读)
     rally_t_ref: float = 0.0  # 固定公共到达时刻，仅用于 RallyJoinPos 全航程调速（秒）
     rally_t_ref_valid: bool = False  # 是否已收齐全队基础航程并生成固定协调计划
@@ -53,8 +51,6 @@ def reset_context(dst: FormContextS) -> None:
     dst.selfAccCmd.accNorth = fresh.selfAccCmd.accNorth
     dst.selfAccCmd.accUp = fresh.selfAccCmd.accUp
     # 集结扩展字段复位
-    dst.slotScale.scale = fresh.slotScale.scale
-    dst.slotScale.scaleRate = fresh.slotScale.scaleRate
     dst.followerStates.clear()
     dst.rally_t_ref = 0.0
     dst.rally_t_ref_valid = False

@@ -261,14 +261,6 @@ def zero_acceleration(a: AccInEarthS) -> None:
 
 
 @dataclass
-class RallySlotScaleS:
-    """集结阶段的槽位偏置缩放因子。注意：需跨拍保留，进 Context；scaleRate 供 SlotGeometry 计算压缩速度前馈。"""
-
-    scale: float = 1.0  # 槽位偏置放大倍数；1.0 为最终队形，>1.0 为松散放大
-    scaleRate: float = 0.0  # scale 对时间的导数（1/s）；LOOSE 为 0，COMPRESS 为负值
-
-
-@dataclass
 class FollowerStateS:
     """单架僚机向长机回报的集结状态快照。注意：id 与节点 ID 对应；posErr 为到当前目标的合距离。"""
 
@@ -292,12 +284,6 @@ class FormationAnalysisS:
     posErrRms_m: float = 0.0  # 期望僚机位置误差 RMSE，米
     inPositionCount: int = 0  # 期望僚机中满足精度要求的机数
     totalCount: int = 0  # 期望参与集结的总机数（= len(expectedFollowerIds)，不受断链影响）
-
-
-def copy_rally_slot_scale(src: RallySlotScaleS, dst: RallySlotScaleS) -> None:
-    """复制槽位缩放因子，避免 Context 字段被外部别名引用。注意：新增字段时同步补齐。"""
-    dst.scale = src.scale
-    dst.scaleRate = src.scaleRate
 
 
 def dist3d(a: "PosInEarthS", b: "PosInEarthS") -> float:

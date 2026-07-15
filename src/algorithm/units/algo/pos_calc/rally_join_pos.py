@@ -29,7 +29,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from src.algorithm.context.leaf_types import PosInEarthS
+from src.algorithm.context.leaf_types import FormStageE, PosInEarthS
 from src.algorithm.units.algo.arc_path import common_tangent
 from src.algorithm.units.algo.formation_math import clamp
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
@@ -135,18 +135,6 @@ class RallyJoinPosInitS(PosCalcInitS):
     standby_altitude_m: float | None = None  # 本地待命目标高度；None 表示保持进入待命首帧高度
 
 
-@dataclass
-class RallyJoinPosInputS(PosCalcInputS):
-    """RallyJoinPos 输入端口。"""
-
-    # 继承 selfState: MotionProfS
-    t_ref: float = 0.0  # 集结基准时刻（长机广播的全队最早公共可达时刻）
-    t_ref_valid: bool = False  # False 时只允许进入/保持盘旋，不允许切出
-    assigned_loops: int = 0  # 固定计划分配给本机的整数绕圈数（Task 5 消费，本任务仅接线）
-    t_now: float = 0.0  # 当前仿真时间
-    standby: bool = False  # True 表示本拍保持本地待命盘旋，不进入集结圆汇合
-
-
 class RallyJoinPos(PosCalcBase):
     """集结汇合位置解算器，提供锁存的基础航程及其当前剩余值。"""
 
@@ -244,16 +232,16 @@ class RallyJoinPos(PosCalcBase):
         """返回是否已至少一次路过松散点 M_i，供汇合过程诊断。"""
         return self._reached_slot_once
 
-    def step(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """推进 RallyJoinPos 一个处理周期。"""
-        if u.selfState is None or y.selfCmd is None:
+        if u.selfState is None or u.cmd is None or y.selfCmd is None:
             raise ValueError("RallyJoinPos ports must be bound")
         # 实体会在固定计划生效后每拍重复发送同一圈数；这里只接受首个有效值，
         # 避免飞机已经消耗的圈数被后续重复报文恢复。
         if u.t_ref_valid and not self._plan_applied:
             # 首次锁存必须先完成全部值域校验，任何失败都不能留下半套计划状态。
-            if not math.isfinite(u.t_ref) or not math.isfinite(u.t_now):
-                raise ValueError("首次有效计划的 t_ref 和 t_now 必须为有限数")
+            if not math.isfinite(u.t_ref) or not math.isfinite(u.now_s):
+                raise ValueError("首次有效计划的 t_ref 和 now_s 必须为有限数")
             # bool 是 int 的子类，必须单独排除；浮点圈数不得通过转换静默截断。
             if (
                 not isinstance(u.assigned_loops, int)
@@ -264,7 +252,7 @@ class RallyJoinPos(PosCalcBase):
             self._assigned_loops = u.assigned_loops
             self._remaining_loops = self._assigned_loops
             self._plan_applied = True
-        if u.standby:
+        if u.cmd.stage == FormStageE.STANDBY:
             if self._state != RALLY_STATE_STANDBY:
                 self._enter_standby(u)
             self._step_standby(u, y)
@@ -311,7 +299,7 @@ class RallyJoinPos(PosCalcBase):
     # 内部阶段实现
     # ------------------------------------------------------------------ #
 
-    def _enter_standby(self, u: RallyJoinPosInputS) -> None:
+    def _enter_standby(self, u: PosCalcInputS) -> None:
         """进入本地待命盘旋。注意：待命圆按进入待命这一拍的本机位置和航向反推。"""
         assert u.selfState is not None
         heading = u.selfState.v.vPsi
@@ -343,7 +331,7 @@ class RallyJoinPos(PosCalcBase):
         self._reached_slot_once = False
         self._state = RALLY_STATE_STANDBY
 
-    def _leave_standby(self, u: RallyJoinPosInputS) -> None:
+    def _leave_standby(self, u: PosCalcInputS) -> None:
         """离开本地待命并按本拍位置一次性规划两圆转移路径。"""
         assert self._standby_center_e is not None and self._standby_center_n is not None
         self._state = RALLY_STATE_FLYING
@@ -418,7 +406,7 @@ class RallyJoinPos(PosCalcBase):
         self._tangent_length_m = math.hypot(entry_e - local_e, entry_n - local_n)
         return _TRANSIT_ARC_TO_TANGENT
 
-    def _step_standby(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def _step_standby(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """在本地待命阶段输出沿本机待命圆的 CCW 盘旋指令。"""
         assert u.selfState is not None
         assert self._standby_center_e is not None and self._standby_center_n is not None
@@ -434,7 +422,7 @@ class RallyJoinPos(PosCalcBase):
 
     def _write_ccw_circle_cmd(
         self,
-        u: RallyJoinPosInputS,
+        u: PosCalcInputS,
         y: PosCalcOutputS,
         *,
         center_e: float,
@@ -461,7 +449,7 @@ class RallyJoinPos(PosCalcBase):
         y.selfCmd.v.dVPsi = speed / self._loiter_radius
         y.selfCmd.v.vTheta = 0.0
 
-    def _step_flying(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def _step_flying(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """在直飞阶段生成指向盘旋圆切入点 T 的指令，到达 T 附近后转入圆弧飞行。"""
         if self._transit_phase == _TRANSIT_ARC_TO_TANGENT:
             self._step_arc_to_tangent(u, y)
@@ -510,7 +498,7 @@ class RallyJoinPos(PosCalcBase):
             # 也避免刚到 T 这一拍还输出已经过期的直飞指令。
             self._step_loitering(u, y)
 
-    def _step_arc_to_tangent(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def _step_arc_to_tangent(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """沿待命圆接近锁存切出点，进入角度窗口后切换到公切线直飞。"""
         assert self._standby_center_e is not None and self._standby_center_n is not None
         theta = math.atan2(
@@ -591,25 +579,25 @@ class RallyJoinPos(PosCalcBase):
             return self._rally_arc_to_slot_m(theta)
         return 0.0
 
-    def _coordinated_speed(self, u: RallyJoinPosInputS) -> float:
+    def _coordinated_speed(self, u: PosCalcInputS) -> float:
         """按完整剩余航程和固定计划剩余时间计算水平协调速度。"""
         # 该函数会在计划生效后的每个 JOINING 子阶段调用，不能只依赖首次计划校验。
-        if not math.isfinite(u.t_ref) or not math.isfinite(u.t_now):
-            raise ValueError("协调调速的 t_ref 和 t_now 必须为有限数")
+        if not math.isfinite(u.t_ref) or not math.isfinite(u.now_s):
+            raise ValueError("协调调速的 t_ref 和 now_s 必须为有限数")
         if not self._plan_applied:
             return self._approach_speed
         # 基础航程沿锁存几何实时递减，整圈部分只由真实经过 M_i 的事件消费；
         # 两者相加后统一除以固定计划的剩余时间，三个子阶段不再各用一套速度口径。
         circumference = _TWO_PI * self._loiter_radius
         remaining_m = self._remaining_base_path_m(u.selfState.pos) + self._remaining_loops * circumference
-        remaining_s = u.t_ref - u.t_now
+        remaining_s = u.t_ref - u.now_s
         # 计划时刻已经到达或越过时直接采用上限，避免除零并尽快追赶固定计划。
         # 此分支只处理有限时间的非正差值，NaN/Inf 已在函数入口拒绝。
         if remaining_s <= 0.0:
             return self._speed_max
         return clamp(remaining_m / remaining_s, self._speed_min, self._speed_max)
 
-    def _step_loitering(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def _step_loitering(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """在盘旋阶段更新切出判定并生成圆周飞行指令。"""
         pos_e = u.selfState.pos.east
         pos_n = u.selfState.pos.north
@@ -677,11 +665,11 @@ class RallyJoinPos(PosCalcBase):
             target_h=self._slot.h,
         )
 
-    def _step_exited(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def _step_exited(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """在已切出阶段持续输出沿任务航向飞行的过渡指令。"""
         self._set_exit_cmd(u, y)
 
-    def _set_exit_cmd(self, u: RallyJoinPosInputS, y: PosCalcOutputS) -> None:
+    def _set_exit_cmd(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """写入从松散点沿任务航向直飞的目标位置与速度。"""
         vd = self._mission_speed
         heading = self._mission_heading

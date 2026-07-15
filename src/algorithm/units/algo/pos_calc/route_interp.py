@@ -18,14 +18,6 @@ class RouteInterpInitS(PosCalcInitS):
     leadTimeS: float = 0.0  # 曲率前馈前瞻时间 σ(秒)，前瞻窗长 L2=σ·vd；0 表示关闭前馈
 
 
-@dataclass
-class RouteInterpInputS(PosCalcInputS):
-    """航线插值输入端口。注意：wayLine 为当前航段，nextWayLine 供曲率前馈跨段前瞻。"""
-
-    wayLine: WayLineS | None = None
-    nextWayLine: WayLineS | None = None
-
-
 class RouteInterp(PosCalcBase):
     """长机航线插值目标计算器。注意：直线段投影/延拓，圆弧段投影到弧；曲率经 σ 前瞻前馈。"""
 
@@ -43,7 +35,7 @@ class RouteInterp(PosCalcBase):
         if self._lead_time_s < 0.0:
             raise ValueError("leadTimeS must be >= 0")
 
-    def step(self, u: RouteInterpInputS, y: PosCalcOutputS) -> None:
+    def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
         """推进 RouteInterp 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.selfState is None or u.wayLine is None or y.selfCmd is None:
             raise ValueError("RouteInterp ports must be bound")
@@ -105,7 +97,7 @@ class RouteInterp(PosCalcBase):
         self_cmd.v.vPsi = heading if line.start.vdCmd else 0.0
         del progress  # 进度仅用于内部高度插值，已在 project_arc 内处理
 
-    def _curvature_ff(self, u: RouteInterpInputS) -> float:
+    def _curvature_ff(self, u: PosCalcInputS) -> float:
         """σ 前瞻曲率前馈：dVPsi = vd·κ_ff，κ_ff=(前瞻航向−当前航向)/窗长。注意：只跨入圆弧下一段。"""
         vd = u.selfState.v.vd
         lead = self._lead_time_s * vd  # L2 = σ·vd

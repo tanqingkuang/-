@@ -23,14 +23,13 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, waypoint_inputs_to_waylines
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
-from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RallyJoinPos,
     RallyJoinPosInitS,
-    RallyJoinPosInputS,
 )
-from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
+from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
@@ -121,11 +120,15 @@ class RallyLeaderEntity(EntityBase):
         self._inbound_u = FollowerStatusInputS(inbox=self._get_inbox_ref(), now_s=0.0)
         self._inbound_y = FollowerStatusOutputS(followerStates=self.cxt.followerStates)
         self._task_u = RallyTaskInputS(remote=self._remote, cmd=self.cxt.cmd, followerStates=self.cxt.followerStates, now_s=0.0)
-        self._task_y = RallyTaskOutputS(cmd=self.cxt.cmd, slotScale=self.cxt.slotScale)
-        self._rally_join_u = RallyJoinPosInputS(selfState=self.cxt.selfState)
+        self._task_y = RallyTaskOutputS(cmd=self.cxt.cmd)
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine)
-        self._pos_calc_u = RouteInterpInputS(selfState=self.cxt.selfState, wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine)
+        self._pos_calc_u = PosCalcInputS(
+            selfState=self.cxt.selfState,
+            cmd=self.cxt.cmd,
+            wayLine=self.cxt.wayLine,
+            nextWayLine=self.cxt.nextWayLine,
+        )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
         self._pos_track_diag = PosTrackDiagS()
@@ -138,7 +141,6 @@ class RallyLeaderEntity(EntityBase):
             cmd=self.cxt.cmd,
             selfState=self.cxt.selfState,
             leaderCmd=self._effective_cmd,
-            slotScale=self.cxt.slotScale,
         )
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
@@ -174,7 +176,7 @@ class RallyLeaderEntity(EntityBase):
         self._outbound_u.t_ref = self.cxt.rally_t_ref
         self._outbound_u.t_ref_valid = self.cxt.rally_t_ref_valid
         self._outbound_u.loop_counts = dict(self._task_y.loopCounts)
-        self._rally_join_u.assigned_loops = self._task_y.loopCounts.get(self._self_id, 0)
+        self._pos_calc_u.assigned_loops = self._task_y.loopCounts.get(self._self_id, 0)
 
         stage = self.cxt.cmd.stage
         step = self.cxt.cmd.step
@@ -196,11 +198,10 @@ class RallyLeaderEntity(EntityBase):
         if stage == FormStageE.STANDBY or (stage == FormStageE.RALLY and step == RallyPhaseE.JOINING):
             # STANDBY/JOINING 都属于 RallyJoinPos 位置解算策略，只由 standby 输入切换内部状态。
             # 待命阶段没有全队固定计划，显式压成无效；新生命周期由 entity.reset() 隔离。
-            self._rally_join_u.standby = stage == FormStageE.STANDBY
-            self._rally_join_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
-            self._rally_join_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
-            self._rally_join_u.t_now = u.now_s
-            self._rally_join.step(self._rally_join_u, self._pos_calc_y)
+            self._pos_calc_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
+            self._pos_calc_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
+            self._pos_calc_u.now_s = u.now_s
+            self._rally_join.step(self._pos_calc_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
             if stage == FormStageE.STANDBY:
                 # effective_cmd 跟随本地盘旋目标，保证输出诊断和跟踪目标一致。

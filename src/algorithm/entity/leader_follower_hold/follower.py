@@ -9,8 +9,8 @@ from src.algorithm.context.leaf_types import MotionProfS, PosTrackDiagS, copy_mo
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
-from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
+from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.inbound.base import InboundInputS
@@ -50,24 +50,18 @@ class FollowerEntity(EntityBase):
 
         # 预绑定端口到黑板：入站把长机状态/指令写入黑板，供后续单元消费
         self._inbound_u = InboundInputS(inbox=self._inbox)
-        # slotScale 端口必须绑定（RallyLeaderFollower 强制校验非 None），hold 场景只使用默认 scale=1.0；
-        # 若接收到旧格式广播缺少 slot_scale/t_ref，则仍回退到 scale=1.0/t_ref_valid=False。
         self._inbound_y = RallyLeaderFollowerOutputS(
             leaderState=self.cxt.leaderState,
             leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
-            slotScale=self.cxt.slotScale,
         )
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
         # 槽位几何输入：长机状态 + 编队指令即可定出僚机目标位，前向待飞距闭环已下沉到 PidCompose，无需本机状态。
-        # slotScale 端口绑定到 Context：hold 场景默认 scale=1.0/scaleRate=0.0，行为等价于未缩放槽位；
-        # 集结场景复用同一 SlotGeometry 时可由 Rally 动态写入缩放因子。
-        self._pos_calc_u = SlotGeometryInputS(
+        self._pos_calc_u = PosCalcInputS(
             leaderState=self.cxt.leaderState,
             leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
-            slotScale=self.cxt.slotScale,
             selfState=self.cxt.selfState,  # 仅供 TD (重)挂载首拍按当前位置播种，稳态几何目标不依赖本机状态
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)

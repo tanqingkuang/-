@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import MotionProfS
+from src.algorithm.context.leaf_types import FormSnapshotS, MotionProfS, WayLineS
 
 
 @dataclass
@@ -16,9 +16,18 @@ class PosCalcInitS:
 
 @dataclass
 class PosCalcInputS:
-    """目标位置计算输入端口。注意：selfState 需要由实体边界在每拍写入。"""
+    """目标位置计算统一输入端口。注意：具体策略只校验和读取自身需要的字段。"""
 
     selfState: MotionProfS | None = None
+    cmd: FormSnapshotS | None = None
+    wayLine: WayLineS | None = None
+    nextWayLine: WayLineS | None = None
+    leaderState: MotionProfS | None = None
+    leaderCmd: MotionProfS | None = None
+    t_ref: float = 0.0
+    t_ref_valid: bool = False
+    assigned_loops: int = 0
+    now_s: float = 0.0
 
 
 @dataclass

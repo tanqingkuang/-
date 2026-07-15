@@ -18,7 +18,6 @@ from src.algorithm.context.leaf_types import (
     NetWorkS,
     PosInEarthS,
     PosTrackDiagS,
-    RallySlotScaleS,
     RemoteCmdS,
     VdInEarthS,
     WayLineS,
@@ -31,9 +30,9 @@ from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
 from src.algorithm.units.algo.ctrl.ppi import PPI, PPIInitS
 from src.algorithm.units.algo.formation_math import clamp, enu_to_track, horizontal_track_to_enu, track_to_enu
-from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS, RouteInterpInputS
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
+from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS
+from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
@@ -226,7 +225,7 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
         )
-        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
@@ -250,7 +249,7 @@ class PosCalcTests(unittest.TestCase):
         route.init(RouteInterpInitS(lookAheadDistance=2.0))
 
         route.step(
-            RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine),
+            PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -267,7 +266,7 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(5.0, 5.0, 5.0), vdCmd=10.0),
             end=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
         )
-        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
@@ -287,7 +286,7 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
         )
-        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
@@ -308,7 +307,7 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
             end=WayPointS(pos=PosInEarthS(30.0, 40.0, 1030.0)),
         )
-        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = PosCalcOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
@@ -325,7 +324,7 @@ class PosCalcTests(unittest.TestCase):
     def test_route_interp_rejects_pure_vertical_segment(self) -> None:
         """验证纯垂直航段（水平长度为零）被显式拒绝，固定翼地速在该航段无定义。"""
 
-        u = RouteInterpInputS(
+        u = PosCalcInputS(
             selfState=_motion(h=1000.0),
             wayLine=WayLineS(
                 start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
@@ -359,7 +358,7 @@ class PosCalcTests(unittest.TestCase):
         route.init(RouteInterpInitS(leadTimeS=0.5))  # σ=0.5s
         cmd = MotionProfS()
 
-        route.step(RouteInterpInputS(selfState=self_state, wayLine=line), PosCalcOutputS(selfCmd=cmd))
+        route.step(PosCalcInputS(selfState=self_state, wayLine=line), PosCalcOutputS(selfCmd=cmd))
 
         # 目标点在弧上(到圆心距离=R)，且为该在弧点的投影(=自身)。
         self.assertAlmostEqual(math.hypot(cmd.pos.east - 1600.0, cmd.pos.north + 400.0), 400.0, places=3)
@@ -388,7 +387,7 @@ class PosCalcTests(unittest.TestCase):
         ctx.selfState = _motion(east=70.0, north=220.0, h=995.0, v_east=12.0)
 
         slot.step(
-            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -414,7 +413,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcInputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -441,7 +440,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -466,7 +465,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(leaderState=ctx.leaderState, leaderCmd=leader_cmd, cmd=ctx.cmd),
+            PosCalcInputS(leaderState=ctx.leaderState, leaderCmd=leader_cmd, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -494,7 +493,7 @@ class PosCalcTests(unittest.TestCase):
         out = PosCalcOutputS(selfCmd=ctx.selfCmd)
 
         slot.step(
-            SlotGeometryInputS(
+            PosCalcInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 leaderCmd=MotionProfS(),
@@ -511,7 +510,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(
+            PosCalcInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 leaderCmd=leader_cmd,
@@ -540,7 +539,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -566,7 +565,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
@@ -596,7 +595,7 @@ class PosCalcTests(unittest.TestCase):
             ctx.selfState = _motion(east=46.0, north=200.0 - right_offset, h=1000.0, v_east=30.0)
 
             slot.step(
-                SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+                PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
                 PosCalcOutputS(selfCmd=ctx.selfCmd),
             )
 
@@ -1352,7 +1351,6 @@ class ProcessUnitTests(unittest.TestCase):
                 cmd=ctx.cmd,
                 selfState=ctx.selfState,
                 leaderCmd=leader_cmd,
-                slotScale=ctx.slotScale,
             ),
             out,
         )
@@ -1368,7 +1366,6 @@ class ProcessUnitTests(unittest.TestCase):
             leaderState=follower_ctx.leaderState,
             leaderCmd=leader_cmd_out,
             cmd=follower_ctx.cmd,
-            slotScale=follower_ctx.slotScale,
         )
         inbound.step(InboundInputS(inbox=out.outbox), inbound_y)
 
@@ -1378,9 +1375,7 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertIn("leader", out.outbox[0].payload["cmd"])
         self.assertAlmostEqual(leader_cmd_out.pos.east, 10.0)
         self.assertAlmostEqual(leader_cmd_out.v.vEast, 12.0)
-        # hold 长机的 ctx.slotScale 停在默认值，广播出去就是 scale=1.0/scaleRate=0.0
-        self.assertAlmostEqual(follower_ctx.slotScale.scale, 1.0)
-        self.assertAlmostEqual(follower_ctx.slotScale.scaleRate, 0.0)
+        self.assertNotIn("slot_scale", out.outbox[0].payload)
 
         inbound.step(InboundInputS(inbox=[]), inbound_y)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
@@ -1393,7 +1388,7 @@ class ProcessUnitTests(unittest.TestCase):
 
         RallyLeaderFollower().step(
             InboundInputS(inbox=[msg]),
-            RallyLeaderFollowerOutputS(leaderState=ctx.leaderState, cmd=ctx.cmd, slotScale=RallySlotScaleS()),
+            RallyLeaderFollowerOutputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
         )
 
         self.assertEqual(ctx.cmd.stage, FormStageE.NONE)

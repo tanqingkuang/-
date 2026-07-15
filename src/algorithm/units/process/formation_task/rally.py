@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import (
     FollowerStateS,
     FormStageE,
     RallyPhaseE,
-    RallySlotScaleS,
 )
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
@@ -31,7 +30,7 @@ class RallyTaskInitS(FormationTaskInitS):
     looseScale: float = 3.0  # 松散槽位放大倍数（松散间距=最终间距×looseScale）
     convergenceRadius_m: float = 5.0  # LOOSE→COMPRESS 槽位误差阈值，米
     stableHold_s: float = 5.0  # LOOSE→COMPRESS 需稳定的时间
-    compressTime_s: float = 30.0  # COMPRESS 阶段持续时间（scale 从 looseScale→1.0）
+    compressTime_s: float = 30.0  # COMPRESS 阶段最短持续时间
     tightRadius_m: float = 2.0  # COMPRESS→HOLD 精度阈值，米
     expectedFollowerIds: list[str] = field(default_factory=list)  # 期望参与集结的僚机 ID；空列表→立即通过（测试用）
     staleTimeout_s: float = 2.0  # 超过此时长未收到某机报文则视为数据失效
@@ -61,10 +60,9 @@ class RallyTaskInputS(FormationTaskInputS):
 
 @dataclass
 class RallyTaskOutputS(FormationTaskOutputS):
-    """Rally 任务输出端口。注意：slotScale 绑到 Context.slotScale。"""
+    """Rally 任务输出端口。"""
 
     # 继承 cmd: FormSnapshotS
-    slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale
     rallyCompleted: bool = False  # COMPRESS→HOLD 正常完成时置 True，仅该拍有效
     t_ref: float = 0.0  # 本帧集结基准时刻：全队整数圈可达区间的最早公共时刻
     t_ref_valid: bool = False  # 是否已收齐全队基础航程并生成固定计划
@@ -95,7 +93,6 @@ class Rally(FormationTaskBase):
             or cfg.loiter_speed_max_mps <= cfg.loiter_speed_min_mps
         ):
             raise ValueError("loiter speed bounds must satisfy 0 < min < max")
-        self._loose_scale = cfg.looseScale
         self._conv_radius_m = cfg.convergenceRadius_m
         self._stable_hold_s = cfg.stableHold_s
         self._compress_time_s = cfg.compressTime_s
@@ -130,7 +127,7 @@ class Rally(FormationTaskBase):
 
     def step(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
-        if y.cmd is None or y.slotScale is None:
+        if y.cmd is None:
             raise ValueError("Rally output ports must be bound")
         y.rallyCompleted = False
         self._write_plan(y)
@@ -146,8 +143,6 @@ class Rally(FormationTaskBase):
             y.cmd.stage = FormStageE.NONE
             y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = 0
-            y.slotScale.scale = self._loose_scale
-            y.slotScale.scaleRate = 0.0
             return
 
         if self._rally_started and y.cmd.stage == FormStageE.NONE:
@@ -155,8 +150,6 @@ class Rally(FormationTaskBase):
             y.cmd.stage = FormStageE.NONE
             y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = 0
-            y.slotScale.scale = self._loose_scale
-            y.slotScale.scaleRate = 0.0
             return
 
         if self._rally_started and remote_stage == FormStageE.STANDBY:
@@ -169,8 +162,6 @@ class Rally(FormationTaskBase):
             y.cmd.stage = FormStageE.HOLD
             y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = 1.0
-            y.slotScale.scaleRate = 0.0
             return
         if remote_stage == FormStageE.STANDBY:
             # STANDBY 是实体内本地盘旋阶段，任务单元只保持状态，不推进 Rally 子流程。
@@ -179,8 +170,6 @@ class Rally(FormationTaskBase):
             y.cmd.stage = FormStageE.STANDBY
             y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = 1.0
-            y.slotScale.scaleRate = 0.0
             return
 
         # remote == RALLY
@@ -189,8 +178,6 @@ class Rally(FormationTaskBase):
             y.cmd.stage = FormStageE.HOLD
             y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = 1.0
-            y.slotScale.scaleRate = 0.0
             return
         if y.cmd.stage in (FormStageE.NONE, FormStageE.STANDBY):
             # 首次进入集结
@@ -208,7 +195,6 @@ class Rally(FormationTaskBase):
         # Rally 任务只看僚机回报的离散门控，不直接读取飞机连续状态。
         # JOINING 使用 EXITED 锁存；CATCHUP 使用位置和航向误差；LOOSE/COMPRESS 使用位置误差。
         # 计时器只在连续满足条件时累加，任一僚机失效或超阈值都会清零。
-        # slotScale 每拍都写出，确保僚机漏收上一帧广播后仍可从最新消息恢复。
         if step == RallyPhaseE.JOINING:
             if not self._plan_ready:
                 # 未收齐时不保留部分映射，下一拍仍以完整快照重新检查。
@@ -227,8 +213,6 @@ class Rally(FormationTaskBase):
                 next_step = RallyPhaseE.JOINING
             y.cmd.step = next_step
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = self._loose_scale
-            y.slotScale.scaleRate = 0.0
 
         elif step == RallyPhaseE.CATCHUP:
             if self._all_catchup_ok(state_map, now_s):
@@ -243,8 +227,6 @@ class Rally(FormationTaskBase):
                 next_step = RallyPhaseE.CATCHUP
             y.cmd.step = next_step
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = self._loose_scale
-            y.slotScale.scaleRate = 0.0
 
         elif step == RallyPhaseE.LOOSE:
             if self._all_followers_ok(state_map, now_s, self._conv_radius_m):
@@ -259,19 +241,12 @@ class Rally(FormationTaskBase):
                 next_step = RallyPhaseE.LOOSE
             y.cmd.step = next_step
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = self._loose_scale
-            y.slotScale.scaleRate = 0.0
 
         else:  # step == RallyPhaseE.COMPRESS
             self._compress_elapsed += self._dt_s
-            progress = self._compress_elapsed / self._compress_time_s
-            scale = self._loose_scale - (self._loose_scale - 1.0) * progress
-            if scale <= 1.0:
-                scale = 1.0
-                scaleRate = 0.0
-            else:
-                scaleRate = -(self._loose_scale - 1.0) / self._compress_time_s
-            if scale == 1.0 and self._all_followers_ok(state_map, now_s, self._tight_radius_m):
+            if self._compress_elapsed >= self._compress_time_s and self._all_followers_ok(
+                state_map, now_s, self._tight_radius_m
+            ):
                 y.cmd.stage = FormStageE.HOLD
                 y.cmd.step = RallyPhaseE.JOINING
                 y.rallyCompleted = True
@@ -279,8 +254,6 @@ class Rally(FormationTaskBase):
                 y.cmd.stage = FormStageE.RALLY
                 y.cmd.step = RallyPhaseE.COMPRESS
             y.cmd.pattern = self._target_pattern
-            y.slotScale.scale = scale
-            y.slotScale.scaleRate = scaleRate
 
     def reset(self) -> None:
         """复位 Rally 的动态状态，清除阶段计时器与一次性协调计划。"""

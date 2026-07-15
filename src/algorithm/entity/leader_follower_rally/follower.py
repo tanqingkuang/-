@@ -19,15 +19,14 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
-from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RALLY_STATE_STANDBY,
     RallyJoinPos,
     RallyJoinPosInitS,
-    RallyJoinPosInputS,
 )
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
+from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
@@ -127,17 +126,14 @@ class RallyFollowerEntity(EntityBase):
             leaderState=self.cxt.leaderState,
             leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
-            slotScale=self.cxt.slotScale,
         )
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
-        self._rally_join_u = RallyJoinPosInputS(selfState=self.cxt.selfState)
-        self._slot_u = SlotGeometryInputS(
+        self._pos_calc_u = PosCalcInputS(
             selfState=self.cxt.selfState,
             leaderState=self.cxt.leaderState,
             leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
-            slotScale=self.cxt.slotScale,
         )
         self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
@@ -167,7 +163,7 @@ class RallyFollowerEntity(EntityBase):
         self.cxt.rally_loop_counts.update(self._inbound_y.loopCounts)
         has_assignment = self._self_id in self._inbound_y.loopCounts
         self.cxt.rally_t_ref_valid = self._inbound_y.t_ref_valid and has_assignment
-        self._rally_join_u.assigned_loops = self._inbound_y.loopCounts.get(self._self_id, 0)
+        self._pos_calc_u.assigned_loops = self._inbound_y.loopCounts.get(self._self_id, 0)
         if standby_requested:
             # 本地远控阶段只决定本机 pos_calc 策略，不阻断长机广播解析。
             self.cxt.cmd.stage = FormStageE.STANDBY
@@ -196,17 +192,14 @@ class RallyFollowerEntity(EntityBase):
         if joining_active:
             # STANDBY/JOINING 都属于 RallyJoinPos 位置解算策略，只由 standby 输入切换内部状态。
             # 待命阶段没有可执行计划，显式压成无效；正式生命周期只允许随后单向进入 RALLY。
-            self._rally_join_u.standby = stage == FormStageE.STANDBY
-            self._rally_join_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
-            self._rally_join_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
-            self._rally_join_u.t_now = u.now_s
-            self._rally_join.step(self._rally_join_u, self._pos_calc_y)
+            self._pos_calc_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
+            self._pos_calc_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
+            self._pos_calc_u.now_s = u.now_s
+            self._rally_join.step(self._pos_calc_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
         else:
-            # RALLY step>=1（CATCHUP/LOOSE/COMPRESS）或 HOLD：三维槽位跟随
-            # CATCHUP 与 LOOSE/COMPRESS 用同一套算法——slotScale 处于松散值时即是 CATCHUP/LOOSE，
-            # 二者的区别只在 Rally 任务的阶段门控上，位置解算本身不需要区分。
-            self._pos_calc_slot.step(self._slot_u, self._pos_calc_y)
+            # RALLY step>=1（CATCHUP/LOOSE/COMPRESS）或 HOLD：三维槽位跟随。
+            self._pos_calc_slot.step(self._pos_calc_u, self._pos_calc_y)
             # CATCHUP 尚未形成松散队形，继续错高；LOOSE 后再回到正常槽位高度。
             if (
                 stage == FormStageE.RALLY
