@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntEnum
 
 from src.algorithm.context.leaf_types import FormSnapshotS, MotionProfS, WayLineS
+
+
+class TraPlanStrategyE(IntEnum):
+    """轨迹规划策略枚举。注意：只表达规划能力，不表达实体角色。"""
+
+    NOOP = 0  # 不更新当前任务航段
+    LEADER_ROUTE = 1  # 按任务航线推进当前航段
 
 
 @dataclass

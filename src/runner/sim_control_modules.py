@@ -36,6 +36,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     route_heading_rad,
     validate_capture_geometry,
 )
+from src.algorithm.units.process.tra_plan import TraPlanStrategyE
 from src.common.envelope import MessageEnvelope
 from src.data.config_loader import resolve_config_references
 from src.environment.comm import CommunicationChannel
@@ -67,6 +68,13 @@ _RALLY_RUN_ACTIVE = "ACTIVE"
 _POS_CALC_CONFIG_BY_ROLE = {
     "rally_leader": (PosCalcStrategyE.ROUTE_INTERP, (PosCalcStrategyE.RALLY_JOIN,)),
     "rally_follower": (PosCalcStrategyE.SLOT_GEOMETRY, (PosCalcStrategyE.RALLY_JOIN,)),
+}
+_TRA_PLAN_CONFIG_BY_ROLE = {
+    "rally_leader": (
+        TraPlanStrategyE.LEADER_ROUTE,
+        (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE),
+    ),
+    "rally_follower": (TraPlanStrategyE.NOOP, (TraPlanStrategyE.NOOP,)),
 }
 
 class _ConfigLoader:
@@ -206,6 +214,7 @@ class _NodeAlgorithm:
             role,
             (PosCalcStrategyE.NOOP, ()),
         )
+        tra_plan_default, tra_plan_strategies = _TRA_PLAN_CONFIG_BY_ROLE.get(role, (None, ()))
         # 按角色选择编队实体。
         # leader/rally_leader/rally_follower/wingman 对应不同算法实现，但对外 step 接口一致。
         if role == "leader":
@@ -229,16 +238,16 @@ class _NodeAlgorithm:
                 rally_layer_altitude_m=rally_layer_altitude_m,
                 pos_calc_default=pos_calc_default,
                 pos_calc_routes=pos_calc_routes,
+                tra_plan_default=tra_plan_default,
+                tra_plan_strategies=tra_plan_strategies,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。
         self._initial_route_lines: list[WayLineS] = []
         if role in {"leader", "rally_leader"}:
-            for _attr in ("_tra_plan", "_tra_plan_mission"):
-                tra_plan = getattr(self._entity, _attr, None)
-                if tra_plan is not None and hasattr(tra_plan, "get_route"):
-                    self._initial_route_lines = tra_plan.get_route()
-                    break
+            tra_plan = getattr(self._entity, "_tra_plan", None)
+            if tra_plan is not None and hasattr(tra_plan, "get_route"):
+                self._initial_route_lines = tra_plan.get_route()
         # 僚机预置：直接进入 HOLD/三角队形并写入长机初态，避免冷启动时无参考。
         # 这段只影响实体上下文初值，后续仍由通信和算法输出持续刷新长机状态。
         self._cold_start_leader_state: MotionProfS | None = (

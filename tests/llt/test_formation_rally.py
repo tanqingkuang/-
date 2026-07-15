@@ -63,11 +63,12 @@ from src.algorithm.units.process.outbound.rally_leader_broadcast import (
     RallyLeaderBroadcastInputS,
     _motion_payload,
 )
+from src.algorithm.units.process.tra_plan import TraPlanStrategyE
 from src.common.envelope import MessageEnvelope
 
 
 def EntityInitS(*args: object, **kwargs: object) -> _EntityInitS:
-    """构造测试实体配置，并按集结长短机现有角色补齐 PosCalc 策略表。"""
+    """构造测试实体配置，并按集结长短机角色补齐流程策略表。"""
 
     cfg = _EntityInitS(*args, **kwargs)
     if cfg.rally_cfg is not None:
@@ -77,6 +78,16 @@ def EntityInitS(*args: object, **kwargs: object) -> _EntityInitS:
             else PosCalcStrategyE.ROUTE_INTERP
         )
         cfg.pos_calc_routes = (PosCalcStrategyE.RALLY_JOIN,)
+        cfg.tra_plan_default = (
+            TraPlanStrategyE.NOOP
+            if cfg.rally_leader_id
+            else TraPlanStrategyE.LEADER_ROUTE
+        )
+        cfg.tra_plan_strategies = (
+            (TraPlanStrategyE.NOOP,)
+            if cfg.rally_leader_id
+            else (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE)
+        )
     return cfg
 
 

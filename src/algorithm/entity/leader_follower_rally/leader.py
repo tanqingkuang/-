@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import (
     FormationAnalysisS,
     FormStageE,
     PosTrackDiagS,
-    RallyPhaseE,
     MotionProfS,
     RemoteCmdS,
     copy_motion,
@@ -18,7 +17,7 @@ from src.algorithm.context.leaf_types import (
     zero_acceleration,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, waypoint_inputs_to_waylines
+from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
@@ -27,8 +26,7 @@ from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskIni
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInitS, FollowerStatusInputS, FollowerStatusOutputS
 from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
 from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
-from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
-from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
+from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
 from src.algorithm.entity.leader_follower_rally import fill_output
 from src.algorithm.units.algo.pos_calc.rally_join_pos import loiter_speed_bounds
 
@@ -57,7 +55,7 @@ class RallyLeaderEntity(EntityBase):
         # 单元实例
         self._inbound = FollowerStatus()
         self._task = Rally()
-        self._tra_plan_mission = LeaderRoute()
+        self._tra_plan = TraPlanManager()
         self._pos_track = PidCompose()
         self._outbound = RallyLeaderBroadcast()
 
@@ -69,8 +67,7 @@ class RallyLeaderEntity(EntityBase):
             loiter_speed_min_mps=loiter_min,
             loiter_speed_max_mps=loiter_max,
         ))
-        mission_lines = waypoint_inputs_to_waylines(cfg.route)
-        self._tra_plan_mission.init(LeaderRouteInitS(mission_lines))
+        self._tra_plan.init(cfg)
         self._pos_track.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
@@ -144,7 +141,7 @@ class RallyLeaderEntity(EntityBase):
         self._outbound_u.loop_counts = dict(self._task_y.loopCounts)
 
         stage = self.cxt.cmd.stage
-        step = self.cxt.cmd.step
+        self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)
 
         if stage == FormStageE.NONE:
             # NONE 是停控空策略，仍保持原有早退语义，和 STANDBY 待命盘旋无关。
@@ -158,12 +155,6 @@ class RallyLeaderEntity(EntityBase):
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
-        joining_active = stage == FormStageE.STANDBY or (
-            stage == FormStageE.RALLY and step == RallyPhaseE.JOINING
-        )
-        if not joining_active:
-            # RALLY step>=1（LOOSE/COMPRESS）或 HOLD：长机沿任务航线飞行
-            self._tra_plan_mission.step(self._tra_plan_u, self._tra_plan_y)
         self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
         self._pos_track.step(self._pos_track_u, self._pos_track_y)
         if stage == FormStageE.STANDBY:
@@ -194,7 +185,7 @@ class RallyLeaderEntity(EntityBase):
         self._remote.stage = RemoteCmdS().stage
         self._rally_completed = False
         self._task.reset()
-        self._tra_plan_mission.reset()
+        self._tra_plan.reset()
         self._pos_calc.reset()
         self._pos_track.reset()
         self._outbound.reset()

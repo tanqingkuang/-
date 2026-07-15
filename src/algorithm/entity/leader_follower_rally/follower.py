@@ -23,8 +23,7 @@ from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
 from src.algorithm.units.process.outbound.base import OutboundOutputS
 from src.algorithm.units.process.outbound.follower_broadcast import FollowerBroadcast, FollowerBroadcastInitS, FollowerBroadcastInputS
-from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
-from src.algorithm.units.process.tra_plan.noop import Noop
+from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
 from src.algorithm.entity.leader_follower_rally import fill_output
 
 
@@ -46,7 +45,7 @@ class RallyFollowerEntity(EntityBase):
 
         # 单元实例
         self._inbound = RallyLeaderFollower()
-        self._tra_plan = Noop()
+        self._tra_plan = TraPlanManager()
         self._pos_track_joining = PidCompose()
         self._pos_track_formation = PidCompose()
         self._pos_track = self._pos_track_joining
@@ -54,7 +53,7 @@ class RallyFollowerEntity(EntityBase):
 
         # 单元初始化
         self._inbound.init(None)
-        self._tra_plan.init(None)
+        self._tra_plan.init(cfg)
         # JOINING 的前向通道只跟踪时间协调速度；形成队形后恢复僚机前向位置闭环。
         self._pos_track_joining.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._pos_track_formation.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))

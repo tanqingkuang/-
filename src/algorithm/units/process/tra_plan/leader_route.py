@@ -5,7 +5,14 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import MotionProfS, PosInEarthS, WayLineS, WayPointS, copy_wayline
+from src.algorithm.context.leaf_types import (
+    MotionProfS,
+    PosInEarthS,
+    WayLineS,
+    WayPointInputS,
+    WayPointS,
+    copy_wayline,
+)
 from src.algorithm.units.algo import arc_path
 from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
 
@@ -72,6 +79,47 @@ class LeaderRoute(TraPlanBase):
         ):
             self._current_index += 1
         return self._current_index
+
+
+def waypoint_inputs_to_waylines(inputs: list[WayPointInputS]) -> list[WayLineS]:
+    """将原始航点转换为内部 WayLineS 序列，并按需展开圆弧几何。
+
+    情况 1：turnSign != 0 表示外部已算好的圆弧，直接映射。
+    情况 2：内部拐点 r > 0 时用 corner_arc() 计算相切圆弧。
+    默认：按普通折线直连。
+    """
+    if len(inputs) < 2:
+        raise ValueError("at least 2 waypoints required")
+    nodes: list[WayPointS] = []
+    for i, wpi in enumerate(inputs):
+        if wpi.turnSign != 0.0:
+            nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd, turnSign=wpi.turnSign, center=wpi.center))
+        elif 0 < i < len(inputs) - 1 and wpi.r > 0.0:
+            arc = arc_path.corner_arc(inputs[i - 1].pos, wpi.pos, inputs[i + 1].pos, wpi.r)
+            if arc is not None:
+                t1, t2, center, turn_sign = arc
+                # 圆弧切点必须仍落在两条原始航腿内，否则保留折线。
+                in_leg = _horizontal_distance(inputs[i - 1].pos, wpi.pos)
+                out_leg = _horizontal_distance(wpi.pos, inputs[i + 1].pos)
+                tangent_in = _horizontal_distance(t1, wpi.pos)
+                tangent_out = _horizontal_distance(t2, wpi.pos)
+                if tangent_in <= in_leg + 1e-9 and tangent_out <= out_leg + 1e-9:
+                    nodes.append(
+                        WayPointS(idx=wpi.idx, pos=t1, vdCmd=inputs[i - 1].vdCmd, turnSign=turn_sign, center=center)
+                    )
+                    nodes.append(WayPointS(idx=wpi.idx, pos=t2, vdCmd=wpi.vdCmd))
+                else:
+                    nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+            else:
+                nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+        else:
+            nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+    return [WayLineS(idx=j, start=nodes[j], end=nodes[j + 1]) for j in range(len(nodes) - 1)]
+
+
+def _horizontal_distance(a: PosInEarthS, b: PosInEarthS) -> float:
+    """计算两点水平距离。注意：圆弧切点合法性只看东/北平面。"""
+    return math.hypot(a.east - b.east, a.north - b.north)
 
 
 def _default_route() -> list[WayLineS]:

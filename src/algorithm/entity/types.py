@@ -16,6 +16,7 @@ from src.algorithm.context.leaf_types import (
 )
 from src.common.envelope import MessageEnvelope
 from src.algorithm.units.algo.pos_calc.base import PosCalcStrategyE
+from src.algorithm.units.process.tra_plan.base import TraPlanStrategyE
 
 
 DEFAULT_CONTROL_PERIOD_S = 0.05
@@ -46,6 +47,8 @@ class EntityInitS:
     rally_layer_altitude_m: float | None = None  # 待命/JOINING/CATCHUP 分层目标高度；None 表示沿用集结槽位高度
     pos_calc_default: PosCalcStrategyE = PosCalcStrategyE.NOOP  # 常规阶段位置解算策略
     pos_calc_routes: tuple[PosCalcStrategyE, ...] = ()  # 相对默认策略额外启用的位置解算能力
+    tra_plan_default: TraPlanStrategyE | None = None  # 常规阶段轨迹规划策略；必须显式配置
+    tra_plan_strategies: tuple[TraPlanStrategyE, ...] = ()  # 本实例启用的全部轨迹规划产品
 
 
 @dataclass
