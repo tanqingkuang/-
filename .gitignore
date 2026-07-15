@@ -30,3 +30,8 @@ venv/
 
 # draw.io 编辑临时备份
 .$*.bkp
+
+# Node 依赖（本项目 Node 仅用内置模块，勿在根目录 npm install）
+node_modules/
+package.json
+package-lock.json
