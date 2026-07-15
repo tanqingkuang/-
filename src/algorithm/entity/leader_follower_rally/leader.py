@@ -14,14 +14,11 @@ from src.algorithm.context.leaf_types import (
     RemoteCmdS,
     copy_motion,
     copy_pos_track_diag,
-    zero_acceleration,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
-from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
-from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
+from src.algorithm.units.algo.pos_track import PosTrackInputS, PosTrackManager, PosTrackOutputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInitS, FollowerStatusInputS, FollowerStatusOutputS
 from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
@@ -56,7 +53,7 @@ class RallyLeaderEntity(EntityBase):
         self._inbound = FollowerStatus()
         self._task = Rally()
         self._tra_plan = TraPlanManager()
-        self._pos_track = PidCompose()
+        self._pos_track = PosTrackManager()
         self._outbound = RallyLeaderBroadcast()
 
         # 单元初始化
@@ -68,7 +65,7 @@ class RallyLeaderEntity(EntityBase):
             loiter_speed_max_mps=loiter_max,
         ))
         self._tra_plan.init(cfg)
-        self._pos_track.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
+        self._pos_track.init(cfg)
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
         # 绑定端口
@@ -92,10 +89,18 @@ class RallyLeaderEntity(EntityBase):
             clock=self.cxt.clock,
             rallyPlan=self.cxt.rallyPlan,
         )
-        self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd, status=self.cxt.posCalcStatus)
+        self._pos_calc_y = PosCalcOutputS(
+            selfCmd=self.cxt.selfCmd,
+            status=self.cxt.posCalcStatus,
+            posTrackCommand=self.cxt.posTrackCommand,
+        )
         self._pos_calc = PosCalcManager()
         self._pos_calc.init(cfg)
-        self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
+        self._pos_track_u = PosTrackInputS(
+            command=self.cxt.posTrackCommand,
+            selfCmd=self.cxt.selfCmd,
+            selfState=self.cxt.selfState,
+        )
         self._pos_track_diag = PosTrackDiagS()
         self._pos_track_y = PosTrackOutputS(
             accCmd=self.cxt.selfAccCmd,
@@ -149,8 +154,7 @@ class RallyLeaderEntity(EntityBase):
                 self._rally_completed = False
                 self.cxt.followerStates.clear()
             self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
-            copy_motion(self.cxt.selfCmd, self._effective_cmd)
-            zero_acceleration(self.cxt.selfAccCmd)
+            self._pos_track.step(self._pos_track_u, self._pos_track_y)
             self._outbound.step(self._outbound_u, self._outbound_y)
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return

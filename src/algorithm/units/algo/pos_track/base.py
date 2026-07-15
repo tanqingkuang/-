@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import AccInEarthS, MotionProfS, PosTrackDiagS
+from src.algorithm.context.leaf_types import (
+    AccInEarthS,
+    MotionProfS,
+    PosTrackCommandS,
+    PosTrackDiagS,
+    PosTrackStrategyE,
+)
 
 
 @dataclass
@@ -18,6 +24,7 @@ class PosTrackInitS:
 class PosTrackInputS:
     """位置跟踪输入端口。注意：selfCmd 和 selfState 必须同时绑定。"""
 
+    command: PosTrackCommandS | None = None
     selfCmd: MotionProfS | None = None
     selfState: MotionProfS | None = None
 

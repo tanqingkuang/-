@@ -10,14 +10,11 @@ from src.algorithm.context.leaf_types import (
     RallyPhaseE,
     copy_motion,
     copy_pos_track_diag,
-    zero_acceleration,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
-from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
-from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
+from src.algorithm.units.algo.pos_track import PosTrackInputS, PosTrackManager, PosTrackOutputS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
@@ -46,17 +43,13 @@ class RallyFollowerEntity(EntityBase):
         # 单元实例
         self._inbound = RallyLeaderFollower()
         self._tra_plan = TraPlanManager()
-        self._pos_track_joining = PidCompose()
-        self._pos_track_formation = PidCompose()
-        self._pos_track = self._pos_track_joining
+        self._pos_track = PosTrackManager()
         self._outbound = FollowerBroadcast()
 
         # 单元初始化
         self._inbound.init(None)
         self._tra_plan.init(cfg)
-        # JOINING 的前向通道只跟踪时间协调速度；形成队形后恢复僚机前向位置闭环。
-        self._pos_track_joining.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
-        self._pos_track_formation.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
+        self._pos_track.init(cfg)
         self._outbound.init(FollowerBroadcastInitS(
             selfId=cfg.selfInit.id,
             netWork=cfg.commInit.netWork,
@@ -80,10 +73,18 @@ class RallyFollowerEntity(EntityBase):
             clock=self.cxt.clock,
             rallyPlan=self.cxt.rallyPlan,
         )
-        self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd, status=self.cxt.posCalcStatus)
+        self._pos_calc_y = PosCalcOutputS(
+            selfCmd=self.cxt.selfCmd,
+            status=self.cxt.posCalcStatus,
+            posTrackCommand=self.cxt.posTrackCommand,
+        )
         self._pos_calc = PosCalcManager()
         self._pos_calc.init(cfg)
-        self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
+        self._pos_track_u = PosTrackInputS(
+            command=self.cxt.posTrackCommand,
+            selfCmd=self.cxt.selfCmd,
+            selfState=self.cxt.selfState,
+        )
         self._pos_track_diag = PosTrackDiagS()
         self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
         self._outbound_u = FollowerBroadcastInputS(
@@ -117,16 +118,11 @@ class RallyFollowerEntity(EntityBase):
         self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)
 
         stage = self.cxt.cmd.stage
-        joining_active = stage == FormStageE.STANDBY or (
-            stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.JOINING
-        )
-        # 两个产品仅在 init 构造一次；运行期按任务指令切换引用，不重建控制器状态。
-        self._pos_track = self._pos_track_joining if joining_active else self._pos_track_formation
 
         if stage == FormStageE.NONE:
             # NONE 是停控空策略，保留当前位置零速输出，和 STANDBY 本地盘旋分开处理。
             self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
-            zero_acceleration(self.cxt.selfAccCmd)
+            self._pos_track.step(self._pos_track_u, self._pos_track_y)
             self._update_outbound()
             self._outbound.step(self._outbound_u, self._outbound_y)
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
@@ -149,9 +145,7 @@ class RallyFollowerEntity(EntityBase):
         self._inbound.reset()
         self._tra_plan.reset()
         self._pos_calc.reset()
-        self._pos_track_joining.reset()
-        self._pos_track_formation.reset()
-        self._pos_track = self._pos_track_joining
+        self._pos_track.reset()
         self._outbound.reset()
         copy_pos_track_diag(PosTrackDiagS(), self._pos_track_diag)
         self._inbox.clear()

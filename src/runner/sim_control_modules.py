@@ -36,6 +36,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     route_heading_rad,
     validate_capture_geometry,
 )
+from src.algorithm.units.algo.pos_track import PosTrackStrategyE
 from src.algorithm.units.process.tra_plan import TraPlanStrategyE
 from src.common.envelope import MessageEnvelope
 from src.data.config_loader import resolve_config_references
@@ -75,6 +76,14 @@ _TRA_PLAN_CONFIG_BY_ROLE = {
         (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE),
     ),
     "rally_follower": (TraPlanStrategyE.NOOP, (TraPlanStrategyE.NOOP,)),
+}
+_POS_TRACK_CONFIG_BY_ROLE = {
+    "rally_leader": (PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED),
+    "rally_follower": (
+        PosTrackStrategyE.NOOP,
+        PosTrackStrategyE.PID_SPEED,
+        PosTrackStrategyE.PID_POSITION,
+    ),
 }
 
 class _ConfigLoader:
@@ -215,6 +224,7 @@ class _NodeAlgorithm:
             (PosCalcStrategyE.NOOP, ()),
         )
         tra_plan_default, tra_plan_strategies = _TRA_PLAN_CONFIG_BY_ROLE.get(role, (None, ()))
+        pos_track_strategies = _POS_TRACK_CONFIG_BY_ROLE.get(role, ())
         # 按角色选择编队实体。
         # leader/rally_leader/rally_follower/wingman 对应不同算法实现，但对外 step 接口一致。
         if role == "leader":
@@ -240,6 +250,7 @@ class _NodeAlgorithm:
                 pos_calc_routes=pos_calc_routes,
                 tra_plan_default=tra_plan_default,
                 tra_plan_strategies=tra_plan_strategies,
+                pos_track_strategies=pos_track_strategies,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。
@@ -378,8 +389,7 @@ class _NodeAlgorithm:
             except ValueError:
                 return f"STEP{step}"
             if step == RallyPhaseE.JOINING:
-                rally_join = getattr(self._entity, "_rally_join", None)
-                join_state = getattr(rally_join, "state", "") if rally_join is not None else ""
+                join_state = cxt.posCalcStatus.rally_state
                 if join_state == RALLY_STATE_LOITERING:
                     return "RALLY_LOITER"
                 if join_state == RALLY_STATE_EXITED:

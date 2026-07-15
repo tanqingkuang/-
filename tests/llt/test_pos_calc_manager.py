@@ -13,6 +13,8 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     MotionProfS,
     PosInEarthS,
+    PosTrackCommandE,
+    PosTrackCommandS,
     RallyPhaseE,
     RallyPlanS,
     VdInEarthS,
@@ -60,7 +62,11 @@ def _ports() -> tuple[PosCalcInputS, PosCalcOutputS]:
     )
     return (
         PosCalcInputS(selfState=state, cmd=cmd, wayLine=line),
-        PosCalcOutputS(selfCmd=MotionProfS(), status=PosCalcStatusS()),
+        PosCalcOutputS(
+            selfCmd=MotionProfS(),
+            status=PosCalcStatusS(),
+            posTrackCommand=PosTrackCommandS(),
+        ),
     )
 
 
@@ -106,6 +112,8 @@ class PosCalcManagerTests(unittest.TestCase):
 
         assert y.status is not None
         self.assertEqual(y.status.active_strategy, PosCalcStrategyE.NOOP)
+        assert y.posTrackCommand is not None
+        self.assertEqual(y.posTrackCommand.mode, PosTrackCommandE.NOOP)
         self.assertEqual(y.selfCmd.pos, u.selfState.pos)
         self.assertEqual(y.selfCmd.v, VdInEarthS())
 
@@ -134,6 +142,8 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.step(u, y)
         assert y.status is not None
         self.assertEqual(y.status.active_strategy, PosCalcStrategyE.RALLY_JOIN)
+        assert y.posTrackCommand is not None
+        self.assertEqual(y.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
 
         u.cmd.stage = FormStageE.RALLY
         u.cmd.step = RallyPhaseE.JOINING
@@ -143,6 +153,7 @@ class PosCalcManagerTests(unittest.TestCase):
         u.cmd.stage = FormStageE.HOLD
         manager.step(u, y)
         self.assertEqual(y.status.active_strategy, PosCalcStrategyE.ROUTE_INTERP)
+        self.assertEqual(y.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
         self.assertIs(manager._registry[PosCalcStrategyE.RALLY_JOIN], rally_product)
         self.assertIs(manager._registry[PosCalcStrategyE.ROUTE_INTERP], route_product)
 

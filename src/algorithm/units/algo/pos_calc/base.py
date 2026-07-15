@@ -10,6 +10,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosCalcStatusS,
     PosCalcStrategyE,
+    PosTrackCommandS,
     RallyPlanS,
     WayLineS,
 )
@@ -42,6 +43,7 @@ class PosCalcOutputS:
 
     selfCmd: MotionProfS | None = None  # 写入黑板的本机目标运动状态
     status: PosCalcStatusS | None = None  # 写入黑板的位置解算运行状态
+    posTrackCommand: PosTrackCommandS | None = None  # 写入下一流程的控制语义命令
 
 
 class PosCalcBase:

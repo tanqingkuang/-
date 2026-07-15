@@ -47,6 +47,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RallyJoinPosInitS,
 )
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
+from src.algorithm.units.algo.pos_track import PosTrackStrategyE
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInputS, FollowerStatusOutputS
@@ -87,6 +88,15 @@ def EntityInitS(*args: object, **kwargs: object) -> _EntityInitS:
             (TraPlanStrategyE.NOOP,)
             if cfg.rally_leader_id
             else (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE)
+        )
+        cfg.pos_track_strategies = (
+            (
+                PosTrackStrategyE.NOOP,
+                PosTrackStrategyE.PID_SPEED,
+                PosTrackStrategyE.PID_POSITION,
+            )
+            if cfg.rally_leader_id
+            else (PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED)
         )
     return cfg
 

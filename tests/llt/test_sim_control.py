@@ -1831,8 +1831,12 @@ class NodeAlgorithmResetTests(unittest.TestCase):
 
     def test_reset_clears_rally_completed_flag(self) -> None:
         """reset() 后 _rally_completed 应归 False，并回到待命而不是直接重进 RALLY。"""
+        from src.algorithm.context.leaf_types import PosInEarthS as P, RallyPhaseE
+        from src.algorithm.units.algo.pos_calc.rally_join_pos import (
+            RALLY_STATE_EXITED,
+            RALLY_STATE_LOITERING,
+        )
         from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
-        from src.algorithm.context.leaf_types import PosInEarthS as P
 
         rally_cfg = RallyTaskInitS(
             expectedFollowerIds=[],
@@ -1865,6 +1869,13 @@ class NodeAlgorithmResetTests(unittest.TestCase):
         self.assertEqual(node.current_rally_phase_str(), "LOCAL_LOITER")
         self.assertTrue(node.start_rally()[0])
         self.assertEqual(node._remote_stage, FormStageE.RALLY)
+
+        node._entity.cxt.cmd.stage = FormStageE.RALLY
+        node._entity.cxt.cmd.step = RallyPhaseE.JOINING
+        node._entity.cxt.posCalcStatus.rally_state = RALLY_STATE_LOITERING
+        self.assertEqual(node.current_rally_phase_str(), "RALLY_LOITER")
+        node._entity.cxt.posCalcStatus.rally_state = RALLY_STATE_EXITED
+        self.assertEqual(node.current_rally_phase_str(), "RALLY_EXITED")
 
 
 class RouteGeodeticEnforcementTests(unittest.TestCase):

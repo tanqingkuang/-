@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from src.algorithm.context.leaf_types import (
     FormStageE,
     PosInEarthS,
+    PosTrackCommandE,
     RallyPhaseE,
     copy_position,
     zero_velocity,
@@ -41,6 +42,12 @@ _LEADER_FF_LEAD_TIME_S = 0.5  # 长机速度前馈时间
 _SLOT_TD_VMAX_LATERAL_DEFAULT = 6.0  # 槽位横侧向默认速度权限
 _SLOT_TD_VMAX_FORWARD_FALLBACK = 5.0  # 前向权限无法推导时的兜底值
 _SLOT_TD_VMAX_VERTICAL_FALLBACK = 3.0  # 垂向权限无法推导时的兜底值
+_POS_TRACK_COMMAND_BY_STRATEGY = {
+    PosCalcStrategyE.NOOP: PosTrackCommandE.NOOP,
+    PosCalcStrategyE.RALLY_JOIN: PosTrackCommandE.SPEED_TRACK,
+    PosCalcStrategyE.ROUTE_INTERP: PosTrackCommandE.SPEED_TRACK,
+    PosCalcStrategyE.SLOT_GEOMETRY: PosTrackCommandE.POSITION_TRACK,
+}
 
 
 class _NoopPosCalc(PosCalcBase):
@@ -109,6 +116,7 @@ class PosCalcManager:
                 rally_join.reset()
         # 所有产品共享同一套端口，切换产品不改变黑板对象引用。
         self._registry[strategy_type].step(u, y)
+        self._write_pos_track_command(strategy_type, y)
         self._active_strategy = strategy_type
         self._write_status(y)
 
@@ -142,6 +150,13 @@ class PosCalcManager:
         status.remaining_loops = rally_join.remaining_loops
         status.reached_slot_once = rally_join.reached_slot_once
         status.join_exited = rally_join.state == RALLY_STATE_EXITED
+
+    @staticmethod
+    def _write_pos_track_command(strategy_type: PosCalcStrategyE, y: PosCalcOutputS) -> None:
+        """发布与本拍位置解算产品对应的控制命令。注意：不泄漏具体控制器类型。"""
+        if y.posTrackCommand is None:
+            return
+        y.posTrackCommand.mode = _POS_TRACK_COMMAND_BY_STRATEGY[strategy_type]
 
     def _select_strategy(self, stage: FormStageE, step: int) -> PosCalcStrategyE:
         """由任务指令选择策略枚举。注意：集结子状态路由不向 Entity 配置层暴露。"""

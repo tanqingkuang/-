@@ -11,6 +11,7 @@ from src.algorithm.context.leaf_types import (
     FormSnapshotS,
     MotionProfS,
     PosCalcStatusS,
+    PosTrackCommandS,
     RallyPlanS,
     WayLineS,
     copy_motion,
@@ -32,6 +33,7 @@ class FormContextS:
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
     posCalcStatus: PosCalcStatusS = field(default_factory=PosCalcStatusS)  # 位置解算状态(PosCalc写/Task与出站读)
+    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)  # 位置解算写、位置跟踪读
     clock: AlgorithmClockS = field(default_factory=AlgorithmClockS)  # 当前算法时钟(实体边界写/各流程读)
     followerStates: list[FollowerStateS] = field(default_factory=list)  # 僚机集结状态(FollowerStatus写/Rally读)
     rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 固定公共到达时刻与节点圈数映射
@@ -85,6 +87,7 @@ def reset_context(dst: FormContextS) -> None:
     dst.posCalcStatus.remaining_loops = fresh.posCalcStatus.remaining_loops
     dst.posCalcStatus.reached_slot_once = fresh.posCalcStatus.reached_slot_once
     dst.posCalcStatus.join_exited = fresh.posCalcStatus.join_exited
+    dst.posTrackCommand.mode = fresh.posTrackCommand.mode
     dst.clock.now_s = fresh.clock.now_s
     # 集结扩展字段复位
     dst.followerStates.clear()

@@ -42,6 +42,29 @@ class PosCalcStrategyE(IntEnum):
     RALLY_JOIN = 3  # 集结：待命、转场、盘旋和切出
 
 
+class PosTrackCommandE(IntEnum):
+    """位置跟踪命令枚举。注意：由 PosCalc 发布，与控制产品策略固定一一对应。"""
+
+    NOOP = 0  # 输出零加速度
+    SPEED_TRACK = 1  # 前向只使用速度闭环
+    POSITION_TRACK = 2  # 前向使用位置和速度串级闭环
+
+
+class PosTrackStrategyE(IntEnum):
+    """位置跟踪产品策略枚举。注意：只表达具体控制产品，不表达任务阶段。"""
+
+    NOOP = 0  # 空控制产品
+    PID_SPEED = 1  # 前向速度 PID 组合产品
+    PID_POSITION = 2  # 前向位置和速度 PID 组合产品
+
+
+@dataclass
+class PosTrackCommandS:
+    """位置跟踪命令载体。注意：PosCalc 和 PosTrack 端口绑定同一可变对象。"""
+
+    mode: PosTrackCommandE = PosTrackCommandE.NOOP  # 本拍期望执行的控制语义
+
+
 @dataclass
 class PosCalcStatusS:
     """位置解算运行状态。注意：位置解算原地写入，其他流程读取上一拍反馈。"""
