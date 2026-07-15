@@ -28,13 +28,26 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from src.algorithm.context.leaf_types import FormStageE, PosInEarthS
+from src.algorithm.context.leaf_types import (
+    FormCommInitS,
+    FormPosS,
+    FormStageE,
+    PosInEarthS,
+    WayPointInputS,
+)
 from src.algorithm.units.algo.arc_path import common_tangent
-from src.algorithm.units.algo.formation_math import clamp
+from src.algorithm.units.algo.formation_math import clamp, horizontal_track_vector_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
 
+if TYPE_CHECKING:
+    from src.algorithm.entity.types import VelCmdLimitS
+
 _TWO_PI = 2.0 * math.pi
+_MIN_FIRST_SEGMENT_HORIZ_M = 1e-6
+_DEFAULT_LOITER_SPEED_MIN_MPS = 14.0
+_DEFAULT_LOITER_SPEED_MAX_MPS = 25.0
 
 RALLY_STATE_FLYING = "FLYING"
 RALLY_STATE_LOITERING = "LOITERING"
@@ -56,6 +69,55 @@ _MIN_ARC_CAPTURE_STEP_MARGIN = 3.0
 _LOCAL_TANGENT_CAPTURE_ANGLE_RAD = math.radians(10.0)
 _TRANSIT_ARC_TO_TANGENT = "ARC_TO_TANGENT"
 _TRANSIT_LINE_TO_RALLY_ENTRY = "LINE_TO_RALLY_ENTRY"
+
+
+def loiter_speed_bounds(vel_cmd_limit: VelCmdLimitS) -> tuple[float, float]:
+    """从速度权限推导盘旋速度上下限。注意：只配置单侧造成反序时明确拒绝。"""
+    fwd_min = vel_cmd_limit.forwardMin
+    fwd_max = vel_cmd_limit.forwardMax
+    loiter_min = fwd_min if math.isfinite(fwd_min) and fwd_min > 0 else _DEFAULT_LOITER_SPEED_MIN_MPS
+    loiter_max = fwd_max if math.isfinite(fwd_max) and fwd_max > 0 else _DEFAULT_LOITER_SPEED_MAX_MPS
+    if loiter_max <= loiter_min:
+        raise ValueError(
+            f"loiter_speed_bounds: 推导出的盘旋速度上下限非法（min={loiter_min}, max={loiter_max}）："
+            "velCmdLimit.forwardMin/forwardMax 只显式配置一侧、另一侧退回默认值（14/25 m/s）时，"
+            "两者可能反序；请同时显式配置一对自洽的 forwardMin/forwardMax，或都不配置以使用默认值"
+        )
+    return loiter_min, loiter_max
+
+
+def route_heading_rad(route: list[WayPointInputS]) -> float:
+    """由航线第一航段计算集结航向。注意：水平退化航段不能定义航向。"""
+    a = route[0].pos
+    a1 = route[1].pos
+    d_e = a1.east - a.east
+    d_n = a1.north - a.north
+    if math.hypot(d_e, d_n) < _MIN_FIRST_SEGMENT_HORIZ_M:
+        raise ValueError(
+            "route 第一航段水平长度退化为零（A/A1 水平坐标重合，仅高度不同也算）："
+            "无法据此推导集结航向，请检查 route 前两个航点"
+        )
+    return math.atan2(d_n, d_e)
+
+
+def rally_loose_target(route_start: PosInEarthS, heading_rad: float, scale: float, slot: FormPosS) -> PosInEarthS:
+    """计算本机松散集结点。注意：高度差不随 looseScale 放大。"""
+    east_off, north_off = horizontal_track_vector_to_enu(
+        (slot.x, slot.z),
+        (math.cos(heading_rad), math.sin(heading_rad)),
+    )
+    return PosInEarthS(
+        east=route_start.east + scale * east_off,
+        north=route_start.north + scale * north_off,
+        h=route_start.h + slot.y,
+    )
+
+
+def resolve_formation_slot(comm_init: FormCommInitS, target_pattern: int, node_id: str) -> FormPosS | None:
+    """按队形索引和节点标识查找槽位。注意：索引越界或缺项时返回 None。"""
+    if not 0 <= target_pattern < len(comm_init.formPos):
+        return None
+    return next((slot for slot in comm_init.formPos[target_pattern] if slot.id == node_id), None)
 
 
 def validate_capture_geometry(
@@ -120,6 +182,7 @@ def validate_capture_geometry(
 class RallyJoinPosInitS(PosCalcInitS):
     """RallyJoinPos 初始化参数。"""
 
+    self_id: str = ""  # 本机节点 ID，用于从公共计划圈数映射读取本机分配
     loose_slot: PosInEarthS = field(default_factory=PosInEarthS)  # 本机固定松散目标点 M_i（ENU 全局坐标），同时是盘旋圆上的切出点
     approach_speed_mps: float = 20.0  # 飞向切入点时的速度
     slow_radius_m: float = 0.0  # 近场降速半径；>0 时在此范围内线性减速
@@ -153,6 +216,7 @@ class RallyJoinPos(PosCalcBase):
         )
 
         self._slot = cfg.loose_slot
+        self._self_id = cfg.self_id
         self._approach_speed = cfg.approach_speed_mps
         self._slow_radius_m = cfg.slow_radius_m
         self._arrival_radius_m = cfg.arrival_radius_m
@@ -238,18 +302,22 @@ class RallyJoinPos(PosCalcBase):
             raise ValueError("RallyJoinPos ports must be bound")
         # 实体会在固定计划生效后每拍重复发送同一圈数；这里只接受首个有效值，
         # 避免飞机已经消耗的圈数被后续重复报文恢复。
-        if u.t_ref_valid and not self._plan_applied:
+        plan = u.rallyPlan
+        clock = u.clock
+        plan_enabled = u.cmd.stage != FormStageE.STANDBY and plan is not None and plan.valid
+        if plan_enabled and not self._plan_applied:
             # 首次锁存必须先完成全部值域校验，任何失败都不能留下半套计划状态。
-            if not math.isfinite(u.t_ref) or not math.isfinite(u.now_s):
+            if clock is None or not math.isfinite(plan.t_ref) or not math.isfinite(clock.now_s):
                 raise ValueError("首次有效计划的 t_ref 和 now_s 必须为有限数")
+            assigned_loops = plan.loop_counts.get(self._self_id, 0)
             # bool 是 int 的子类，必须单独排除；浮点圈数不得通过转换静默截断。
             if (
-                not isinstance(u.assigned_loops, int)
-                or isinstance(u.assigned_loops, bool)
-                or u.assigned_loops < 0
+                not isinstance(assigned_loops, int)
+                or isinstance(assigned_loops, bool)
+                or assigned_loops < 0
             ):
                 raise ValueError("assigned_loops 必须为非 bool 的非负整数")
-            self._assigned_loops = u.assigned_loops
+            self._assigned_loops = assigned_loops
             self._remaining_loops = self._assigned_loops
             self._plan_applied = True
         if u.cmd.stage == FormStageE.STANDBY:
@@ -581,16 +649,21 @@ class RallyJoinPos(PosCalcBase):
 
     def _coordinated_speed(self, u: PosCalcInputS) -> float:
         """按完整剩余航程和固定计划剩余时间计算水平协调速度。"""
-        # 该函数会在计划生效后的每个 JOINING 子阶段调用，不能只依赖首次计划校验。
-        if not math.isfinite(u.t_ref) or not math.isfinite(u.now_s):
-            raise ValueError("协调调速的 t_ref 和 now_s 必须为有限数")
         if not self._plan_applied:
             return self._approach_speed
+        # 该函数会在计划生效后的每个 JOINING 子阶段调用，不能只依赖首次计划校验。
+        if (
+            u.rallyPlan is None
+            or u.clock is None
+            or not math.isfinite(u.rallyPlan.t_ref)
+            or not math.isfinite(u.clock.now_s)
+        ):
+            raise ValueError("协调调速的 t_ref 和 now_s 必须为有限数")
         # 基础航程沿锁存几何实时递减，整圈部分只由真实经过 M_i 的事件消费；
         # 两者相加后统一除以固定计划的剩余时间，三个子阶段不再各用一套速度口径。
         circumference = _TWO_PI * self._loiter_radius
         remaining_m = self._remaining_base_path_m(u.selfState.pos) + self._remaining_loops * circumference
-        remaining_s = u.t_ref - u.now_s
+        remaining_s = u.rallyPlan.t_ref - u.clock.now_s
         # 计划时刻已经到达或越过时直接采用上限，避免除零并尽快追赶固定计划。
         # 此分支只处理有限时间的非正差值，NaN/Inf 已在函数入口拒绝。
         if remaining_s <= 0.0:

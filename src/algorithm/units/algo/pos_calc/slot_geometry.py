@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import (
     FormPosS,
+    FormStageE,
     MotionProfS,
+    RallyPhaseE,
     copy_velocity,
 )
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
@@ -47,6 +49,7 @@ class SlotGeometryInitS(PosCalcInitS):
     # velFf 忠实驱动飞机按急减速走、ζ=0.65 回路跟不上反致过冲(比不加更差)；故默认关，仅用位置软化。
     # 后续把 r 按回路带宽调缓、或引入积分后再评估是否开启。见 docs/相对槽位TD。
     slotVelFf: bool = True
+    catchupAltitudeM: float | None = None  # 集结 CATCHUP 阶段分层高度；普通保持场景不配置
 
 
 class SlotGeometry(PosCalcBase):
@@ -64,6 +67,7 @@ class SlotGeometry(PosCalcBase):
         self._td_y = TdHan()
         self._td_z = TdHan()
         self._seeded = False
+        self._catchup_altitude_m: float | None = None
 
     def init(self, cfg: SlotGeometryInitS) -> None:
         """按配置初始化 SlotGeometry。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -72,6 +76,7 @@ class SlotGeometry(PosCalcBase):
         self._form_pos = [list(row) for row in cfg.formPos]
         self._td_enabled = cfg.control_period_s > 0.0
         self._ff_enabled = cfg.slotVelFf
+        self._catchup_altitude_m = cfg.catchupAltitudeM
         if self._td_enabled:
             h = cfg.control_period_s
             self._td_x.init(TdHanInitS(r=cfg.rForward, h=h, vMax=cfg.vMaxForward))
@@ -106,6 +111,13 @@ class SlotGeometry(PosCalcBase):
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + slot_up
+        if (
+            self._catchup_altitude_m is not None
+            and u.cmd.stage == FormStageE.RALLY
+            and u.cmd.step == RallyPhaseE.CATCHUP
+        ):
+            # CATCHUP 尚未形成松散队形，保持初始化时分配的错层高度；后续阶段恢复真实槽位高度。
+            y.selfCmd.pos.h = self._catchup_altitude_m
         copy_velocity(frame.v, y.selfCmd.v)
         # 槽位随长机指令航迹刚性旋转，避免长机实际速度受扰时把僚机坐标系带乱。
         y.selfCmd.v.dVPsi = frame.v.dVPsi
@@ -194,6 +206,7 @@ class SlotGeometry(PosCalcBase):
         self._td_x.seed(seed_fwd, 0.0)
         self._td_y.seed(seed_up, 0.0)
         self._td_z.seed(seed_right, 0.0)
+
 
 def _fur_basis_or_none(state: MotionProfS) -> FurBasis | None:
     """计算可用的三维 FUR 航迹基。注意：水平航迹退化时返回空值并由调用方兜底。"""

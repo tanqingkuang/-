@@ -16,10 +16,10 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     WayPointS,
 )
-from src.algorithm.entity.leader_follower_rally import (
+from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     rally_loose_target,
-    route_heading_rad,
     resolve_formation_slot,
+    route_heading_rad,
 )
 from src.algorithm.entity.types import VelCmdLimitS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS

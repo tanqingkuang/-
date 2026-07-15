@@ -33,6 +33,44 @@ class RallyPhaseE(IntEnum):
     COMPRESS = 3
 
 
+class PosCalcStrategyE(IntEnum):
+    """位置解算策略枚举。注意：只表达算法能力，不表达实体角色或集结子阶段。"""
+
+    NOOP = 0  # 停控：保持当前位置并输出零速度
+    ROUTE_INTERP = 1  # 长机：沿当前任务航段生成目标
+    SLOT_GEOMETRY = 2  # 僚机：按长机状态解算编队槽位
+    RALLY_JOIN = 3  # 集结：待命、转场、盘旋和切出
+
+
+@dataclass
+class PosCalcStatusS:
+    """位置解算运行状态。注意：位置解算原地写入，其他流程读取上一拍反馈。"""
+
+    active_strategy: PosCalcStrategyE | None = None  # 本拍实际执行的策略
+    rally_state: str = ""  # 集结位置解算内部状态；未装配时为空
+    planned_path_length_m: float = -1.0  # 不含额外整圈的锁存基础航程
+    remaining_path_length_m: float = -1.0  # 当前到下一次切出点的基础剩余航程
+    remaining_loops: int = 0  # 固定协调计划尚未消费的整圈数
+    reached_slot_once: bool = False  # 是否真实越过过松散点
+    join_exited: bool = False  # 是否已经从集结圆切出
+
+
+@dataclass
+class AlgorithmClockS:
+    """算法黑板时钟。注意：实体边界每拍原地更新时间，流程端口长期持有引用。"""
+
+    now_s: float = 0.0  # 当前仿真时刻，单位秒
+
+
+@dataclass
+class RallyPlanS:
+    """集结公共计划。注意：长机任务生成，僚机入站接收，位置解算只读。"""
+
+    t_ref: float = 0.0  # 全队公共切出参考时刻，单位秒
+    valid: bool = False  # 航程收齐且圈数分配完成后有效
+    loop_counts: dict[str, int] = field(default_factory=dict)  # 节点 ID 到额外整圈数
+
+
 @dataclass
 class FormSelfInitS:
     """实体自身初始化标识。注意：id 用于在通信拓扑中唯一定位本机。"""

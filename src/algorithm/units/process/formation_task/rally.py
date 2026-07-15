@@ -9,6 +9,7 @@ from fractions import Fraction
 from src.algorithm.context.leaf_types import (
     FollowerStateS,
     FormStageE,
+    PosCalcStatusS,
     RallyPhaseE,
 )
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
@@ -54,8 +55,7 @@ class RallyTaskInputS(FormationTaskInputS):
     # 继承 remote: RemoteCmdS, cmd: FormSnapshotS
     followerStates: list[FollowerStateS] | None = None  # 端口 → Context.followerStates
     now_s: float = 0.0  # 当前仿真时间（秒），由实体从边界输入注入，用于超时判断
-    leader_path_length_m: float = -1.0  # 长机自身 RallyJoinPos.planned_path_length_m
-    leader_join_exited: bool = False  # 长机自身是否已 EXITED（由长机实体每帧注入）
+    posCalcStatus: PosCalcStatusS | None = None  # 端口 → Context.posCalcStatus，读取长机上一拍位置解算反馈
 
 
 @dataclass
@@ -207,7 +207,8 @@ class Rally(FormationTaskBase):
                     self._plan_ready = True
                     self._write_plan(y)
 
-            if self._all_participants_exited(state_map, now_s, u.leader_join_exited):
+            leader_exited = u.posCalcStatus.join_exited if u.posCalcStatus is not None else False
+            if self._all_participants_exited(state_map, now_s, leader_exited):
                 next_step = RallyPhaseE.CATCHUP
             else:
                 next_step = RallyPhaseE.JOINING
@@ -291,7 +292,11 @@ class Rally(FormationTaskBase):
     ) -> dict[str, float] | None:
         """收齐并校验长机与所有期望僚机的基础航程。"""
 
-        leader_length_m = task_input.leader_path_length_m
+        leader_length_m = (
+            task_input.posCalcStatus.planned_path_length_m
+            if task_input.posCalcStatus is not None
+            else -1.0
+        )
         # -1.0 是 RallyJoinPos 尚未完成路径规划的协议哨兵。
         if not math.isfinite(leader_length_m) or leader_length_m < 0.0:
             return None

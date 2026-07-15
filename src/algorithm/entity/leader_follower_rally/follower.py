@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
     FormStageE,
@@ -12,21 +10,12 @@ from src.algorithm.context.leaf_types import (
     RallyPhaseE,
     copy_motion,
     copy_pos_track_diag,
-    copy_position,
     zero_acceleration,
-    zero_velocity,
 )
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.leader import _default_tracker_init, _follower_tracker_init
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
-from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.rally_join_pos import (
-    RALLY_STATE_EXITED,
-    RALLY_STATE_STANDBY,
-    RallyJoinPos,
-    RallyJoinPosInitS,
-)
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
+from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
 from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
@@ -36,13 +25,7 @@ from src.algorithm.units.process.outbound.base import OutboundOutputS
 from src.algorithm.units.process.outbound.follower_broadcast import FollowerBroadcast, FollowerBroadcastInitS, FollowerBroadcastInputS
 from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
 from src.algorithm.units.process.tra_plan.noop import Noop
-from src.algorithm.entity.leader_follower_rally import (
-    fill_output,
-    loiter_speed_bounds,
-    rally_loose_target,
-    route_heading_rad,
-    resolve_formation_slot,
-)
+from src.algorithm.entity.leader_follower_rally import fill_output
 
 
 class RallyFollowerEntity(EntityBase):
@@ -52,22 +35,8 @@ class RallyFollowerEntity(EntityBase):
         """按配置初始化 RallyFollowerEntity。"""
         if len(cfg.route) < 2:
             raise ValueError("RallyFollowerEntity: route 至少需要两个航点")
-        rally_cfg = cfg.rally_cfg
-        if not isinstance(rally_cfg, RallyTaskInitS):
+        if not isinstance(cfg.rally_cfg, RallyTaskInitS):
             raise ValueError("RallyFollowerEntity: rally_cfg must be RallyTaskInitS")
-
-        # 从统一航线第一航段计算集结航向，再按目标队形槽位算本机松散目标点。
-        _A = cfg.route[0].pos
-        _heading = route_heading_rad(cfg.route)
-        _slot = resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)
-        if _slot is None:
-            raise ValueError(
-                f"RallyFollowerEntity: 节点 {cfg.selfInit.id!r} 在目标队形 {rally_cfg.targetPattern!r} "
-                "的槽位表中未找到对应条目（目标队形不在 formPat 中，或 formPos 缺少该队形/该节点）"
-            )
-        _rally_target = rally_loose_target(_A, _heading, rally_cfg.looseScale, _slot)
-        if cfg.rally_layer_altitude_m is not None:
-            _rally_target.h = cfg.rally_layer_altitude_m
 
         self.cxt = FormContextS()
         self._inbox: list = []
@@ -75,42 +44,17 @@ class RallyFollowerEntity(EntityBase):
         self._leader_cmd = MotionProfS()
         self._self_id = cfg.selfInit.id
 
-        loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
-
-        slow_radius_m = max(rally_cfg.arrival_radius_m * 3.0, 60.0)
-
         # 单元实例
         self._inbound = RallyLeaderFollower()
         self._tra_plan = Noop()
-        self._rally_join = RallyJoinPos()
-        self._pos_calc_slot = SlotGeometry()
         self._pos_track_joining = PidCompose()
         self._pos_track_formation = PidCompose()
         self._pos_track = self._pos_track_joining
         self._outbound = FollowerBroadcast()
-        self._rally_layer_altitude_m = cfg.rally_layer_altitude_m
 
         # 单元初始化
         self._inbound.init(None)
         self._tra_plan.init(None)
-        v_up_min = cfg.velCmdLimit.verticalMin if math.isfinite(cfg.velCmdLimit.verticalMin) else -3.0
-        v_up_max = cfg.velCmdLimit.verticalMax if math.isfinite(cfg.velCmdLimit.verticalMax) else 3.0
-        self._rally_join.init(RallyJoinPosInitS(
-            loose_slot=_rally_target,
-            approach_speed_mps=cfg.rally_approach_speed_mps,
-            slow_radius_m=slow_radius_m,
-            arrival_radius_m=rally_cfg.arrival_radius_m,
-            loiter_radius_m=rally_cfg.loiter_radius_m,
-            loiter_speed_min_mps=loiter_min,
-            loiter_speed_max_mps=loiter_max,
-            mission_heading_rad=_heading,
-            mission_speed_mps=cfg.rally_approach_speed_mps,
-            v_up_min_mps=v_up_min,
-            v_up_max_mps=v_up_max,
-            control_period_s=cfg.control_period_s,
-            standby_altitude_m=cfg.rally_layer_altitude_m,
-        ))
-        self._pos_calc_slot.init(SlotGeometryInitS(cfg.selfInit.id, cfg.commInit.formPat, cfg.commInit.formPos))
         # JOINING 的前向通道只跟踪时间协调速度；形成队形后恢复僚机前向位置闭环。
         self._pos_track_joining.init(_default_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
         self._pos_track_formation.init(_follower_tracker_init(cfg.control_period_s, cfg.velCmdLimit))
@@ -134,8 +78,12 @@ class RallyFollowerEntity(EntityBase):
             leaderState=self.cxt.leaderState,
             leaderCmd=self._leader_cmd,
             cmd=self.cxt.cmd,
+            clock=self.cxt.clock,
+            rallyPlan=self.cxt.rallyPlan,
         )
-        self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd)
+        self._pos_calc_y = PosCalcOutputS(selfCmd=self.cxt.selfCmd, status=self.cxt.posCalcStatus)
+        self._pos_calc = PosCalcManager()
+        self._pos_calc.init(cfg)
         self._pos_track_u = PosTrackInputS(selfCmd=self.cxt.selfCmd, selfState=self.cxt.selfState)
         self._pos_track_diag = PosTrackDiagS()
         self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
@@ -150,8 +98,8 @@ class RallyFollowerEntity(EntityBase):
         """推进 RallyFollowerEntity 一个处理周期。"""
         if u.selfState is not None:
             copy_motion(u.selfState, self.cxt.selfState)
+        self.cxt.clock.now_s = u.now_s
         remote_stage = u.remote.stage if u.remote is not None else None
-        previous_stage = self.cxt.cmd.stage
         self._inbox.clear()
         self._inbox.extend(u.inbox)
         standby_requested = remote_stage == FormStageE.STANDBY
@@ -163,7 +111,6 @@ class RallyFollowerEntity(EntityBase):
         self.cxt.rally_loop_counts.update(self._inbound_y.loopCounts)
         has_assignment = self._self_id in self._inbound_y.loopCounts
         self.cxt.rally_t_ref_valid = self._inbound_y.t_ref_valid and has_assignment
-        self._pos_calc_u.assigned_loops = self._inbound_y.loopCounts.get(self._self_id, 0)
         if standby_requested:
             # 本地远控阶段只决定本机 pos_calc 策略，不阻断长机广播解析。
             self.cxt.cmd.stage = FormStageE.STANDBY
@@ -179,35 +126,15 @@ class RallyFollowerEntity(EntityBase):
 
         if stage == FormStageE.NONE:
             # NONE 是停控空策略，保留当前位置零速输出，和 STANDBY 本地盘旋分开处理。
-            if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
-                self._rally_join.reset()
-            copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)
-            zero_velocity(self.cxt.selfCmd.v)
+            self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
             zero_acceleration(self.cxt.selfAccCmd)
             self._update_outbound()
             self._outbound.step(self._outbound_u, self._outbound_y)
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
-        if joining_active:
-            # STANDBY/JOINING 都属于 RallyJoinPos 位置解算策略，只由 standby 输入切换内部状态。
-            # 待命阶段没有可执行计划，显式压成无效；正式生命周期只允许随后单向进入 RALLY。
-            self._pos_calc_u.t_ref = 0.0 if stage == FormStageE.STANDBY else self.cxt.rally_t_ref
-            self._pos_calc_u.t_ref_valid = False if stage == FormStageE.STANDBY else self.cxt.rally_t_ref_valid
-            self._pos_calc_u.now_s = u.now_s
-            self._rally_join.step(self._pos_calc_u, self._pos_calc_y)
-            self._pos_track.step(self._pos_track_u, self._pos_track_y)
-        else:
-            # RALLY step>=1（CATCHUP/LOOSE/COMPRESS）或 HOLD：三维槽位跟随。
-            self._pos_calc_slot.step(self._pos_calc_u, self._pos_calc_y)
-            # CATCHUP 尚未形成松散队形，继续错高；LOOSE 后再回到正常槽位高度。
-            if (
-                stage == FormStageE.RALLY
-                and self.cxt.cmd.step == RallyPhaseE.CATCHUP
-                and self._rally_layer_altitude_m is not None
-            ):
-                self.cxt.selfCmd.pos.h = self._rally_layer_altitude_m
-            self._pos_track.step(self._pos_track_u, self._pos_track_y)
+        self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
+        self._pos_track.step(self._pos_track_u, self._pos_track_y)
         if stage == FormStageE.STANDBY:
             # STANDBY 仍走出站槽位，只把回报语义固定为本地待命。
             self._update_standby_outbound()
@@ -222,8 +149,7 @@ class RallyFollowerEntity(EntityBase):
         copy_motion(MotionProfS(), self._leader_cmd)
         self._inbound.reset()
         self._tra_plan.reset()
-        self._rally_join.reset()
-        self._pos_calc_slot.reset()
+        self._pos_calc.reset()
         self._pos_track_joining.reset()
         self._pos_track_formation.reset()
         self._pos_track = self._pos_track_joining
@@ -238,14 +164,15 @@ class RallyFollowerEntity(EntityBase):
 
     def _update_outbound(self) -> None:
         """将 RallyJoinPos 状态同步到出站端口。"""
-        self._outbound_u.rally_state = self._rally_join.state
-        self._outbound_u.planned_path_length_m = self._rally_join.planned_path_length_m
-        self._outbound_u.reached_slot_once = self._rally_join.reached_slot_once
-        self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
+        status = self.cxt.posCalcStatus
+        self._outbound_u.rally_state = status.rally_state
+        self._outbound_u.planned_path_length_m = status.planned_path_length_m
+        self._outbound_u.reached_slot_once = status.reached_slot_once
+        self._outbound_u.selfArrived = 1 if status.join_exited else 0
 
     def _update_standby_outbound(self) -> None:
         """将本地待命盘旋状态同步到僚机回报端口。"""
-        self._outbound_u.rally_state = RALLY_STATE_STANDBY
+        self._outbound_u.rally_state = self.cxt.posCalcStatus.rally_state
         self._outbound_u.planned_path_length_m = -1.0
         self._outbound_u.reached_slot_once = False
         self._outbound_u.selfArrived = 0

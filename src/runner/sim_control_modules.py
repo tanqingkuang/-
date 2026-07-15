@@ -24,14 +24,16 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.base import EntityBase
 from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
 from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
-from src.algorithm.entity.leader_follower_rally import loiter_speed_bounds, route_heading_rad
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS, VelCmdLimitS
+from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RALLY_STATE_FLYING,
     RALLY_STATE_LOITERING,
+    loiter_speed_bounds,
+    route_heading_rad,
     validate_capture_geometry,
 )
 from src.common.envelope import MessageEnvelope
@@ -62,6 +64,10 @@ from src.runner.sim_control_types import (
 
 _RALLY_RUN_STANDBY = "STANDBY"
 _RALLY_RUN_ACTIVE = "ACTIVE"
+_POS_CALC_CONFIG_BY_ROLE = {
+    "rally_leader": (PosCalcStrategyE.ROUTE_INTERP, (PosCalcStrategyE.RALLY_JOIN,)),
+    "rally_follower": (PosCalcStrategyE.SLOT_GEOMETRY, (PosCalcStrategyE.RALLY_JOIN,)),
+}
 
 class _ConfigLoader:
     """控制器首版使用的轻量 JSON/YAML 加载器。注意：YAML 依赖缺失时只支持 JSON。"""
@@ -196,6 +202,10 @@ class _NodeAlgorithm:
         self._remote_stage = FormStageE.NONE if self._is_rally_role else FormStageE.HOLD
         self._initial_remote_stage = self._remote_stage
         self._rally_completed: bool = False
+        pos_calc_default, pos_calc_routes = _POS_CALC_CONFIG_BY_ROLE.get(
+            role,
+            (PosCalcStrategyE.NOOP, ()),
+        )
         # 按角色选择编队实体。
         # leader/rally_leader/rally_follower/wingman 对应不同算法实现，但对外 step 接口一致。
         if role == "leader":
@@ -217,6 +227,8 @@ class _NodeAlgorithm:
                 rally_leader_id=rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed_mps,
                 rally_layer_altitude_m=rally_layer_altitude_m,
+                pos_calc_default=pos_calc_default,
+                pos_calc_routes=pos_calc_routes,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。
