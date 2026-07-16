@@ -1,4 +1,4 @@
-"""目标位置计算基础接口。注意：集结实体由具体策略维护端口，显式端口仅兼容旧调用。"""
+"""目标位置计算基础接口。注意：具体策略自行维护输入输出快照。"""
 
 from __future__ import annotations
 
@@ -6,14 +6,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from src.algorithm.context.leaf_types import (
-    AlgorithmClockS,
-    FormSnapshotS,
-    MotionProfS,
     PosCalcStatusS,
     PosCalcStrategyE as PosCalcStrategyE,
-    PosTrackCommandS,
-    RallyPlanS,
-    WayLineS,
 )
 
 if TYPE_CHECKING:
@@ -27,29 +21,6 @@ class PosCalcInitS:
     pass
 
 
-@dataclass
-class PosCalcInputS:
-    """旧式统一输入端口。注意：仅供既有显式端口调用兼容，新策略应定义专属输入。"""
-
-    selfState: MotionProfS | None = None  # 本机实测运动状态
-    cmd: FormSnapshotS | None = None  # 任务编排产生的阶段和队形指令
-    wayLine: WayLineS | None = None  # 轨迹规划产生的当前航段
-    nextWayLine: WayLineS | None = None  # 曲率前馈使用的下一航段
-    leaderState: MotionProfS | None = None  # 僚机收到的长机实测状态
-    leaderCmd: MotionProfS | None = None  # 僚机收到的长机目标状态
-    clock: AlgorithmClockS | None = None  # 跨流程共享的仿真时钟引用
-    rallyPlan: RallyPlanS | None = None  # 跨流程共享的集结计划引用
-
-
-@dataclass
-class PosCalcOutputS:
-    """旧式统一输出端口。注意：仅供既有显式端口调用兼容，新策略应定义专属输出。"""
-
-    selfCmd: MotionProfS | None = None  # 写入黑板的本机目标运动状态
-    status: PosCalcStatusS | None = None  # 写入黑板的位置解算运行状态
-    posTrackCommand: PosTrackCommandS | None = None  # 写入下一流程的控制语义命令
-
-
 class PosCalcBase:
     """目标位置计算算法基类。注意：子类只负责生成目标运动剖面，不直接输出加速度。"""
 
@@ -61,12 +32,8 @@ class PosCalcBase:
         """按配置初始化 PosCalcBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError
 
-    def step(
-        self,
-        u: PosCalcInputS | None = None,
-        y: PosCalcOutputS | None = None,
-    ) -> None:
-        """推进一个处理周期。注意：无参模式使用策略内部快照，显式端口仅用于兼容。"""
+    def step(self) -> None:
+        """推进一个处理周期。注意：策略从绑定黑板读取并原地提交结果。"""
         raise NotImplementedError
 
     def reset(self) -> None:

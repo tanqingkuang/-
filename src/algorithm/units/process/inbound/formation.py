@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import copy_follower_state, copy_motion, copy_snapshot
 from src.algorithm.units.process.formation_protocol import FOLLOWER_STATUS_TOPIC, LEADER_BROADCAST_TOPIC
-from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
+from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS
 from src.algorithm.units.process.inbound.follower_status import _parse_follower_status
 from src.algorithm.units.process.inbound.rally_leader_follower import (
     _parse_leader_broadcast,
@@ -16,6 +16,7 @@ from src.algorithm.units.process.inbound.rally_leader_follower import (
 
 if TYPE_CHECKING:
     from src.algorithm.entity.types import EntityRuntimeS
+    from src.common.envelope import MessageEnvelope
 
 
 @dataclass
@@ -26,7 +27,14 @@ class FormationInboundInitS(InboundInitS):
 
 
 @dataclass
-class FormationInboundOutputS(InboundOutputS):
+class FormationInboundInputS:
+    """统一入站输入快照。注意：仅用于隔离邮箱边界和协议级测试。"""
+
+    inbox: list[MessageEnvelope] = field(default_factory=list)
+
+
+@dataclass
+class FormationInboundOutputS:
     """统一入站输出端口。注意：context 绑定实体持有的完整黑板。"""
 
     context: FormContextS | None = None  # 所有解析结果的原地写入目标
@@ -37,7 +45,9 @@ class FormationInbound(InboundBase):
 
     def bind(self, runtime: EntityRuntimeS) -> None:
         """绑定实体运行环境。注意：入站流程自行维护协议端口。"""
-        self._bound_input = InboundInputS(inbox=runtime.inbox)
+        # inbox 列表由 Entity 每拍原地刷新，因此这里只绑定一次列表引用。
+        # context 同样保持对象身份稳定，解析器只能原地覆盖内部字段。
+        self._bound_input = FormationInboundInputS(inbox=runtime.inbox)
         self._bound_output = FormationInboundOutputS(context=runtime.context)
 
     def init(self, cfg: FormationInboundInitS) -> None:
@@ -50,7 +60,7 @@ class FormationInbound(InboundBase):
 
     def step(
         self,
-        u: InboundInputS | None = None,
+        u: FormationInboundInputS | None = None,
         y: FormationInboundOutputS | None = None,
     ) -> None:
         """处理本帧邮箱。注意：空邮箱不清空黑板，未知 topic 直接忽略。"""
@@ -66,6 +76,8 @@ class FormationInbound(InboundBase):
             raise ValueError("FormationInbound context port must be bound")
         # 先建立索引，使同一批消息对既有节点执行原地更新。
         # 原地更新保证任务单元持有的 followerStates 列表引用始终有效。
+        # 同一节点一拍出现多条消息时按邮箱顺序处理，最后一条有效消息生效。
+        # 非法消息不得创建空状态，也不得刷新既有状态的超时时间。
         state_lookup = {state.id: state for state in cxt.followerStates}
         for message in u.inbox:
             # topic 是唯一解析路由依据，角色和任务阶段不参与通信解析。
@@ -99,6 +111,8 @@ class FormationInbound(InboundBase):
         except (TypeError, ValueError, OverflowError):
             return
         # 嵌套对象按字段复制，维持其他单元在 init 时绑定的引用。
+        # 状态、指令和协调计划来自同一报文，禁止跨报文拼接半份快照。
+        # 圈数映射先清后写，避免新计划缺少的旧节点继续保留分配。
         copy_motion(parsed.leader_state, cxt.leaderState)
         copy_motion(parsed.leader_cmd, cxt.leaderCmd)
         copy_snapshot(parsed.cmd, cxt.cmd)

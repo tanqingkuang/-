@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import AlgorithmClockS, FollowerStateS, copy_follower_state
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_FLYING
 from src.algorithm.units.process.formation_protocol import FOLLOWER_STATUS_TOPIC
-from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
+from src.algorithm.units.process.inbound.base import InboundInitS
 from src.common.envelope import MessageEnvelope
 
 
@@ -20,15 +20,15 @@ class FollowerStatusInitS(InboundInitS):
 
 
 @dataclass
-class FollowerStatusInputS(InboundInputS):
+class FollowerStatusInputS:
     """长机入站输入端口。注意：时钟绑定到 Context 黑板。"""
 
-    # 继承 inbox: list[MessageEnvelope]
+    inbox: list[MessageEnvelope] = field(default_factory=list)
     clock: AlgorithmClockS | None = None  # 端口 → Context.clock，提供状态更新时间
 
 
 @dataclass
-class FollowerStatusOutputS(InboundOutputS):
+class FollowerStatusOutputS:
     """长机入站输出端口。注意：followerStates 绑到 Context.followerStates。"""
 
     followerStates: list[FollowerStateS] | None = None  # 端口 → Context.followerStates
@@ -92,7 +92,7 @@ def _parse_follower_status(msg: MessageEnvelope, now_s: float) -> FollowerStateS
     return parsed
 
 
-class FollowerStatus(InboundBase):
+class FollowerStatus:
     """长机入站单元：从收件箱筛出僚机回报，原地更新 followerStates 列表。注意：断链帧不更新 lastUpdate_s，超时由 Rally 侧处理。"""
 
     def init(self, cfg: FollowerStatusInitS) -> None:

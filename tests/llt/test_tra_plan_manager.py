@@ -5,25 +5,22 @@ from __future__ import annotations
 import unittest
 
 from src.algorithm.context.leaf_types import (
-    FormSnapshotS,
     FormStageE,
-    MotionProfS,
     PosInEarthS,
     RallyPhaseE,
     WayLineS,
     WayPointInputS,
 )
-from src.algorithm.entity.leader_follower_hold.leader import (
-    waypoint_inputs_to_waylines as legacy_waypoint_inputs_to_waylines,
+from src.algorithm.entity.types import (
+    EntityInitS,
+    EntityManagerInitS,
+    EntityProcessSpecS,
+    EntityRuntimeS,
 )
-from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityProcessSpecS
 from src.algorithm.units.process.tra_plan import (
-    TraPlanInputS,
     TraPlanManager,
-    TraPlanOutputS,
     TraPlanStrategyE,
 )
-from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 
 
 def _route() -> list[WayPointInputS]:
@@ -79,19 +76,6 @@ class TraPlanManagerTests(unittest.TestCase):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
                 TraPlanManager().init(cfg)
 
-    def test_route_conversion_matches_legacy_hold_implementation(self) -> None:
-        """验证新旧架构并存期间两份航点转换实现保持完全等价。"""
-        route = [
-            WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=20.0),
-            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=20.0, r=20.0),
-            WayPointInputS(idx=2, pos=PosInEarthS(100.0, 100.0, 1000.0), vdCmd=20.0),
-        ]
-
-        self.assertEqual(
-            waypoint_inputs_to_waylines(route),
-            legacy_waypoint_inputs_to_waylines(route),
-        )
-
     def test_init_requires_explicit_noop_product(self) -> None:
         """验证长机配置不能依赖 Manager 隐式补充 NOOP。"""
         manager = TraPlanManager()
@@ -107,22 +91,24 @@ class TraPlanManagerTests(unittest.TestCase):
 
     def test_noop_only_configuration_supports_follower(self) -> None:
         """验证僚机显式只配置 NOOP 时可在任意正常阶段执行。"""
+        runtime = EntityRuntimeS()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.wayLine.idx = 9
         manager = TraPlanManager()
+        manager.bind(runtime)
         manager.init(
             _entity_cfg(TraPlanStrategyE.NOOP, (TraPlanStrategyE.NOOP,))
         )
-        way_line = WayLineS(idx=9)
 
-        manager.step(
-            TraPlanInputS(cmd=FormSnapshotS(stage=FormStageE.HOLD), wayLine=way_line),
-            TraPlanOutputS(wayLine=way_line),
-        )
+        manager.step()
 
-        self.assertEqual(way_line.idx, 9)
+        self.assertEqual(runtime.context.wayLine.idx, 9)
 
     def test_leader_routes_by_cmd_and_preserves_cached_route_state(self) -> None:
         """验证待命不推进航段，恢复任务航线后继续使用同一产品状态。"""
+        runtime = EntityRuntimeS()
         manager = TraPlanManager()
+        manager.bind(runtime)
         manager.init(
             _entity_cfg(
                 TraPlanStrategyE.LEADER_ROUTE,
@@ -131,35 +117,35 @@ class TraPlanManagerTests(unittest.TestCase):
             )
         )
         product_ids = {strategy: id(product) for strategy, product in manager._registry.items()}
-        cmd = FormSnapshotS(stage=FormStageE.STANDBY, step=RallyPhaseE.JOINING)
-        self_state = MotionProfS(pos=PosInEarthS(120.0, 0.0, 1000.0))
-        way_line = WayLineS(idx=9)
-        u = TraPlanInputS(cmd=cmd, wayLine=way_line, selfState=self_state)
-        y = TraPlanOutputS(wayLine=way_line)
+        cxt = runtime.context
+        cxt.cmd.stage = FormStageE.STANDBY
+        cxt.cmd.step = RallyPhaseE.JOINING
+        cxt.selfState.pos = PosInEarthS(120.0, 0.0, 1000.0)
+        cxt.wayLine = WayLineS(idx=9)
 
-        manager.step(u, y)
-        self.assertEqual(way_line.idx, 9)
+        manager.step()
+        self.assertEqual(cxt.wayLine.idx, 9)
 
-        cmd.stage = FormStageE.RALLY
-        cmd.step = RallyPhaseE.CATCHUP
-        manager.step(u, y)
-        self.assertEqual(way_line.idx, 1)
+        cxt.cmd.stage = FormStageE.RALLY
+        cxt.cmd.step = RallyPhaseE.CATCHUP
+        manager.step()
+        self.assertEqual(cxt.wayLine.idx, 1)
 
-        cmd.stage = FormStageE.STANDBY
-        manager.step(u, y)
-        cmd.stage = FormStageE.HOLD
-        self_state.pos.east = 10.0
-        manager.step(u, y)
+        cxt.cmd.stage = FormStageE.STANDBY
+        manager.step()
+        cxt.cmd.stage = FormStageE.HOLD
+        cxt.selfState.pos.east = 10.0
+        manager.step()
 
-        self.assertEqual(way_line.idx, 1)
+        self.assertEqual(cxt.wayLine.idx, 1)
         self.assertEqual(
             {strategy: id(product) for strategy, product in manager._registry.items()},
             product_ids,
         )
 
         manager.reset()
-        manager.step(u, y)
-        self.assertEqual(way_line.idx, 0)
+        manager.step()
+        self.assertEqual(cxt.wayLine.idx, 0)
 
 
 if __name__ == "__main__":

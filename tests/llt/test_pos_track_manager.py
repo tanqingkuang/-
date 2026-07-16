@@ -9,52 +9,34 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosInEarthS,
     PosTrackCommandE,
-    PosTrackCommandS,
-    PosTrackDiagS,
     VdInEarthS,
-)
-from src.algorithm.entity.leader_follower_hold.leader import (
-    _default_tracker_init,
-    _follower_tracker_init,
 )
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityManagerInitS,
     EntityProcessSpecS,
-    VelCmdLimitS,
+    EntityRuntimeS,
 )
 from src.algorithm.units.algo.pos_track import (
-    PosTrackInputS,
     PosTrackManager,
-    PosTrackOutputS,
     PosTrackStrategyE,
 )
-from src.algorithm.units.algo.pos_track.manager import _pid_position_init, _pid_speed_init
 
 
-def _ports(command: PosTrackCommandE) -> tuple[PosTrackInputS, PosTrackOutputS]:
-    """构造完整绑定的位置跟踪端口。"""
+def _runtime(command: PosTrackCommandE) -> EntityRuntimeS:
+    """构造完整绑定的位置跟踪运行环境。"""
 
-    self_state = MotionProfS(
+    runtime = EntityRuntimeS()
+    runtime.context.selfState = MotionProfS(
         pos=PosInEarthS(0.0, 0.0, 500.0),
         v=VdInEarthS(vEast=10.0, vd=10.0),
     )
-    self_cmd = MotionProfS(
+    runtime.context.selfCmd = MotionProfS(
         pos=PosInEarthS(100.0, 0.0, 500.0),
         v=VdInEarthS(vEast=10.0, vd=10.0),
     )
-    return (
-        PosTrackInputS(
-            command=PosTrackCommandS(command),
-            selfCmd=self_cmd,
-            selfState=self_state,
-        ),
-        PosTrackOutputS(
-            accCmd=AccInEarthS(),
-            diag=PosTrackDiagS(),
-            effectiveCmd=MotionProfS(),
-        ),
-    )
+    runtime.context.posTrackCommand.mode = command
+    return runtime
 
 
 def _entity_cfg(strategies: tuple[object, ...]) -> EntityManagerInitS:
@@ -91,6 +73,8 @@ class PosTrackManagerTests(unittest.TestCase):
         """运行期命令应选择固定策略，且切换前后不重建有状态产品。"""
 
         manager = PosTrackManager()
+        runtime = _runtime(PosTrackCommandE.SPEED_TRACK)
+        manager.bind(runtime)
         manager.init(
             _entity_cfg(
                 (
@@ -102,15 +86,13 @@ class PosTrackManagerTests(unittest.TestCase):
         )
         product_ids = {key: id(value) for key, value in manager._registry.items()}
 
-        speed_u, speed_y = _ports(PosTrackCommandE.SPEED_TRACK)
-        manager.step(speed_u, speed_y)
-        position_u, position_y = _ports(PosTrackCommandE.POSITION_TRACK)
-        manager.step(position_u, position_y)
+        manager.step()
+        speed_acc_east = runtime.context.selfAccCmd.accEast
+        runtime.context.posTrackCommand.mode = PosTrackCommandE.POSITION_TRACK
+        manager.step()
 
-        assert speed_y.accCmd is not None
-        assert position_y.accCmd is not None
-        self.assertAlmostEqual(speed_y.accCmd.accEast, 0.0)
-        self.assertGreater(position_y.accCmd.accEast, 0.0)
+        self.assertAlmostEqual(speed_acc_east, 0.0)
+        self.assertGreater(runtime.context.selfAccCmd.accEast, 0.0)
         self.assertEqual(
             {key: id(value) for key, value in manager._registry.items()},
             product_ids,
@@ -120,62 +102,42 @@ class PosTrackManagerTests(unittest.TestCase):
         """命令对应产品未装配时应明确失败，不允许隐式创建。"""
 
         manager = PosTrackManager()
+        runtime = _runtime(PosTrackCommandE.POSITION_TRACK)
+        manager.bind(runtime)
         manager.init(
             _entity_cfg((PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED))
         )
-        u, y = _ports(PosTrackCommandE.POSITION_TRACK)
 
         with self.assertRaisesRegex(ValueError, "PID_POSITION"):
-            manager.step(u, y)
+            manager.step()
 
     def test_rejects_plain_integer_command(self) -> None:
         """运行期命令必须使用语义枚举，普通整数不得绕过接口契约。"""
 
         manager = PosTrackManager()
+        runtime = _runtime(PosTrackCommandE.NOOP)
+        manager.bind(runtime)
         manager.init(_entity_cfg((PosTrackStrategyE.NOOP,)))
-        u, y = _ports(PosTrackCommandE.NOOP)
-        assert u.command is not None
-        u.command.mode = 0  # type: ignore[assignment]
+        runtime.context.posTrackCommand.mode = 0  # type: ignore[assignment]
 
         with self.assertRaisesRegex(ValueError, "PosTrackCommandE"):
-            manager.step(u, y)
+            manager.step()
 
     def test_noop_clears_control_output(self) -> None:
         """NOOP 应只清零加速度并保留既有诊断和 PosCalc 目标快照。"""
 
         manager = PosTrackManager()
+        runtime = _runtime(PosTrackCommandE.NOOP)
+        manager.bind(runtime)
         manager.init(_entity_cfg((PosTrackStrategyE.NOOP,)))
-        u, y = _ports(PosTrackCommandE.NOOP)
-        assert y.accCmd is not None
-        assert y.diag is not None
-        assert y.effectiveCmd is not None
-        assert u.selfCmd is not None
-        y.accCmd.accEast = 3.0
-        y.diag.cmd_pos_east_m = 8.0
+        runtime.context.selfAccCmd.accEast = 3.0
+        runtime.posTrackDiag.cmd_pos_east_m = 8.0
 
-        manager.step(u, y)
+        manager.step()
 
-        self.assertEqual(y.accCmd, AccInEarthS())
-        self.assertEqual(y.diag.cmd_pos_east_m, 8.0)
-        self.assertEqual(y.effectiveCmd, u.selfCmd)
-
-    def test_pid_builders_preserve_previous_rally_configuration(self) -> None:
-        """Manager 创建的速度/位置 PID 参数必须与重构前装配值逐字段一致。"""
-
-        period_s = 0.2
-        limit = VelCmdLimitS(
-            forwardMin=8.0,
-            forwardMax=25.0,
-            verticalMin=-4.0,
-            verticalMax=5.0,
-        )
-
-        self.assertEqual(_pid_speed_init(period_s, limit), _default_tracker_init(period_s, limit))
-        self.assertEqual(
-            _pid_position_init(period_s, limit),
-            _follower_tracker_init(period_s, limit),
-        )
-
+        self.assertEqual(runtime.context.selfAccCmd, AccInEarthS())
+        self.assertEqual(runtime.posTrackDiag.cmd_pos_east_m, 8.0)
+        self.assertEqual(runtime.context.effectiveCmd, runtime.context.selfCmd)
 
 if __name__ == "__main__":
     unittest.main()

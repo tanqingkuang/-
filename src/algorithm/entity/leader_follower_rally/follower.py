@@ -39,6 +39,9 @@ class RallyFollowerEntity(EntityBase):
             raise ValueError("RallyFollowerEntity: rally_cfg must be RallyTaskInitS")
 
         # 固定流程类和端口由基类定义；空策略流程仍使用各自业务参数正常初始化。
+        # 同一个实体类同时服务直接 HOLD 和集结后 HOLD，两者只在初始化配置上有差异。
+        # Profile 声明完整算法能力，rally_enabled 决定本次任务启用哪套集结专用参数。
+        # 运行期间流程对象和产品实例均不重新装配。
         self._initialize_process_chain(
             {
                 "inbound": FormationInboundInitS(cfg.selfInit.id),
@@ -53,7 +56,12 @@ class RallyFollowerEntity(EntityBase):
                     selfId=cfg.selfInit.id,
                     netWork=cfg.commInit.netWork,
                     leaderId=cfg.rally_leader_id,
-                    messageType=OutboundMessageE.FOLLOWER_STATUS,
+                    messageType=(
+                        # 普通 HOLD 保持旧协议静默；集结僚机才需要持续回报协调状态。
+                        OutboundMessageE.FOLLOWER_STATUS
+                        if cfg.rally_enabled
+                        else OutboundMessageE.NOOP
+                    ),
                 ),
             },
         )

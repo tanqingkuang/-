@@ -330,7 +330,7 @@ def _same_xy(a: PosInEarthS, b: PosInEarthS) -> bool:
 def _wpi_from_waypoints(
     raw_waypoints: object, route_defaults: dict[str, object], *, insert_arcs: bool = True
 ) -> list[WayPointInputS]:
-    """把航点序列转换为 WayPointInputS 列表。注意：insert_arcs=True 时内部拐点设 r=R，由 leader.init() 插圆弧。"""
+    """把航点序列转换为 WayPointInputS 列表。注意：insert_arcs=True 时由轨迹规划流程插入圆弧。"""
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise ValueError("route.waypoints must contain at least two points")
     speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))

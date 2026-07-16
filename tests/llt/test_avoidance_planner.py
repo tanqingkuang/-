@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.feasibility import ERR_LEG_TOO_SHORT
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import blocked, make_circle, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import (

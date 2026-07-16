@@ -5,7 +5,6 @@ from __future__ import annotations
 import unittest
 
 from src.algorithm.context.leaf_types import (
-    AlgorithmClockS,
     FormCommInitS,
     FormPosS,
     FormSelfInitS,
@@ -14,20 +13,20 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosInEarthS,
     PosTrackCommandE,
-    PosTrackCommandS,
     RallyPhaseE,
-    RallyPlanS,
     VdInEarthS,
     WayLineS,
     WayPointInputS,
     WayPointS,
 )
-from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityProcessSpecS
+from src.algorithm.entity.types import (
+    EntityInitS,
+    EntityManagerInitS,
+    EntityProcessSpecS,
+    EntityRuntimeS,
+)
 from src.algorithm.units.algo.pos_calc import (
-    PosCalcInputS,
     PosCalcManager,
-    PosCalcOutputS,
-    PosCalcStatusS,
     PosCalcStrategyE,
 )
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
@@ -51,23 +50,17 @@ def _route() -> list[WayPointInputS]:
     ]
 
 
-def _ports() -> tuple[PosCalcInputS, PosCalcOutputS]:
-    """构造绑定完整的统一输入输出端口。"""
+def _runtime() -> EntityRuntimeS:
+    """构造绑定完整的实体运行环境。"""
 
-    state = _motion()
-    cmd = FormSnapshotS(stage=FormStageE.HOLD)
-    line = WayLineS(
+    runtime = EntityRuntimeS()
+    runtime.context.selfState = _motion()
+    runtime.context.cmd = FormSnapshotS(stage=FormStageE.HOLD)
+    runtime.context.wayLine = WayLineS(
         start=WayPointS(pos=PosInEarthS(0.0, 0.0, 500.0), vdCmd=20.0),
         end=WayPointS(pos=PosInEarthS(1000.0, 0.0, 500.0), vdCmd=20.0),
     )
-    return (
-        PosCalcInputS(selfState=state, cmd=cmd, wayLine=line),
-        PosCalcOutputS(
-            selfCmd=MotionProfS(),
-            status=PosCalcStatusS(),
-            posTrackCommand=PosTrackCommandS(),
-        ),
-    )
+    return runtime
 
 
 def _entity_cfg(
@@ -84,13 +77,14 @@ def _entity_cfg(
             strategies=strategies,
         ),
     )
+
+
 class PosCalcManagerTests(unittest.TestCase):
     """验证 Manager 的配置校验、缓存路由和统一输出。"""
 
     def test_rejects_duplicate_routes(self) -> None:
         """相同附加能力重复登记时应明确失败。"""
 
-        u, y = _ports()
         manager = PosCalcManager()
 
         with self.assertRaises(ValueError):
@@ -104,7 +98,6 @@ class PosCalcManagerTests(unittest.TestCase):
     def test_rejects_noop_as_entity_default(self) -> None:
         """NOOP 是系统停控策略，不允许配置成实体常规飞行策略。"""
 
-        u, y = _ports()
         manager = PosCalcManager()
 
         with self.assertRaises(ValueError):
@@ -113,29 +106,26 @@ class PosCalcManagerTests(unittest.TestCase):
     def test_noop_writes_current_position_and_zero_velocity(self) -> None:
         """NONE 阶段应选择系统空策略并完整输出停控目标。"""
 
-        u, y = _ports()
-        assert u.cmd is not None
-        assert u.selfState is not None
-        assert y.selfCmd is not None
-        u.cmd.stage = FormStageE.NONE
-        u.selfState.pos = PosInEarthS(12.0, 34.0, 560.0)
+        runtime = _runtime()
+        cxt = runtime.context
+        cxt.cmd.stage = FormStageE.NONE
+        cxt.selfState.pos = PosInEarthS(12.0, 34.0, 560.0)
         manager = PosCalcManager()
+        manager.bind(runtime)
         manager.init(_entity_cfg(PosCalcStrategyE.ROUTE_INTERP))
 
-        manager.step(u, y)
+        manager.step()
 
-        assert y.status is not None
-        self.assertEqual(y.status.active_strategy, PosCalcStrategyE.NOOP)
-        assert y.posTrackCommand is not None
-        self.assertEqual(y.posTrackCommand.mode, PosTrackCommandE.NOOP)
-        self.assertEqual(y.selfCmd.pos, u.selfState.pos)
-        self.assertEqual(y.selfCmd.v, VdInEarthS())
+        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.NOOP)
+        self.assertEqual(cxt.posTrackCommand.mode, PosTrackCommandE.NOOP)
+        self.assertEqual(cxt.selfCmd.pos, cxt.selfState.pos)
+        self.assertEqual(cxt.selfCmd.v, VdInEarthS())
 
     def test_rally_route_switches_cached_products_without_rebuilding(self) -> None:
         """STANDBY/JOINING 应选集结策略，HOLD 应返回同一个默认策略实例。"""
 
-        u, y = _ports()
-        assert u.cmd is not None
+        runtime = _runtime()
+        cxt = runtime.context
         cfg = _entity_cfg(
             PosCalcStrategyE.ROUTE_INTERP,
             (PosCalcStrategyE.RALLY_JOIN,),
@@ -148,37 +138,59 @@ class PosCalcManagerTests(unittest.TestCase):
             rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
         )
         manager = PosCalcManager()
+        manager.bind(runtime)
         manager.init(cfg)
         rally_product = manager._registry[PosCalcStrategyE.RALLY_JOIN]
         route_product = manager._registry[PosCalcStrategyE.ROUTE_INTERP]
 
-        u.cmd.stage = FormStageE.STANDBY
-        manager.step(u, y)
-        assert y.status is not None
-        self.assertEqual(y.status.active_strategy, PosCalcStrategyE.RALLY_JOIN)
-        assert y.posTrackCommand is not None
-        self.assertEqual(y.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
+        cxt.cmd.stage = FormStageE.STANDBY
+        manager.step()
+        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.RALLY_JOIN)
+        self.assertEqual(cxt.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
 
-        u.cmd.stage = FormStageE.RALLY
-        u.cmd.step = RallyPhaseE.JOINING
-        manager.step(u, y)
-        self.assertEqual(y.status.active_strategy, PosCalcStrategyE.RALLY_JOIN)
+        cxt.cmd.stage = FormStageE.RALLY
+        cxt.cmd.step = RallyPhaseE.JOINING
+        manager.step()
+        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.RALLY_JOIN)
 
-        u.cmd.stage = FormStageE.HOLD
-        manager.step(u, y)
-        self.assertEqual(y.status.active_strategy, PosCalcStrategyE.ROUTE_INTERP)
-        self.assertEqual(y.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
+        cxt.cmd.stage = FormStageE.HOLD
+        manager.step()
+        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.ROUTE_INTERP)
+        self.assertEqual(cxt.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
         self.assertIs(manager._registry[PosCalcStrategyE.RALLY_JOIN], rally_product)
         self.assertIs(manager._registry[PosCalcStrategyE.ROUTE_INTERP], route_product)
+
+    def test_direct_hold_keeps_slot_transition_differentiator_enabled(self) -> None:
+        """统一僚机直接进入 HOLD 时应保留原保持场景的槽位 TD。"""
+
+        runtime = _runtime()
+        cfg = _entity_cfg(
+            PosCalcStrategyE.SLOT_GEOMETRY,
+            (PosCalcStrategyE.RALLY_JOIN,),
+            selfInit=FormSelfInitS("A02"),
+            commInit=FormCommInitS(
+                formPat=["wedge"],
+                formPos=[[FormPosS("A02", -50.0, 0.0, 50.0)]],
+            ),
+            route=_route(),
+            rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
+            rally_enabled=False,
+        )
+        manager = PosCalcManager()
+        manager.bind(runtime)
+        manager.init(cfg)
+
+        slot_product = manager._registry[PosCalcStrategyE.SLOT_GEOMETRY]
+        self.assertTrue(slot_product._td_enabled)  # type: ignore[attr-defined]
 
     def test_manager_writes_runtime_status_to_bound_output(self) -> None:
         """Manager 应原地更新绑定状态，供黑板其他单元读取上一拍结果。"""
 
-        u, y = _ports()
-        assert u.cmd is not None
-        assert y.status is not None
-        status = y.status
+        runtime = _runtime()
+        cxt = runtime.context
+        status = cxt.posCalcStatus
         manager = PosCalcManager()
+        manager.bind(runtime)
         manager.init(
             _entity_cfg(
                 PosCalcStrategyE.ROUTE_INTERP,
@@ -192,11 +204,11 @@ class PosCalcManagerTests(unittest.TestCase):
                 rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
             )
         )
-        u.cmd.stage = FormStageE.STANDBY
+        cxt.cmd.stage = FormStageE.STANDBY
 
-        manager.step(u, y)
+        manager.step()
 
-        self.assertIs(y.status, status)
+        self.assertIs(cxt.posCalcStatus, status)
         self.assertEqual(status.active_strategy, PosCalcStrategyE.RALLY_JOIN)
         self.assertNotEqual(status.rally_state, "")
         self.assertGreaterEqual(status.planned_path_length_m, -1.0)
@@ -204,11 +216,14 @@ class PosCalcManagerTests(unittest.TestCase):
     def test_rally_product_reads_dynamic_values_from_blackboard_references(self) -> None:
         """集结产品应从黑板取得时钟、公共时刻和本机圈数，不要求 Entity 搬运标量。"""
 
-        u, y = _ports()
-        assert u.cmd is not None
-        u.clock = AlgorithmClockS(now_s=12.5)
-        u.rallyPlan = RallyPlanS(t_ref=80.0, valid=True, loop_counts={"A01": 2})
+        runtime = _runtime()
+        cxt = runtime.context
+        cxt.clock.now_s = 12.5
+        cxt.rallyPlan.t_ref = 80.0
+        cxt.rallyPlan.valid = True
+        cxt.rallyPlan.loop_counts = {"A01": 2}
         manager = PosCalcManager()
+        manager.bind(runtime)
         manager.init(
             _entity_cfg(
                 PosCalcStrategyE.ROUTE_INTERP,
@@ -223,15 +238,14 @@ class PosCalcManagerTests(unittest.TestCase):
             )
         )
 
-        u.cmd.stage = FormStageE.STANDBY
-        manager.step(u, y)
-        assert y.status is not None
-        self.assertEqual(y.status.remaining_loops, 0)
+        cxt.cmd.stage = FormStageE.STANDBY
+        manager.step()
+        self.assertEqual(cxt.posCalcStatus.remaining_loops, 0)
 
-        u.cmd.stage = FormStageE.RALLY
-        u.cmd.step = RallyPhaseE.JOINING
-        manager.step(u, y)
-        self.assertEqual(y.status.remaining_loops, 2)
+        cxt.cmd.stage = FormStageE.RALLY
+        cxt.cmd.step = RallyPhaseE.JOINING
+        manager.step()
+        self.assertEqual(cxt.posCalcStatus.remaining_loops, 2)
 
 
 if __name__ == "__main__":

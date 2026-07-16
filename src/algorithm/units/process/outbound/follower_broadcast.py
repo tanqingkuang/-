@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import MotionProfS, dist3d
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.formation_protocol import FOLLOWER_STATUS_TOPIC
-from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
+from src.algorithm.units.process.outbound.base import OutboundInitS
 from src.common.envelope import MessageEnvelope
 
 
@@ -21,10 +21,10 @@ class FollowerBroadcastInitS(OutboundInitS):
 
 
 @dataclass
-class FollowerBroadcastInputS(OutboundInputS):
+class FollowerBroadcastInputS:
     """僚机广播输入端口。"""
 
-    # 继承 cmd: FormSnapshotS, selfState: MotionProfS
+    selfState: MotionProfS | None = None
     selfCmd: MotionProfS | None = None  # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
     selfArrived: int = 0  # 兼容旧协议；新协议使用 rally_state
     rally_state: str = RALLY_STATE_STANDBY  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
@@ -32,7 +32,14 @@ class FollowerBroadcastInputS(OutboundInputS):
     reached_slot_once: bool = False  # 是否已至少一次路过 M_i，作为汇合过程诊断量广播
 
 
-class FollowerBroadcast(OutboundBase):
+@dataclass
+class FollowerBroadcastOutputS:
+    """僚机广播输出快照。注意：每拍覆盖待发消息列表。"""
+
+    outbox: list[MessageEnvelope] = field(default_factory=list)
+
+
+class FollowerBroadcast:
     """僚机广播单元：把本机位置、到目标距离、到达标志打包为 formation.follower_status 消息。注意：每帧覆盖发送，不累积。"""
 
     def __init__(self) -> None:
@@ -47,7 +54,7 @@ class FollowerBroadcast(OutboundBase):
         self._self_id = cfg.selfId
         self._leader_id = cfg.leaderId
 
-    def step(self, u: FollowerBroadcastInputS, y: OutboundOutputS) -> None:
+    def step(self, u: FollowerBroadcastInputS, y: FollowerBroadcastOutputS) -> None:
         """推进 FollowerBroadcast 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.selfState is None or u.selfCmd is None or y.outbox is None:
             raise ValueError("FollowerBroadcast input ports must be bound")

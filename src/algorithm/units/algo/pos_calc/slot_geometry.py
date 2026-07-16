@@ -23,8 +23,6 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
     PosCalcInitS,
-    PosCalcInputS,
-    PosCalcOutputS,
 )
 from src.algorithm.units.algo.td_han import TdHan, TdHanInitS
 from src.common.coordinates import (
@@ -127,8 +125,8 @@ class SlotGeometry(PosCalcBase):
 
     def step(
         self,
-        u: PosCalcInputS | SlotGeometryInputS | None = None,
-        y: PosCalcOutputS | SlotGeometryOutputS | None = None,
+        u: SlotGeometryInputS | None = None,
+        y: SlotGeometryOutputS | None = None,
     ) -> None:
         """推进槽位解算。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
         if u is None and y is None:
@@ -146,8 +144,8 @@ class SlotGeometry(PosCalcBase):
 
     def _calculate(
         self,
-        u: PosCalcInputS | SlotGeometryInputS,
-        y: PosCalcOutputS | SlotGeometryOutputS,
+        u: SlotGeometryInputS,
+        y: SlotGeometryOutputS,
     ) -> None:
         """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
         if u.leaderState is None or u.cmd is None or y.selfCmd is None:
@@ -240,7 +238,7 @@ class SlotGeometry(PosCalcBase):
         copy_motion(self._cxt.leaderCmd, self._u.leaderCmd)
         copy_snapshot(self._cxt.cmd, self._u.cmd)
 
-    def _write_common_output(self, y: PosCalcOutputS | SlotGeometryOutputS) -> None:
+    def _write_common_output(self, y: SlotGeometryOutputS) -> None:
         """完整填写本策略公共输出。"""
         if y.status is not None:
             # 槽位策略只拥有活动策略字段，不清除已完成的集结诊断。
@@ -270,7 +268,7 @@ class SlotGeometry(PosCalcBase):
         self,
         slot: FormPosS,
         basis: FurBasis | None,
-        u: PosCalcInputS | SlotGeometryInputS,
+        u: SlotGeometryInputS,
     ) -> tuple[float, float, float, float, float, float]:
         """对相对槽位 (x前向, y上, z右) 三路做 Han TD 软化，返回 (sx, sy, sz, vfx, vfy, vfz)。
 
@@ -294,7 +292,7 @@ class SlotGeometry(PosCalcBase):
     def _seed_from_current(
         self,
         basis: FurBasis,
-        u: PosCalcInputS | SlotGeometryInputS,
+        u: SlotGeometryInputS,
     ) -> None:
         """把本机当前位置换算成长机三维 FUR 相对偏移，作为三路 TD 初值，避免起步大阶跃。"""
         assert u.selfState is not None and u.leaderState is not None

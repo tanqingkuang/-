@@ -8,8 +8,6 @@ from src.algorithm.context.leaf_types import FormStageE, RallyPhaseE, WayLineS
 from src.algorithm.units.process.tra_plan.base import (
     TraPlanBase,
     TraPlanInitS,
-    TraPlanInputS,
-    TraPlanOutputS,
     TraPlanStrategyE,
 )
 from src.algorithm.units.process.tra_plan.leader_route import (
@@ -32,22 +30,16 @@ class TraPlanManager:
         self._registry: dict[TraPlanStrategyE, TraPlanBase] = {}
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体运行环境。注意：轨迹规划流程自行维护航段端口。"""
-        cxt = runtime.context
-        self._bound_input = TraPlanInputS(
-            cmd=cxt.cmd,
-            wayLine=cxt.wayLine,
-            selfState=cxt.selfState,
-        )
-        self._bound_output = TraPlanOutputS(
-            wayLine=cxt.wayLine,
-            nextWayLine=cxt.nextWayLine,
-        )
+        """绑定实体运行环境。注意：Manager 只读取路由指令并转交运行环境。"""
+        self._runtime = runtime
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证创建全部已声明产品。注意：不得隐式补充策略。"""
         # 配置表是实例能力的唯一来源，Manager 不根据角色补默认产品。
         # 枚举必须严格校验，普通整数会掩盖配置生成阶段的类型错误。
+        # 规划产品可能持有航段索引和上一拍投影结果，必须在初始化时一次性创建。
+        # default_strategy 表示常规任务航线能力，strategies 表示本实例全部可用产品。
+        # NOOP 与真实规划器使用同一无参流程接口，主链不需要为其分支。
         process_spec = cfg.process
         default_strategy = _require_strategy(process_spec.default_strategy, "tra_plan.default_strategy")
         strategies = tuple(
@@ -71,27 +63,21 @@ class TraPlanManager:
         self._registry = {
             strategy: self._create_strategy(strategy, cfg.entity) for strategy in strategies
         }
+        for strategy in self._registry.values():
+            strategy.bind(self._runtime)
 
-    def step(
-        self,
-        u: TraPlanInputS | None = None,
-        y: TraPlanOutputS | None = None,
-    ) -> None:
+    def step(self) -> None:
         """按任务指令选择缓存产品并推进一拍。注意：本方法不创建产品。"""
-        if u is None and y is None:
-            u = self._bound_input
-            y = self._bound_output
-        elif u is None or y is None:
-            raise ValueError("TraPlanManager 输入输出端口必须同时提供")
         # cmd 是任务单元发布的统一路由指令，Entity 不参与产品选择。
         # 查表失败说明配置能力与运行期指令不一致，应立即暴露而非降级。
-        if u.cmd is None:
-            raise ValueError("TraPlanManager cmd port must be bound")
-        strategy_type = self._select_strategy(u.cmd.stage, u.cmd.step)
+        # Manager 只选择缓存对象，具体规划器自行读取本机状态和航线黑板。
+        # 切换引用不会清除 LeaderRoute 已积累的航段推进状态。
+        cmd = self._runtime.context.cmd
+        strategy_type = self._select_strategy(cmd.stage, cmd.step)
         strategy = self._registry.get(strategy_type)
         if strategy is None:
             raise ValueError(f"轨迹规划策略未配置: {strategy_type.name}")
-        strategy.step(u, y)
+        strategy.step()
 
     def reset(self) -> None:
         """复位全部缓存产品。注意：保留配置和产品实例。"""

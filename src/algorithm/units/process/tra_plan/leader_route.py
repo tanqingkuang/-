@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from src.algorithm.context.leaf_types import (
     MotionProfS,
@@ -11,10 +12,15 @@ from src.algorithm.context.leaf_types import (
     WayLineS,
     WayPointInputS,
     WayPointS,
+    copy_motion,
     copy_wayline,
 )
 from src.algorithm.units.algo import arc_path
-from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
+from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS
+
+if TYPE_CHECKING:
+    from src.algorithm.context.context import FormContextS
+    from src.algorithm.entity.types import EntityRuntimeS
 
 _GRAVITY_MPS2 = 9.80665  # 重力加速度，用于由速度和滚转角估算转弯半径
 _TURN_BANK_DEG = 20.0  # 标称协调转弯滚转角，越大则转弯半径越小
@@ -28,6 +34,21 @@ class LeaderRouteInitS(TraPlanInitS):
     route: list[WayLineS] | None = None  # 预置航线（已完成圆弧几何计算的航段序列）
 
 
+@dataclass
+class LeaderRouteInputS:
+    """长机航线策略输入快照。注意：只包含航段推进所需的本机状态。"""
+
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+
+
+@dataclass
+class LeaderRouteOutputS:
+    """长机航线策略输出快照。注意：计算成功后统一提交黑板。"""
+
+    wayLine: WayLineS = field(default_factory=WayLineS)
+    nextWayLine: WayLineS = field(default_factory=WayLineS)
+
+
 class LeaderRoute(TraPlanBase):
     """长机航路规划器：维护当前航段索引，按本机位置在多航段间顺序推进。注意：切换不可回退，只单向递增到下一段。"""
 
@@ -35,6 +56,13 @@ class LeaderRoute(TraPlanBase):
         """初始化 LeaderRoute 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._route = _default_route()
         self._current_index = 0  # 当前正在跟踪的航段下标
+        self._cxt: FormContextS | None = None
+        self._u = LeaderRouteInputS()
+        self._y = LeaderRouteOutputS()
+
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体黑板。注意：运行期通过内部快照隔离计算和提交。"""
+        self._cxt = runtime.context
 
     def init(self, cfg: TraPlanInitS | None) -> None:
         """按配置初始化 LeaderRoute。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -45,16 +73,18 @@ class LeaderRoute(TraPlanBase):
             self._route = _default_route()
         self._current_index = 0
 
-    def step(self, u: TraPlanInputS, y: TraPlanOutputS) -> None:
-        """推进 LeaderRoute 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
-        if y.wayLine is None:
-            raise ValueError("LeaderRoute output port must be bound")
-        index = self._select_current_index(u.selfState)  # 据本机位置选定当前航段下标
+    def step(self) -> None:
+        """推进航段选择并提交黑板。注意：异常时不写入半成品航段。"""
+        if self._cxt is None:
+            raise ValueError("LeaderRoute 尚未绑定黑板")
+        copy_motion(self._cxt.selfState, self._u.selfState)
+        index = self._select_current_index(self._u.selfState)  # 据本机位置选定当前航段下标
         lines = self._route
-        copy_wayline(lines[index], y.wayLine)  # 拷出，避免下游改写内部航线数据
+        copy_wayline(lines[index], self._y.wayLine)  # 拷出，避免下游改写内部航线数据
         # 同时给出下一航段(末段时退化为当前段)，供曲率前馈跨段前瞻采样。
-        if y.nextWayLine is not None:
-            copy_wayline(lines[min(index + 1, len(lines) - 1)], y.nextWayLine)
+        copy_wayline(lines[min(index + 1, len(lines) - 1)], self._y.nextWayLine)
+        copy_wayline(self._y.wayLine, self._cxt.wayLine)
+        copy_wayline(self._y.nextWayLine, self._cxt.nextWayLine)
 
     def get_route(self) -> list[WayLineS]:
         """返回内部航线副本，供外部初始显示使用。注意：只读，不应由外部修改。"""

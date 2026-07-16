@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING
 from src.algorithm.context.leaf_types import (
     AlgorithmClockS,
     FollowerStateS,
+    FormSnapshotS,
     FormStageE,
     PosCalcStatusS,
     RallyPhaseE,
     RallyPlanS,
+    RemoteCmdS,
 )
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
@@ -21,8 +23,6 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
 from src.algorithm.units.process.formation_task.base import (
     FormationTaskBase,
     FormationTaskInitS,
-    FormationTaskInputS,
-    FormationTaskOutputS,
 )
 
 if TYPE_CHECKING:
@@ -56,20 +56,21 @@ class RallyTaskInitS(FormationTaskInitS):
 
 
 @dataclass
-class RallyTaskInputS(FormationTaskInputS):
+class RallyTaskInputS:
     """Rally 任务输入端口。注意：动态状态均绑定到 Context 黑板对象。"""
 
-    # 继承 remote: RemoteCmdS, cmd: FormSnapshotS
+    remote: RemoteCmdS | None = None  # 外部遥控指令
+    cmd: FormSnapshotS | None = None  # 当前编队指令快照
     followerStates: list[FollowerStateS] | None = None  # 端口 → Context.followerStates
     clock: AlgorithmClockS | None = None  # 端口 → Context.clock，用于超时判断和计划起点
     posCalcStatus: PosCalcStatusS | None = None  # 端口 → Context.posCalcStatus，读取长机上一拍位置解算反馈
 
 
 @dataclass
-class RallyTaskOutputS(FormationTaskOutputS):
+class RallyTaskOutputS:
     """Rally 任务输出端口。注意：协调计划原地写入绑定的黑板对象。"""
 
-    # 继承 cmd: FormSnapshotS
+    cmd: FormSnapshotS | None = None  # 输出的编队指令
     rallyCompleted: bool = False  # COMPRESS→HOLD 正常完成时置 True，仅该拍有效
     rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 端口 → Context.rallyPlan
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import InitVar, dataclass, field
 
-from src.algorithm.context.leaf_types import CommDirE, MotionProfS, RallyPlanS
+from src.algorithm.context.leaf_types import CommDirE, FormSnapshotS, MotionProfS, RallyPlanS
 from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC, motion_payload
-from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
+from src.algorithm.units.process.outbound.base import OutboundInitS
 from src.common.envelope import MessageEnvelope
 
 
@@ -14,10 +14,11 @@ _motion_payload = motion_payload  # 兼容既有测试和外部调用，协议�
 
 
 @dataclass
-class RallyLeaderBroadcastInputS(OutboundInputS):
+class RallyLeaderBroadcastInputS:
     """集结长机广播输入端口。"""
 
-    # 继承 cmd: FormSnapshotS, selfState: MotionProfS
+    cmd: FormSnapshotS | None = None
+    selfState: MotionProfS | None = None
     leaderCmd: MotionProfS | None = None  # 长机跟踪指令，供僚机建立槽位坐标系。
     rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 端口 → Context.rallyPlan
     t_ref: InitVar[float | None] = None  # 兼容旧 Hold 调用；Rally 应直接绑定 rallyPlan
@@ -35,7 +36,14 @@ class RallyLeaderBroadcastInputS(OutboundInputS):
             self.rallyPlan.valid = t_ref_valid
 
 
-class RallyLeaderBroadcast(OutboundBase):
+@dataclass
+class RallyLeaderBroadcastOutputS:
+    """长机广播输出快照。注意：每拍覆盖待发消息列表。"""
+
+    outbox: list[MessageEnvelope] = field(default_factory=list)
+
+
+class RallyLeaderBroadcast:
     """长机广播单元：把本机状态、编队指令和协调计划打包成一条多播消息。注意：目标列表由通信拓扑推导，不含自身。"""
 
     def __init__(self) -> None:
@@ -48,7 +56,7 @@ class RallyLeaderBroadcast(OutboundBase):
         self._self_id = cfg.selfId
         self._net_work = list(cfg.netWork)
 
-    def step(self, u: RallyLeaderBroadcastInputS, y: OutboundOutputS) -> None:
+    def step(self, u: RallyLeaderBroadcastInputS, y: RallyLeaderBroadcastOutputS) -> None:
         """推进 RallyLeaderBroadcast 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if u.cmd is None or u.selfState is None:
             raise ValueError("RallyLeaderBroadcast input ports must be bound")

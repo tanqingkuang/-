@@ -13,7 +13,8 @@ from src.algorithm.context.leaf_types import (
     copy_snapshot,
 )
 from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC
-from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
+from src.algorithm.units.process.inbound.base import InboundInitS
+from src.common.envelope import MessageEnvelope
 
 
 
@@ -117,17 +118,25 @@ def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcas
 
 
 @dataclass
-class RallyLeaderFollowerOutputS(InboundOutputS):
+class RallyLeaderFollowerInputS:
+    """长机广播解析输入快照。注意：只消费 formation.leader 主题。"""
+
+    inbox: list[MessageEnvelope] = field(default_factory=list)
+
+
+@dataclass
+class RallyLeaderFollowerOutputS:
     """集结僚机入站输出端口。"""
 
-    # 继承 leaderState: MotionProfS, cmd: FormSnapshotS
+    leaderState: MotionProfS | None = None
+    cmd: FormSnapshotS | None = None
     leaderCmd: MotionProfS | None = None  # 长机跟踪指令；None 时接收端可沿用 leaderState。
     t_ref: float = 0.0  # 长机广播的集结基准时刻（秒）；由实体每帧复制到 cxt.rally_t_ref
     t_ref_valid: bool = False  # 旧格式或非法 t_ref 默认 False，禁止冷启动误切出
     loopCounts: dict[str, int] = field(default_factory=dict)  # 长机固定计划的节点整数圈数映射
 
 
-class RallyLeaderFollower(InboundBase):
+class RallyLeaderFollower:
     """集结僚机入站单元：解析长机广播，同时写入 leaderState/cmd。注意：字段来自同一条消息，保证一致性。"""
 
     def init(self, cfg: InboundInitS) -> None:
@@ -136,7 +145,7 @@ class RallyLeaderFollower(InboundBase):
         # 输出端口由 step 的 y 参数绑定；首次 step 前 reset 明确定义为无输出可清理的 no-op。
         self._latched_output: RallyLeaderFollowerOutputS | None = None
 
-    def step(self, u: InboundInputS, y: RallyLeaderFollowerOutputS) -> None:
+    def step(self, u: RallyLeaderFollowerInputS, y: RallyLeaderFollowerOutputS) -> None:
         """推进 RallyLeaderFollower 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
         if y.leaderState is None or y.cmd is None:
             raise ValueError("RallyLeaderFollower output ports must be bound")

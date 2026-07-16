@@ -45,7 +45,7 @@ from src.algorithm.entity.types import (
     VelCmdLimitS,
 )
 from src.algorithm.units.algo.pos_calc import PosCalcManager
-from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS, PosCalcStrategyE
+from src.algorithm.units.algo.pos_calc.base import PosCalcStrategyE
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
     RALLY_STATE_FLYING,
@@ -54,39 +54,47 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RallyJoinPos,
     RallyJoinPosInitS,
     RallyJoinPosInputS,
+    RallyJoinPosOutputS,
 )
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterpInputS
 from src.algorithm.units.algo.pos_calc.slot_geometry import (
     SlotGeometry,
     SlotGeometryInitS,
     SlotGeometryInputS,
+    SlotGeometryOutputS,
 )
 from src.algorithm.units.algo.pos_track import PosTrackManager
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
-from src.algorithm.units.process.inbound import (
+from src.algorithm.units.process.inbound.formation import (
     FormationInbound,
+    FormationInboundInputS,
     FormationInboundInitS,
     FormationInboundOutputS,
 )
-from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInputS, FollowerStatusOutputS
-from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
-from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
-from src.algorithm.units.process.outbound import (
+from src.algorithm.units.process.inbound.rally_leader_follower import (
+    RallyLeaderFollower,
+    RallyLeaderFollowerInputS,
+    RallyLeaderFollowerOutputS,
+)
+from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundMessageE
+from src.algorithm.units.process.outbound.formation import (
     FormationOutbound,
     FormationOutboundInitS,
     FormationOutboundInputS,
-    OutboundMessageE,
+    FormationOutboundOutputS,
 )
 from src.algorithm.units.process.outbound.follower_broadcast import (
     FOLLOWER_STATUS_TOPIC,
     FollowerBroadcast,
     FollowerBroadcastInitS,
     FollowerBroadcastInputS,
+    FollowerBroadcastOutputS,
 )
 from src.algorithm.units.process.outbound.rally_leader_broadcast import (
     RallyLeaderBroadcast,
     RallyLeaderBroadcastInputS,
+    RallyLeaderBroadcastOutputS,
     _motion_payload,
 )
 from src.algorithm.units.process.tra_plan import TraPlanManager
@@ -238,10 +246,10 @@ def _rally_join_input(
     assigned_loops: int = 0,
     t_now: float = 0.0,
     standby: bool = False,
-) -> PosCalcInputS:
+) -> RallyJoinPosInputS:
     """把历史测试场景转换为统一位置解算输入端口。"""
 
-    return PosCalcInputS(
+    return RallyJoinPosInputS(
         selfState=selfState,
         cmd=FormSnapshotS(stage=FormStageE.STANDBY if standby else FormStageE.RALLY),
         clock=AlgorithmClockS(now_s=t_now),
@@ -1112,7 +1120,7 @@ class FormationInboundTests(unittest.TestCase):
             _leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R02": 2}),
         ]
 
-        inbound.step(InboundInputS(inbox=messages), FormationInboundOutputS(context=cxt))
+        inbound.step(FormationInboundInputS(inbox=messages), FormationInboundOutputS(context=cxt))
 
         self.assertEqual(cxt.cmd.stage, FormStageE.RALLY)
         self.assertAlmostEqual(cxt.leaderState.pos.east, 100.0)
@@ -1123,7 +1131,7 @@ class FormationInboundTests(unittest.TestCase):
         self.assertAlmostEqual(cxt.followerStates[0].lastUpdate_s, 12.0)
         snapshot = deepcopy(cxt)
 
-        inbound.step(InboundInputS(), FormationInboundOutputS(context=cxt))
+        inbound.step(FormationInboundInputS(), FormationInboundOutputS(context=cxt))
 
         self.assertEqual(cxt, snapshot)
 
@@ -1135,7 +1143,7 @@ class FormationInboundTests(unittest.TestCase):
         inbound.init(FormationInboundInitS("R02"))
 
         inbound.step(
-            InboundInputS(inbox=[_leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R03": 1})]),
+            FormationInboundInputS(inbox=[_leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R03": 1})]),
             FormationInboundOutputS(context=cxt),
         )
 
@@ -1151,6 +1159,25 @@ class FormationOutboundTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "messageType 必须显式配置"):
             FormationOutbound().init(FormationOutboundInitS(selfId="R01"))
+
+    def test_noop_message_product_keeps_outbox_empty(self) -> None:
+        """直接 HOLD 僚机的空出站产品不得占用通信链路。"""
+
+        cxt = FormContextS()
+        outbound = FormationOutbound()
+        outbound.init(
+            FormationOutboundInitS(
+                selfId="R02",
+                messageType=OutboundMessageE.NOOP,
+            )
+        )
+        output = FormationOutboundOutputS(
+            outbox=[MessageEnvelope("stale", "R02", "R01", 0.0, {})]
+        )
+
+        outbound.step(FormationOutboundInputS(context=cxt), output)
+
+        self.assertEqual(output.outbox, [])
 
     def test_writes_leader_broadcast_from_context(self) -> None:
         """长机广播应读取黑板中的状态、有效指令和公共计划。"""
@@ -1169,7 +1196,7 @@ class FormationOutboundTests(unittest.TestCase):
             netWork=[NetWorkS("R01", "R02", CommDirE.SIMPLEX)],
             messageType=OutboundMessageE.LEADER_BROADCAST,
         ))
-        output = OutboundOutputS()
+        output = FormationOutboundOutputS()
 
         outbound.step(FormationOutboundInputS(context=cxt), output)
 
@@ -1193,7 +1220,7 @@ class FormationOutboundTests(unittest.TestCase):
             netWork=[NetWorkS("R01", "R02", CommDirE.SIMPLEX)],
             messageType=OutboundMessageE.LEADER_BROADCAST,
         ))
-        output = OutboundOutputS()
+        output = FormationOutboundOutputS()
 
         outbound.step(FormationOutboundInputS(context=cxt), output)
 
@@ -1215,7 +1242,7 @@ class FormationOutboundTests(unittest.TestCase):
             leaderId="R01",
             messageType=OutboundMessageE.FOLLOWER_STATUS,
         ))
-        output = OutboundOutputS()
+        output = FormationOutboundOutputS()
 
         outbound.step(FormationOutboundInputS(context=cxt), output)
 
@@ -1236,7 +1263,7 @@ class FollowerStatusTests(unittest.TestCase):
 
         outbound = FollowerBroadcast()
         outbound.init(FollowerBroadcastInitS(selfId="R02", leaderId="R01"))
-        output = OutboundOutputS()
+        output = FollowerBroadcastOutputS()
 
         outbound.step(
             FollowerBroadcastInputS(
@@ -1260,7 +1287,7 @@ class FollowerStatusTests(unittest.TestCase):
 
         outbound = FollowerBroadcast()
         outbound.init(FollowerBroadcastInitS(selfId="R02", leaderId="R01"))
-        output = OutboundOutputS()
+        output = FollowerBroadcastOutputS()
 
         outbound.step(
             FollowerBroadcastInputS(
@@ -1283,7 +1310,7 @@ class FollowerStatusTests(unittest.TestCase):
             selfCmd=_motion(east=4.0, north=5.0, h=6.0),
             planned_path_length_m=3210.5,
         )
-        outbound_output = OutboundOutputS()
+        outbound_output = FollowerBroadcastOutputS()
         outbound.step(outbound_input, outbound_output)
 
         assert outbound_output.outbox is not None
@@ -1354,7 +1381,7 @@ class FollowerStatusTests(unittest.TestCase):
         outbound = FollowerBroadcast()
         outbound.init(FollowerBroadcastInitS(selfId="R02", leaderId="R01"))
         with self.assertRaises(ValueError):
-            outbound.step(FollowerBroadcastInputS(selfState=_motion()), OutboundOutputS())
+            outbound.step(FollowerBroadcastInputS(selfState=_motion()), FollowerBroadcastOutputS())
 
     def test_follower_status_parses_updates_filters_and_uses_source_id(self) -> None:
         """验证长机侧解析、原地更新、过滤非法消息，并以 envelope.source 为准。"""
@@ -1516,7 +1543,7 @@ class RallyCommunicationTests(unittest.TestCase):
             t_ref=12.0,
             loop_counts={"R02": 1},
         )
-        inbound.step(InboundInputS(inbox=[valid]), parsed)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[valid]), parsed)
         baseline = deepcopy((ctx.leaderState, leader_cmd, ctx.cmd, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts))
 
         malformed = _leader_msg(
@@ -1529,7 +1556,7 @@ class RallyCommunicationTests(unittest.TestCase):
         )
         malformed.payload["leader_state"]["vd"]["vNorth"] = "非法速度"
 
-        inbound.step(InboundInputS(inbox=[malformed]), parsed)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[malformed]), parsed)
 
         self.assertEqual(
             (ctx.leaderState, leader_cmd, ctx.cmd, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts),
@@ -1555,7 +1582,7 @@ class RallyCommunicationTests(unittest.TestCase):
             t_ref=12.0,
             loop_counts={"R02": 1},
         )
-        inbound.step(InboundInputS(inbox=[valid]), parsed)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[valid]), parsed)
         baseline = deepcopy((ctx.leaderState, leader_cmd, ctx.cmd, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts))
 
         malformed = _leader_msg(
@@ -1568,7 +1595,7 @@ class RallyCommunicationTests(unittest.TestCase):
         )
         malformed.payload["cmd"]["stage"] = 999
 
-        inbound.step(InboundInputS(inbox=[malformed]), parsed)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[malformed]), parsed)
 
         self.assertEqual(
             (ctx.leaderState, leader_cmd, ctx.cmd, parsed.t_ref, parsed.t_ref_valid, parsed.loopCounts),
@@ -1587,7 +1614,7 @@ class RallyCommunicationTests(unittest.TestCase):
             cmd=ctx.cmd,
         )
         inbound.step(
-            InboundInputS(
+            RallyLeaderFollowerInputS(
                 inbox=[
                     _leader_msg(
                         stage=FormStageE.RALLY,
@@ -1623,7 +1650,7 @@ class RallyCommunicationTests(unittest.TestCase):
                 loop_counts={"A01": 0, "A02": 2},
             ),
         )
-        broadcast_output = OutboundOutputS()
+        broadcast_output = RallyLeaderBroadcastOutputS()
         outbound.step(broadcast_input, broadcast_output)
 
         payload = broadcast_output.outbox[0].payload
@@ -1634,7 +1661,7 @@ class RallyCommunicationTests(unittest.TestCase):
             leaderState=ctx.leaderState,
             cmd=ctx.cmd,
         )
-        RallyLeaderFollower().step(InboundInputS(inbox=broadcast_output.outbox), parsed)
+        RallyLeaderFollower().step(RallyLeaderFollowerInputS(inbox=broadcast_output.outbox), parsed)
 
         self.assertTrue(parsed.t_ref_valid)
         self.assertEqual(parsed.t_ref, 180.0)
@@ -1665,7 +1692,7 @@ class RallyCommunicationTests(unittest.TestCase):
                 message = _leader_msg(stage=FormStageE.RALLY, pattern=0, step=2, t_ref=180.0)
                 message.payload["loop_counts"] = invalid_plan
 
-                RallyLeaderFollower().step(InboundInputS(inbox=[message]), parsed)
+                RallyLeaderFollower().step(RallyLeaderFollowerInputS(inbox=[message]), parsed)
 
                 self.assertEqual((ctx.cmd.stage, ctx.cmd.pattern, ctx.cmd.step), (FormStageE.HOLD, 3, 7))
                 self.assertEqual((parsed.t_ref, parsed.t_ref_valid), (12.0, True))
@@ -1684,7 +1711,7 @@ class RallyCommunicationTests(unittest.TestCase):
         outbound.init(OutboundInitS(selfId="R01", netWork=[NetWorkS("R01", "R02", CommDirE.DUPLEX)]))
         for case_name, invalid_plan in invalid_plans:
             with self.subTest(case=case_name):
-                output = OutboundOutputS()
+                output = RallyLeaderBroadcastOutputS()
                 broadcast_input = RallyLeaderBroadcastInputS(
                     cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=0),
                     selfState=_motion(),
@@ -1704,7 +1731,7 @@ class RallyCommunicationTests(unittest.TestCase):
 
         outbound = RallyLeaderBroadcast()
         outbound.init(OutboundInitS(selfId="R01", netWork=[NetWorkS("R01", "R02", CommDirE.DUPLEX)]))
-        output = OutboundOutputS()
+        output = RallyLeaderBroadcastOutputS()
 
         outbound.step(
             RallyLeaderBroadcastInputS(
@@ -1734,7 +1761,7 @@ class RallyCommunicationTests(unittest.TestCase):
             cmd=ctx.cmd,
         )
         inbound.step(
-            InboundInputS(inbox=[_leader_msg(step=2, t_ref=12.0, t_ref_valid=True)]),
+            RallyLeaderFollowerInputS(inbox=[_leader_msg(step=2, t_ref=12.0, t_ref_valid=True)]),
             inbound_output,
         )
 
@@ -1752,7 +1779,7 @@ class RallyCommunicationTests(unittest.TestCase):
             cmd=ctx.cmd,
         )
         inbound.step(
-            InboundInputS(inbox=[old_format]),
+            RallyLeaderFollowerInputS(inbox=[old_format]),
             old_output,
         )
         self.assertFalse(old_output.t_ref_valid)
@@ -1774,7 +1801,7 @@ class RallyCommunicationTests(unittest.TestCase):
         bad_t_ref_msg = _leader_msg(stage=FormStageE.RALLY, step=2, t_ref_valid=True)
         bad_t_ref_msg.payload["t_ref"] = "not-a-float"  # type: ignore[index]
 
-        inbound.step(InboundInputS(inbox=[bad_t_ref_msg]), out)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[bad_t_ref_msg]), out)
 
         # t_ref 非法 → 整条消息应被丢弃，cmd 维持 HOLD/step=0 不变
         self.assertEqual(ctx.cmd.stage, FSE.HOLD,
@@ -1809,7 +1836,7 @@ class RallyCommunicationTests(unittest.TestCase):
                 )
                 message.payload["t_ref"] = invalid_t_ref
 
-                RallyLeaderFollower().step(InboundInputS(inbox=[message]), out)
+                RallyLeaderFollower().step(RallyLeaderFollowerInputS(inbox=[message]), out)
 
                 self.assertEqual(ctx.leaderState.pos, _pos(1.0, 2.0, 3.0))
                 self.assertEqual((ctx.cmd.stage, ctx.cmd.pattern, ctx.cmd.step), (FormStageE.HOLD, 3, 7))
@@ -1820,7 +1847,7 @@ class RallyCommunicationTests(unittest.TestCase):
         """验证三类输出端口必须同时绑定。"""
 
         with self.assertRaises(ValueError):
-            RallyLeaderFollower().step(InboundInputS(inbox=[]), RallyLeaderFollowerOutputS())
+            RallyLeaderFollower().step(RallyLeaderFollowerInputS(inbox=[]), RallyLeaderFollowerOutputS())
 
 
 class RallyLooseTargetTests(unittest.TestCase):
@@ -1877,7 +1904,7 @@ class RallyLooseTargetTests(unittest.TestCase):
 
     def test_climbing_first_segment_still_uses_horizontal_rally_plane(self) -> None:
         """首航段有非零倾角时，M_i 仍是水平盘旋几何，不能误套三维 FUR 倾角旋转。"""
-        from src.algorithm.entity.leader_follower_rally import rally_loose_target, route_heading_rad
+        from src.algorithm.units.algo.pos_calc.rally_join_pos import rally_loose_target, route_heading_rad
 
         route = _route((0.0, 0.0, 100.0), (100.0, 0.0, 200.0))
         heading = route_heading_rad(route)
@@ -1941,11 +1968,11 @@ def _new_join_for_transit() -> RallyJoinPos:
     return join
 
 
-def _make_standby_join_for_transit() -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+def _make_standby_join_for_transit() -> tuple[RallyJoinPos, MotionProfS, RallyJoinPosOutputS]:
     """构造两个分离等半径圆，并把飞机放在待命圆顶部等待切出。"""
 
     join = _new_join_for_transit()
-    output = PosCalcOutputS(selfCmd=MotionProfS())
+    output = RallyJoinPosOutputS(selfCmd=MotionProfS())
     enter_state = _motion(
         east=0.0,
         north=0.0,
@@ -1966,7 +1993,7 @@ def _make_standby_join_for_transit() -> tuple[RallyJoinPos, MotionProfS, PosCalc
     return join, transit_state, output
 
 
-def _started_join_with_two_circles() -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+def _started_join_with_two_circles() -> tuple[RallyJoinPos, MotionProfS, RallyJoinPosOutputS]:
     """启动分离两圆的公切线汇合路径。"""
 
     join, state, output = _make_standby_join_for_transit()
@@ -2008,7 +2035,7 @@ def _started_join_with_coincident_circles() -> tuple[RallyJoinPos, float]:
         control_period_s=0.05,
         standby_altitude_m=560.0,
     ))
-    output = PosCalcOutputS(selfCmd=MotionProfS())
+    output = RallyJoinPosOutputS(selfCmd=MotionProfS())
     join.step(
         _rally_join_input(
             selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
@@ -2023,7 +2050,7 @@ def _started_join_with_coincident_circles() -> tuple[RallyJoinPos, float]:
     return join, expected_arc
 
 
-def _join_at_transit_phase(phase: str) -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+def _join_at_transit_phase(phase: str) -> tuple[RallyJoinPos, MotionProfS, RallyJoinPosOutputS]:
     """把汇合解算器推进到指定转移子阶段，并返回该阶段内的代表位置。"""
 
     join, state, output = _started_join_with_two_circles()
@@ -2059,14 +2086,14 @@ def _join_at_transit_phase(phase: str) -> tuple[RallyJoinPos, MotionProfS, PosCa
     raise ValueError(f"未知转移子阶段: {phase}")
 
 
-def _join_loitering_with_plan(assigned_loops: int) -> tuple[RallyJoinPos, PosCalcOutputS]:
+def _join_loitering_with_plan(assigned_loops: int) -> tuple[RallyJoinPos, RallyJoinPosOutputS]:
     """构造已锁存固定计划且位于 M_i 远角窗的盘旋状态。"""
 
     join = _new_join_for_transit()
     join._state = RALLY_STATE_LOITERING
     join._transit_phase = None
     join._theta_entry = join._theta_slot - math.pi
-    output = PosCalcOutputS(selfCmd=MotionProfS())
+    output = RallyJoinPosOutputS(selfCmd=MotionProfS())
     theta = join._theta_slot - math.pi
     state = _motion(
         east=join._loiter_center_e + join._loiter_radius * math.cos(theta),
@@ -2103,7 +2130,7 @@ def _rally_circle_state(join: RallyJoinPos, slot_remaining_angle: float) -> Moti
 
 def _cross_rally_slot(
     join: RallyJoinPos,
-    output: PosCalcOutputS,
+    output: RallyJoinPosOutputS,
     *,
     assigned_loops: int,
     t_ref: float = 200.0,
@@ -2185,7 +2212,7 @@ def _drive_follower_across_rally_slot(
 class RallyJoinPosTests(unittest.TestCase):
     """验证集结专用位置解算单元。"""
 
-    def _make_standby_join_for_transit(self) -> tuple[RallyJoinPos, MotionProfS, PosCalcOutputS]:
+    def _make_standby_join_for_transit(self) -> tuple[RallyJoinPos, MotionProfS, RallyJoinPosOutputS]:
         """构造两个分离等半径圆，并把飞机放在待命圆顶部等待切出。"""
 
         return _make_standby_join_for_transit()
@@ -2194,7 +2221,7 @@ class RallyJoinPosTests(unittest.TestCase):
         """未开始规划、保持待命或复位后，基础航程及剩余航程都应保留未规划哨兵值。"""
 
         join = _new_join_for_transit()
-        output = PosCalcOutputS(selfCmd=MotionProfS())
+        output = RallyJoinPosOutputS(selfCmd=MotionProfS())
         self.assertEqual(join.planned_path_length_m, -1.0)
         self.assertEqual(join.remaining_path_length_m, -1.0)
 
@@ -2386,7 +2413,7 @@ class RallyJoinPosTests(unittest.TestCase):
         after_slot = _new_join_for_transit()
         after_slot._theta_entry = after_slot._theta_slot + 0.1
         after_slot._enter_arc()
-        output = PosCalcOutputS(selfCmd=MotionProfS())
+        output = RallyJoinPosOutputS(selfCmd=MotionProfS())
         for index, remaining_angle in enumerate((-0.1, -0.04, -0.08)):
             after_slot.step(
                 _rally_join_input(
@@ -2704,7 +2731,7 @@ class RallyJoinPosTests(unittest.TestCase):
             control_period_s=0.05,
             standby_altitude_m=560.0,
         ))
-        output = PosCalcOutputS(selfCmd=MotionProfS())
+        output = RallyJoinPosOutputS(selfCmd=MotionProfS())
         join.step(
             _rally_join_input(
                 selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
@@ -2891,7 +2918,7 @@ class RallyJoinPosTests(unittest.TestCase):
             control_period_s=0.05,
             standby_altitude_m=560.0,
         ))
-        output = PosCalcOutputS(selfCmd=MotionProfS())
+        output = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
         join.step(
             _rally_join_input(
@@ -2918,7 +2945,7 @@ class RallyJoinPosTests(unittest.TestCase):
                 standby=False,
                 t_now=1.0,
             ),
-            PosCalcOutputS(selfCmd=MotionProfS()),
+            RallyJoinPosOutputS(selfCmd=MotionProfS()),
         )
 
         self.assertEqual(join.state, RALLY_STATE_FLYING)
@@ -2939,7 +2966,7 @@ class RallyJoinPosTests(unittest.TestCase):
                     mission_speed_mps=20.0,
                     control_period_s=0.05,
                 ))
-                output = PosCalcOutputS(selfCmd=MotionProfS())
+                output = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
                 join.step(
                     _rally_join_input(
@@ -2972,12 +2999,12 @@ class RallyJoinPosTests(unittest.TestCase):
         slot.init(SlotGeometryInitS("R02", comm_init.formPat, comm_init.formPos))
 
         slot.step(
-            PosCalcInputS(
+            SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 cmd=ctx.cmd,
             ),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 90.0)
@@ -3012,12 +3039,12 @@ class RallyJoinPosTests(unittest.TestCase):
         slot.init(SlotGeometryInitS("R02", comm_init_alt.formPat, comm_init_alt.formPos))
 
         slot.step(
-            PosCalcInputS(
+            SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 cmd=ctx.cmd,
             ),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 530.0)
@@ -3029,10 +3056,10 @@ class RallyJoinPosTests(unittest.TestCase):
 
         comm_init = _comm_init()
         slot = SlotGeometry()
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = SlotGeometryOutputS(selfCmd=MotionProfS())
         slot.init(SlotGeometryInitS("R02", comm_init.formPat, comm_init.formPos))
         slot.step(
-            PosCalcInputS(
+            SlotGeometryInputS(
                 selfState=_motion(),
                 leaderState=_motion(east=100.0, north=200.0, h=500.0, v_east=20.0),
                 cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0),
@@ -3057,7 +3084,7 @@ class RallyJoinPosTests(unittest.TestCase):
             loiter_speed_max_mps=25.0,
             mission_heading_rad=0.0,
         ))
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         join.step(_rally_join_input(selfState=_motion(east=2000.0, north=300.0, h=500.0), t_ref_valid=False), out)
 
         entry = join._entry_point  # 白盒检查：切入点应已算出并固定
@@ -3082,7 +3109,7 @@ class RallyJoinPosTests(unittest.TestCase):
             mission_speed_mps=20.0,
         ))
         state = _motion(east=-2000.0, north=300.0, h=500.0)
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         t_now = 0.0
         dt = 0.05
         prev_heading = None
@@ -3193,7 +3220,7 @@ class RallyJoinPosTests(unittest.TestCase):
         # 起点在 A 的正东侧、需要一路向西飞才能到达——旧版会让盘旋圆按到达航向（向西）摆歪，
         # 切出瞬间指令方向与任务航向（正东）相差近 180°。
         state = _motion(east=2000.0, north=300.0, h=500.0)
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         t_now = 0.0
         dt = 0.1
         for _ in range(20000):
@@ -3236,7 +3263,7 @@ class RallyJoinPosTests(unittest.TestCase):
         # 该起点对应的切入点 T ≈ (34.7, 3.0)，与 M_i=(0,0) 弦长仅约 35m，
         # 但按 CCW 方向的真实弧长约 350°（T 在角度上刚"越过"M_i，而非即将到达）。
         state = _motion(east=-950.08, north=-170.61, h=500.0)
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         t_now = 0.0
         dt = 0.1
         for _ in range(20000):
@@ -3276,7 +3303,7 @@ class RallyJoinPosTests(unittest.TestCase):
         ))
         # t_ref_valid=False：只观察进 LOITERING 那一拍的 reached_slot_once，不触发切出评估。
         state = _motion(east=-950.08, north=-170.61, h=500.0)
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         t_now = 0.0
         dt = 0.1
         for _ in range(20000):
@@ -3313,7 +3340,7 @@ class RallyJoinPosTests(unittest.TestCase):
             mission_heading_rad=0.0,
             mission_speed_mps=20.0,
         ))
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
         # 让飞机"实际半径"明显偏离期望值（150m，不是 200m），验证指令仍然对齐期望半径而不是跟着实际半径走。
         # 直接从 FLYING 步进到接近切入点，再手动摆一个偏离期望半径的位置进入 LOITERING 的第一拍。
@@ -3349,7 +3376,7 @@ class RallyJoinPosTests(unittest.TestCase):
             loiter_speed_max_mps=25.0,
             mission_heading_rad=0.0,
         ))
-        out = PosCalcOutputS(selfCmd=MotionProfS())
+        out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         # 起点就是 loose_slot 本身（必然落在盘旋圆上/圆内），验证不抛异常且退化为直飞该点。
         join.step(_rally_join_input(selfState=_motion(east=10.0, north=20.0, h=500.0), t_ref_valid=False), out)
 
@@ -3369,7 +3396,7 @@ class RallyJoinPosTests(unittest.TestCase):
             loiter_speed_max_mps=25.0,
             mission_heading_rad=0.0,
         ))
-        output = PosCalcOutputS(selfCmd=MotionProfS())
+        output = RallyJoinPosOutputS(selfCmd=MotionProfS())
         join.step(
             _rally_join_input(
                 selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
@@ -3406,7 +3433,7 @@ class RallyJoinPosTests(unittest.TestCase):
         join = _new_join_for_transit()
         join._theta_entry = join._theta_slot - 0.5
         join._enter_arc()
-        output = PosCalcOutputS(selfCmd=MotionProfS())
+        output = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
         for index, remaining_angle in enumerate((0.5, 0.2)):
             join.step(

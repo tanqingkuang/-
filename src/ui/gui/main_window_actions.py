@@ -180,14 +180,6 @@ class MainWindowActionMixin:
             f"{action.log_text} -> {self.sim.last_result_code}, state={snapshot.run_state}",
         )
 
-    def _load_demo_config(self, filename: str) -> None:
-        """加载 configs/ 目录下的预置演示配置。注意：文件不存在时记录告警。"""
-        path = self.project_root / "configs" / filename
-        if not path.exists():
-            self._log("WARN", f"演示配置不存在：{path}")
-            return
-        self._apply_config_path(str(path))
-
     def _choose_config(self) -> None:
         """处理 config 选择流程。注意：用户取消时不改变当前配置。"""
         # 起始目录优先用上次配置所在目录，过滤常见配置扩展名。

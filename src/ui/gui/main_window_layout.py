@@ -44,17 +44,6 @@ from src.ui.gui.view_models import (
     playback_rate_to_slider_value,
 )
 
-# 演示入口只在文案、提示和配置文件上有差异，统一规格避免新增场景时复制控件样板。
-DEMO_CONFIG_ACTIONS: tuple[tuple[str, str, str], ...] = (
-    ("编队保持", "加载 configs/base.json — 三机楔形保持队形演示", "base.json"),
-    (
-        "集结演示",
-        "加载 configs/rally_demo_5_aircraft.json — 五机分散后集结演示",
-        "rally_demo_5_aircraft.json",
-    ),
-)
-
-
 @dataclass(frozen=True)
 class _StageLayoutSlot:
     """记录实时显示区在主布局中的位置。注意：只由布局 Mixin 创建和恢复。"""
@@ -253,22 +242,6 @@ class MainWindowLayoutMixin:
             # index//2 为行、index%2 为列，铺成两行两列。
             grid.addWidget(button, index // 2, index % 2)
         layout.addWidget(disturb_group)
-
-        # "演示场景"分组：快捷加载预置配置文件。
-        demo_group = QGroupBox("演示场景")
-        demo_layout = QVBoxLayout(demo_group)
-        demo_layout.setContentsMargins(10, 18, 10, 10)
-        demo_layout.setSpacing(8)
-        for button_text, tooltip, filename in DEMO_CONFIG_ACTIONS:
-            button = QPushButton(button_text)
-            button.setToolTip(tooltip)
-            button.clicked.connect(
-                lambda checked=False, config_filename=filename: self._load_demo_config(
-                    config_filename
-                )
-            )
-            demo_layout.addWidget(button)
-        layout.addWidget(demo_group)
 
         # 底部弹性占位把上面各分组顶到面板顶部。
         layout.addStretch(1)

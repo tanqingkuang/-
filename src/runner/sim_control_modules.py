@@ -22,8 +22,6 @@ from src.algorithm.context.leaf_types import (
     copy_motion,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
-from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity
 from src.algorithm.entity.leader_follower_rally import create_rally_entity
 from src.algorithm.entity.types import (
     EntityInitS,
@@ -202,19 +200,22 @@ class _NodeAlgorithm:
         self._remote_stage = FormStageE.NONE if self._is_rally_role else FormStageE.HOLD
         self._initial_remote_stage = self._remote_stage
         self._rally_completed: bool = False
-        entity_rally_cfg = rally_cfg
-        if isinstance(rally_cfg, RallyTaskInitS):
-            entity_rally_cfg = replace(rally_cfg, passive=role == "rally_follower")
-        # 按角色选择编队实体。
-        # leader/rally_leader/rally_follower/wingman 对应不同算法实现，但对外 step 接口一致。
-        if role == "leader":
-            self._entity: EntityBase = LeaderEntity()
-        elif role == "rally_leader":
-            self._entity = create_rally_entity(EntityProfileE.RALLY_LEADER)
-        elif role == "rally_follower":
-            self._entity = create_rally_entity(EntityProfileE.RALLY_FOLLOWER)
-        else:
-            self._entity = FollowerEntity()
+        leader_role = role in {"leader", "rally_leader"}
+        if not leader_role and not self._rally_leader_id:
+            # 旧 wingman 直接构造路径没有 leader_id；仅用于兼容初始化，正式场景由控制器注入真实长机。
+            self._rally_leader_id = "R01"
+        base_rally_cfg = (
+            rally_cfg
+            if isinstance(rally_cfg, RallyTaskInitS)
+            else RallyTaskInitS(
+                targetPattern=self._initial_pattern,
+                dt_s=control_period_s,
+            )
+        )
+        entity_rally_cfg = replace(base_rally_cfg, passive=not leader_role)
+        # 所有角色统一使用集结实体；旧 leader/wingman 仅作为直接进入 HOLD 的配置标签兼容。
+        profile = EntityProfileE.RALLY_LEADER if leader_role else EntityProfileE.RALLY_FOLLOWER
+        self._entity: EntityBase = create_rally_entity(profile)
         self._entity.init(
             EntityInitS(
                 selfInit=FormSelfInitS(node_id),
@@ -223,9 +224,10 @@ class _NodeAlgorithm:
                 control_period_s=control_period_s,
                 velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
                 rally_cfg=entity_rally_cfg,
-                rally_leader_id=rally_leader_id,
+                rally_leader_id=self._rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed_mps,
                 rally_layer_altitude_m=rally_layer_altitude_m,
+                rally_enabled=self._is_rally_role,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。

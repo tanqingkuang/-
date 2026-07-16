@@ -78,6 +78,7 @@ class EntityInitS:
     rally_approach_speed_mps: float = 20.0  # 僚机飞向 M_i 的速度
     rally_leader_id: str = ""  # 僚机回报消息的发送目标（来自节点配置 leader_id）
     rally_layer_altitude_m: float | None = None  # 待命/JOINING/CATCHUP 分层目标高度；None 表示沿用集结槽位高度
+    rally_enabled: bool = True  # 当前实例是否执行集结任务；直接 HOLD 时关闭集结专用槽位配置
 
 
 @dataclass(frozen=True)

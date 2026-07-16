@@ -20,8 +20,6 @@ from src.algorithm.units.algo import arc_path
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
     PosCalcInitS,
-    PosCalcInputS,
-    PosCalcOutputS,
 )
 
 
@@ -79,8 +77,8 @@ class RouteInterp(PosCalcBase):
 
     def step(
         self,
-        u: PosCalcInputS | RouteInterpInputS | None = None,
-        y: PosCalcOutputS | RouteInterpOutputS | None = None,
+        u: RouteInterpInputS | None = None,
+        y: RouteInterpOutputS | None = None,
     ) -> None:
         """推进航线插值。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
         if u is None and y is None:
@@ -98,8 +96,8 @@ class RouteInterp(PosCalcBase):
 
     def _calculate(
         self,
-        u: PosCalcInputS | RouteInterpInputS,
-        y: PosCalcOutputS | RouteInterpOutputS,
+        u: RouteInterpInputS,
+        y: RouteInterpOutputS,
     ) -> None:
         """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
         if u.selfState is None or u.wayLine is None or y.selfCmd is None:
@@ -123,7 +121,7 @@ class RouteInterp(PosCalcBase):
         copy_wayline(self._cxt.wayLine, self._u.wayLine)
         copy_wayline(self._cxt.nextWayLine, self._u.nextWayLine)
 
-    def _write_common_output(self, y: PosCalcOutputS | RouteInterpOutputS) -> None:
+    def _write_common_output(self, y: RouteInterpOutputS) -> None:
         """完整填写本策略公共输出。"""
         if y.status is not None:
             # 航线策略不拥有集结诊断，只更新公共活动策略字段。
@@ -190,7 +188,7 @@ class RouteInterp(PosCalcBase):
         self_cmd.v.vPsi = heading if line.start.vdCmd else 0.0
         del progress  # 进度仅用于内部高度插值，已在 project_arc 内处理
 
-    def _curvature_ff(self, u: PosCalcInputS | RouteInterpInputS) -> float:
+    def _curvature_ff(self, u: RouteInterpInputS) -> float:
         """σ 前瞻曲率前馈：dVPsi = vd·κ_ff，κ_ff=(前瞻航向−当前航向)/窗长。注意：只跨入圆弧下一段。"""
         vd = u.selfState.v.vd
         lead = self._lead_time_s * vd  # L2 = σ·vd

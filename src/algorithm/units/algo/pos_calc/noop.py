@@ -16,8 +16,6 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
     PosCalcInitS,
-    PosCalcInputS,
-    PosCalcOutputS,
 )
 
 
@@ -40,29 +38,11 @@ class NoopPosCalc(PosCalcBase):
         """初始化停控策略。注意：无静态配置和动态资源。"""
         del cfg
 
-    def step(
-        self,
-        u: PosCalcInputS | None = None,
-        y: PosCalcOutputS | None = None,
-    ) -> None:
-        """输出当前位置和零速度。注意：无参模式用于集结实体固定流程。"""
-        if u is None and y is None:
-            # 停控也遵守先读快照、后计算、最后提交的策略契约。
-            self._read_context()
-            self._calculate(self._self_state, self._self_cmd)
-            self._write_context()
-            return
-        if u is None or y is None:
-            # 单边端口无法形成完整计算事务，必须立即拒绝。
-            raise ValueError("NoopPosCalc 输入输出端口必须同时提供")
-        if u.selfState is None or y.selfCmd is None:
-            raise ValueError("NoopPosCalc ports must be bound")
-        self._calculate(u.selfState, y.selfCmd)
-        # 兼容入口由具体策略直接发布公共状态，Manager不再补写。
-        if y.status is not None:
-            y.status.active_strategy = PosCalcStrategyE.NOOP
-        if y.posTrackCommand is not None:
-            y.posTrackCommand.mode = PosTrackCommandE.NOOP
+    def step(self) -> None:
+        """输出当前位置和零速度。注意：按读取、计算、提交顺序更新黑板。"""
+        self._read_context()
+        self._calculate(self._self_state, self._self_cmd)
+        self._write_context()
 
     def reset(self) -> None:
         """复位停控策略。注意：无跨帧算法状态。"""

@@ -49,6 +49,9 @@ class RallyLeaderEntity(EntityBase):
         loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
 
         # 固定流程类和端口由基类定义；策略流程读取本实例绑定的 Profile。
+        # 直接 HOLD 与集结任务共享同一长机流程链，差异只来自运行期任务命令。
+        # 长机始终保留航线和广播能力，不因当前阶段更换流程对象。
+        # Rally 任务同时覆盖直接保持和集结完成后的保持编排。
         self._initialize_process_chain(
             {
                 "inbound": FormationInboundInitS(cfg.selfInit.id),

@@ -14,8 +14,6 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
     PosCalcInitS,
-    PosCalcInputS,
-    PosCalcOutputS,
     PosCalcStrategyE,
 )
 from src.algorithm.units.algo.pos_calc.noop import NoopPosCalc
@@ -82,6 +80,9 @@ class PosCalcManager:
         self._default_strategy = default_strategy
         self._routes = routes
         # 产品只在此处创建一次，运行期路由只切换缓存引用。
+        # NOOP 始终作为系统停控能力创建，不要求 Profile 重复声明。
+        # required 使用集合去重，默认策略与附加能力重合时也只创建一个实例。
+        # 有状态产品的生命周期与 Entity 相同，不能在 step 中临时构造。
         required = {PosCalcStrategyE.NOOP, default_strategy, *routes}
         self._registry = {
             strategy: self._create_strategy(strategy, entity_cfg) for strategy in required
@@ -92,25 +93,14 @@ class PosCalcManager:
                 strategy.bind(self._cxt)
         self._active_strategy = None
 
-    def step(
-        self,
-        u: PosCalcInputS | None = None,
-        y: PosCalcOutputS | None = None,
-    ) -> None:
+    def step(self) -> None:
         """选择并调用缓存策略。注意：所有黑板读写均由具体子类完成。"""
-        if u is None and y is None:
-            # 新实体固定流程走无参入口，命令直接从共享黑板读取。
-            if self._cxt is None:
-                raise ValueError("PosCalcManager 尚未绑定黑板")
-            cmd = self._cxt.cmd
-        elif u is None or y is None:
-            raise ValueError("PosCalcManager 输入输出端口必须同时提供")
-        elif u.cmd is None:
-            raise ValueError("PosCalcManager cmd port must be bound")
-        else:
-            # 显式端口仅服务尚未迁移的Hold实体和低层兼容测试。
-            cmd = u.cmd
+        if self._cxt is None:
+            raise ValueError("PosCalcManager 尚未绑定黑板")
+        cmd = self._cxt.cmd
         # cmd 是唯一运行期路由依据，Entity 不参与具体产品判断。
+        # 选择过程只返回枚举，算法输入由产品随后从黑板自行冻结。
+        # registry 缺项属于初始化配置错误，不允许静默退回默认策略。
         strategy_type = self._select_strategy(cmd.stage, cmd.step)
         # 进入停控阶段时只复位一次集结产品，避免每拍清空刚生成的停控输出。
         if strategy_type == PosCalcStrategyE.NOOP and self._active_strategy != PosCalcStrategyE.NOOP:
@@ -118,12 +108,8 @@ class PosCalcManager:
             if rally_join is not None:
                 rally_join.reset()
         strategy = self._registry[strategy_type]
-        if u is None and y is None:
-            # 子策略完成快照读取、内部计算和黑板提交的完整事务。
-            strategy.step()
-        else:
-            # 旧入口仍由同一个策略实例执行，不建立第二套算法状态。
-            strategy.step(u, y)
+        # 子策略完成快照读取、内部计算和黑板提交的完整事务。
+        strategy.step()
         self._active_strategy = strategy_type
 
     def reset(self) -> None:
@@ -162,15 +148,18 @@ class PosCalcManager:
             return strategy
         if strategy_type == PosCalcStrategyE.SLOT_GEOMETRY:  # 僚机队形槽位解算产品
             strategy = SlotGeometry()
-            rally_enabled = PosCalcStrategyE.RALLY_JOIN in self._routes
-            if rally_enabled:  # 集结实体保留 CATCHUP 分层高度且不启用重构 TD
+            if cfg.rally_enabled:  # 集结任务保留 CATCHUP 分层高度且不启用重构 TD
+                # 集结期间槽位由状态机连续压缩，不能再叠加普通保持的 TD 过渡。
+                # 分层高度只在 CATCHUP 生效，进入 LOOSE 后恢复编队槽位高度。
                 init_cfg = SlotGeometryInitS(
                     cfg.selfInit.id,
                     cfg.commInit.formPat,
                     cfg.commInit.formPos,
                     catchupAltitudeM=cfg.rally_layer_altitude_m,
                 )
-            else:  # 普通保持实体按速度权限配置槽位重构 TD
+            else:  # 直接 HOLD 的统一实体仍按速度权限配置原槽位重构 TD
+                # 普通保持需要 TD 软化初始槽位误差以及运行期队形重构阶跃。
+                # 速度上界从本机权限推导，保证参考轨迹给反馈控制保留余量。
                 v_fwd, v_up, v_lat = _slot_td_vmax(cfg.velCmdLimit)
                 init_cfg = SlotGeometryInitS(
                     cfg.selfInit.id,

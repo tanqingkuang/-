@@ -9,40 +9,50 @@ from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
     CommDirE,
-    FormCommInitS,
     FormPosS,
-    FormSelfInitS,
     FormSnapshotS,
     FormStageE,
     MotionProfS,
     NetWorkS,
     PosInEarthS,
     PosTrackDiagS,
-    RemoteCmdS,
     VdInEarthS,
     WayLineS,
     WayPointS,
 )
-from src.algorithm.entity.leader_follower_hold.follower import FollowerEntity
-from src.algorithm.entity.leader_follower_hold.leader import LeaderEntity, _follower_tracker_init
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
+from src.algorithm.entity.types import EntityRuntimeS, VelCmdLimitS
 from src.algorithm.units.algo.ctrl.base import CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
 from src.algorithm.units.algo.ctrl.ppi import PPI, PPIInitS
 from src.algorithm.units.algo.formation_math import clamp, enu_to_track, horizontal_track_to_enu, track_to_enu
-from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
-from src.algorithm.units.algo.pos_track.base import PosTrackInputS, PosTrackOutputS
+from src.algorithm.units.algo.pos_calc.route_interp import (
+    RouteInterp,
+    RouteInterpInitS,
+    RouteInterpInputS,
+    RouteInterpOutputS,
+)
+from src.algorithm.units.algo.pos_calc.slot_geometry import (
+    SlotGeometry,
+    SlotGeometryInitS,
+    SlotGeometryInputS,
+    SlotGeometryOutputS,
+)
+from src.algorithm.units.algo.pos_track.manager import _pid_position_init
+from src.algorithm.units.algo.pos_track.pid_compose import PidComposeInputS, PidComposeOutputS
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
-from src.algorithm.units.process.formation_task.base import FormationTaskInputS, FormationTaskOutputS
-from src.algorithm.units.process.formation_task.hold import Hold
-from src.algorithm.units.process.inbound.base import InboundInputS
-from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
-from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
-from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
-from src.algorithm.units.process.tra_plan.base import TraPlanInputS, TraPlanOutputS
+from src.algorithm.units.process.inbound.rally_leader_follower import (
+    RallyLeaderFollower,
+    RallyLeaderFollowerInputS,
+    RallyLeaderFollowerOutputS,
+)
+from src.algorithm.units.process.outbound.base import OutboundInitS
+from src.algorithm.units.process.outbound.rally_leader_broadcast import (
+    RallyLeaderBroadcast,
+    RallyLeaderBroadcastInputS,
+    RallyLeaderBroadcastOutputS,
+)
+from src.algorithm.units.process.tra_plan.base import TraPlanInitS
 from src.algorithm.units.process.tra_plan.leader_route import LeaderRoute, LeaderRouteInitS
 from src.algorithm.units.process.tra_plan.noop import Noop
 from src.common.envelope import MessageEnvelope
@@ -225,8 +235,8 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
         )
-        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
-        y = PosCalcOutputS(selfCmd=ctx.selfCmd)
+        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
 
@@ -249,8 +259,8 @@ class PosCalcTests(unittest.TestCase):
         route.init(RouteInterpInitS(lookAheadDistance=2.0))
 
         route.step(
-            PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine),
+            RouteInterpOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 5.0)
@@ -266,8 +276,8 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(5.0, 5.0, 5.0), vdCmd=10.0),
             end=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
         )
-        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
-        y = PosCalcOutputS(selfCmd=ctx.selfCmd)
+        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
 
@@ -286,8 +296,8 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
             end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
         )
-        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
-        y = PosCalcOutputS(selfCmd=ctx.selfCmd)
+        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
 
@@ -307,8 +317,8 @@ class PosCalcTests(unittest.TestCase):
             start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
             end=WayPointS(pos=PosInEarthS(30.0, 40.0, 1030.0)),
         )
-        u = PosCalcInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
-        y = PosCalcOutputS(selfCmd=ctx.selfCmd)
+        u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
+        y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
 
         RouteInterp().step(u, y)
 
@@ -324,7 +334,7 @@ class PosCalcTests(unittest.TestCase):
     def test_route_interp_rejects_pure_vertical_segment(self) -> None:
         """验证纯垂直航段（水平长度为零）被显式拒绝，固定翼地速在该航段无定义。"""
 
-        u = PosCalcInputS(
+        u = RouteInterpInputS(
             selfState=_motion(h=1000.0),
             wayLine=WayLineS(
                 start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
@@ -332,7 +342,7 @@ class PosCalcTests(unittest.TestCase):
             ),
         )
         with self.assertRaisesRegex(ValueError, "horizontal"):
-            RouteInterp().step(u, PosCalcOutputS(selfCmd=MotionProfS()))
+            RouteInterp().step(u, RouteInterpOutputS(selfCmd=MotionProfS()))
 
     def test_route_interp_tracks_arc_segment_with_curvature_ff(self) -> None:
         """验证圆弧航段：目标点投影到弧上、速度沿切向、曲率前馈 dVPsi=vd·κ(右转为负)。"""
@@ -358,7 +368,7 @@ class PosCalcTests(unittest.TestCase):
         route.init(RouteInterpInitS(leadTimeS=0.5))  # σ=0.5s
         cmd = MotionProfS()
 
-        route.step(PosCalcInputS(selfState=self_state, wayLine=line), PosCalcOutputS(selfCmd=cmd))
+        route.step(RouteInterpInputS(selfState=self_state, wayLine=line), RouteInterpOutputS(selfCmd=cmd))
 
         # 目标点在弧上(到圆心距离=R)，且为该在弧点的投影(=自身)。
         self.assertAlmostEqual(math.hypot(cmd.pos.east - 1600.0, cmd.pos.north + 400.0), 400.0, places=3)
@@ -387,8 +397,8 @@ class PosCalcTests(unittest.TestCase):
         ctx.selfState = _motion(east=70.0, north=220.0, h=995.0, v_east=12.0)
 
         slot.step(
-            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 70.0)
@@ -413,8 +423,8 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            PosCalcInputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryInputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
@@ -440,8 +450,8 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 6058.0)
@@ -465,8 +475,8 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            PosCalcInputS(leaderState=ctx.leaderState, leaderCmd=leader_cmd, cmd=ctx.cmd),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryInputS(leaderState=ctx.leaderState, leaderCmd=leader_cmd, cmd=ctx.cmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
@@ -490,10 +500,10 @@ class PosCalcTests(unittest.TestCase):
                 control_period_s=0.05,
             )
         )
-        out = PosCalcOutputS(selfCmd=ctx.selfCmd)
+        out = SlotGeometryOutputS(selfCmd=ctx.selfCmd)
 
         slot.step(
-            PosCalcInputS(
+            SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 leaderCmd=MotionProfS(),
@@ -510,7 +520,7 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            PosCalcInputS(
+            SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
                 leaderCmd=leader_cmd,
@@ -539,8 +549,8 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 70.0)
@@ -565,8 +575,8 @@ class PosCalcTests(unittest.TestCase):
         )
 
         slot.step(
-            PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
-            PosCalcOutputS(selfCmd=ctx.selfCmd),
+            SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+            SlotGeometryOutputS(selfCmd=ctx.selfCmd),
         )
 
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 46.0)
@@ -595,8 +605,8 @@ class PosCalcTests(unittest.TestCase):
             ctx.selfState = _motion(east=46.0, north=200.0 - right_offset, h=1000.0, v_east=30.0)
 
             slot.step(
-                PosCalcInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
-                PosCalcOutputS(selfCmd=ctx.selfCmd),
+                SlotGeometryInputS(selfState=ctx.selfState, leaderState=ctx.leaderState, cmd=ctx.cmd),
+                SlotGeometryOutputS(selfCmd=ctx.selfCmd),
             )
 
             # 沿航迹速度 = vd + b·ω；本例左转 ω>0，故 b<0(左/内侧)减速、b>0(右/外侧)加速。横扫 = a·ω 投到左向(此处为北向分量)。
@@ -628,7 +638,7 @@ class PosCalcTests(unittest.TestCase):
                 leaderState=leader,
                 cmd=FormSnapshotS(stage=FormStageE.HOLD, pattern=0),
             ),
-            PosCalcOutputS(selfCmd=output),
+            SlotGeometryOutputS(selfCmd=output),
         )
 
         # 东向爬升 30°：F=(cosθ,0,sinθ)，U=(-sinθ,0,cosθ)，R=(0,-1,0)。
@@ -663,7 +673,7 @@ class PosCalcTests(unittest.TestCase):
                         leaderState=leader,
                         cmd=FormSnapshotS(stage=FormStageE.HOLD, pattern=0),
                     ),
-                    PosCalcOutputS(selfCmd=output),
+                    SlotGeometryOutputS(selfCmd=output),
                 )
 
                 relative_velocity_fur = enu_to_track(
@@ -683,7 +693,7 @@ class PosCalcTests(unittest.TestCase):
                     self.assertAlmostEqual(actual, wanted, places=12)
 
     def test_slot_geometry_td_seed_projects_full_enu_offset_to_fur(self) -> None:
-        """TD 首拍必须把当前三维 ENU 相对位置反投影到 FUR，缩放后仍从本机位置软接管。"""
+        """TD 首拍必须把当前三维 ENU 相对位置反投影到 FUR，并从本机位置软接管。"""
 
         theta = math.radians(25.0)
         leader = _motion(
@@ -693,8 +703,7 @@ class PosCalcTests(unittest.TestCase):
             v_east=18.0 * math.cos(theta),
             v_up=18.0 * math.sin(theta),
         )
-        # scale=2 只缩放 x/z；物理播种偏移对应未缩放 FUR (10,5,-6)。
-        physical_offset = track_to_enu((20.0, 5.0, -12.0), leader)
+        physical_offset = track_to_enu((10.0, 5.0, -6.0), leader)
         self_state = _motion(
             east=leader.pos.east + physical_offset[0],
             north=leader.pos.north + physical_offset[1],
@@ -717,9 +726,8 @@ class PosCalcTests(unittest.TestCase):
                 selfState=self_state,
                 leaderState=leader,
                 cmd=FormSnapshotS(stage=FormStageE.HOLD, pattern=0),
-                slotScale=RallySlotScaleS(scale=2.0),
             ),
-            PosCalcOutputS(selfCmd=output),
+            SlotGeometryOutputS(selfCmd=output),
         )
 
         self.assertAlmostEqual(output.pos.east, self_state.pos.east, places=12)
@@ -745,8 +753,8 @@ class PosTrackTests(unittest.TestCase):
         ctx.selfCmd = _motion(east=50.0, north=4.0, h=1008.0, v_east=12.0)
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd),
         )
 
         # 前向(东向)：kp·前向位置误差 + kd·前向速度误差 = 0.1·50 + 0.5·2 = 6.0。
@@ -773,8 +781,8 @@ class PosTrackTests(unittest.TestCase):
         ctx.selfCmd = _motion(v_east=20.0, v_north=0.0)
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd),
         )
 
         # 沿目标航向(东)输出标量速度误差 10；本机航向(北)分量为 0。
@@ -799,8 +807,8 @@ class PosTrackTests(unittest.TestCase):
         ctx.selfCmd = _motion(east=100.0, north=0.0, h=0.0, v_east=10.0)   # 目标航向朝东，在正东 100m
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd),
         )
 
         # 目标系(东)下 100m 为纯前向误差 → 前向加速度 0.1·100=10 沿东；侧偏为 0，无转弯指令。
@@ -823,8 +831,8 @@ class PosTrackTests(unittest.TestCase):
         ctx.selfCmd = _motion(east=0.0, north=50.0, h=0.0)               # 目标在正北 50m，且悬停(零速)
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd),
         )
 
         # 退回自身系(东)：北向 50m 为侧偏，lateral_right=(0,-1,0) → 侧偏 -50 → 侧向加速度 -25 落在北向 +25。
@@ -846,8 +854,8 @@ class PosTrackTests(unittest.TestCase):
         ctx.selfCmd = _motion(east=0.0, north=0.0, h=0.0, v_east=20.0, d_vpsi=0.1)
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd),
         )
 
         self.assertAlmostEqual(ctx.selfAccCmd.accNorth, 1.0)  # dVPsi·V_self = 0.1·10
@@ -871,8 +879,8 @@ class PosTrackTests(unittest.TestCase):
         diag = PosTrackDiagS()
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd, diag=diag),
         )
 
         self.assertAlmostEqual(diag.cmd_pos_east_m, 50.0)
@@ -906,8 +914,8 @@ class PosTrackTests(unittest.TestCase):
         diag = PosTrackDiagS()
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd, diag=diag),
         )
 
         # 1.1 后误差在"目标速度系"(selfCmd 航迹系，含其 v_north/-3、v_up/5 造成的航向与倾角)分解；
@@ -936,8 +944,8 @@ class PosTrackTests(unittest.TestCase):
         diag = PosTrackDiagS()
 
         tracker.step(
-            PosTrackInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
-            PosTrackOutputS(accCmd=ctx.selfAccCmd, diag=diag),
+            PidComposeInputS(selfCmd=ctx.selfCmd, selfState=ctx.selfState),
+            PidComposeOutputS(accCmd=ctx.selfAccCmd, diag=diag),
         )
 
         self.assertAlmostEqual(diag.track_pos_err_x_m, 50.0)
@@ -952,8 +960,8 @@ class PosTrackTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "vMin"):
             tracker.step(
-                PosTrackInputS(selfCmd=_motion(), selfState=_motion(v_east=1.0)),
-                PosTrackOutputS(accCmd=out),
+                PidComposeInputS(selfCmd=_motion(), selfState=_motion(v_east=1.0)),
+                PidComposeOutputS(accCmd=out),
             )
 
         self.assertEqual((out.accEast, out.accNorth, out.accUp), (1.0, 2.0, 3.0))
@@ -983,8 +991,8 @@ class PosTrackTests(unittest.TestCase):
         effective = MotionProfS()
 
         tracker.step(
-            PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
-            PosTrackOutputS(accCmd=acc, effectiveCmd=effective),
+            PidComposeInputS(selfCmd=self_cmd, selfState=self_state),
+            PidComposeOutputS(accCmd=acc, effectiveCmd=effective),
         )
 
         self.assertAlmostEqual(effective.v.vd, 20.0, places=6)
@@ -1020,8 +1028,8 @@ class PosTrackTests(unittest.TestCase):
         effective = MotionProfS()
 
         tracker.step(
-            PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
-            PosTrackOutputS(accCmd=AccInEarthS(), effectiveCmd=effective),
+            PidComposeInputS(selfCmd=self_cmd, selfState=self_state),
+            PidComposeOutputS(accCmd=AccInEarthS(), effectiveCmd=effective),
         )
 
         self.assertAlmostEqual(effective.v.vPsi, -expected_angle, places=6)
@@ -1113,7 +1121,7 @@ class PosTrackClosedLoopTests(unittest.TestCase):
         """
         model = PointMass3DoFModel(ModelIterator._default_config())
         tracker = PidCompose()
-        tracker.init(_follower_tracker_init(0.05))
+        tracker.init(_pid_position_init(0.05, VelCmdLimitS()))
         state = AircraftState(
             node_id="F", x_m=40.0, y_m=80.0, altitude_m=1000.0, speed_mps=20.0,
             theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
@@ -1135,8 +1143,8 @@ class PosTrackClosedLoopTests(unittest.TestCase):
             self_cmd.pos = PosInEarthS(slot_e, slot_n, slot_h)
             self_cmd.v = VdInEarthS(vEast=slot_v, vNorth=0.0, vUp=0.0, vd=slot_v, vPsi=0.0, dVPsi=0.0)
             tracker.step(
-                PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
-                PosTrackOutputS(accCmd=acc),
+                PidComposeInputS(selfCmd=self_cmd, selfState=self_state),
+                PidComposeOutputS(accCmd=acc),
             )
             state.update_from_vector(
                 model.step(state.as_vector(), (acc.accEast, acc.accNorth, acc.accUp), (0.0, 0.0, 0.0), dt)
@@ -1156,11 +1164,11 @@ class PosTrackClosedLoopTests(unittest.TestCase):
 
         换到目标速度系度量误差后，丢了自身航迹系随机头旋转的纯追踪前置阻尼；若侧向阻尼(kd)照搬旧自身系
         并联式的偏小值就会欠阻尼——过冲到对侧、持续摆动(base.json 僚机切入曾复现)。kd 整定到 0.30 后收敛。
-        本用例用真实僚机增益 `_follower_tracker_init`，是该整定的回归护栏(若把 kd 调回欠阻尼即失败)。
+        本用例用真实僚机增益 `_pid_position_init`，是该整定的回归护栏(若把 kd 调回欠阻尼即失败)。
         """
         model = PointMass3DoFModel(ModelIterator._default_config())
         tracker = PidCompose()
-        tracker.init(_follower_tracker_init(0.05))
+        tracker.init(_pid_position_init(0.05, VelCmdLimitS()))
         state = AircraftState(
             node_id="F", x_m=0.0, y_m=150.0, altitude_m=1000.0, speed_mps=20.0,
             theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
@@ -1181,8 +1189,8 @@ class PosTrackClosedLoopTests(unittest.TestCase):
             self_cmd.pos = PosInEarthS(slot_e, slot_n, slot_h)
             self_cmd.v = VdInEarthS(vEast=slot_v, vNorth=0.0, vUp=0.0, vd=slot_v, vPsi=0.0, dVPsi=0.0)
             tracker.step(
-                PosTrackInputS(selfCmd=self_cmd, selfState=self_state),
-                PosTrackOutputS(accCmd=acc),
+                PidComposeInputS(selfCmd=self_cmd, selfState=self_state),
+                PidComposeOutputS(accCmd=acc),
             )
             state.update_from_vector(
                 model.step(state.as_vector(), (acc.accEast, acc.accNorth, acc.accUp), (0.0, 0.0, 0.0), dt)
@@ -1199,23 +1207,12 @@ class PosTrackClosedLoopTests(unittest.TestCase):
 
 
 class ProcessUnitTests(unittest.TestCase):
-    def test_hold_writes_hold_triangle(self) -> None:
-        """验证本轮 Hold 编排固定输出编队保持和三角队形。"""
-
-        ctx = FormContextS()
-        Hold().step(
-            FormationTaskInputS(remote=RemoteCmdS(stage=FormStageE.RECONFIG), cmd=ctx.cmd),
-            FormationTaskOutputS(cmd=ctx.cmd),
-        )
-
-        self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(ctx.cmd.pattern, 0)
-
     def test_leader_route_selects_current_segment_from_route(self) -> None:
         """验证长机轨迹规划持有整条航线，每拍只向黑板写当前航段。"""
 
         ctx = FormContextS()
         planner = LeaderRoute()
+        planner.bind(EntityRuntimeS(context=ctx))
         planner.init(
             LeaderRouteInitS(
                 [
@@ -1233,24 +1230,18 @@ class ProcessUnitTests(unittest.TestCase):
             )
         )
         ctx.selfState = _motion(east=50.0, h=1000.0)
-        planner.step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        planner.step()
         self.assertEqual(ctx.wayLine.idx, 0)
 
         ctx.selfState = _motion(east=120.0, h=1000.0)
-        planner.step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        planner.step()
         self.assertEqual(ctx.wayLine.idx, 1)
         original_end = ctx.wayLine.end.pos.east
 
-        Noop().step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        noop = Noop()
+        noop.bind(EntityRuntimeS(context=ctx))
+        noop.init(TraPlanInitS())
+        noop.step()
 
         self.assertEqual(ctx.wayLine.end.pos.east, original_end)
 
@@ -1259,6 +1250,7 @@ class ProcessUnitTests(unittest.TestCase):
 
         ctx = FormContextS()
         planner = LeaderRoute()
+        planner.bind(EntityRuntimeS(context=ctx))
         planner.init(
             LeaderRouteInitS(
                 [
@@ -1277,17 +1269,11 @@ class ProcessUnitTests(unittest.TestCase):
         )
 
         ctx.selfState = _motion(east=65.0, h=1000.0)
-        planner.step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        planner.step()
         self.assertEqual(ctx.wayLine.idx, 0)
 
         ctx.selfState = _motion(east=73.0, h=1000.0)
-        planner.step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        planner.step()
         self.assertEqual(ctx.wayLine.idx, 1)
 
     def test_leader_route_switch_distance_scales_with_heading_change(self) -> None:
@@ -1295,6 +1281,7 @@ class ProcessUnitTests(unittest.TestCase):
 
         ctx = FormContextS()
         planner = LeaderRoute()
+        planner.bind(EntityRuntimeS(context=ctx))
         planner.init(
             LeaderRouteInitS(
                 [
@@ -1313,17 +1300,11 @@ class ProcessUnitTests(unittest.TestCase):
         )
 
         ctx.selfState = _motion(east=80.0, h=1000.0)
-        planner.step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        planner.step()
         self.assertEqual(ctx.wayLine.idx, 0)
 
         ctx.selfState = _motion(east=93.0, h=1000.0)
-        planner.step(
-            TraPlanInputS(cmd=ctx.cmd, wayLine=ctx.wayLine, selfState=ctx.selfState),
-            TraPlanOutputS(wayLine=ctx.wayLine),
-        )
+        planner.step()
         self.assertEqual(ctx.wayLine.idx, 1)
 
     def test_leader_broadcast_targets_topology_and_inbound_parses_latest(self) -> None:
@@ -1343,7 +1324,7 @@ class ProcessUnitTests(unittest.TestCase):
                 ],
             )
         )
-        out = OutboundOutputS()
+        out = RallyLeaderBroadcastOutputS()
 
         leader_cmd = _motion(east=10.0, north=20.0, h=30.0, v_east=12.0, v_north=0.0)
         outbound.step(
@@ -1367,7 +1348,7 @@ class ProcessUnitTests(unittest.TestCase):
             leaderCmd=leader_cmd_out,
             cmd=follower_ctx.cmd,
         )
-        inbound.step(InboundInputS(inbox=out.outbox), inbound_y)
+        inbound.step(RallyLeaderFollowerInputS(inbox=out.outbox), inbound_y)
 
         self.assertEqual(follower_ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(follower_ctx.cmd.pattern, 0)
@@ -1377,7 +1358,7 @@ class ProcessUnitTests(unittest.TestCase):
         self.assertAlmostEqual(leader_cmd_out.v.vEast, 12.0)
         self.assertNotIn("slot_scale", out.outbox[0].payload)
 
-        inbound.step(InboundInputS(inbox=[]), inbound_y)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[]), inbound_y)
         self.assertAlmostEqual(follower_ctx.leaderState.pos.east, 1.0)
 
     def test_inbound_skips_non_leader_follower_messages(self) -> None:
@@ -1387,107 +1368,11 @@ class ProcessUnitTests(unittest.TestCase):
         msg = MessageEnvelope("node.status", "A99", "A02", 0.0, {"health": "normal"})
 
         RallyLeaderFollower().step(
-            InboundInputS(inbox=[msg]),
+            RallyLeaderFollowerInputS(inbox=[msg]),
             RallyLeaderFollowerOutputS(leaderState=ctx.leaderState, cmd=ctx.cmd),
         )
 
         self.assertEqual(ctx.cmd.stage, FormStageE.NONE)
-
-
-class EntityTests(unittest.TestCase):
-    def test_leader_and_follower_ports_share_context_and_run_one_frame(self) -> None:
-        """验证长机/僚机实体完成端口绑定，并能通过一帧 outbox/inbox 串起领航跟随数据流。"""
-
-        comm = FormCommInitS(
-            netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
-            formPat=[0],
-            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
-        )
-        leader = LeaderEntity()
-        follower = FollowerEntity()
-        leader.init(EntityInitS(selfInit=FormSelfInitS("A01"), commInit=comm))
-        follower.init(EntityInitS(selfInit=FormSelfInitS("A02"), commInit=comm))
-
-        leader_state = _motion(east=5.0, north=0.0, h=1000.0, v_east=8.0)
-        leader_out = EntityOutputS()
-        leader.step(EntityInputS(selfState=leader_state, remote=RemoteCmdS(FormStageE.HOLD)), leader_out)
-
-        self.assertIs(leader._pos_calc_y.selfCmd, leader.cxt.selfCmd)
-        self.assertEqual(len(leader_out.outbox), 1)
-        self.assertIsNotNone(leader_out.selfCmd)
-        self.assertIsNotNone(leader_out.controlDiag)
-        assert leader_out.selfCmd is not None
-        assert leader_out.controlDiag is not None
-        self.assertAlmostEqual(leader_out.selfCmd.pos.h, leader.cxt.selfCmd.pos.h)
-        self.assertAlmostEqual(leader_out.controlDiag.cmd_pos_h_m, leader.cxt.selfCmd.pos.h)
-
-        follower_out = EntityOutputS()
-        follower.step(
-            EntityInputS(
-                selfState=_motion(east=-30.0, north=15.0, h=1000.0, v_east=8.0),
-                inbox=leader_out.outbox,
-            ),
-            follower_out,
-        )
-
-        self.assertIs(follower._inbound_y.leaderState, follower.cxt.leaderState)
-        self.assertEqual(follower_out.outbox, [])
-        self.assertIsNotNone(follower_out.selfCmd)
-        self.assertIsNotNone(follower_out.controlDiag)
-        # 相对槽位 TD 首帧按当前位置播种(软接管)：命令起点贴合本机 (-30, 15)，而非直接跳到槽位。
-        self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -30.0, delta=0.5)
-        self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 15.0, delta=0.5)
-        # 续喂同一长机广播，TD 应把命令平滑收敛到 leader+slot 几何目标 (-25, 20)，验证槽位几何正确。
-        for _ in range(300):
-            follower.step(
-                EntityInputS(
-                    selfState=_motion(east=-30.0, north=15.0, h=1000.0, v_east=8.0),
-                    inbox=leader_out.outbox,
-                ),
-                follower_out,
-            )
-        self.assertAlmostEqual(follower.cxt.selfCmd.pos.east, -25.0, delta=0.2)
-        self.assertAlmostEqual(follower.cxt.selfCmd.pos.north, 20.0, delta=0.2)
-
-    def test_entity_reset_clears_context_and_boundary_buffers(self) -> None:
-        """验证实体 reset 会原地复位 Context、边界缓存和子单元状态。"""
-
-        comm = FormCommInitS(
-            netWork=[NetWorkS("A01", "A02", CommDirE.DUPLEX)],
-            formPat=[0],
-            formPos=[[FormPosS("A01", 0.0, 0.0, 0.0), FormPosS("A02", -30.0, 0.0, -20.0)]],
-        )
-        leader = LeaderEntity()
-        follower = FollowerEntity()
-        leader.init(EntityInitS(selfInit=FormSelfInitS("A01"), commInit=comm))
-        follower.init(EntityInitS(selfInit=FormSelfInitS("A02"), commInit=comm))
-
-        leader.step(
-            EntityInputS(
-                selfState=_motion(east=5.0, h=1000.0, v_east=8.0),
-                remote=RemoteCmdS(FormStageE.HOLD),
-            ),
-            EntityOutputS(),
-        )
-        follower.step(
-            EntityInputS(
-                selfState=_motion(east=-30.0, h=1000.0, v_east=8.0),
-                inbox=list(leader._outbox),
-            ),
-            EntityOutputS(),
-        )
-
-        leader.reset()
-        follower.reset()
-
-        self.assertEqual(leader.cxt.cmd.stage, FormStageE.NONE)
-        self.assertEqual(leader.cxt.selfState.pos.h, 0.0)
-        self.assertEqual(leader._outbox, [])
-        self.assertIs(leader._task_u.remote, leader._remote)
-        self.assertEqual(follower.cxt.cmd.stage, FormStageE.NONE)
-        self.assertEqual(follower.cxt.leaderState.pos.h, 0.0)
-        self.assertEqual(follower._inbox, [])
-        self.assertIs(follower._inbound_y.leaderState, follower.cxt.leaderState)
 
 
 if __name__ == "__main__":

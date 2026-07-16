@@ -15,8 +15,6 @@ from src.algorithm.units.algo.ctrl.ppi import PPIInitS
 from src.algorithm.units.algo.pos_track.base import (
     PosTrackBase,
     PosTrackInitS,
-    PosTrackInputS,
-    PosTrackOutputS,
 )
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngleInitS
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
@@ -43,19 +41,21 @@ _COMMAND_TO_STRATEGY = {
 class _NoopPosTrack(PosTrackBase):
     """空位置跟踪产品。注意：保持旧 NONE 分支只清零加速度的语义。"""
 
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：空产品直接原地更新停控字段。"""
+        self._runtime = runtime
+
     def init(self, cfg: PosTrackInitS) -> None:
         """初始化空产品。注意：无控制参数和动态状态。"""
         del cfg
 
-    def step(self, u: PosTrackInputS, y: PosTrackOutputS) -> None:
+    def step(self) -> None:
         """输出停控结果。注意：有效指令保持为 PosCalc 生成的 selfCmd。"""
         # NOOP 只关闭加速度控制，不清除位置解算生成的诊断目标。
         # effectiveCmd 仍需同步，保证长机广播与本拍 selfCmd 一致。
-        if y.accCmd is None:
-            raise ValueError("NoopPosTrack accCmd port must be bound")
-        zero_acceleration(y.accCmd)
-        if y.effectiveCmd is not None and u.selfCmd is not None:
-            copy_motion(u.selfCmd, y.effectiveCmd)
+        cxt = self._runtime.context
+        zero_acceleration(cxt.selfAccCmd)
+        copy_motion(cxt.selfCmd, cxt.effectiveCmd)
 
     def reset(self) -> None:
         """复位空产品。注意：无运行期状态。"""
@@ -163,23 +163,15 @@ class PosTrackManager:
         self._registry: dict[PosTrackStrategyE, PosTrackBase] = {}
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体运行环境。注意：位置跟踪流程自行维护控制端口。"""
-        cxt = runtime.context
-        self._bound_input = PosTrackInputS(
-            command=cxt.posTrackCommand,
-            selfCmd=cxt.selfCmd,
-            selfState=cxt.selfState,
-        )
-        self._bound_output = PosTrackOutputS(
-            accCmd=cxt.selfAccCmd,
-            diag=runtime.posTrackDiag,
-            effectiveCmd=cxt.effectiveCmd,
-        )
+        """绑定实体运行环境。注意：Manager 只读取控制命令并向产品转交环境。"""
+        self._runtime = runtime
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证创建全部控制产品。注意：不得隐式补充策略。"""
         # 实体配置明确声明能力集合，Manager 不按角色猜测缺失产品。
         # NOOP 是异常/停控路径的系统能力，也必须在配置中显式出现。
+        # 控制产品能力完全来自 Profile，Manager 不根据实体角色补充 PID。
+        # 显式能力表使缺失控制器在初始化期暴露，而不是飞行中途才失败。
         strategies = tuple(_require_strategy(item) for item in cfg.process.strategies)
         if not strategies:
             raise ValueError("processes.pos_track.strategies 不得为空")
@@ -189,32 +181,28 @@ class PosTrackManager:
             raise ValueError("processes.pos_track.strategies 必须显式包含 NOOP")
         # 每个 PID 产品只构造一次，积分器状态随产品对象跨帧保留。
         self._registry = {strategy: _BUILDERS[strategy](cfg.entity) for strategy in strategies}
+        # 建造函数只负责静态增益初始化，黑板绑定统一在产品全部创建后完成。
+        # 各产品共享 runtime，但只能读写自身控制契约内的字段。
+        for strategy in self._registry.values():
+            strategy.bind(self._runtime)
 
-    def step(
-        self,
-        u: PosTrackInputS | None = None,
-        y: PosTrackOutputS | None = None,
-    ) -> None:
+    def step(self) -> None:
         """按控制命令执行缓存产品。注意：命令与策略固定一一对应。"""
-        if u is None and y is None:
-            u = self._bound_input
-            y = self._bound_output
-        elif u is None or y is None:
-            raise ValueError("PosTrackManager 输入输出端口必须同时提供")
         # command 来自 PosCalc 的统一输出，不允许 Entity 二次改写。
         # 未配置产品属于装配错误，不能临时回退到另一控制器。
-        if u.command is None:
-            raise ValueError("PosTrackManager command port must be bound")
-        if not isinstance(u.command.mode, PosTrackCommandE):
+        # 命令由 PosCalc 在同一拍发布，位置跟踪不得反向读取任务阶段重新判断。
+        # 一一映射保证同一控制语义在所有实体上选择相同类型的控制产品。
+        command = self._runtime.context.posTrackCommand
+        if not isinstance(command.mode, PosTrackCommandE):
             raise ValueError("位置跟踪命令必须是 PosTrackCommandE")
-        strategy_type = _COMMAND_TO_STRATEGY.get(u.command.mode)
+        strategy_type = _COMMAND_TO_STRATEGY.get(command.mode)
         if strategy_type is None:
-            raise ValueError(f"不支持的位置跟踪命令: {u.command.mode!r}")
+            raise ValueError(f"不支持的位置跟踪命令: {command.mode!r}")
         strategy = self._registry.get(strategy_type)
         if strategy is None:
             raise ValueError(f"位置跟踪策略未配置: {strategy_type.name}")
         # 运行期仅切换缓存引用，PID 积分状态不会因任务阶段变化丢失。
-        strategy.step(u, y)
+        strategy.step()
 
     def reset(self) -> None:
         """复位全部缓存产品。注意：保留配置和实例。"""
