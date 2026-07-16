@@ -77,11 +77,11 @@ class TestConfigValidation(unittest.TestCase):
                 PointMassModelConfig(**{**cfg.__dict__, "nx_min": 1.0, "nx_max": 1.0})
             )
 
-    def test_nz_min_must_be_non_negative(self):
+    def test_n_normal_min_must_be_non_negative(self):
         cfg = _default_config()
-        with self.assertRaisesRegex(ValueError, "nz_min"):
+        with self.assertRaisesRegex(ValueError, "n_normal_min"):
             ModelIterator._validate_config(
-                PointMassModelConfig(**{**cfg.__dict__, "nz_min": -0.1})
+                PointMassModelConfig(**{**cfg.__dict__, "n_normal_min": -0.1})
             )
 
     def test_phi_min_must_be_less_than_phi_max(self):
@@ -95,20 +95,30 @@ class TestConfigValidation(unittest.TestCase):
                 )
             )
 
-    def test_nz_max_must_cover_trim(self):
-        """nz_max < 1.0 makes level-flight trim unreachable — must raise."""
+    def test_n_normal_max_must_cover_trim(self):
+        """法向合过载上限低于 1g 时无法平飞配平，必须拒绝。"""
         cfg = _default_config()
-        with self.assertRaisesRegex(ValueError, "nz_max"):
+        with self.assertRaisesRegex(ValueError, "n_normal_max"):
             ModelIterator._validate_config(
-                PointMassModelConfig(**{**cfg.__dict__, "nz_max": 0.9})
+                PointMassModelConfig(**{**cfg.__dict__, "n_normal_max": 0.9})
             )
 
-    def test_nz_min_must_not_exceed_trim(self):
-        """nz_min > 1.0 excludes level-flight trim nz=1 from the range — must raise."""
+    def test_n_normal_min_must_not_exceed_trim(self):
+        """法向合过载下限高于 1g 时无法平飞配平，必须拒绝。"""
         cfg = _default_config()
-        with self.assertRaisesRegex(ValueError, "nz"):
+        with self.assertRaisesRegex(ValueError, "n_normal"):
             ModelIterator._validate_config(
-                PointMassModelConfig(**{**cfg.__dict__, "nz_min": 1.5, "nz_max": 4.0})
+                PointMassModelConfig(
+                    **{**cfg.__dict__, "n_normal_min": 1.5, "n_normal_max": 4.0}
+                )
+            )
+
+    def test_old_nz_magnitude_limit_names_are_rejected(self):
+        """旧 nz 上下限把合量冒充 z 分量，必须显式迁移而不能静默兼容。"""
+
+        with self.assertRaisesRegex(ValueError, "n_normal_min/n_normal_max"):
+            ModelIterator._parse_model_config(
+                {"limits": {"nz_min": 0.0, "nz_max": 4.0}}
             )
 
     def test_nx_range_must_include_zero(self):
@@ -142,6 +152,15 @@ class TestConfigValidation(unittest.TestCase):
         self.assertEqual(cfg.max_climb_rate_mps, ModelIterator.DEFAULT_MAX_CLIMB_RATE_MPS)
         self.assertEqual(cfg.max_descent_rate_mps, ModelIterator.DEFAULT_MAX_DESCENT_RATE_MPS)
 
+    def test_model_numeric_config_must_be_finite(self):
+        cfg = _default_config()
+        with self.assertRaisesRegex(ValueError, "finite"):
+            ModelIterator._validate_config(
+                PointMassModelConfig(
+                    **{**cfg.__dict__, "n_normal_max": float("nan")}
+                )
+            )
+
     def test_vertical_rate_limits_must_be_positive(self):
         cfg = _default_config()
         with self.assertRaisesRegex(ValueError, "max_climb_rate"):
@@ -159,12 +178,13 @@ class TestConfigValidation(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestAccelerationRoundTrip(unittest.TestCase):
-    def test_level_trim_converts_to_nx0_nz1_phi0(self):
-        """Zero ENU command at level flight → Nx=0, Nz=1, phi=0."""
+    def test_level_trim_converts_to_nx0_ny1_nz0_phi0(self):
+        """平飞零加速度对应前向 0、上向 1g、右向 0。"""
         m = _model()
         inputs = m.acceleration_to_inputs([0.0, 0.0, 0.0], 0.0, 0.0)
         self.assertAlmostEqual(inputs.nx, 0.0, delta=1e-9)
-        self.assertAlmostEqual(inputs.nz, 1.0, delta=1e-9)
+        self.assertAlmostEqual(inputs.ny, 1.0, delta=1e-9)
+        self.assertAlmostEqual(inputs.nz, 0.0, delta=1e-9)
         self.assertAlmostEqual(inputs.phi_rad, 0.0, delta=1e-9)
 
     def test_positive_east_command_heading_east(self):
@@ -174,17 +194,23 @@ class TestAccelerationRoundTrip(unittest.TestCase):
         self.assertGreater(inputs.nx, 0.0)
 
     def test_positive_north_command_heading_east_turns_left(self):
-        """North cmd while heading east → CCW turn (psi increasing), phi > 0 in this model's convention."""
+        """朝东飞时北向指令为左转：nz/phi 为负，psi_dot 为正。"""
         m = _model()
         inputs = m.acceleration_to_inputs([0.0, 2.0, 0.0], 0.0, 0.0)
-        # psi_dot = g * nz * sin(phi) / speed; to turn north (CCW), psi_dot > 0 → phi > 0
-        self.assertGreater(inputs.phi_rad, 0.0)
+        self.assertLess(inputs.nz, 0.0)
+        self.assertLess(inputs.phi_rad, 0.0)
+        self.assertGreater(
+            m.compute_psi_dot_rad_s(m.config.gravity_mps2, inputs.nz, 10.0, 1.0),
+            0.0,
+        )
 
-    def test_positive_up_command_increases_nz(self):
-        """Up command adds lift force → Nz > 1."""
+    def test_positive_up_command_increases_ny_and_normal_load(self):
+        """天向指令增加 FUR 上向分量与法向合过载，不应伪造右向 nz。"""
         m = _model()
         inputs = m.acceleration_to_inputs([0.0, 0.0, 3.0], 0.0, 0.0)
-        self.assertGreater(inputs.nz, 1.0)
+        self.assertGreater(inputs.ny, 1.0)
+        self.assertAlmostEqual(inputs.nz, 0.0, delta=1e-9)
+        self.assertGreater(inputs.n_normal, 1.0)
 
     def test_inverse_map_is_consistent(self):
         """iterator._inputs_to_enu then model.acceleration_to_inputs should return original inputs."""
@@ -193,14 +219,173 @@ class TestAccelerationRoundTrip(unittest.TestCase):
 
         theta = math.radians(5.0)
         psi = math.radians(45.0)
-        nx_in, nz_in, phi_in = 0.1, 1.05, math.radians(15.0)
+        nx_in, n_normal_in, phi_in = 0.1, 1.05, math.radians(15.0)
+        ny_in = n_normal_in * math.cos(phi_in)
+        nz_in = n_normal_in * math.sin(phi_in)
 
-        ax, ay, az = it._inputs_to_enu_acceleration(nx_in, nz_in, phi_in, theta, psi)
+        ax, ay, az = it._inputs_to_enu_acceleration(
+            nx_in, ny_in, nz_in, theta, psi
+        )
         result = it._system.acceleration_to_inputs([ax, ay, az], theta, psi)
 
         self.assertAlmostEqual(result.nx, nx_in, delta=1e-6)
+        self.assertAlmostEqual(result.ny, ny_in, delta=1e-6)
         self.assertAlmostEqual(result.nz, nz_in, delta=1e-6)
+        self.assertAlmostEqual(result.n_normal, n_normal_in, delta=1e-6)
         self.assertAlmostEqual(result.phi_rad, phi_in, delta=1e-6)
+
+
+class TestSovietTrackLoadContract(unittest.TestCase):
+    """锁定动力学航迹系为前、上、右，避免左右符号再次靠抵消维持。"""
+
+    def test_level_trim_is_nx0_ny1_nz0(self) -> None:
+        """平飞配平只有上向过载，右侧向分量必须为零。"""
+
+        inputs = _model().acceleration_to_inputs([0.0, 0.0, 0.0], 0.0, 0.0)
+
+        self.assertAlmostEqual(inputs.nx, 0.0, delta=1e-9)
+        self.assertAlmostEqual(inputs.ny, 1.0, delta=1e-9)
+        self.assertAlmostEqual(inputs.nz, 0.0, delta=1e-9)
+        self.assertAlmostEqual(inputs.n_normal, 1.0, delta=1e-9)
+        self.assertAlmostEqual(inputs.phi_rad, 0.0, delta=1e-9)
+
+    def test_right_acceleration_has_positive_nz_and_bank(self) -> None:
+        """朝东飞行时南向为右，故右向指令必须得到正 nz 和正滚转角。"""
+
+        inputs = _model().acceleration_to_inputs([0.0, -2.0, 0.0], 0.0, 0.0)
+
+        self.assertGreater(inputs.nz, 0.0)
+        self.assertGreater(inputs.phi_rad, 0.0)
+
+    def test_left_acceleration_has_negative_nz_and_bank(self) -> None:
+        """朝东飞行时北向为左，故左向指令必须得到负 nz 和负滚转角。"""
+
+        inputs = _model().acceleration_to_inputs([0.0, 2.0, 0.0], 0.0, 0.0)
+
+        self.assertLess(inputs.nz, 0.0)
+        self.assertLess(inputs.phi_rad, 0.0)
+
+    def test_explicit_right_axis_keeps_legacy_no_wind_state_derivative(self) -> None:
+        """把旧左向量及正号方程同时翻成右向量及负号后，名义轨迹导数必须不变。"""
+
+        model = _model()
+        theta = math.radians(8.0)
+        psi = math.radians(35.0)
+        speed = 24.0
+        ax, ay, az = 0.4, 1.8, 0.6
+        state = [0.0, 0.0, 1000.0, speed, theta, psi, ax, ay, az, 0.0, 0.0, 0.0]
+
+        derivative = model.derivative(state, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+
+        gravity = model.config.gravity_mps2
+        cos_theta = math.cos(theta)
+        sin_theta = math.sin(theta)
+        cos_psi = math.cos(psi)
+        sin_psi = math.sin(psi)
+        force_east, force_north, force_up = ax, ay, az + gravity
+        legacy_forward = (
+            cos_theta * cos_psi * force_east
+            + cos_theta * sin_psi * force_north
+            + sin_theta * force_up
+        )
+        legacy_up = (
+            -sin_theta * cos_psi * force_east
+            - sin_theta * sin_psi * force_north
+            + cos_theta * force_up
+        )
+        legacy_left = -sin_psi * force_east + cos_psi * force_north
+        expected_speed_dot = legacy_forward - gravity * sin_theta
+        expected_theta_dot = (legacy_up - gravity * cos_theta) / speed
+        expected_psi_dot = legacy_left / (speed * cos_theta)
+
+        self.assertAlmostEqual(derivative[3], expected_speed_dot, delta=1e-12)
+        self.assertAlmostEqual(derivative[4], expected_theta_dot, delta=1e-12)
+        self.assertAlmostEqual(derivative[5], expected_psi_dot, delta=1e-12)
+
+
+class TestAirAndGroundVelocityContract(unittest.TestCase):
+    """锁定动力学使用空速、制导和日志使用地速的分层契约。"""
+
+    def test_crosswind_is_included_in_ground_velocity_and_track(self) -> None:
+        """东向空速叠加北风后，地速与地面航迹角必须同步反映横风。"""
+
+        iterator = ModelIterator()
+        iterator.init({"nodes": [{"node_id": "A", "speed_mps": 15.0, "psi_v_deg": 0.0}]}, seed=0)
+        iterator.inject_wind({"params": {"speed_mps": 5.0, "direction_deg": 90.0}})
+
+        state = iterator.read_states()["A"]
+
+        self.assertAlmostEqual(state.air_vx_mps, 15.0, delta=1e-9)
+        self.assertAlmostEqual(state.air_vy_mps, 0.0, delta=1e-9)
+        self.assertAlmostEqual(state.ground_vx_mps, 15.0, delta=1e-9)
+        self.assertAlmostEqual(state.ground_vy_mps, 5.0, delta=1e-9)
+        self.assertAlmostEqual(state.ground_psi_rad, math.atan2(5.0, 15.0), delta=1e-9)
+
+    def test_crosswind_ground_course_rate_is_not_air_heading_rate(self) -> None:
+        """横风下地面航迹率由地速矢量导数决定，不能直接复制空速航向率。"""
+
+        iterator = ModelIterator()
+        iterator.init(
+            {
+                "nodes": [
+                    {
+                        "node_id": "A",
+                        "speed_mps": 10.0,
+                        "psi_v_deg": 0.0,
+                        "ay_mps2": 2.0,
+                    }
+                ]
+            },
+            seed=0,
+        )
+        iterator.inject_wind(
+            {"params": {"speed_mps": 10.0, "direction_deg": 90.0}}
+        )
+
+        state = iterator.read_states()["A"]
+
+        self.assertGreater(state.psi_dot_deg_s, 0.0)
+        self.assertAlmostEqual(
+            state.ground_psi_dot_deg_s,
+            0.5 * state.psi_dot_deg_s,
+            delta=1e-9,
+        )
+
+    def test_inconsistent_initial_velocity_representations_are_rejected(self) -> None:
+        """速度分量与标量/角度不能拼成第三个未声明的初始速度向量。"""
+
+        iterator = ModelIterator()
+        with self.assertRaisesRegex(ValueError, "velocity representations"):
+            iterator.init(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "A",
+                            "speed_mps": 10.0,
+                            "vx_mps": 0.0,
+                            "vy_mps": 10.0,
+                            "vz_mps": 5.0,
+                            "theta_deg": 0.0,
+                        }
+                    ]
+                },
+                seed=0,
+            )
+
+    def test_invalid_wind_vectors_are_rejected(self) -> None:
+        """风矢量必须由有限的非负水平风速、方向和垂向分量构成。"""
+
+        iterator = ModelIterator()
+        iterator.init({"nodes": [{"node_id": "A", "speed_mps": 15.0}]}, seed=0)
+        invalid_params = (
+            {"speed_mps": -1.0},
+            {"speed_mps": float("nan")},
+            {"speed_mps": 1.0, "direction_deg": float("inf")},
+            {"speed_mps": 1.0, "vertical_mps": float("nan")},
+        )
+        for params in invalid_params:
+            with self.subTest(params=params), self.assertRaisesRegex(ValueError, "wind"):
+                iterator.inject_wind({"params": params})
 
 
 # ---------------------------------------------------------------------------
@@ -227,10 +412,10 @@ class TestSaturation(unittest.TestCase):
         inputs = m.acceleration_to_inputs([100.0, 0.0, 0.0], 0.0, 0.0)
         self.assertLessEqual(inputs.nx, m.config.nx_max)
 
-    def test_nz_clamped_by_config_limits(self):
+    def test_normal_load_is_clamped_by_config_limits(self):
         m = _model()
         inputs = m.acceleration_to_inputs([0.0, 0.0, 100.0], 0.0, 0.0)
-        self.assertLessEqual(inputs.nz, m.config.nz_max)
+        self.assertLessEqual(inputs.n_normal, m.config.n_normal_max)
 
     def test_climb_rate_is_limited_by_config(self):
         cfg = PointMassModelConfig(
@@ -397,32 +582,55 @@ class TestRK4Step(unittest.TestCase):
 
 class TestInitialStateVelocityComponents(unittest.TestCase):
     def test_vx_vy_override_derives_psi(self):
-        """Providing vx/vy should override psi_v_deg derived from default 0."""
+        """纯 ENU 分量表示应由 vx/vy 推导空速航向。"""
         it = ModelIterator()
-        it.init({"nodes": [{"node_id": "A", "speed_mps": 10.0, "vx_mps": 0.0, "vy_mps": 10.0}]}, seed=0)
+        it.init(
+            {"nodes": [{"node_id": "A", "vx_mps": 0.0, "vy_mps": 10.0}]},
+            seed=0,
+        )
         state = it.read_states()["A"]
         self.assertAlmostEqual(state.psi_rad, math.radians(90.0), delta=1e-6)
 
     def test_vz_derives_theta(self):
-        """Positive vz while not specifying theta_deg → positive climb angle."""
+        """纯 ENU 分量表示应由 vz 推导空速航迹倾角。"""
         speed = 10.0
         vz = 2.0
         it = ModelIterator()
-        it.init({"nodes": [{"node_id": "A", "speed_mps": speed, "vx_mps": 0.0, "vy_mps": speed, "vz_mps": vz}]}, seed=0)
+        it.init(
+            {
+                "nodes": [
+                    {
+                        "node_id": "A",
+                        "vx_mps": 0.0,
+                        "vy_mps": speed,
+                        "vz_mps": vz,
+                    }
+                ]
+            },
+            seed=0,
+        )
         state = it.read_states()["A"]
         expected_theta = math.asin(vz / math.sqrt(speed ** 2 + vz ** 2))
         self.assertAlmostEqual(state.theta_rad, expected_theta, delta=1e-6)
 
-    def test_explicit_theta_deg_not_overridden_by_vz(self):
-        """If theta_deg is supplied alongside velocity components, it takes priority."""
+    def test_explicit_theta_and_velocity_components_are_rejected(self):
+        """球面角与 ENU 分量是两套权威，禁止靠优先级掩盖冲突。"""
         it = ModelIterator()
-        it.init({"nodes": [{
-            "node_id": "A", "speed_mps": 10.0,
-            "vx_mps": 0.0, "vy_mps": 10.0, "vz_mps": 5.0,
-            "theta_deg": 0.0,
-        }]}, seed=0)
-        state = it.read_states()["A"]
-        self.assertAlmostEqual(state.theta_rad, 0.0, delta=1e-9)
+        with self.assertRaisesRegex(ValueError, "velocity representations"):
+            it.init(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "A",
+                            "vx_mps": 0.0,
+                            "vy_mps": 10.0,
+                            "vz_mps": 5.0,
+                            "theta_deg": 0.0,
+                        }
+                    ]
+                },
+                seed=0,
+            )
 
     def test_initial_vz_is_clamped_by_vertical_rate_limit(self):
         """初始垂向速度分量超过包线时，应裁剪航迹倾角而不是保留不可飞爬升率。"""
@@ -430,7 +638,14 @@ class TestInitialStateVelocityComponents(unittest.TestCase):
         it.init(
             {
                 "model": {"limits": {"max_climb_rate_mps": 2.0}},
-                "nodes": [{"node_id": "A", "speed_mps": 10.0, "vx_mps": 10.0, "vy_mps": 0.0, "vz_mps": 6.0}],
+                "nodes": [
+                    {
+                        "node_id": "A",
+                        "vx_mps": 10.0,
+                        "vy_mps": 0.0,
+                        "vz_mps": 6.0,
+                    }
+                ],
             },
             seed=0,
         )
@@ -438,6 +653,68 @@ class TestInitialStateVelocityComponents(unittest.TestCase):
         state = it.read_states()["A"]
 
         self.assertLessEqual(state.vz_mps, 2.0 + 1e-9)
+
+
+class TestInitialLoadRepresentations(unittest.TestCase):
+    """锁定初始过载也只能使用一套 FUR 表示，避免旧 nz 合量语义回流。"""
+
+    def test_polar_normal_load_is_resolved_to_ny_nz(self) -> None:
+        iterator = ModelIterator()
+        iterator.init(
+            {
+                "nodes": [
+                    {
+                        "node_id": "A",
+                        "speed_mps": 20.0,
+                        "n_normal": 1.1,
+                        "phi_deg": 20.0,
+                    }
+                ]
+            },
+            seed=0,
+        )
+
+        state = iterator.read_states()["A"]
+
+        self.assertAlmostEqual(state.n_normal, 1.1, delta=1e-9)
+        self.assertAlmostEqual(state.ny, 1.1 * math.cos(math.radians(20.0)), delta=1e-9)
+        self.assertAlmostEqual(state.nz, 1.1 * math.sin(math.radians(20.0)), delta=1e-9)
+        self.assertAlmostEqual(state.phi_deg, 20.0, delta=1e-9)
+
+    def test_axis_and_polar_load_representations_cannot_mix(self) -> None:
+        iterator = ModelIterator()
+        with self.assertRaisesRegex(ValueError, "load representations"):
+            iterator.init(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "A",
+                            "speed_mps": 20.0,
+                            "ny": 1.0,
+                            "nz": 0.0,
+                            "n_normal": 1.0,
+                        }
+                    ]
+                },
+                seed=0,
+            )
+
+    def test_negative_normal_load_magnitude_is_rejected(self) -> None:
+        iterator = ModelIterator()
+        with self.assertRaisesRegex(ValueError, "n_normal"):
+            iterator.init(
+                {
+                    "nodes": [
+                        {
+                            "node_id": "A",
+                            "speed_mps": 20.0,
+                            "n_normal": -1.0,
+                            "phi_deg": 0.0,
+                        }
+                    ]
+                },
+                seed=0,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -482,16 +759,14 @@ class TestLegacyConfigFields(unittest.TestCase):
 
 class TestPsiNormalization(unittest.TestCase):
     def test_compute_psi_dot_rad_s_fixed_values(self):
-        """固定数值验证公式幅值和单位：g=10, nz=2, phi=30°, V=20, cos_theta=0.5 → 精确 1 rad/s。"""
-        # 手算：10 × 2 × sin(30°) / (20 × 0.5) = 10 × 2 × 0.5 / 10 = 1.0 rad/s
+        """固定数值验证 z 向右为正、航向左转为正，二者符号相反。"""
         result = PointMass3DoFModel.compute_psi_dot_rad_s(
             gravity=10.0,
-            nz=2.0,
-            phi_rad=math.radians(30.0),
+            nz=1.0,
             speed=20.0,
             cos_theta=0.5,
         )
-        self.assertAlmostEqual(result, 1.0, delta=1e-12)
+        self.assertAlmostEqual(result, -1.0, delta=1e-12)
 
     def test_psi_dot_deg_s_level_flight_is_zero(self):
         """水平飞行零滚转时偏航角速率应为零。"""
@@ -500,8 +775,8 @@ class TestPsiNormalization(unittest.TestCase):
         state = it.read_states()["A"]
         self.assertAlmostEqual(state.psi_dot_deg_s, 0.0, delta=1e-6)
 
-    def test_psi_dot_deg_s_positive_roll_positive_turn(self):
-        """正滚转角（左倾）应产生正偏航角速率（左转/逆时针）。"""
+    def test_left_bank_and_left_turn_are_both_negative_right_axis(self):
+        """北向指令使飞机左倾：phi/nz 为负，而左转 psi_dot 为正。"""
         it = ModelIterator()
         it.init({"nodes": [{"node_id": "A", "speed_mps": 50.0}]}, seed=0)
         limit = ModelIterator.DEFAULT_ACCELERATION_COMMAND_LIMIT_MPS2
@@ -509,7 +784,8 @@ class TestPsiNormalization(unittest.TestCase):
         for _ in range(20):
             it.step(0.005)
         state = it.read_states()["A"]
-        self.assertGreater(state.phi_rad, 0.0)
+        self.assertLess(state.phi_rad, 0.0)
+        self.assertLess(state.nz, 0.0)
         self.assertGreater(state.psi_dot_deg_s, 0.0)
 
     def test_psi_dot_deg_s_uses_config_min_speed(self):
@@ -529,7 +805,7 @@ class TestPsiNormalization(unittest.TestCase):
         speed = max(min_speed, state.speed_mps)
         expected = _math.degrees(
             PointMass3DoFModel.compute_psi_dot_rad_s(
-                it._config.gravity_mps2, state.nz, state.phi_rad, speed, cos_theta
+                it._config.gravity_mps2, state.nz, speed, cos_theta
             )
         )
         self.assertAlmostEqual(state.psi_dot_deg_s, expected, delta=1e-6)
@@ -552,7 +828,7 @@ class TestPsiNormalization(unittest.TestCase):
         speed = max(it._config.min_speed_mps, state.speed_mps)
         expected = _math.degrees(
             PointMass3DoFModel.compute_psi_dot_rad_s(
-                gravity, state.nz, state.phi_rad, speed, cos_theta
+                gravity, state.nz, speed, cos_theta
             )
         )
         self.assertAlmostEqual(state.psi_dot_deg_s, expected, delta=1e-6)

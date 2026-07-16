@@ -1,4 +1,4 @@
-"""僚机实体的槽位几何目标计算。注意：支持普通槽位和集结槽位缩放，槽位随长机水平航迹旋转。"""
+"""僚机实体的槽位几何目标计算。注意：槽位使用长机三维 FUR 航迹系。"""
 
 from __future__ import annotations
 
@@ -12,9 +12,15 @@ from src.algorithm.context.leaf_types import (
     RallySlotScaleS,
     copy_velocity,
 )
-from src.algorithm.units.algo.formation_math import horizontal_track_basis, horizontal_track_vector_to_enu
 from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
 from src.algorithm.units.algo.td_han import TdHan, TdHanInitS
+from src.common.coordinates import (
+    FurBasis,
+    enu_to_fur,
+    fur_basis_from_angles,
+    fur_basis_from_velocity,
+    fur_to_enu,
+)
 
 _GRAVITY_MPS2 = 9.80665
 # 相对槽位 TD 的加速度上界默认 = 0.8×各轴加速度权限：前向/垂向按加速度指令上限 6.0；侧向按 g·tan(40°)≈8.2。
@@ -57,7 +63,7 @@ class SlotGeometryInputS(PosCalcInputS):
 
 
 class SlotGeometry(PosCalcBase):
-    """僚机槽位目标计算器。注意：产出随长机水平航迹旋转和可选缩放的槽位目标，前向待飞距闭环交给 PidCompose。"""
+    """僚机槽位目标计算器。注意：槽位使用长机三维 FUR 航迹系，前向待飞距闭环交给 PidCompose。"""
 
     def __init__(self) -> None:
         """初始化 SlotGeometry 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -98,45 +104,78 @@ class SlotGeometry(PosCalcBase):
         if slot is None:
             raise ValueError(f"missing slot for selfId: {self._self_id}")
 
-        frame, track = _select_frame_and_track(u.leaderCmd, u.leaderState)
-        track_defined = track is not None
+        # 指令航迹可用时优先稳定队形朝向；否则退回实际航迹，位置原点始终取长机实际位置。
+        frame, basis = _select_frame_and_basis(u.leaderCmd, u.leaderState)
 
-        # 相对槽位 TD 软化：只对长机航迹系下的 (x 前向, y 上, z 右) 三路做——绝对(长机)位置连续、不过 TD。
+        # 相对槽位 TD 软化：只对长机 FUR 航迹系下的 (x 前向, y 上法向, z 右) 三路做。
         # sx/sy/sz 为平滑后的相对偏移，vfx/vfy/vfz 为其导数(相对槽位切换速度前馈)。关闭或未播种时透传原始槽位。
-        sx, sy, sz, vfx, vfy, vfz = self._smooth_slot(slot, track, u)
-
-        if track is None:
-            # 长机水平航迹未定义时按东向航迹兜底，避免起步/悬停首拍崩溃。
-            slot_east, slot_north = sx, -sz
-        else:
-            # FormPosS 使用 x 前向、z 右侧向，与水平航迹转换函数的轴序一致。
-            slot_east, slot_north = horizontal_track_vector_to_enu((sx, sz), track)
+        # TD 工作在缩放前的槽位坐标中，使集结比例变化不会反向污染平滑器内部状态。
+        sx, sy, sz, vfx, vfy, vfz = self._smooth_slot(slot, basis, u)
+        scale = u.slotScale.scale if u.slotScale is not None else 1.0
+        scale_rate = u.slotScale.scaleRate if u.slotScale is not None else 0.0
+        # 集结缩放只作用于队形平面尺寸 x/z；y 仍表示固定的上法向间隔。
+        slot_fur = (scale * sx, sy, scale * sz)
+        transform_basis = basis if basis is not None else fur_basis_from_angles(0.0, 0.0)
+        # 长机航迹未定义时按“东向平飞”的 FUR 兜底，保持 x→东、y→天、z→南的旧行为。
+        # 兜底基仍满足前上右手性，只是不声称能代表零水平速度时不存在的真实航向。
+        slot_east, slot_north, slot_up = fur_to_enu(slot_fur, transform_basis)
+        # 槽位是相对量，完成旋转后再叠加长机实际 ENU 位置，不能使用指令位置作原点。
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
-        y.selfCmd.pos.h = u.leaderState.pos.h + sy
+        y.selfCmd.pos.h = u.leaderState.pos.h + slot_up
         copy_velocity(frame.v, y.selfCmd.v)
         # 槽位随长机指令航迹刚性旋转，避免长机实际速度受扰时把僚机坐标系带乱。
         y.selfCmd.v.dVPsi = frame.v.dVPsi
-        # 相对槽位垂向速度前馈叠加(TD 的 x2)；巡航无重构时 vfy=0，等价旧行为。
-        y.selfCmd.v.vUp = u.leaderState.v.vUp + vfy
-        if track_defined:
-            track_x, track_y = track
-            # 槽位速度前馈：槽位随长机刚性旋转，其真实速度 v_S = (V + b·ω)·t̂ + (a·ω)·n̂，
-            # 其中 a=slot.x(前向)、b=slot.z(右向)、ω=长机偏航角速率、n̂=左单位向量。用平滑后的 sx/sz。
-            # 沿航迹分量按 b·ω 增减(对某一转向，外侧半径大加速、内侧减速)；a·ω 补后方槽位转弯时的横扫。
+        if basis is not None:
+            # 偏航角速率左转为正，而 FUR 的 z 轴向右；刚体偏航速度统一在右轴表达。
+            # 因右轴与左转正方向相反，后方槽位的横扫项在水平飞行时表现为 -a·omega。
+            # theta 固定时：v_F=b·ω·cosθ，v_U=-b·ω·sinθ，v_R=(-a·cosθ+y·sinθ)·ω。
+            # 当前状态不提供 theta_dot，故这里只加入偏航刚体项；水平飞行时严格退化为 (b·ω, 0, -a·ω)。
             omega = frame.v.dVPsi
-            v_along = frame.v.vd + sz * omega
-            v_swing = sx * omega
-            left_x, left_y = -track_y, track_x
-            # 刚体旋转速度前馈 + 相对槽位切换速度前馈(TD x2 由航迹系转 ENU 叠加)。
-            rel_e, rel_n = horizontal_track_vector_to_enu((vfx, vfz), track)
-            y.selfCmd.v.vEast = v_along * track_x + v_swing * left_x + rel_e
-            y.selfCmd.v.vNorth = v_along * track_y + v_swing * left_y + rel_n
-            # 前向待飞距闭环已下沉到 PidCompose 的前向位置环，这里只产出纯几何目标与速度前馈，不再读本机状态。
-            y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
-            y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
-        if u.slotScale is not None:
-            self._apply_slot_scale(u, y, frame)
+            # cos_theta 和 sin_theta 直接从单位前轴读取，避免再次由速度反解角度引入分支差异。
+            cos_theta = math.hypot(basis[0][0], basis[0][1])
+            sin_theta = basis[0][2]
+            yaw_velocity_fur = (
+                slot_fur[2] * omega * cos_theta,
+                -slot_fur[2] * omega * sin_theta,
+                (-slot_fur[0] * cos_theta + slot_fur[1] * sin_theta) * omega,
+            )
+            # TD 导数及 scaleRate 也在同一 FUR 基中叠加，避免先转世界系再缩放破坏三维轴义。
+            # 缩放只作用 x/z，因此 y 通道仅保留 TD 自身导数，不叠加 scaleRate。
+            transition_velocity_fur = (
+                scale * vfx + scale_rate * sx,
+                vfy,
+                scale * vfz + scale_rate * sz,
+            )
+            relative_velocity_fur = (
+                yaw_velocity_fur[0] + transition_velocity_fur[0],
+                yaw_velocity_fur[1] + transition_velocity_fur[1],
+                yaw_velocity_fur[2] + transition_velocity_fur[2],
+            )
+            rel_e, rel_n, rel_u = fur_to_enu(relative_velocity_fur, basis)
+            y.selfCmd.v.vEast = frame.v.vEast + rel_e
+            y.selfCmd.v.vNorth = frame.v.vNorth + rel_n
+            y.selfCmd.v.vUp = frame.v.vUp + rel_u
+        else:
+            # 兜底帧无旋转语义，仅保留队形重构和缩放速度前馈。
+            transition_velocity_fur = (
+                scale * vfx + scale_rate * sx,
+                vfy,
+                scale * vfz + scale_rate * sz,
+            )
+            rel_e, rel_n, rel_u = fur_to_enu(transition_velocity_fur, transform_basis)
+            y.selfCmd.v.vEast = frame.v.vEast + rel_e
+            y.selfCmd.v.vNorth = frame.v.vNorth + rel_n
+            y.selfCmd.v.vUp = frame.v.vUp + rel_u
+        # 前向待飞距闭环已下沉到 PidCompose；本单元只产出几何目标与刚体/重构速度前馈。
+        # 三个 ENU 速度分量更新后必须同步派生 vd、vPsi、vTheta，保证下游读到自洽指令。
+        y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
+        y.selfCmd.v.vPsi = (
+            math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
+            if y.selfCmd.v.vd > 0.0
+            else 0.0
+        )
+        y.selfCmd.v.vTheta = math.atan2(y.selfCmd.v.vUp, y.selfCmd.v.vd)
         return None
 
     def reset(self) -> None:
@@ -149,7 +188,7 @@ class SlotGeometry(PosCalcBase):
         return None
 
     def _smooth_slot(
-        self, slot: FormPosS, track: tuple[float, float] | None, u: SlotGeometryInputS
+        self, slot: FormPosS, basis: FurBasis | None, u: SlotGeometryInputS
     ) -> tuple[float, float, float, float, float, float]:
         """对相对槽位 (x前向, y上, z右) 三路做 Han TD 软化，返回 (sx, sy, sz, vfx, vfy, vfz)。
 
@@ -158,10 +197,10 @@ class SlotGeometry(PosCalcBase):
         if not self._td_enabled:
             return slot.x, slot.y, slot.z, 0.0, 0.0, 0.0
         if not self._seeded:
-            if track is None or u.selfState is None:
+            if basis is None or u.selfState is None:
                 # 播种条件不足，本拍先透传原始槽位、待下一拍航迹可用时再对齐当前位置播种。
                 return slot.x, slot.y, slot.z, 0.0, 0.0, 0.0
-            self._seed_from_current(slot, track, u)
+            self._seed_from_current(basis, u)
             self._seeded = True
         sx, vfx = self._td_x.step(slot.x)
         sy, vfy = self._td_y.step(slot.y)
@@ -170,16 +209,14 @@ class SlotGeometry(PosCalcBase):
             return sx, sy, sz, 0.0, 0.0, 0.0  # 仅位置软化；速度前馈默认关(见 slotVelFf 说明)
         return sx, sy, sz, vfx * 0.2, vfy * 0.2, vfz * 0.2
 
-    def _seed_from_current(self, slot: FormPosS, track: tuple[float, float], u: SlotGeometryInputS) -> None:
-        """把本机当前位置换算成长机航迹系相对偏移，作为三路 TD 的 x1 初值(x2=0)，避免起步大阶跃。"""
+    def _seed_from_current(self, basis: FurBasis, u: SlotGeometryInputS) -> None:
+        """把本机当前位置换算成长机三维 FUR 相对偏移，作为三路 TD 初值，避免起步大阶跃。"""
         assert u.selfState is not None and u.leaderState is not None
-        track_x, track_y = track
         rel_e = u.selfState.pos.east - u.leaderState.pos.east
         rel_n = u.selfState.pos.north - u.leaderState.pos.north
-        # 投影到长机航迹系：前向=dot(rel, 前向单位)，右向=dot(rel, 右向单位=(track_y,-track_x))。
-        seed_fwd = rel_e * track_x + rel_n * track_y
-        seed_right = rel_e * track_y - rel_n * track_x
-        seed_up = u.selfState.pos.h - u.leaderState.pos.h
+        rel_u = u.selfState.pos.h - u.leaderState.pos.h
+        # 播种反投影必须复用本拍相同的三维基，否则爬升时前向距离会被误记为纯水平距离。
+        seed_fwd, seed_up, seed_right = enu_to_fur((rel_e, rel_n, rel_u), basis)
         # TD 工作在缩放前的原始槽位空间；当前相对位置是缩放后的物理量，水平需 /scale 对齐(高度不缩放)。
         if u.slotScale is not None and u.slotScale.scale > 0.0:
             seed_fwd /= u.slotScale.scale
@@ -188,41 +225,21 @@ class SlotGeometry(PosCalcBase):
         self._td_y.seed(seed_up, 0.0)
         self._td_z.seed(seed_right, 0.0)
 
-    def _apply_slot_scale(self, u: SlotGeometryInputS, y: PosCalcOutputS, frame: MotionProfS) -> None:
-        """按 slotScale 后处理槽位位置和速度。注意：高度偏置不缩放，垂向速度不加 scaleRate 项。"""
-        assert u.leaderState is not None and u.slotScale is not None and y.selfCmd is not None
-        scale = u.slotScale.scale
-        scale_rate = u.slotScale.scaleRate
-        # 世界坐标系下的未缩放水平偏置（上游刚按标准槽位写入）。
-        offset_e = y.selfCmd.pos.east - u.leaderState.pos.east
-        offset_n = y.selfCmd.pos.north - u.leaderState.pos.north
-        # 水平位置缩放；高度直接保持 leader.h + slot.y，不随 scale 扩展。
-        y.selfCmd.pos.east = u.leaderState.pos.east + scale * offset_e
-        y.selfCmd.pos.north = u.leaderState.pos.north + scale * offset_n
-        # 速度后处理：d/dt(scale·R·slot) = scale·dR/dt·slot + scaleRate·R·slot。
-        # 先提取标准槽位相对长机的旋转前馈，再乘 scale 并叠加压缩速度前馈。
-        ff_e = y.selfCmd.v.vEast - frame.v.vEast
-        ff_n = y.selfCmd.v.vNorth - frame.v.vNorth
-        y.selfCmd.v.vEast = frame.v.vEast + scale * ff_e + scale_rate * offset_e
-        y.selfCmd.v.vNorth = frame.v.vNorth + scale * ff_n + scale_rate * offset_n
-        y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
-        y.selfCmd.v.vPsi = math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
 
-
-def _horizontal_track_or_none(state: MotionProfS) -> tuple[float, float] | None:
-    """计算可用的水平航迹基向量。注意：航段退化时返回空值并由调用方兜底。"""
+def _fur_basis_or_none(state: MotionProfS) -> FurBasis | None:
+    """计算可用的三维 FUR 航迹基。注意：水平航迹退化时返回空值并由调用方兜底。"""
     try:
-        return horizontal_track_basis(state)
+        return fur_basis_from_velocity((state.v.vEast, state.v.vNorth, state.v.vUp))
     except ValueError:
         return None
 
 
-def _select_frame_and_track(
+def _select_frame_and_basis(
     leader_cmd: MotionProfS | None, leader_state: MotionProfS
-) -> tuple[MotionProfS, tuple[float, float] | None]:
+) -> tuple[MotionProfS, FurBasis | None]:
     """选择槽位航迹系参考帧。注意：默认零值 leaderCmd 不能覆盖仍有效的 leaderState。"""
     if leader_cmd is not None:
-        track = _horizontal_track_or_none(leader_cmd)
-        if track is not None:
-            return leader_cmd, track
-    return leader_state, _horizontal_track_or_none(leader_state)
+        basis = _fur_basis_or_none(leader_cmd)
+        if basis is not None:
+            return leader_cmd, basis
+    return leader_state, _fur_basis_or_none(leader_state)

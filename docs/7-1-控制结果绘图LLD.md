@@ -24,7 +24,7 @@
 
 ## 2. 坐标系约定
 
-所有通道数据统一在**苏联式航迹坐标系**（`enu_to_track` 输出）中定义：
+所有 `track_*` 通道统一使用 [`docs/0-坐标系约定.md`](0-坐标系约定.md) 定义的**制导地速航迹 FUR**（`enu_to_track` 输出）：
 
 | 轴 | 方向 | 基向量 |
 | --- | --- | --- |
@@ -32,9 +32,9 @@
 | y（法向/上向） | 垂直速度向量、指向上 | `(-sin_θ·cos_ψ, -sin_θ·sin_ψ, cos_θ)` |
 | z（侧向右） | 水平向右，垂直航迹 | `(sin_ψ, -cos_ψ, 0)` |
 
-θ 为俯仰角，ψ 为水平航迹角（ENU，0° 朝东，90° 朝北）。近水平飞行时 y ≈ ENU 天向，z ≈ 水平右向。
+θ 为航迹倾角，ψ 为水平航迹角（ENU，0° 朝东，90° 朝北，左转/逆时针为正）。近水平飞行时 y ≈ ENU 天向，z ≈ 水平右向。
 
-坐标系以**本机实际速度**为基向量计算，每帧更新。
+控制误差默认以**目标/指令地速**为基向量计算，每帧更新；目标水平地速不足以定向时退回本机实际地速。该制导地速航迹系不得与动力学空速航迹系混用。
 
 ---
 
@@ -42,9 +42,9 @@
 
 所有通道均显示**误差量**（无指令线），以 0 为视觉基准。误差符号约定：
 
-- **位置误差** = cmd − actual（正值 = 实际落后于指令）
+- **位置误差** = cmd − actual，再投影到目标地速 FUR（前向正值表示实际落后于指令）
 - **速度误差 x** = `cmd.vd − actual.vd`（标量地速之差）
-- **速度误差 y/z** = 指令速度在实际航迹法向 / 侧向的投影分量（实际分量恒为 0，因航迹系以实际速度为基）
+- **速度误差 y/z** = 指令地速分量 − 实际地速分量，二者均投影到同一目标地速 FUR
 - **航迹角偏差** = `actual_ψ − cmd_ψ`，归一化到 `(-180°, 180°]`
 
 ### 3.1 通道列表
@@ -76,8 +76,8 @@ def _hdg_dev(n: NodeState) -> float | None:
 
 ### 3.3 字段说明补充
 
-- `perr_x`（前向位置误差）：僚机有意义（槽位前向偏差），长机前向不做位置闭环，该值接近 0。
-- `verr_y`/`verr_z`：实际速度在航迹 y/z 轴分量恒为 0（由坐标系定义决定），因此这两个误差等于指令速度在对应轴的投影；其控制意义是 PID 的速度前馈参考量，而非传统 cmd−actual 之差。
+- `perr_x`（前向位置误差）：僚机有意义（槽位前向偏差）；长机前向不做位置闭环时，该诊断通道输出 0。
+- `verr_y`/`verr_z`：目标速度在自身地速 FUR 的 y/z 分量通常为 0，因此两者通常等于实际地速相应投影的相反数；语义仍统一为 `cmd−actual`。
 - 航迹角偏差与 `verr_z` 存在强相关（`verr_z ≈ V·sin(Δψ)`），二者信息部分重叠。
 
 ---
@@ -297,9 +297,11 @@ QtCharts 为硬依赖，代码中不做降级保护。
     {
       "node_id": "A01", "role": "leader", "health": "normal",
       "x_m": 140.12, "y_m": 260.34, "altitude_m": 1200.00,
-      "psi_v_deg": 89.73, "theta_deg": 0.00, "speed_mps": 8.02,
+      "psi_v_deg": 89.73, "theta_deg": 0.00,
+      "speed_mps": 8.02, "ground_speed_mps": 8.02,
       "vx_mps": 0.24, "vy_mps": 8.02, "vz_mps": 0.00,
-      "nx": 0.00, "nz": 1.00, "phi_deg": 0.00, "psi_dot_deg_s": 0.00,
+      "nx": 0.0000, "ny": 1.0000, "nz": 0.0000, "n_normal": 1.0000,
+      "phi_deg": 0.00, "psi_dot_deg_s": 0.00,
       "cmd_vel_east_mps": 0.00, "cmd_vel_north_mps": 8.00, "cmd_vel_up_mps": 0.00,
       "track_pos_err_x_m": 0.12, "track_pos_err_y_m": 0.00, "track_pos_err_z_m": -0.34,
       "track_vel_err_x_mps": 0.02, "track_vel_err_y_mps": 0.00, "track_vel_err_z_mps": 0.00,
@@ -311,7 +313,7 @@ QtCharts 为硬依赖，代码中不做降级保护。
 }
 ```
 
-所有 `NodeState` 字段均存在；`null` 对应 Python `None`，与 `NodeState.cross_track_error_m: float | None` 兼容。
+所有 `NodeState` 字段均存在；其中 `speed_mps` 是暂时保留的空速兼容字段，`ground_speed_mps/theta_deg/psi_v_deg/psi_dot_deg_s` 与 `vx_mps/vy_mps/vz_mps` 描述叠加风后的地速航迹。算法 `vd` 使用水平地速，不能与三维 `ground_speed_mps` 混用。`null` 对应 Python `None`，与 `NodeState.cross_track_error_m: float | None` 兼容。
 
 ### 9.3 通道与代码复用
 
@@ -321,7 +323,7 @@ QtCharts 为硬依赖，代码中不做降级保护。
 from src.ui.gui.live_monitor import Ch, _hdg_dev, _PALETTE, _apply_y_range
 ```
 
-`OFFLINE_CHANNELS` 在 `offline_plot.py` 内独立定义（7 个通道，内容与 `live_monitor.CHANNELS` 相同），不从 `live_monitor` 导入 `CHANNELS`，以便后续扩展离线专属通道（如 `nx/nz`、`cross_track_error_m`）时不影响实时监控侧边栏。
+`OFFLINE_CHANNELS` 在 `offline_plot.py` 内独立定义（7 个通道，内容与 `live_monitor.CHANNELS` 相同），不从 `live_monitor` 导入 `CHANNELS`，以便后续扩展离线专属通道（如 `nx/ny/nz/n_normal`、`cross_track_error_m`）时不影响实时监控侧边栏。
 
 ### 9.4 NodeState 重建
 
@@ -476,7 +478,7 @@ if self._offline_plot is not None:
 
 #### 9.11.4 控制量历程
 
-- **加速度指令**：`nx`（切向过载）、`nz`（法向过载）、`phi_deg`（滚转角）全程时序，评估控制律平滑性和极值裕量。
+- **实际过载与滚转**：`nx/ny/nz`（空速航迹 FUR 有符号分量）、`n_normal`（法向合过载）、`phi_deg`（右倾为正）全程时序，评估控制响应平滑性和极值裕量。
 - **速度指令 vs 实际速度**：`cmd_vel_{east,north,up}_mps` 与 `v{x,y,z}_mps` 对比曲线，反映指令跟踪能力。
 
 #### 9.11.5 数据导出

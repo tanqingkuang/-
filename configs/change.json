@@ -43,8 +43,8 @@
       "max_descent_rate_mps": 4.0,
       "nx_min": -1.0,
       "nx_max": 1.0,
-      "nz_min": 0.0,
-      "nz_max": 4.0,
+      "n_normal_min": 0.0,
+      "n_normal_max": 4.0,
       "phi_min_deg": -70.0,
       "phi_max_deg": 70.0
     }

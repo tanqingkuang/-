@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,7 @@ from pathlib import Path
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import inside, make_polygon
 from src.data.config_loader import resolve_config_references
 from src.data.geo import GeoOrigin, enu_to_geodetic, geodetic_to_enu
-from src.data.geo_config import route_to_internal
+from src.data.geo_config import obstacles_to_internal, route_to_external, route_to_internal
 
 
 class GeoConversionTests(unittest.TestCase):
@@ -23,6 +24,18 @@ class GeoConversionTests(unittest.TestCase):
             actual_east, actual_north = geodetic_to_enu(lat, lon, origin)
             self.assertAlmostEqual(actual_east, east, places=3)
             self.assertAlmostEqual(actual_north, north, places=3)
+
+    def test_cardinal_geodetic_increments_keep_east_north_signs(self) -> None:
+        """增大经度必须向东，增大纬度必须向北，避免正反变换同时翻号仍通过往返测试。"""
+        origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
+
+        east, east_north = geodetic_to_enu(39.0, 116.001, origin)
+        north_east, north = geodetic_to_enu(39.001, 116.0, origin)
+
+        self.assertGreater(east, 0.0)
+        self.assertGreater(north, 0.0)
+        self.assertLess(abs(east_north), east)
+        self.assertLess(abs(north_east), north)
 
 
 class GeoConfigTests(unittest.TestCase):
@@ -138,6 +151,73 @@ class GeoConfigTests(unittest.TestCase):
         self.assertTrue(inside(obstacle, 0.0, 100.0))
         self.assertFalse(inside(obstacle, 70.0, 50.0))
         self.assertTrue(inside(obstacle, 70.0, 50.0, clearance=20.0))
+
+    def test_mixed_geodetic_and_enu_obstacle_points_are_rejected(self) -> None:
+        """同一个多边形不得混用经纬度与 ENU，避免 ENU 点被静默按 0°/0° 投影。"""
+        with self.assertRaisesRegex(ValueError, "mixes geodetic and ENU"):
+            obstacles_to_internal(
+                [
+                    {
+                        "type": "polygon",
+                        "points": [
+                            {"latitude_deg": 39.0, "longitude_deg": 116.0},
+                            {"east_m": 100.0, "north_m": 200.0},
+                        ],
+                    }
+                ],
+                GeoOrigin(latitude_deg=39.0, longitude_deg=116.0),
+            )
+
+    def test_partial_geodetic_obstacle_point_is_rejected(self) -> None:
+        """经纬度缺少任一半边时直接报错，不得回退为 ENU 或坐标原点。"""
+        with self.assertRaisesRegex(ValueError, "both latitude and longitude"):
+            obstacles_to_internal(
+                [{"type": "polygon", "points": [{"latitude_deg": 39.0}]}],
+                GeoOrigin(latitude_deg=39.0, longitude_deg=116.0),
+            )
+
+    def test_invalid_geodetic_obstacle_coordinates_are_rejected(self) -> None:
+        """非有限及越界经纬度均应在投影前报错。"""
+        invalid_points = (
+            {"latitude_deg": math.nan, "longitude_deg": 116.0},
+            {"latitude_deg": math.inf, "longitude_deg": 116.0},
+            {"latitude_deg": 91.0, "longitude_deg": 116.0},
+            {"latitude_deg": 39.0, "longitude_deg": 181.0},
+        )
+        for point in invalid_points:
+            with self.subTest(point=point), self.assertRaises(ValueError):
+                obstacles_to_internal(
+                    [{"type": "circle", "center": point}],
+                    GeoOrigin(latitude_deg=39.0, longitude_deg=116.0),
+                )
+
+    def test_route_external_supports_east_north_and_round_trips(self) -> None:
+        """east_m/north_m 应正确输出经纬度，读回后保持方向和数值。"""
+        origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
+        external = route_to_external(
+            {
+                "waypoints": [
+                    {"east_m": 1200.0, "north_m": -800.0, "altitude_m": 1000.0},
+                ]
+            },
+            origin,
+        )
+
+        point = external["waypoints"][0]
+        self.assertNotIn("east_m", point)
+        self.assertNotIn("north_m", point)
+        internal, _ = route_to_internal(external, origin)
+        actual = internal["waypoints"][0]
+        self.assertAlmostEqual(actual["x_m"], 1200.0, delta=0.02)
+        self.assertAlmostEqual(actual["y_m"], -800.0, delta=0.02)
+
+    def test_route_external_missing_enu_coordinate_is_rejected(self) -> None:
+        """内部航点缺少水平坐标时不得静默输出 origin 经纬度。"""
+        with self.assertRaisesRegex(ValueError, "both east_m and north_m"):
+            route_to_external(
+                {"waypoints": [{"east_m": 100.0, "altitude_m": 1000.0}]},
+                GeoOrigin(latitude_deg=39.0, longitude_deg=116.0),
+            )
 
 
 if __name__ == "__main__":

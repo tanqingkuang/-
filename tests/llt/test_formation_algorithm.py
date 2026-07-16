@@ -86,8 +86,8 @@ class FormationMathTests(unittest.TestCase):
         self.assertAlmostEqual(enu_to_track((0.0, 2.0, 3.0), northbound)[1], 3.0)
         self.assertAlmostEqual(track_to_enu((2.0, 3.0, 0.0), northbound)[1], 2.0)
 
-    def test_horizontal_track_to_enu_ignores_vertical_velocity(self) -> None:
-        """验证水平队形槽位只随水平航迹旋转，不被长机爬升/下降角耦合。"""
+    def test_horizontal_rally_adapter_ignores_vertical_velocity(self) -> None:
+        """验证集结松散点专用二维适配器只按水平任务航向旋转，不冒充三维 FUR。"""
 
         northbound_climb = _motion(v_east=0.0, v_north=10.0, v_up=10.0)
 
@@ -604,6 +604,129 @@ class PosCalcTests(unittest.TestCase):
             self.assertAlmostEqual(ctx.selfCmd.v.vEast, expect_along)
             self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -54.0 * omega)
 
+    def test_slot_geometry_uses_full_fur_basis_while_leader_climbs(self) -> None:
+        """爬升时槽位 x/y 必须随航迹倾角旋转，z 始终保持水平右侧向。"""
+
+        theta = math.radians(30.0)
+        leader = _motion(
+            east=100.0,
+            north=200.0,
+            h=1000.0,
+            v_east=20.0 * math.cos(theta),
+            v_up=20.0 * math.sin(theta),
+        )
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPos=[[FormPosS("A02", 100.0, 20.0, 30.0)]],
+            )
+        )
+        output = MotionProfS()
+
+        slot.step(
+            SlotGeometryInputS(
+                leaderState=leader,
+                cmd=FormSnapshotS(stage=FormStageE.HOLD, pattern=0),
+            ),
+            PosCalcOutputS(selfCmd=output),
+        )
+
+        # 东向爬升 30°：F=(cosθ,0,sinθ)，U=(-sinθ,0,cosθ)，R=(0,-1,0)。
+        self.assertAlmostEqual(output.pos.east, 100.0 + 100.0 * math.cos(theta) - 20.0 * math.sin(theta))
+        self.assertAlmostEqual(output.pos.north, 200.0 - 30.0)
+        self.assertAlmostEqual(output.pos.h, 1000.0 + 100.0 * math.sin(theta) + 20.0 * math.cos(theta))
+
+    def test_slot_geometry_yaw_velocity_uses_fur_right_axis_and_mirrors_turn(self) -> None:
+        """三维槽位偏航速度须满足右轴表达，并在左右转时严格镜像。"""
+
+        theta = math.radians(30.0)
+        speed = 20.0
+        a, y_up, b = 40.0, 10.0, 20.0
+        for omega in (0.1, -0.1):
+            with self.subTest(omega=omega):
+                leader = _motion(
+                    v_east=speed * math.cos(theta),
+                    v_up=speed * math.sin(theta),
+                    d_vpsi=omega,
+                )
+                slot = SlotGeometry()
+                slot.init(
+                    SlotGeometryInitS(
+                        selfId="A02",
+                        formPos=[[FormPosS("A02", a, y_up, b)]],
+                    )
+                )
+                output = MotionProfS()
+
+                slot.step(
+                    SlotGeometryInputS(
+                        leaderState=leader,
+                        cmd=FormSnapshotS(stage=FormStageE.HOLD, pattern=0),
+                    ),
+                    PosCalcOutputS(selfCmd=output),
+                )
+
+                relative_velocity_fur = enu_to_track(
+                    (
+                        output.v.vEast - leader.v.vEast,
+                        output.v.vNorth - leader.v.vNorth,
+                        output.v.vUp - leader.v.vUp,
+                    ),
+                    leader,
+                )
+                expected = (
+                    b * omega * math.cos(theta),
+                    -b * omega * math.sin(theta),
+                    (-a * math.cos(theta) + y_up * math.sin(theta)) * omega,
+                )
+                for actual, wanted in zip(relative_velocity_fur, expected, strict=True):
+                    self.assertAlmostEqual(actual, wanted, places=12)
+
+    def test_slot_geometry_td_seed_projects_full_enu_offset_to_fur(self) -> None:
+        """TD 首拍必须把当前三维 ENU 相对位置反投影到 FUR，缩放后仍从本机位置软接管。"""
+
+        theta = math.radians(25.0)
+        leader = _motion(
+            east=300.0,
+            north=-80.0,
+            h=1200.0,
+            v_east=18.0 * math.cos(theta),
+            v_up=18.0 * math.sin(theta),
+        )
+        # scale=2 只缩放 x/z；物理播种偏移对应未缩放 FUR (10,5,-6)。
+        physical_offset = track_to_enu((20.0, 5.0, -12.0), leader)
+        self_state = _motion(
+            east=leader.pos.east + physical_offset[0],
+            north=leader.pos.north + physical_offset[1],
+            h=leader.pos.h + physical_offset[2],
+            v_east=leader.v.vEast,
+            v_up=leader.v.vUp,
+        )
+        slot = SlotGeometry()
+        slot.init(
+            SlotGeometryInitS(
+                selfId="A02",
+                formPos=[[FormPosS("A02", 100.0, 30.0, 40.0)]],
+                control_period_s=0.05,
+            )
+        )
+        output = MotionProfS()
+
+        slot.step(
+            SlotGeometryInputS(
+                selfState=self_state,
+                leaderState=leader,
+                cmd=FormSnapshotS(stage=FormStageE.HOLD, pattern=0),
+                slotScale=RallySlotScaleS(scale=2.0),
+            ),
+            PosCalcOutputS(selfCmd=output),
+        )
+
+        self.assertAlmostEqual(output.pos.east, self_state.pos.east, places=12)
+        self.assertAlmostEqual(output.pos.north, self_state.pos.north, places=12)
+        self.assertAlmostEqual(output.pos.h, self_state.pos.h, places=12)
+
 
 class PosTrackTests(unittest.TestCase):
     def test_pid_compose_forward_closes_position_and_velocity(self) -> None:
@@ -996,7 +1119,7 @@ class PosTrackClosedLoopTests(unittest.TestCase):
             node_id="F", x_m=40.0, y_m=80.0, altitude_m=1000.0, speed_mps=20.0,
             theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
             ax_rate_mps3=0.0, ay_rate_mps3=0.0, az_rate_mps3=0.0,
-            nx=0.0, nz=0.0, phi_rad=0.0, psi_dot_deg_s=0.0,
+            nx=0.0, ny=1.0, nz=0.0, psi_dot_deg_s=0.0,
         )
         slot_e, slot_n, slot_h, slot_v = 0.0, 0.0, 1000.0, 20.0  # 槽位起于原点、沿东向匀速
         dt = 0.05
@@ -1043,7 +1166,7 @@ class PosTrackClosedLoopTests(unittest.TestCase):
             node_id="F", x_m=0.0, y_m=150.0, altitude_m=1000.0, speed_mps=20.0,
             theta_rad=0.0, psi_rad=0.0, ax_mps2=0.0, ay_mps2=0.0, az_mps2=0.0,
             ax_rate_mps3=0.0, ay_rate_mps3=0.0, az_rate_mps3=0.0,
-            nx=0.0, nz=0.0, phi_rad=0.0, psi_dot_deg_s=0.0,
+            nx=0.0, ny=1.0, nz=0.0, psi_dot_deg_s=0.0,
         )
         slot_e, slot_n, slot_h, slot_v = 0.0, 0.0, 1000.0, 20.0  # 槽位在东向直线上匀速
         dt = 0.05

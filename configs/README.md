@@ -1,6 +1,8 @@
 # 配置说明
 
-本目录记录每个 JSON 配置文件对应的仿真内容。客户可编辑的基础航线和避障障碍文件使用经纬高；控制器和算法内部仍统一采用 ENU：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度；外部队形文件中的槽位使用 `x_forward_y_up_z_right`。
+本目录记录每个 JSON 配置文件对应的仿真内容。客户可编辑的基础航线和避障障碍文件使用经纬高；控制器和算法内部仍统一采用 ENU：`x_m` 为东向，`y_m` 为北向，`altitude_m` 为高度；外部队形文件中的槽位使用制导地速 FUR `x_forward_y_up_z_right`。完整坐标与符号契约见 [`docs/0-坐标系约定.md`](../docs/0-坐标系约定.md)。
+
+模型 `limits` 中，`nx_min/max` 限制空速航迹前向过载，`n_normal_min/max` 限制非负法向合过载 `sqrt(ny^2+nz^2)`，`phi_min/max_deg` 限制右倾为正的滚转角；不对 `ny/nz` 分量分别配置独立限幅。
 
 ## `base.json`
 

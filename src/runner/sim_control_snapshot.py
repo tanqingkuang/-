@@ -39,6 +39,12 @@ class SimulationControllerSnapshotMixin:
             diag = self._control_diagnostics.get(state.node_id, PosTrackDiagS())
             cmd_pos_e = diag.cmd_pos_east_m
             cmd_pos_n = diag.cmd_pos_north_m
+            # 快照是环境模型到 UI/日志的裁决边界，字段参考系在此一次性固定。
+            # 位置、速度分量与控制诊断统一使用东北天 ENU，便于直接叠加与作图。
+            # psi_v_deg/theta_deg 反映地面轨迹，横风下应与 air_* 角度明确分离。
+            # speed_mps 保留为空速兼容字段，ground_speed_mps 才描述三维地速大小。
+            # nx/ny/nz 按前上右 FUR 原样输出，n_normal 仅作为法向合量的派生指标。
+            # psi_dot_deg_s 对外表示地面转率，air_psi_dot_deg_s 保留动力学转率证据。
             nodes.append(
                 NodeState(
                     node_id=state.node_id,
@@ -47,35 +53,49 @@ class SimulationControllerSnapshotMixin:
                     x_m=state.x_m,
                     y_m=state.y_m,
                     altitude_m=state.altitude_m,
-                    psi_v_deg=state.psi_v_deg,
-                    theta_deg=state.theta_deg,
+                    psi_v_deg=math.degrees(state.ground_psi_rad),
+                    theta_deg=math.degrees(state.ground_theta_rad),
                     speed_mps=state.speed_mps,
-                    vx_mps=state.vx_mps,
-                    vy_mps=state.vy_mps,
-                    vz_mps=state.vz_mps,
+                    airspeed_mps=state.speed_mps,
+                    air_psi_v_deg=state.psi_v_deg,
+                    air_theta_deg=state.theta_deg,
+                    air_psi_dot_deg_s=state.psi_dot_deg_s,
+                    ground_speed_mps=state.ground_speed_mps,
+                    vx_mps=state.ground_vx_mps,
+                    vy_mps=state.ground_vy_mps,
+                    vz_mps=state.ground_vz_mps,
                     nx=state.nx,
+                    ny=state.ny,
                     nz=state.nz,
+                    n_normal=state.n_normal,
                     phi_deg=state.phi_deg,
-                    psi_dot_deg_s=state.psi_dot_deg_s,
+                    psi_dot_deg_s=state.ground_psi_dot_deg_s,
+                    # 控制指令是 ENU 绝对量，直接保留其东、北、天三个物理分量。
                     cmd_pos_east_m=cmd_pos_e,
                     cmd_pos_north_m=cmd_pos_n,
                     cmd_pos_h_m=diag.cmd_pos_h_m,
+                    # 速度指令同样保持 ENU，不能套用航迹系的前上右轴序。
                     cmd_vel_east_mps=diag.cmd_vel_east_mps,
                     cmd_vel_north_mps=diag.cmd_vel_north_mps,
                     cmd_vel_up_mps=diag.cmd_vel_up_mps,
+                    # 世界系位置误差用于复现导航解算，正负号遵循 ENU 各轴方向。
                     pos_err_east_m=diag.pos_err_east_m,
                     pos_err_north_m=diag.pos_err_north_m,
                     pos_err_h_m=diag.pos_err_h_m,
+                    # 世界系速度误差与上面的地速分量同源，可直接做逐轴闭环分析。
                     vel_err_east_mps=diag.vel_err_east_mps,
                     vel_err_north_mps=diag.vel_err_north_mps,
                     vel_err_up_mps=diag.vel_err_up_mps,
+                    # 航迹系位置误差按前上右输出，z 正值始终代表右侧误差。
                     track_pos_err_x_m=diag.track_pos_err_x_m,
                     track_pos_err_y_m=diag.track_pos_err_y_m,
                     track_pos_err_z_m=diag.track_pos_err_z_m,
+                    # 航迹系速度误差与槽位坐标共用 FUR，便于验证控制器轴向响应。
                     track_vel_err_x_mps=diag.track_vel_err_x_mps,
                     track_vel_err_y_mps=diag.track_vel_err_y_mps,
                     track_vel_err_z_mps=diag.track_vel_err_z_mps,
                     # 侧偏与待飞距相对"当前航段"计算，供 UI 显示跟踪误差。
+                    # 侧偏取右侧为正，与 FUR z 轴一致；待飞距则沿航段前向投影。
                     cross_track_error_m=self._cross_track_error(state, route),
                     distance_to_go_m=self._distance_to_go(state, route),
                     rally_phase=rally_phases.get(state.node_id, ""),
