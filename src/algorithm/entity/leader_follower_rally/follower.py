@@ -21,8 +21,12 @@ from src.algorithm.units.process.inbound import (
     FormationInboundOutputS,
     InboundInputS,
 )
-from src.algorithm.units.process.outbound.base import OutboundOutputS
-from src.algorithm.units.process.outbound.follower_broadcast import FollowerBroadcast, FollowerBroadcastInitS, FollowerBroadcastInputS
+from src.algorithm.units.process.outbound import (
+    FormationOutbound,
+    FormationOutboundInitS,
+    FormationOutboundInputS,
+    OutboundOutputS,
+)
 from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
 from src.algorithm.entity.leader_follower_rally import fill_output
 
@@ -45,16 +49,17 @@ class RallyFollowerEntity(EntityBase):
         self._inbound = FormationInbound()
         self._tra_plan = TraPlanManager()
         self._pos_track = PosTrackManager()
-        self._outbound = FollowerBroadcast()
+        self._outbound = FormationOutbound()
 
         # 单元初始化
         self._inbound.init(FormationInboundInitS(cfg.selfInit.id))
         self._tra_plan.init(cfg)
         self._pos_track.init(cfg)
-        self._outbound.init(FollowerBroadcastInitS(
+        self._outbound.init(FormationOutboundInitS(
             selfId=cfg.selfInit.id,
             netWork=cfg.commInit.netWork,
             leaderId=cfg.rally_leader_id,
+            messageType=cfg.outbound_message,
         ))
 
         # 绑定端口
@@ -84,11 +89,7 @@ class RallyFollowerEntity(EntityBase):
         )
         self._pos_track_diag = PosTrackDiagS()
         self._pos_track_y = PosTrackOutputS(accCmd=self.cxt.selfAccCmd, diag=self._pos_track_diag)
-        self._outbound_u = FollowerBroadcastInputS(
-            cmd=self.cxt.cmd,
-            selfState=self.cxt.selfState,
-            selfCmd=self.cxt.selfCmd,
-        )
+        self._outbound_u = FormationOutboundInputS(context=self.cxt)
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
     def step(self, u: EntityInputS, y: EntityOutputS) -> None:
@@ -115,18 +116,12 @@ class RallyFollowerEntity(EntityBase):
             # NONE 是停控空策略，保留当前位置零速输出，和 STANDBY 本地盘旋分开处理。
             self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
             self._pos_track.step(self._pos_track_u, self._pos_track_y)
-            self._update_outbound()
             self._outbound.step(self._outbound_u, self._outbound_y)
             fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
             return
 
         self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
         self._pos_track.step(self._pos_track_u, self._pos_track_y)
-        if stage == FormStageE.STANDBY:
-            # STANDBY 仍走出站槽位，只把回报语义固定为本地待命。
-            self._update_standby_outbound()
-        else:
-            self._update_outbound()
         self._outbound.step(self._outbound_u, self._outbound_y)
         fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
 
@@ -145,18 +140,3 @@ class RallyFollowerEntity(EntityBase):
     def close(self) -> None:
         """释放 RallyFollowerEntity 持有的资源。"""
         return None
-
-    def _update_outbound(self) -> None:
-        """将 RallyJoinPos 状态同步到出站端口。"""
-        status = self.cxt.posCalcStatus
-        self._outbound_u.rally_state = status.rally_state
-        self._outbound_u.planned_path_length_m = status.planned_path_length_m
-        self._outbound_u.reached_slot_once = status.reached_slot_once
-        self._outbound_u.selfArrived = 1 if status.join_exited else 0
-
-    def _update_standby_outbound(self) -> None:
-        """将本地待命盘旋状态同步到僚机回报端口。"""
-        self._outbound_u.rally_state = self.cxt.posCalcStatus.rally_state
-        self._outbound_u.planned_path_length_m = -1.0
-        self._outbound_u.reached_slot_once = False
-        self._outbound_u.selfArrived = 0

@@ -17,6 +17,7 @@ from src.algorithm.context.leaf_types import (
 from src.common.envelope import MessageEnvelope
 from src.algorithm.units.algo.pos_calc.base import PosCalcStrategyE
 from src.algorithm.units.algo.pos_track.base import PosTrackStrategyE
+from src.algorithm.units.process.outbound.base import OutboundMessageE
 from src.algorithm.units.process.tra_plan.base import TraPlanStrategyE
 
 
@@ -51,6 +52,7 @@ class EntityInitS:
     pos_track_strategies: tuple[PosTrackStrategyE, ...] = ()  # 本实例启用的全部位置跟踪产品
     tra_plan_default: TraPlanStrategyE | None = None  # 常规阶段轨迹规划策略；必须显式配置
     tra_plan_strategies: tuple[TraPlanStrategyE, ...] = ()  # 本实例启用的全部轨迹规划产品
+    outbound_message: OutboundMessageE | None = None  # 本实例固定发送的出站消息类型；必须显式配置
 
 
 @dataclass

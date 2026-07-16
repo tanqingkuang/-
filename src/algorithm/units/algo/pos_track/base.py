@@ -9,7 +9,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosTrackCommandS,
     PosTrackDiagS,
-    PosTrackStrategyE,
+    PosTrackStrategyE as PosTrackStrategyE,
 )
 
 

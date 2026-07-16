@@ -12,9 +12,9 @@ from src.algorithm.context.leaf_types import (
     copy_motion,
     copy_snapshot,
 )
+from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
 
-LEADER_BROADCAST_TOPIC = "formation.leader"
 
 
 @dataclass

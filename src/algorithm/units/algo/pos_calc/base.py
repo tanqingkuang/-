@@ -9,7 +9,7 @@ from src.algorithm.context.leaf_types import (
     FormSnapshotS,
     MotionProfS,
     PosCalcStatusS,
-    PosCalcStrategyE,
+    PosCalcStrategyE as PosCalcStrategyE,
     PosTrackCommandS,
     RallyPlanS,
     WayLineS,

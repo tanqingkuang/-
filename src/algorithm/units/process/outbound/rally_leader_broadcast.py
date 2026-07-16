@@ -5,29 +5,12 @@ from __future__ import annotations
 from dataclasses import InitVar, dataclass, field
 
 from src.algorithm.context.leaf_types import CommDirE, MotionProfS, RallyPlanS
-from src.algorithm.units.process.inbound.rally_leader_follower import LEADER_BROADCAST_TOPIC
+from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC, motion_payload
 from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
 from src.common.envelope import MessageEnvelope
 
 
-def _motion_payload(motion: MotionProfS) -> dict[str, dict[str, float]]:
-    """把运动状态转换为通信载荷。注意：字段名需与入站解析保持一致。"""
-    return {
-        "pos": {
-            "east": motion.pos.east,
-            "north": motion.pos.north,
-            "h": motion.pos.h,
-        },
-        "vd": {
-            "vEast": motion.v.vEast,
-            "vNorth": motion.v.vNorth,
-            "vUp": motion.v.vUp,
-            "vTheta": motion.v.vTheta,
-            "vPsi": motion.v.vPsi,
-            "vd": motion.v.vd,
-            "dVPsi": motion.v.dVPsi,
-        },
-    }
+_motion_payload = motion_payload  # 兼容既有测试和外部调用，协议实现统一由 formation_protocol 提供。
 
 
 @dataclass

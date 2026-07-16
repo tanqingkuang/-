@@ -33,6 +33,8 @@ class TraPlanManager:
 
     def init(self, cfg: EntityInitS) -> None:
         """按实体配置创建全部已声明产品。注意：不得隐式补充策略。"""
+        # 配置表是实例能力的唯一来源，Manager 不根据角色补默认产品。
+        # 枚举必须严格校验，普通整数会掩盖配置生成阶段的类型错误。
         default_strategy = _require_strategy(cfg.tra_plan_default, "tra_plan_default")
         strategies = tuple(
             _require_strategy(strategy, "tra_plan_strategies") for strategy in cfg.tra_plan_strategies
@@ -48,10 +50,14 @@ class TraPlanManager:
 
         self._default_strategy = default_strategy
         # 产品只在初始化阶段创建一次，运行期路由只查表切换引用。
+        # LeaderRoute 保存跨帧航段索引，因此绝不能在阶段切换时重新构造。
+        # registry 保存产品对象而非类，切换策略不会丢失各自内部状态。
         self._registry = {strategy: self._create_strategy(strategy, cfg) for strategy in strategies}
 
     def step(self, u: TraPlanInputS, y: TraPlanOutputS) -> None:
         """按任务指令选择缓存产品并推进一拍。注意：本方法不创建产品。"""
+        # cmd 是任务单元发布的统一路由指令，Entity 不参与产品选择。
+        # 查表失败说明配置能力与运行期指令不一致，应立即暴露而非降级。
         if u.cmd is None:
             raise ValueError("TraPlanManager cmd port must be bound")
         strategy_type = self._select_strategy(u.cmd.stage, u.cmd.step)
@@ -62,16 +68,20 @@ class TraPlanManager:
 
     def reset(self) -> None:
         """复位全部缓存产品。注意：保留配置和产品实例。"""
+        # 每个缓存产品都可能持有独立跨帧状态，必须全部复位。
         for strategy in self._registry.values():
             strategy.reset()
 
     def get_route(self) -> list[WayLineS]:
         """返回长机任务航线，供 Runner 初始显示。注意：未配置时返回空列表。"""
+        # 这是显示适配接口，不参与 step 的策略路由。
         strategy = self._registry.get(TraPlanStrategyE.LEADER_ROUTE)
         return strategy.get_route() if isinstance(strategy, LeaderRoute) else []
 
     def _select_strategy(self, stage: FormStageE, step: int) -> TraPlanStrategyE:
         """由任务指令选择策略。注意：任务阶段映射属于 TraPlan 内部语义。"""
+        # NONE/STANDBY/JOINING 都没有任务航段推进语义，统一走 NOOP。
+        # 集结完成后的 CATCHUP/LOOSE/COMPRESS/HOLD 回到配置默认产品。
         if stage in (FormStageE.NONE, FormStageE.STANDBY):
             return TraPlanStrategyE.NOOP
         if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
@@ -83,6 +93,7 @@ class TraPlanManager:
     @staticmethod
     def _create_strategy(strategy_type: TraPlanStrategyE, cfg: EntityInitS) -> TraPlanBase:
         """创建并初始化单个产品。注意：只允许由 init 调用。"""
+        # 建造逻辑集中在 Manager 内，Entity 只感知枚举和统一端口。
         if strategy_type == TraPlanStrategyE.NOOP:
             strategy = Noop()
             strategy.init(TraPlanInitS())

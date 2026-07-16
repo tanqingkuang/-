@@ -37,6 +37,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     validate_capture_geometry,
 )
 from src.algorithm.units.algo.pos_track import PosTrackStrategyE
+from src.algorithm.units.process.outbound import OutboundMessageE
 from src.algorithm.units.process.tra_plan import TraPlanStrategyE
 from src.common.envelope import MessageEnvelope
 from src.data.config_loader import resolve_config_references
@@ -84,6 +85,10 @@ _POS_TRACK_CONFIG_BY_ROLE = {
         PosTrackStrategyE.PID_SPEED,
         PosTrackStrategyE.PID_POSITION,
     ),
+}
+_OUTBOUND_CONFIG_BY_ROLE = {
+    "rally_leader": OutboundMessageE.LEADER_BROADCAST,
+    "rally_follower": OutboundMessageE.FOLLOWER_STATUS,
 }
 
 class _ConfigLoader:
@@ -225,6 +230,7 @@ class _NodeAlgorithm:
         )
         tra_plan_default, tra_plan_strategies = _TRA_PLAN_CONFIG_BY_ROLE.get(role, (None, ()))
         pos_track_strategies = _POS_TRACK_CONFIG_BY_ROLE.get(role, ())
+        outbound_message = _OUTBOUND_CONFIG_BY_ROLE.get(role)
         # 按角色选择编队实体。
         # leader/rally_leader/rally_follower/wingman 对应不同算法实现，但对外 step 接口一致。
         if role == "leader":
@@ -251,6 +257,7 @@ class _NodeAlgorithm:
                 tra_plan_default=tra_plan_default,
                 tra_plan_strategies=tra_plan_strategies,
                 pos_track_strategies=pos_track_strategies,
+                outbound_message=outbound_message,
             )
         )
         # 保存长机初始航线（内部 WayLineS），供首步前 current_route() 回退显示。

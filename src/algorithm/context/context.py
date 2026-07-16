@@ -31,6 +31,7 @@ class FormContextS:
     leaderState: MotionProfS = field(default_factory=MotionProfS)  # 长机状态(僚机由入站解析得到)
     leaderCmd: MotionProfS = field(default_factory=MotionProfS)  # 长机目标指令(僚机由入站解析得到)
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
+    effectiveCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机有效运动指令(位置跟踪写/出站读)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
     posCalcStatus: PosCalcStatusS = field(default_factory=PosCalcStatusS)  # 位置解算状态(PosCalc写/Task与出站读)
@@ -77,6 +78,7 @@ def reset_context(dst: FormContextS) -> None:
     copy_motion(fresh.leaderState, dst.leaderState)  # 重置长机状态
     copy_motion(fresh.leaderCmd, dst.leaderCmd)  # 重置长机目标指令
     copy_motion(fresh.selfCmd, dst.selfCmd)  # 重置本机目标状态
+    copy_motion(fresh.effectiveCmd, dst.effectiveCmd)  # 重置本机有效运动指令
     copy_motion(fresh.selfState, dst.selfState)  # 重置本机实测状态
     # 加速度指令逐分量清零(无 copy 辅助函数，直接赋值)
     dst.selfAccCmd.accEast = fresh.selfAccCmd.accEast

@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 from src.algorithm.context.leaf_types import FormSnapshotS, MotionProfS, NetWorkS
 from src.common.envelope import MessageEnvelope
+
+
+class OutboundMessageE(IntEnum):
+    """出站消息类型。注意：实体初始化后不得在运行期切换。"""
+
+    LEADER_BROADCAST = 1  # 长机向通信拓扑中的僚机广播状态、指令和集结计划
+    FOLLOWER_STATUS = 2  # 僚机向指定长机回报位置误差和集结状态
 
 
 @dataclass

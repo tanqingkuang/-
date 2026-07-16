@@ -58,6 +58,12 @@ from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInputS, FollowerStatusOutputS
 from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
 from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
+from src.algorithm.units.process.outbound import (
+    FormationOutbound,
+    FormationOutboundInitS,
+    FormationOutboundInputS,
+    OutboundMessageE,
+)
 from src.algorithm.units.process.outbound.follower_broadcast import (
     FOLLOWER_STATUS_TOPIC,
     FollowerBroadcast,
@@ -102,6 +108,11 @@ def EntityInitS(*args: object, **kwargs: object) -> _EntityInitS:
             )
             if cfg.rally_leader_id
             else (PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED)
+        )
+        cfg.outbound_message = (
+            OutboundMessageE.FOLLOWER_STATUS
+            if cfg.rally_leader_id
+            else OutboundMessageE.LEADER_BROADCAST
         )
     return cfg
 
@@ -1143,6 +1154,72 @@ class FormationInboundTests(unittest.TestCase):
 
         self.assertFalse(cxt.rallyPlan.valid)
         self.assertEqual(cxt.rallyPlan.loop_counts, {"R01": 0, "R03": 1})
+
+
+class FormationOutboundTests(unittest.TestCase):
+    """验证统一出站按初始化配置从黑板生成固定类型报文。"""
+
+    def test_requires_explicit_message_type(self) -> None:
+        """实体配置未指定出站产品时应在初始化阶段明确失败。"""
+
+        with self.assertRaisesRegex(ValueError, "messageType 必须显式配置"):
+            FormationOutbound().init(FormationOutboundInitS(selfId="R01"))
+
+    def test_writes_leader_broadcast_from_context(self) -> None:
+        """长机广播应读取黑板中的状态、有效指令和公共计划。"""
+
+        cxt = FormContextS()
+        cxt.selfState = _motion(east=1.0, north=2.0, h=3.0)
+        cxt.effectiveCmd = _motion(east=4.0, north=5.0, h=6.0)
+        cxt.cmd.stage = FormStageE.RALLY
+        cxt.cmd.pattern = 2
+        cxt.rallyPlan.t_ref = 90.0
+        cxt.rallyPlan.valid = True
+        cxt.rallyPlan.loop_counts.update({"R01": 0, "R02": 1})
+        outbound = FormationOutbound()
+        outbound.init(FormationOutboundInitS(
+            selfId="R01",
+            netWork=[NetWorkS("R01", "R02", CommDirE.SIMPLEX)],
+            messageType=OutboundMessageE.LEADER_BROADCAST,
+        ))
+        output = OutboundOutputS()
+
+        outbound.step(FormationOutboundInputS(context=cxt), output)
+
+        self.assertEqual(len(output.outbox), 1)
+        message = output.outbox[0]
+        self.assertEqual((message.topic, message.source, message.target), ("formation.leader", "R01", ["R02"]))
+        self.assertEqual(message.payload["cmd"]["leader"]["pos"]["east"], 4.0)
+        self.assertEqual(message.payload["t_ref"], 90.0)
+        self.assertEqual(message.payload["loop_counts"], {"R01": 0, "R02": 1})
+
+    def test_writes_follower_status_from_context(self) -> None:
+        """僚机回报应直接读取位置解算状态，不需要实体手工同步端口字段。"""
+
+        cxt = FormContextS()
+        cxt.selfState = _motion(east=1.0, north=2.0, h=3.0)
+        cxt.selfCmd = _motion(east=4.0, north=6.0, h=3.0)
+        cxt.posCalcStatus.rally_state = RALLY_STATE_LOITERING
+        cxt.posCalcStatus.planned_path_length_m = 321.0
+        cxt.posCalcStatus.reached_slot_once = True
+        cxt.posCalcStatus.join_exited = True
+        outbound = FormationOutbound()
+        outbound.init(FormationOutboundInitS(
+            selfId="R02",
+            leaderId="R01",
+            messageType=OutboundMessageE.FOLLOWER_STATUS,
+        ))
+        output = OutboundOutputS()
+
+        outbound.step(FormationOutboundInputS(context=cxt), output)
+
+        message = output.outbox[0]
+        self.assertEqual((message.topic, message.source, message.target), (FOLLOWER_STATUS_TOPIC, "R02", "R01"))
+        self.assertAlmostEqual(message.payload["pos_err_m"], 5.0)
+        self.assertEqual(message.payload["rally_state"], RALLY_STATE_LOITERING)
+        self.assertEqual(message.payload["planned_path_length_m"], 321.0)
+        self.assertEqual(message.payload["reached_slot_once"], True)
+        self.assertEqual(message.payload["arrived"], 1)
 
 
 class FollowerStatusTests(unittest.TestCase):
@@ -3447,7 +3524,7 @@ class RallyEntityTests(unittest.TestCase):
         self.assertTrue(plan_payload["t_ref_valid"])
         self.assertEqual(plan_payload["loop_counts"], {"A01": 3, "A02": 1, "A03": 0, "A04": 0, "A05": 0})
         self.assertIs(leader._task_y.rallyPlan, leader.cxt.rallyPlan)
-        self.assertIs(leader._outbound_u.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._outbound_u.context, leader.cxt)
         self.assertIs(leader._task_u.clock, leader.cxt.clock)
         locked_t_ref = plan_payload["t_ref"]
         locked_loop_counts = dict(plan_payload["loop_counts"])

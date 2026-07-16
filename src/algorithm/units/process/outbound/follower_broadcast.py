@@ -7,10 +7,9 @@ from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import MotionProfS, dist3d
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
+from src.algorithm.units.process.formation_protocol import FOLLOWER_STATUS_TOPIC
 from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
 from src.common.envelope import MessageEnvelope
-
-FOLLOWER_STATUS_TOPIC = "formation.follower_status"
 
 
 @dataclass

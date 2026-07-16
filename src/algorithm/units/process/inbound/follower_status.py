@@ -7,8 +7,8 @@ from dataclasses import dataclass
 
 from src.algorithm.context.leaf_types import AlgorithmClockS, FollowerStateS, copy_follower_state
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_FLYING
+from src.algorithm.units.process.formation_protocol import FOLLOWER_STATUS_TOPIC
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
-from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 from src.common.envelope import MessageEnvelope
 
 

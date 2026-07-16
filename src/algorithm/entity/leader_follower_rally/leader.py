@@ -10,7 +10,6 @@ from src.algorithm.context.leaf_types import (
     FormationAnalysisS,
     FormStageE,
     PosTrackDiagS,
-    MotionProfS,
     RemoteCmdS,
     copy_motion,
     copy_pos_track_diag,
@@ -26,8 +25,12 @@ from src.algorithm.units.process.inbound import (
     FormationInboundOutputS,
     InboundInputS,
 )
-from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
-from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
+from src.algorithm.units.process.outbound import (
+    FormationOutbound,
+    FormationOutboundInitS,
+    FormationOutboundInputS,
+    OutboundOutputS,
+)
 from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
 from src.algorithm.entity.leader_follower_rally import fill_output
 from src.algorithm.units.algo.pos_calc.rally_join_pos import loiter_speed_bounds
@@ -47,7 +50,6 @@ class RallyLeaderEntity(EntityBase):
         self.cxt = FormContextS()
         self._remote = RemoteCmdS()
         self._outbox: list = []
-        self._effective_cmd = MotionProfS()
         self._rally_completed = False
         self._expected_follower_ids: list[str] = list(rally_cfg.expectedFollowerIds)
         self._tight_radius_m: float = rally_cfg.tightRadius_m
@@ -59,7 +61,7 @@ class RallyLeaderEntity(EntityBase):
         self._task = Rally()
         self._tra_plan = TraPlanManager()
         self._pos_track = PosTrackManager()
-        self._outbound = RallyLeaderBroadcast()
+        self._outbound = FormationOutbound()
 
         # 单元初始化
         self._inbound.init(FormationInboundInitS(cfg.selfInit.id))
@@ -71,7 +73,11 @@ class RallyLeaderEntity(EntityBase):
         ))
         self._tra_plan.init(cfg)
         self._pos_track.init(cfg)
-        self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
+        self._outbound.init(FormationOutboundInitS(
+            selfId=cfg.selfInit.id,
+            netWork=cfg.commInit.netWork,
+            messageType=cfg.outbound_message,
+        ))
 
         # 绑定端口
         self._inbound_u = InboundInputS(inbox=self._get_inbox_ref())
@@ -110,14 +116,9 @@ class RallyLeaderEntity(EntityBase):
         self._pos_track_y = PosTrackOutputS(
             accCmd=self.cxt.selfAccCmd,
             diag=self._pos_track_diag,
-            effectiveCmd=self._effective_cmd,
+            effectiveCmd=self.cxt.effectiveCmd,
         )
-        self._outbound_u = RallyLeaderBroadcastInputS(
-            cmd=self.cxt.cmd,
-            selfState=self.cxt.selfState,
-            leaderCmd=self._effective_cmd,
-            rallyPlan=self.cxt.rallyPlan,
-        )
+        self._outbound_u = FormationOutboundInputS(context=self.cxt)
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
         self._inbox: list = []
@@ -158,7 +159,7 @@ class RallyLeaderEntity(EntityBase):
         self._pos_track.step(self._pos_track_u, self._pos_track_y)
         if stage == FormStageE.STANDBY:
             # effective_cmd 跟随本地盘旋目标，保证输出诊断和跟踪目标一致。
-            copy_motion(self.cxt.selfCmd, self._effective_cmd)
+            copy_motion(self.cxt.selfCmd, self.cxt.effectiveCmd)
 
         self._outbound.step(self._outbound_u, self._outbound_y)
 
@@ -180,7 +181,6 @@ class RallyLeaderEntity(EntityBase):
     def reset(self) -> None:
         """复位 RallyLeaderEntity 的动态状态。"""
         reset_context(self.cxt)
-        copy_motion(MotionProfS(), self._effective_cmd)
         self._remote.stage = RemoteCmdS().stage
         self._rally_completed = False
         self._task.reset()
