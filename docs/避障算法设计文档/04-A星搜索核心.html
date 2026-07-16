@@ -10,9 +10,24 @@
   <header>
     <a href="避障学习目录.html">返回目录</a>
     <h1>04 A* 搜索核心</h1>
-    <p>本章只看无转向惩罚的普通分支。这是最标准、最容易理解的一条路径：open 里取 f 最小的格点，扩展邻居，更新 g 和 came_from。</p>
+    <p>本章只看无转向惩罚的普通分支：open 里取 f 最小的格点，扩展邻居，更新 g 和 came_from。当前性能优化没有改写这套内核，而是尽量减少进入 A* 的航段和传入的障碍数量。</p>
   </header>
   <main>
+    <section>
+      <h2>什么情况下才真正进入 A*</h2>
+      <pre><code>direct_candidates = leg_candidate_obstacles(
+    start, goal, obstacles, clearance_m, margin_m=0.0)
+
+if line_of_sight_clear(start, goal, direct_candidates,
+                       clearance=clearance_m):
+    raw = [start, goal]          # 清空航段：跳过 A*
+else:
+    leg_obstacles = leg_candidate_obstacles(
+        start, goal, obstacles, clearance_m, margin_m)
+    raw = plan_path(start, goal, leg_obstacles, ...)</code></pre>
+      <p>没有障碍挡住原航段时，两端点直线就是最短解，无需建立大范围网格。只有被阻挡的腿才调用 <code>plan_path()</code>，并且只携带与本腿搜索盒相交的候选障碍。</p>
+      <div class="note">候选集不是最终安全结论。A* 输出经去冗余后还会对全部障碍复核；发现漏筛会使用完整障碍集重新规划，详见第 05 章。</div>
+    </section>
     <section>
       <h2>主循环骨架</h2>
       <pre><code>open_heap = [(heuristic(*start_cell), counter, start_cell)]
@@ -83,7 +98,7 @@ while open_heap:
       <ol>
         <li>为什么入堆元素要包含 <code>tie</code> 计数器？</li>
         <li><code>came_from</code> 是在发现邻居时更新，还是在终点找到后才更新？</li>
-        <li>如果 open 空了还没到终点，返回什么？</li>
+        <li>为什么原始航段直线可达时，跳过 A* 不会错过更短路径？</li>
       </ol>
       <div class="nav"><a href="03-栅格化与坐标转换.html">上一页：03 栅格化与坐标转换</a><a href="05-工程安全规则.html">下一页：05 工程安全规则</a></div>
     </section>

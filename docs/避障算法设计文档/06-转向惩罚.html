@@ -65,6 +65,7 @@ state = (i, j, previous_dir)</code></pre>
         <div class="note warning"><strong>代价</strong><br>状态数量变多，同一个格点可能按不同入射方向重复存在。</div>
         <div class="note"><strong>边界</strong><br>它只是等效米代价，不替代真正的转弯半径校验。</div>
       </div>
+      <p>大范围性能优化没有改变这套代价公式：直线清空的航段在进入 A* 前就被跳过；真正进入 A* 的被阻挡航段仍按这里的普通分支或带方向状态分支搜索，只是障碍集已裁剪到本腿附近。</p>
     </section>
     <section>
       <h2>本章检查题</h2>

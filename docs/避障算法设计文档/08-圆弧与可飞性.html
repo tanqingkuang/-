@@ -10,16 +10,17 @@
   <header>
     <a href="避障学习目录.html">返回目录</a>
     <h1>08 圆弧与可飞性</h1>
-    <p>A* 和去冗余只能说明“几何通道存在”。飞机能不能按转弯半径飞出来，还要检查急拐点、腿长和圆弧触障。</p>
+    <p>A* 和去冗余只能说明“几何通道存在”。当前实现先把满足条件的圆形绕障折线折叠为贴障大弧，再对真正要飞的直线骨架、固定 R 转弯和显式弧段做后置可飞性校验。</p>
   </header>
   <main>
     <section>
-      <h2>三类失败</h2>
+      <h2>四类不可飞失败</h2>
       <table>
         <thead><tr><th>原因码</th><th>检查对象</th><th>含义</th></tr></thead>
         <tbody>
           <tr><td><code>ERR_AVOID_TURN_TOO_SHARP</code></td><td>拐点偏转角</td><td>接近掉头，圆弧几何不稳定或不可接受。</td></tr>
           <tr><td><code>ERR_AVOID_LEG_TOO_SHORT</code></td><td>相邻拐点之间的腿长</td><td>一条腿容不下两端圆弧切线占用和直线余度 L。</td></tr>
+          <tr><td><code>ERR_AVOID_STRAIGHT_HITS_OBSTACLE</code></td><td>最终直线腿采样点</td><td>全量障碍末端复核仍发现直线触障。</td></tr>
           <tr><td><code>ERR_AVOID_ARC_HITS_OBSTACLE</code></td><td>圆弧采样点</td><td>直线骨架安全，但圆弧外凸后碰到障碍。</td></tr>
         </tbody>
       </table>
@@ -46,8 +47,15 @@
       </div>
     </section>
     <section>
-      <h2>圆弧触障为什么必要</h2>
-      <p>A* 和去冗余检查的是折线骨架。飞机实际转弯时，拐点附近不是尖角，而是外切圆弧。这个圆弧可能向障碍一侧外凸，所以可飞性模块会重建圆弧并采样检查。</p>
+      <h2>两类圆弧</h2>
+      <table>
+        <thead><tr><th>圆弧</th><th>半径与表示</th><th>适用位置</th></tr></thead>
+        <tbody>
+          <tr><td>固定 R 交接弧</td><td>半径为飞机最小转弯半径 R；由直线拐点的 r 或烘焙航段表达。</td><td>剩余直线—直线拐点。</td></tr>
+          <tr><td>障碍贴行大弧</td><td>半径为 <code>obstacle.radius + simplify_clearance_m</code>；用 turnSign 与 center 显式表达。</td><td>连续绕同一圆形障碍的一串拐点。</td></tr>
+        </tbody>
+      </table>
+      <p>A* 和去冗余检查的是折线骨架，飞机实际转弯时圆弧可能向障碍一侧外凸。因此固定 R 圆弧和贴障大弧都要按弧长密集采样，并复用统一 <code>inside()</code> 判障。</p>
       <pre><code>arc = corner_arc(p_prev, p_corner, p_next, turn_radius_m)
 for east, north in _arc_sample_points(arc, turn_radius_m, sample_step):
     obstacle_id = _hit_obstacle(obstacles, east, north, arc_clearance)
@@ -55,16 +63,53 @@ for east, north in _arc_sample_points(arc, turn_radius_m, sample_step):
         return FeasibilityResult(ok=False, code=ERR_ARC_HITS_OBSTACLE)</code></pre>
     </section>
     <section>
+      <h2>贴障大弧如何生成</h2>
+      <ol>
+        <li>去冗余阶段根据 cause 标签找到“连续由同一个圆形障碍逼出”的拐点串。</li>
+        <li>要求拐点沿圆心极角单调同向、至少两个，并且膨胀半径不小于飞机最小转弯半径 R。</li>
+        <li>自由点与圆之间使用点—圆切线；相邻两段贴障弧优先使用圆—圆公切线无拐点衔接。</li>
+        <li>检查新弧扫掠角不应明显超过原拐点角度跨度，避免切点选反后沿圆长边绕行。</li>
+        <li>贴障弧和两侧衔接直线按真实障碍复核，全部通过才替换原拐点串。</li>
+      </ol>
+      <div class="warning note">贴障弧当前只处理圆形障碍。polygon 和轴对齐矩形继续使用固定 R 倒角。公切线整体方案不可飞时，会退化为各圆独立、逐段尝试；单段仍失败则保留原拐点，不强行输出危险圆弧。</div>
+    </section>
+    <section>
+      <h2>为什么可飞性必须后置</h2>
+      <p>早期流程先按每个折线拐点的固定 R 检查腿长，可能把“固定 R 碎弧不可行、但沿更大膨胀圆连续飞行可行”的路径提前拒绝。当前流程先折叠贴障弧，再校验真正要输出的航线。</p>
+      <pre><code>straight_subroutes, explicit_arcs = split_route_segments(route)
+
+for points in straight_subroutes:
+    check_feasibility(points, turn_radius_m=R, ...)
+
+for arc in explicit_arcs:
+    sample_and_check_arc(arc, obstacles, ...)</code></pre>
+      <p><code>check_route_feasibility()</code> 在显式弧处分割航线：剩余直线骨架继续检查直线触障、急转角、腿长与固定 R 圆弧；显式贴障弧按自己的实际半径单独检查。被大弧替换掉的中间拐点不再错误地参与固定 R 腿长约束。</p>
+    </section>
+    <section>
       <h2>planner.py 如何收口</h2>
-      <pre><code>raw = plan_path(...)
-simplified = simplify_path(raw, obstacles, clearance=simplify_clearance_m)
-feasibility = check_feasibility(full_xy, obstacles, turn_radius_m=...)
-route = points_to_route(full_xy, speed_mps=speed_mps, altitudes=full_alt)
+      <pre><code>raw = direct_line_or_candidate_astar(...)
+simplified, causes = simplify_path_with_causes(
+    raw, leg_obstacles, clearance=simplify_clearance_m)
+
+if not clear_against_all_obstacles(simplified):
+    raw = plan_path(start, goal, all_obstacles, ...)
+    simplified, causes = simplify_path_with_causes(raw, all_obstacles, ...)
+
+route = points_to_route(full_xy, speed_mps=speed_mps,
+                        altitudes=full_alt)
+if allow_arc:
+    route = bake_obstacle_hug_arcs(route, full_causes, obstacles, ...)
+
+feasibility = check_route_feasibility(route, obstacles,
+                                      turn_radius_m=turn_radius_m, ...)
+if not feasibility.ok:
+    return PlanResult(ok=False, code=feasibility.code, ...)
+
 assign_transition_radius(route, turn_radius_m)
 if allow_arc:
     route = bake_transition_arcs(route)
 return PlanResult(ok=True, route=route, simplified_points=full_xy)</code></pre>
-      <p><code>PlanResult</code> 是上层 UI 最关心的边界：成功时带 route；失败时带原因码、详情、腿序号或障碍 id。</p>
+      <p><code>PlanResult</code> 是上层 UI 最关心的边界：成功时带真正可采用和可输出的 route；失败时带原因码、详情、腿序号或障碍 id。注意顺序是“贴障弧 → 后置校验 → 补剩余 R → 烘焙剩余转弯”。</p>
     </section>
     <section>
       <h2>高度怎么处理</h2>
@@ -74,8 +119,9 @@ return PlanResult(ok=True, route=route, simplified_points=full_xy)</code></pre>
       <h2>本章检查题</h2>
       <ol>
         <li>为什么 A* 成功不等于 <code>PlanResult.ok=True</code>？</li>
-        <li><code>allow_arc=False</code> 时，长机实际还会不会平滑过弯？</li>
-        <li>为什么圆弧触障默认按真实障碍检查，而不是再次叠加 A* 的 clearance？</li>
+        <li>为什么贴障大弧必须在可飞性校验之前生成？</li>
+        <li><code>allow_arc=False</code> 时，长机实际还会不会按交接半径平滑过弯？</li>
+        <li>公切线方案失败时，为什么选择退化而不是强制保留整段大弧？</li>
       </ol>
       <div class="nav"><a href="07-去冗余与航线转换.html">上一页：07 去冗余与航线转换</a><a href="避障学习目录.html">回到目录</a></div>
     </section>

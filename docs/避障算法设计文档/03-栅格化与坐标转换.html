@@ -10,9 +10,22 @@
   <header>
     <a href="避障学习目录.html">返回目录</a>
     <h1>03 栅格化与坐标转换</h1>
-    <p>A* 不能直接在连续坐标上搜索，工程先把 east/north 平面切成格点。理解这一步，后面的 open heap 才有落脚点。</p>
+    <p>客户航线和障碍文件使用经纬度，算法内部统一使用米制 ENU。完成 LLA→ENU 后，工程再把连续 east/north 平面切成格点，供 A* 搜索。</p>
   </header>
   <main>
+    <section>
+      <h2>先统一坐标层，再进入算法</h2>
+      <table>
+        <thead><tr><th>层次</th><th>坐标与文件</th><th>职责</th></tr></thead>
+        <tbody>
+          <tr><td>外部输入</td><td><code>route_file</code>、<code>obstacles_file</code> 中的 latitude / longitude / altitude</td><td>面向配置、客户文件和航线输出。</td></tr>
+          <tr><td>配置展开</td><td>以基础航线第一个航点为 origin</td><td>航点、圆心、polygon 顶点使用同一原点转换。</td></tr>
+          <tr><td>内部规划</td><td>east / north / h，单位米</td><td>判障、A*、去冗余、圆弧与 GUI 画布全部使用 ENU。</td></tr>
+          <tr><td>航线输出</td><td>内部 ENU 反算为经纬高</td><td>圆弧中心与航点一起转换，保证输出文件可再次读回。</td></tr>
+        </tbody>
+      </table>
+      <div class="warning note">当前 JSON 航线文件要求使用经纬度航点；外部文件中的 ENU 航点会在加载期被拒绝。这里展示的 east/north 是配置展开后的内部形态，不是客户文件格式。</div>
+    </section>
     <section>
       <h2>从世界坐标到格点</h2>
       <div class="grid-2">
@@ -50,7 +63,7 @@ def to_cell(point):
     </section>
     <section>
       <h2>bounds 从哪里来</h2>
-      <p>如果调用者没有传 <code>bounds</code>，工程用 <code>compute_bounds()</code> 自动从起点、终点、障碍包围盒推导搜索范围，并额外加 <code>margin_m + resolution_m</code>。</p>
+      <p>如果调用者没有传 <code>bounds</code>，<code>compute_bounds()</code> 会从本腿起点、终点和本腿候选障碍的包围盒推导搜索范围，并额外加 <code>margin_m + resolution_m</code>。全图远场障碍已在 planner 层预筛，不会无意义地撑大这条腿的网格。</p>
       <pre><code>bounds = compute_bounds(
     start,
     goal,
@@ -62,7 +75,7 @@ def to_cell(point):
         <thead><tr><th>参与因素</th><th>原因</th></tr></thead>
         <tbody>
           <tr><td>起点 / 终点</td><td>至少要把任务端点放进搜索范围。</td></tr>
-          <tr><td>障碍包围盒</td><td>绕障空间不能只看起终点连线，否则障碍旁边没路可走。</td></tr>
+          <tr><td>候选障碍包围盒</td><td>绕障空间不能只看起终点连线，但也不应被远离本腿的障碍撑大。</td></tr>
           <tr><td><code>clearance_m</code></td><td>障碍会膨胀，搜索范围也要覆盖膨胀后的外边界。</td></tr>
           <tr><td><code>margin_m</code></td><td>给绕行留额外空间。</td></tr>
         </tbody>
@@ -82,7 +95,7 @@ if nx * ny > MAX_GRID_CELLS:
       <ol>
         <li><code>resolution_m=20</code> 改成 <code>resolution_m=10</code>，网格数量大约如何变化？</li>
         <li>为什么 <code>to_cell()</code> 使用 <code>round</code> 后，源码仍要对真实起终点做精确判障？</li>
-        <li><code>margin_m</code> 太小可能导致什么问题？</li>
+        <li>为什么航线、圆弧中心和障碍顶点必须使用同一个 ENU origin？</li>
       </ol>
       <div class="nav"><a href="02-障碍物建模与判障.html">上一页：02 障碍物建模与判障</a><a href="04-A星搜索核心.html">下一页：04 A* 搜索核心</a></div>
     </section>
