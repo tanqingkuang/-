@@ -171,6 +171,9 @@ class PidCompose(PosTrackBase):
         #        无该配置时退回并联/串级 Pid(旧行为)。两路均叠加向心前馈 lateral_ff。
         if self._lateral_cascade is not None:
             lateral_acc = self._lateral_cascade.step(pos_err[2], vel_err[2], u.selfState.v.vd) + lateral_ff
+            if y.diag is not None:
+                # 饱和证据随诊断透出，供离线分析统计限幅占空比；不参与控制计算。
+                y.diag.lateral_saturated = self._lateral_cascade.last_saturated
             if self._lateral_cascade.last_saturated and y.effectiveCmd is not None:
                 _write_limited_effective_velocity(
                     u.selfCmd,

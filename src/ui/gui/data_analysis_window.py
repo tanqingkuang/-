@@ -10,6 +10,7 @@ from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
 from PySide6.QtCore import QMargins, QPoint, QPointF, QSize, QSignalBlocker, Qt
 from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QAbstractItemView,
     QCheckBox,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QScrollArea,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -34,14 +36,16 @@ from PySide6.QtWidgets import (
 )
 
 from src.data.control_effect_analysis import (
-    DEFAULT_CHANNELS,
+    GUI_CHANNELS,
     AnalysisChannel,
     AnalysisSourceData,
     MetricSummary,
+    convergence_time_s,
     load_snapshot_samples,
     node_ids_from_sources,
     normalized_time_range,
     points_for,
+    series_for,
     sliding_window,
     summary_for,
     write_metrics_csv,
@@ -115,7 +119,7 @@ class FullRowRadioButton(QRadioButton):
         return self.rect().contains(pos)
 
 
-CHANNELS = DEFAULT_CHANNELS
+CHANNELS = GUI_CHANNELS
 METRIC_COLUMNS: tuple[tuple[str, str], ...] = (
     # 表格列名统一用中文，导出字段名另保留英文。
     ("mean", "均值"),
@@ -124,7 +128,15 @@ METRIC_COLUMNS: tuple[tuple[str, str], ...] = (
     ("rms", "RMS"),
     ("max_abs", "最大绝对值"),
     ("max_abs_time_s", "发生时刻(s)"),
+    # 扩展指标：P95 抗尖峰分位、总变差(抖动/操纵反复)、时间积分(外甩面积/J_n)。
+    ("p95_abs", "P95绝对值"),
+    ("tv", "总变差"),
+    ("integral", "时间积分"),
+    # 收敛时刻由误差带 ε 和保持时长 T 输入决定，不属于 MetricSummary 字段。
+    ("conv_time_s", "收敛时刻(s)"),
 )
+# 汇总表最多直接展示的行数，超出部分转为表格内部滚动，避免通道扩容后挤压图表区。
+SUMMARY_VISIBLE_ROWS = 8
 WINDOW_METRICS: tuple[tuple[str, str, str], ...] = (
     # 四个窗口指标各自独立 Y 轴，避免量级差异压扁曲线。
     ("mean", "窗口均值", "#2563eb"),
@@ -136,13 +148,18 @@ WINDOW_METRICS: tuple[tuple[str, str, str], ...] = (
 SOURCE_COLORS = {"A": "#2563eb", "B": "#dc2626"}
 # 默认窗口宽度来自阶段二草图，用于空态和首次加载。
 DEFAULT_WINDOW_S = 5.0
+# 收敛判定默认参数：误差带 ε 与保持时长 T，实际值由用户按通道量纲调整。
+DEFAULT_CONV_BAND = 1.0
+DEFAULT_CONV_HOLD_S = 5.0
 # X 轴右侧留白，避免末尾点贴住边框。
 X_MARGIN_S = 0.5
 
-# 本窗口先做阶段三 UI 工作台，同时带最小可用分析内核。
+# 本窗口是人工离线观察工具，只报告物理量，不输出 PASS/FAIL 自动结论。
 # 输入契约只认 snapshots.jsonl，不读取 events/config，也不解释扰动原因。
 # A/B 是并列输入源，只做同表同图展示，不做差值、比值或自动结论。
-# 汇总表固定六个通道，绘图通道单选不改变表格和导出内容。
+# 汇总表覆盖基础误差通道与扩展评测通道（几何裁判/过载/指令/耗时），
+# 扩展通道字段缺失（旧日志）时对应行显示空位；绘图通道单选不改变表格和导出内容。
+# 收敛时刻列由顶栏 ε/T 参数决定口径：进入误差带并连续保持 T 后的最早时刻。
 # 表格单元格保留 “A | B” 的视觉结构，禁用的一侧显示为空。
 # all 表示把所有飞机的同一通道样本合并后统计。
 # 单机对象只使用该 node_id 样本，不做跨飞机补齐。
@@ -339,7 +356,18 @@ class DataAnalysisWindow(QDialog):
         self._window_input.setValue(DEFAULT_WINDOW_S)
         lay.addWidget(self._window_input, 1, 10)
 
-        for column in range(11):
+        # 收敛判定参数：进入误差带 ε 并连续保持 T 后判收敛（口径见 docs/codex指标.md）。
+        lay.addWidget(QLabel("误差带 ε"), 0, 11)
+        self._conv_band_input = self._make_time_input("offlineConvBandInput")
+        self._conv_band_input.setValue(DEFAULT_CONV_BAND)
+        lay.addWidget(self._conv_band_input, 0, 12)
+
+        lay.addWidget(QLabel("保持 T s"), 1, 11)
+        self._conv_hold_input = self._make_time_input("offlineConvHoldInput")
+        self._conv_hold_input.setValue(DEFAULT_CONV_HOLD_S)
+        lay.addWidget(self._conv_hold_input, 1, 12)
+
+        for column in range(13):
             lay.setColumnStretch(column, 0)
         lay.setColumnStretch(1, 1)
         return panel
@@ -383,8 +411,8 @@ class DataAnalysisWindow(QDialog):
         self._summary_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._summary_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self._summary_table.setAlternatingRowColors(True)
-        # 汇总表固定 6 行，关闭内部滚动，把高度交给外层布局一次性展示。
-        self._summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 通道扩容后行数超过可视上限，超出部分交给表格内部垂直滚动。
+        self._summary_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._summary_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._summary_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self._summary_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -410,8 +438,16 @@ class DataAnalysisWindow(QDialog):
         """构建左侧绘图通道单选列表。"""
         box = QGroupBox("绘图通道")
         box.setFixedWidth(230)
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(10, 12, 10, 10)
+        outer = QVBoxLayout(box)
+        outer.setContentsMargins(4, 8, 4, 4)
+        # 通道扩容后列表超过面板高度，放入滚动区避免挤压图表布局。
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        host = QWidget()
+        lay = QVBoxLayout(host)
+        lay.setContentsMargins(6, 4, 6, 6)
         lay.setSpacing(8)
         self._channel_group = QButtonGroup(self)
         self._channel_group.setExclusive(True)
@@ -428,6 +464,8 @@ class DataAnalysisWindow(QDialog):
             self._channel_group.addButton(button)
             lay.addWidget(button)
         lay.addStretch()
+        scroll.setWidget(host)
+        outer.addWidget(scroll)
         return box
 
     def _set_plot_channel(self, channel_key: str) -> None:
@@ -540,12 +578,16 @@ class DataAnalysisWindow(QDialog):
         source.path = Path(path)
         source.error = ""
         source.data = None
+        # 大文件解析可能持续数秒，用忙碌光标提示用户加载中，避免误以为界面卡死。
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             source.data = load_snapshot_samples(path, label=label, channels=CHANNELS)
             source.path = source.data.path
         except (OSError, ValueError) as exc:
             # 错误挂在当前输入源上，另一份文件仍可继续分析。
             source.error = str(exc)
+        finally:
+            QApplication.restoreOverrideCursor()
         self._clear_window_cache(label)
         self._update_path_label(label)
         self._refresh_all(reset_time=True)
@@ -617,26 +659,54 @@ class DataAnalysisWindow(QDialog):
             self._end_input.setValue(t_max)
 
     def _refresh_summary_table(self) -> None:
-        """重新计算并填充六通道汇总指标表。"""
+        """重新计算并填充全通道汇总指标表。"""
         target = self._target_combo.currentText() or "all"
         start_s, end_s = self._time_range()
         for row, channel in enumerate(CHANNELS):
             self._set_table_item(row, 0, channel.label)
+            # 每个输入源对当前通道只做一次汇总，各指标列从同一 summary 取值，
+            # 避免逐列重复统计放大大文件下的表格刷新耗时。
+            summaries = {
+                source_label: self._summary_for(self._sources[source_label], target, channel, start_s, end_s)
+                for source_label in ("A", "B")
+            }
             for column, (metric_key, _metric_name) in enumerate(METRIC_COLUMNS, start=1):
                 values = []
                 for source_label in ("A", "B"):
                     # 分别计算 A/B，再拼成 “左 | 右”。
-                    summary = self._summary_for(self._sources[source_label], target, channel, start_s, end_s)
-                    values.append(self._format_metric(summary, metric_key))
+                    if metric_key == "conv_time_s":
+                        values.append(self._format_convergence(source_label, target, channel, start_s, end_s))
+                    else:
+                        values.append(self._format_metric(summaries[source_label], metric_key))
                 self._set_table_item(row, column, f"{values[0]} | {values[1]}".strip())
         self._summary_table.resizeRowsToContents()
         self._fit_summary_table_height()
 
+    def _format_convergence(
+        self,
+        source_label: str,
+        target: str,
+        channel: AnalysisChannel,
+        start_s: float,
+        end_s: float,
+    ) -> str:
+        """计算并格式化收敛时刻列；禁用、无样本或未收敛显示空位。"""
+        source = self._sources[source_label]
+        if not source.enabled or source.error or source.data is None:
+            return ""
+        # 直接取数组视图做收敛扫描，避免为该列多复制一份 (t, v) 列表。
+        arrays = series_for(source.data, target, channel.key, start_s, end_s)
+        if len(arrays[0]) == 0:
+            return ""
+        conv = convergence_time_s(arrays, self._conv_band_input.value(), self._conv_hold_input.value())
+        return f"{conv:.3f}" if conv is not None else "未收敛"
+
     def _fit_summary_table_height(self) -> None:
-        """按固定 6 个通道计算汇总表高度，避免表格内部出现滚动条。"""
-        # 高度由表头、所有数据行和边框组成，避免不同系统字体下裁剪最后一行。
+        """按可视行数上限计算汇总表高度，超出部分由表格内部滚动承接。"""
+        # 高度由表头、可视数据行和边框组成，避免不同系统字体下裁剪最后一行。
         header_height = self._summary_table.horizontalHeader().height()
-        row_height = sum(self._summary_table.rowHeight(row) for row in range(self._summary_table.rowCount()))
+        visible_rows = min(self._summary_table.rowCount(), SUMMARY_VISIBLE_ROWS)
+        row_height = sum(self._summary_table.rowHeight(row) for row in range(visible_rows))
         frame = self._summary_table.frameWidth() * 2
         height = header_height + row_height + frame + 2
         self._summary_table.setMinimumHeight(height)

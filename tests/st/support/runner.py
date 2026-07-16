@@ -58,6 +58,9 @@ def run_scenario(config_path: str | Path, *, scenario: str | None = None, seed: 
     scenario_name = scenario or path.stem
     started = time.perf_counter()
     controller = SimulationController()
+    # 文件日志默认关闭（见 log_enabled 开关），但 ST 三层检查依赖 snapshots/events 落盘，
+    # 因此在 ST 入口无条件强制开启，场景配置无需各自声明 log_enabled。
+    controller.set_file_log_enabled(True)
     try:
         if _needs_planned_avoidance(path):
             result = _run_with_planned_avoidance(controller, path)

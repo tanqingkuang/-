@@ -1168,6 +1168,54 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(logged_times, [0.1])
         controller.close()
 
+    def test_file_logging_disabled_by_default(self) -> None:
+        """文件日志默认关闭：不创建 logs/run-* 目录，内存快照仍正常记录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.1,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                # 内存快照供 GUI 尾迹/回放消费，不受文件开关影响。
+                _cursor, timed_snapshots = controller.read_timed_snapshots(None)
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.code, "OK")
+            self.assertFalse((Path(tmp) / "logs").exists())
+            self.assertTrue(timed_snapshots)
+
+    def test_set_file_log_enabled_overrides_config_default(self) -> None:
+        """set_file_log_enabled(True) 应在配置未声明 log_enabled 时强制落盘，供 ST/批处理使用。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                controller.set_file_log_enabled(True)
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.1,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(len(list((Path(tmp) / "logs").glob("run-*"))), 1)
+
     def test_timed_data_logger_persists_snapshot_files(self) -> None:
         """关键数据日志应落盘到 logs/run-*/snapshots.jsonl，便于仿真后查找。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1179,6 +1227,8 @@ class SimulationControllerTests(unittest.TestCase):
                     {
                         "duration_s": 0.1,
                         "step_s": 0.01,
+                        # 文件日志默认关闭，落盘类用例需显式打开开关。
+                        "log_enabled": True,
                         "nodes": [{"node_id": "A01"}],
                         "links": [],
                     }
@@ -1206,6 +1256,8 @@ class SimulationControllerTests(unittest.TestCase):
                     {
                         "duration_s": 0.1,
                         "step_s": 0.01,
+                        # 文件日志默认关闭，落盘类用例需显式打开开关。
+                        "log_enabled": True,
                         "nodes": [{"node_id": "A01"}],
                         "links": [],
                     }
@@ -1238,9 +1290,20 @@ class SimulationControllerTests(unittest.TestCase):
                 "track_vel_err_x_mps",
                 "track_vel_err_y_mps",
                 "track_vel_err_z_mps",
+                # 评测补充字段：原始控制指令、饱和证据与算法耗时。
+                "cmd_acc_east_mps2",
+                "cmd_acc_north_mps2",
+                "cmd_acc_up_mps2",
+                "acc_saturated",
+                "lateral_saturated",
+                "algo_step_ms",
             ):
                 self.assertIn(key, node)
                 self.assertIsInstance(node[key], (int, float))
+            # 槽位上下文字段必须存在；默认队形下首节点占 (0,0,0) 槽位，无队形时为 None。
+            for key in ("slot_x_m", "slot_y_m", "slot_z_m"):
+                self.assertIn(key, node)
+                self.assertTrue(node[key] is None or isinstance(node[key], (int, float)))
 
     def test_data_logger_opens_files_only_after_first_tick(self) -> None:
         """加载配置和 reset 不应创建空 run 目录，首次推进仿真时才创建日志目录。"""
@@ -1250,6 +1313,8 @@ class SimulationControllerTests(unittest.TestCase):
                 os.chdir(tmp)
                 config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
                 controller = SimulationController()
+                # 文件日志默认关闭，本用例验证的是"目录延迟创建"语义，需强制开启。
+                controller.set_file_log_enabled(True)
                 self.assertEqual(controller.load_config(str(config_path)).code, "OK")
                 self.assertFalse((Path(tmp) / "logs").exists())
 
@@ -1280,6 +1345,8 @@ class SimulationControllerTests(unittest.TestCase):
             try:
                 os.chdir(tmp)
                 controller = SimulationController()
+                # 文件日志默认关闭，本用例验证的是"写失败降级"语义，需强制开启。
+                controller.set_file_log_enabled(True)
                 config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
                 self.assertEqual(controller.load_config(str(config_path)).code, "OK")
                 self.assertEqual(controller.step(9).code, "OK")
@@ -1371,7 +1438,10 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(payload["time_s"], 1.235)
             self.assertEqual(payload["duration_s"], 2.346)
             self.assertNotIn("step_s", payload)
-            self.assertNotIn("route", payload)
+            # 当前航段几何自本版起落盘，供离线分析推导弯道外甩等裁判量；精度沿用 _m 两位小数。
+            self.assertEqual(payload["route"]["start_x_m"], 0.01)
+            self.assertEqual(payload["route"]["end_y_m"], 3.46)
+            self.assertIn("turn_sign", payload["route"])
             self.assertNotIn("route_segments", payload)
             self.assertEqual(node["x_m"], 1.24)
             self.assertEqual(node["altitude_m"], 1234.57)

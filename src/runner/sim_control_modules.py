@@ -114,6 +114,10 @@ class _ConfigLoader:
             or algorithm_decimation <= 0
         ):
             raise ValueError("algorithm_decimation must be a positive integer")
+        # 文件日志开关必须是布尔值；缺省 False（不落盘），避免大数据量场景默认拖慢仿真。
+        log_enabled = config.get("log_enabled", False)
+        if not isinstance(log_enabled, bool):
+            raise ValueError("log_enabled must be a boolean")
         nodes = config.get("nodes", [])
         links = config.get("links", [])
         model = config.get("model", {})
@@ -567,7 +571,9 @@ class _DataLogger:
     # 有符号 nz 表示右向分量，不能替代始终非负的法向合过载 n_normal。
     # 四个载荷字段采用相同小数位，便于离线重算 n_normal 与滚转角并核对契约。
     _TIME_KEYS = {"time_s", "duration_s", "step_s"}
-    _SNAPSHOT_OMIT_KEYS = {"step_s", "route", "route_segments"}
+    # route（当前航段几何）自本版起落盘：离线分析需要 turn_sign/半径来推导弯道外甩等
+    # 裁判量；route_segments 仍然裁剪，全航线几何应从 config.json 复原。
+    _SNAPSHOT_OMIT_KEYS = {"step_s", "route_segments"}
     _LOAD_FACTOR_KEYS = {"nx", "ny", "nz", "n_normal"}
     _ANGLE_SUFFIXES = ("_deg", "_deg_s")
     _ACCELERATION_SUFFIXES = ("_mps2", "_mps3")

@@ -117,6 +117,23 @@ class NodeState:
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
     rally_phase: str = ""  # 集结阶段字符串，如 JOINING/FLYING、CATCHUP、LOOSE、COMPRESS、HOLD
+    # 评测补充字段：原始控制指令、饱和证据、算法耗时与槽位上下文，均为增量字段，
+    # 旧日志缺失时离线分析工具按"通道不可用"处理，不得用 0 兜底。
+    # cmd_acc_* 是位置跟踪器输出的 ENU 原始加速度指令（模型限幅前）。
+    cmd_acc_east_mps2: float = 0.0
+    cmd_acc_north_mps2: float = 0.0
+    cmd_acc_up_mps2: float = 0.0
+    # 任一 ENU 轴原始指令达到模型幅值上限即视为指令饱和。
+    acc_saturated: bool = False
+    # 横侧向串级变限幅是否触发饱和，来自 PosTrackDiagS，仅串级配置有意义。
+    lateral_saturated: bool = False
+    # 本节点最近一次算法链路单步耗时（毫秒），按算法分频节拍更新。
+    algo_step_ms: float = 0.0
+    # 当前队形下本机的标称槽位坐标（长机 FUR，前/上/右），未定义槽位时为 None。
+    # 注意：这是配置标称值（scale=1），集结压缩阶段的动态缩放不反映在此字段。
+    slot_x_m: float | None = None
+    slot_y_m: float | None = None
+    slot_z_m: float | None = None
 
 
 @dataclass(frozen=True)

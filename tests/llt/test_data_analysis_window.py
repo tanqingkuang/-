@@ -16,6 +16,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QPushButton
 
+from src.data.control_effect_analysis import GUI_CHANNELS
 from src.ui.gui import data_analysis_window as data_analysis_window_module
 from src.ui.gui.data_analysis_window import DataAnalysisWindow
 
@@ -49,16 +50,27 @@ class DataAnalysisWindowTests(unittest.TestCase):
             window._load_file("B", b_path)
             self.app.processEvents()
 
-            self.assertEqual(window.summary_table.rowCount(), 6)
+            # 通道扩容后表格覆盖全部 GUI 通道，超出可视行数部分转为内部滚动。
+            self.assertEqual(window.summary_table.rowCount(), len(GUI_CHANNELS))
             self.assertEqual(window.summary_table.horizontalHeaderItem(1).text(), "均值")
             self.assertEqual(window.summary_table.horizontalHeaderItem(3).text(), "标准差")
-            self.assertEqual(window.summary_table.verticalScrollBar().maximum(), 0)
+            header_texts = [
+                window.summary_table.horizontalHeaderItem(i).text()
+                for i in range(window.summary_table.columnCount())
+            ]
+            self.assertIn("P95绝对值", header_texts)
+            self.assertIn("总变差", header_texts)
+            self.assertIn("时间积分", header_texts)
+            self.assertIn("收敛时刻(s)", header_texts)
             self.assertEqual(window._target_combo.itemText(0), "all")
             self.assertIn("A01", [window._target_combo.itemText(i) for i in range(window._target_combo.count())])
             self.assertEqual(window.summary_table.item(0, 1).text(), "4.00 |")
             self.assertIn("pos_y", window._channel_buttons)
             self.assertIn("vel_y", window._channel_buttons)
-            self.assertEqual(len(window._channel_buttons), 6)
+            # 扩展通道（几何裁判/过载/指令/耗时）进入绘图通道单选列表。
+            self.assertIn("e_perp", window._channel_buttons)
+            self.assertIn("n_tot", window._channel_buttons)
+            self.assertEqual(len(window._channel_buttons), len(GUI_CHANNELS))
             self.assertEqual(window._chart_layers["mean"].x_axis.titleText(), "")
 
             window._source_checks["B"].setChecked(True)

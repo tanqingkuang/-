@@ -10,7 +10,7 @@ from collections import deque
 from dataclasses import replace
 from typing import Callable
 
-from src.algorithm.context.leaf_types import PosTrackDiagS, WayLineS, WayPointInputS, to_display_inputs
+from src.algorithm.context.leaf_types import FormPosS, PosTrackDiagS, WayLineS, WayPointInputS, to_display_inputs
 from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
 from src.common.envelope import MessageEnvelope
 from src.environment.comm import CommunicationChannel
@@ -85,6 +85,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
         self._formation_names: list[str] = []  # 各队形名字（供界面下拉框显示，索引=队形序号）
         self._formation_index: int = 0  # 当前/初始队形索引，供界面下拉框预选
+        self._formation_slots: list[list[FormPosS]] = []  # 各队形槽位表(FUR 标称坐标)，供快照透出
+        # 文件日志开关：配置 log_enabled 决定默认值，override 供 ST/批处理强制开启。
+        self._file_log_enabled = False
+        self._file_log_override: bool | None = None
+        # 各节点最近一次算法链路单步耗时（毫秒），按算法分频节拍更新。
+        self._algo_step_ms: dict[str, float] = {}
         self._rally_geometry: dict[str, object] = {}  # RallyPlanGeometryState 按 node_id 索引，供 GUI 展示两个盘旋圆。
         # 控制输出缓存按节点 ID 存放，模型 tick 前后都能生成一致快照。
         self._current_controls: dict[str, AccelerationCommand] = {}
@@ -122,6 +128,19 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
 
         with self._lock:
             return self._playback_rate
+
+    def set_file_log_enabled(self, enabled: bool | None) -> None:
+        """强制开启/关闭文件日志落盘。注意：None 表示跟随配置 log_enabled；对已打开的日志不生效。"""
+
+        # override 独立于配置存放：load_config 会按配置刷新默认值，但不得覆盖调用方的强制意图。
+        with self._lock:
+            self._file_log_override = enabled
+
+    def _file_log_effective_unlocked(self) -> bool:
+        """返回当前生效的文件日志开关。注意：override 优先于配置默认值。"""
+        if self._file_log_override is not None:
+            return self._file_log_override
+        return self._file_log_enabled
 
     def load_config(self, path: str) -> CommandResult:
         """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
@@ -675,6 +694,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         # 缓存队形名字供界面选择；索引即 switch_formation 下发的整型队形号。
         self._formation_names = list(formation_comm_init.formPat)
         self._formation_index = int(formation_comm_init.initialPattern)
+        # 缓存各队形槽位表（长机 FUR 标称坐标），供快照透出评测用槽位上下文。
+        self._formation_slots = [list(row) for row in formation_comm_init.formPos]
+        # 文件日志开关默认关闭：大数据量场景避免 10Hz JSON 序列化与磁盘 IO 拖慢仿真。
+        self._file_log_enabled = bool(config.get("log_enabled", False))
+        # 新配置清空耗时缓存，避免节点集合变化后残留旧值。
+        self._algo_step_ms = {}
         leader_id = _leader_id_from_nodes(list(nodes))
         initial_leader_state = states.get(leader_id)
         # 把长机初始状态转换为算法侧运动表示，供僚机持队参考；无长机则为 None。
@@ -859,6 +884,9 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
 
     def _ensure_logger_open_unlocked(self) -> None:
         """确保当前运行已创建日志目录。注意：打开失败只记录 WARN，不阻断 tick。"""
+        # 文件日志默认关闭：只影响磁盘落盘，内存快照/事件仍正常记录（供尾迹与 GUI 日志窗口）。
+        if not self._file_log_effective_unlocked():
+            return
         if self._config is None or self._logger.opened or self._logger._file_logging_disabled:
             return
         if not self._logger.open(f"run-{int(time.time())}", self._config):
@@ -876,9 +904,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         for node_id, state in states.items():
             # 每个节点先取走自己的收件箱（读取即清空），再驱动其算法一步。
             inbox = self._comm.read_inbox(node_id)
+            # 逐节点计时算法单步耗时，作为评测"计算代价"证据随快照落盘。
+            step_started = time.perf_counter()
             output = self._node_algorithms[node_id].step(
                 state, inbox, self._time_s, health_map.get(node_id, "normal")
             )
+            self._algo_step_ms[node_id] = (time.perf_counter() - step_started) * 1000.0
             controls[node_id] = output.control
             diagnostics[node_id] = replace(output.control_diag)
             # 汇总各节点待发消息，统一在本轮末尾交给通信模块。
