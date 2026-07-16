@@ -109,6 +109,55 @@ class GeoConfigTests(unittest.TestCase):
                 }
             )
 
+    def test_route_to_internal_rejects_mixed_coordinates_within_one_waypoint(self) -> None:
+        """反例：同一航点不得同时携带经纬度和任一套 ENU 别名。"""
+        enu_representations = (
+            {"x_m": 100.0, "y_m": 200.0},
+            {"east_m": 100.0, "north_m": 200.0},
+            {"east": 100.0, "north": 200.0},
+        )
+        for enu in enu_representations:
+            with self.subTest(enu=enu), self.assertRaisesRegex(
+                ValueError,
+                r"waypoints\[0\].*mixes geodetic and ENU",
+            ):
+                route_to_internal(
+                    {
+                        "waypoints": [
+                            {
+                                "latitude_deg": 39.0,
+                                "longitude_deg": 116.0,
+                                "altitude_m": 1000.0,
+                                **enu,
+                            }
+                        ]
+                    }
+                )
+
+    def test_route_to_internal_rejects_mixed_coordinates_in_arc_center(self) -> None:
+        """反例：圆弧中心同样只能使用经纬度，不能夹带 ENU 别名。"""
+        with self.assertRaisesRegex(
+            ValueError,
+            r"center.*mixes geodetic and ENU",
+        ):
+            route_to_internal(
+                {
+                    "waypoints": [
+                        {
+                            "latitude_deg": 39.0,
+                            "longitude_deg": 116.0,
+                            "altitude_m": 1000.0,
+                            "center": {
+                                "latitude_deg": 39.001,
+                                "longitude_deg": 116.001,
+                                "east": 100.0,
+                                "north": 200.0,
+                            },
+                        }
+                    ]
+                }
+            )
+
     def test_route_to_internal_rejects_enu_arc_center(self) -> None:
         """反例：圆弧中心点属于航线几何，JSON 中也必须用经纬度，不能混入 ENU center。"""
         origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
