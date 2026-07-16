@@ -49,7 +49,93 @@
       </div>
     </section>
     <section>
-      <h2>规则三：缓存判障结果</h2>
+      <h2>性能快路径与安全慢路径</h2>
+      <svg class="diagram" viewBox="0 0 1000 420" role="img" aria-label="性能快路径与安全回退流程">
+        <defs>
+          <marker id="arrowSafety" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#0f7b75"></path>
+          </marker>
+        </defs>
+        <g font-family="Microsoft YaHei, sans-serif" font-size="15" fill="#1d252c">
+          <rect x="25" y="65" width="135" height="70" rx="8" fill="#eef8f6" stroke="#0f7b75"></rect>
+          <text x="92" y="95" text-anchor="middle">原始航段</text>
+          <text x="92" y="117" text-anchor="middle" fill="#63717d" font-size="13">start → goal</text>
+          <rect x="205" y="65" width="145" height="70" rx="8" fill="#f0ece3" stroke="#918778"></rect>
+          <text x="277" y="95" text-anchor="middle">直线快判</text>
+          <text x="277" y="117" text-anchor="middle" fill="#63717d" font-size="13">膨胀障碍</text>
+          <rect x="405" y="20" width="150" height="70" rx="8" fill="#e9f5ee" stroke="#4f9a68"></rect>
+          <text x="480" y="50" text-anchor="middle">直接保留端点</text>
+          <text x="480" y="72" text-anchor="middle" fill="#63717d" font-size="13">完全跳过 A*</text>
+          <rect x="405" y="130" width="150" height="70" rx="8" fill="#e8efff" stroke="#2f6fed"></rect>
+          <text x="480" y="160" text-anchor="middle">候选障碍 A*</text>
+          <text x="480" y="182" text-anchor="middle" fill="#63717d" font-size="13">只搜本腿附近</text>
+          <rect x="610" y="75" width="150" height="70" rx="8" fill="#eef8f6" stroke="#0f7b75"></rect>
+          <text x="685" y="105" text-anchor="middle">候选集去冗余</text>
+          <text x="685" y="127" text-anchor="middle" fill="#63717d" font-size="13">线段再次预筛</text>
+          <rect x="815" y="75" width="160" height="70" rx="8" fill="#fff8d8" stroke="#b48b00"></rect>
+          <text x="895" y="105" text-anchor="middle">全量障碍复核</text>
+          <text x="895" y="127" text-anchor="middle" fill="#63717d" font-size="13">simplify clearance</text>
+          <rect x="610" y="275" width="150" height="70" rx="8" fill="#fff3e9" stroke="#c35a2e"></rect>
+          <text x="685" y="305" text-anchor="middle">全障碍 A*</text>
+          <text x="685" y="327" text-anchor="middle" fill="#63717d" font-size="13">漏筛时慢路径回退</text>
+          <rect x="815" y="275" width="160" height="70" rx="8" fill="#e9f5ee" stroke="#4f9a68"></rect>
+          <text x="895" y="305" text-anchor="middle">最终可飞性</text>
+          <text x="895" y="327" text-anchor="middle" fill="#63717d" font-size="13">直线 / 转角 / 腿 / 弧</text>
+        </g>
+        <line x1="160" y1="100" x2="202" y2="100" stroke="#0f7b75" stroke-width="3" marker-end="url(#arrowSafety)"></line>
+        <path d="M350 88 C375 88 375 55 402 55" fill="none" stroke="#4f9a68" stroke-width="3" marker-end="url(#arrowSafety)"></path>
+        <text x="375" y="55" fill="#4f9a68" font-family="Microsoft YaHei, sans-serif" font-size="13">清空</text>
+        <path d="M350 112 C375 112 375 165 402 165" fill="none" stroke="#2f6fed" stroke-width="3" marker-end="url(#arrowSafety)"></path>
+        <text x="365" y="155" fill="#2f6fed" font-family="Microsoft YaHei, sans-serif" font-size="13">阻挡</text>
+        <path d="M555 55 C585 55 585 100 607 100" fill="none" stroke="#0f7b75" stroke-width="3" marker-end="url(#arrowSafety)"></path>
+        <path d="M555 165 C585 165 585 120 607 120" fill="none" stroke="#0f7b75" stroke-width="3" marker-end="url(#arrowSafety)"></path>
+        <line x1="760" y1="110" x2="812" y2="110" stroke="#0f7b75" stroke-width="3" marker-end="url(#arrowSafety)"></line>
+        <line x1="895" y1="145" x2="895" y2="272" stroke="#4f9a68" stroke-width="3" marker-end="url(#arrowSafety)"></line>
+        <text x="905" y="215" fill="#4f9a68" font-family="Microsoft YaHei, sans-serif" font-size="13">通过</text>
+        <path d="M850 145 C830 225 760 235 720 272" fill="none" stroke="#c35a2e" stroke-width="3" marker-end="url(#arrowSafety)"></path>
+        <text x="785" y="230" fill="#c35a2e" font-family="Microsoft YaHei, sans-serif" font-size="13">发现漏筛</text>
+        <path d="M685 275 C685 220 805 210 850 148" fill="none" stroke="#c35a2e" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrowSafety)"></path>
+      </svg>
+      <p>优化后的规划器先走便宜路径，只有必要时才扩大计算量；但所有快路径都必须汇入全量复核。这里的目标不是用速度交换安全，而是让常见大范围场景少做与结果无关的工作。</p>
+    </section>
+    <section>
+      <h2>规则三：直线清空就跳过 A*</h2>
+      <pre><code>direct_candidates = _leg_candidate_obstacles(
+    start, goal, obstacles, clearance_m, 0.0)
+
+if line_of_sight_clear(start, goal, direct_candidates,
+                       clearance=clearance_m):
+    raw = [start, goal]
+else:
+    raw = plan_path(...)</code></pre>
+      <p>原始航段在膨胀障碍外全程可达时，端点直线已经是该腿的最短路径。直接保留两端既不改变结果，也避免创建大范围网格和运行 open/closed 主循环。</p>
+    </section>
+    <section>
+      <h2>规则四：航段与线段两级候选预筛</h2>
+      <table>
+        <thead><tr><th>层级</th><th>包围盒</th><th>用途</th></tr></thead>
+        <tbody>
+          <tr><td>航段级</td><td>起终点盒 + clearance + margin</td><td>只把可能影响本腿搜索范围的障碍交给 A*。</td></tr>
+          <tr><td>线段级</td><td>当前视线段盒 + clearance</td><td>密集采样时只调用附近候选障碍的 <code>inside()</code>。</td></tr>
+        </tbody>
+      </table>
+      <p>两级预筛都只剔除包围盒明确不相交的障碍。polygon 的 bounds 在构造时已缓存，圆和矩形也能常数时间给出包围盒。</p>
+    </section>
+    <section>
+      <h2>规则五：全量复核失败就完整重规划</h2>
+      <pre><code>simplified, causes = simplify_path_with_causes(
+    raw, leg_obstacles, clearance=simplify_clearance_m)
+
+if candidate_set_is_smaller and not path_clear_against_all_obstacles(
+        simplified, obstacles, simplify_clearance_m, sample_step):
+    raw = plan_path(start, goal, obstacles, ...)
+    simplified, causes = simplify_path_with_causes(
+        raw, obstacles, clearance=simplify_clearance_m)</code></pre>
+      <p>局部候选可能漏掉“原本不在直线盒内、但绕行后进入新路径附近”的障碍。因此候选路径生成后，必须用全量障碍和去冗余相同的 <code>simplify_clearance_m</code> 复核。只要发现漏筛，就放弃快路径结果，用完整障碍集重新运行 A*。</p>
+      <div class="warning note">最终 <code>check_feasibility()</code> 还会按全部真实障碍检查每条直线腿，并可返回 <code>ERR_AVOID_STRAIGHT_HITS_OBSTACLE</code>。它是末端诊断护栏，不替代前面的全量重规划。</div>
+    </section>
+    <section>
+      <h2>规则六：缓存格点判障结果</h2>
       <pre><code>blocked_cache = {}
 
 def is_blocked(i, j):
@@ -62,7 +148,7 @@ def is_blocked(i, j):
       <p>搜索过程中同一个格点可能被不同方向多次检查。缓存只在一次规划内有效，避免跨配置复用旧障碍结果。</p>
     </section>
     <section>
-      <h2>规则四：无解和配置错误分开处理</h2>
+      <h2>规则七：无解和配置错误分开处理</h2>
       <table>
         <thead><tr><th>情况</th><th>行为</th><th>原因</th></tr></thead>
         <tbody>
@@ -76,7 +162,8 @@ def is_blocked(i, j):
       <ol>
         <li>为什么吸附后的起点格心也要再判障？</li>
         <li>禁止切角会让路径更短还是更保守？</li>
-        <li>为什么 <code>blocked_cache</code> 不应该做成全局缓存？</li>
+        <li>为什么候选障碍路径通过局部判定后，还必须对全量障碍复核？</li>
+        <li>为什么发现候选漏筛时要重新规划，而不是直接返回直线触障失败？</li>
       </ol>
       <div class="nav"><a href="04-A星搜索核心.html">上一页：04 A* 搜索核心</a><a href="06-转向惩罚.html">下一页：06 转向惩罚</a></div>
     </section>

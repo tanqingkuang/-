@@ -10,7 +10,7 @@
   <header>
     <a href="避障学习目录.html">返回目录</a>
     <h1>07 去冗余与航线转换</h1>
-    <p>A* 输出的是格点折线，通常又密又锯齿。工程接着用视线可达检查删除不必要的中间点，再把拐点变成 `WayPointInputS`。</p>
+    <p>A* 输出的是格点折线，通常又密又锯齿。工程用候选障碍视线检查删除不必要的中间点，同时记录“哪个障碍逼出了这个拐点”，再把结果交给贴障弧和航线转换。</p>
   </header>
   <main>
     <section>
@@ -33,29 +33,55 @@
     </section>
     <section>
       <h2>视线可达检查</h2>
-      <pre><code>def line_of_sight_clear(start, end, obstacles, clearance=0.0):
+      <pre><code>def _first_blocker(start, end, obstacles, clearance=0.0):
+    candidates = _segment_candidate_obstacles(
+        start, end, obstacles, clearance)
+    if not candidates:
+        return None
+
     length = hypot(end[0] - start[0], end[1] - start[1])
     steps = max(1, ceil(length / sample_step))
     for k in range(steps + 1):
         t = k / steps
         east = start[0] + (end[0] - start[0]) * t
         north = start[1] + (end[1] - start[1]) * t
-        if blocked(obstacles, east, north, clearance):
-            return False
-    return True</code></pre>
-      <p>注意这里用 <code>ceil</code>，保证采样间距不超过 <code>sample_step</code>。如果用向下取整，短线段中间的细障碍可能被漏掉。</p>
+        for obstacle in candidates:
+            if inside(obstacle, east, north, clearance):
+                return obstacle
+    return None
+
+def line_of_sight_clear(...):
+    return _first_blocker(...) is None</code></pre>
+      <p>线段先按扩展包围盒筛选候选障碍，密集采样只检查附近对象。这里仍使用 <code>ceil</code>，保证实际采样间距不超过 <code>sample_step</code>。与旧布尔接口不同，内部函数返回首个挡路线障碍，为后续 cause 标签提供来源。</p>
     </section>
     <section>
       <h2>贪心去冗余</h2>
       <pre><code>result = [points[0]]
+causes = [None]
 anchor = 0
 for i in range(1, len(points) - 1):
-    if not line_of_sight_clear(points[anchor], points[i + 1], obstacles):
+    blocker = _first_blocker(
+        points[anchor], points[i + 1], obstacles)
+    if blocker is not None:
         result.append(points[i])
+        causes.append(blocker)
         anchor = i
 result.append(points[-1])</code></pre>
       <p>从锚点开始尽量往远处看。如果锚点看不到下一个点，就说明当前点必须保留；否则当前点可以跳过。</p>
       <div class="note">去冗余不是“删掉所有共线点”这么简单。即使不共线，只要从锚点到远点的直线不穿障碍，也可以删掉中间点。</div>
+    </section>
+    <section>
+      <h2>cause 标签为什么重要</h2>
+      <p><code>simplify_path_with_causes()</code> 返回与简化点等长的 cause 列表。首末点通常为 None；中间点被保留时，cause 指向阻止锚点继续拉直的障碍。</p>
+      <table>
+        <thead><tr><th>cause 模式</th><th>几何含义</th><th>后续处理</th></tr></thead>
+        <tbody>
+          <tr><td>None</td><td>首末点或没有明确逼停来源。</td><td>作为普通直线骨架点。</td></tr>
+          <tr><td>单个圆障碍</td><td>只有一个拐点由该圆逼出。</td><td>保留固定 R 倒角，不强行合弧。</td></tr>
+          <tr><td>连续同一圆、同一绕行方向</td><td>多个拐点正在沿同一膨胀圆绕行。</td><td>可折叠为一段贴障大弧。</td></tr>
+        </tbody>
+      </table>
+      <p>这种“在判障时记账”的做法比事后根据点到圆心的浮点距离反推来源稳定，也不需要额外容差猜测。</p>
     </section>
     <section>
       <h2>转换为 WayPointInputS</h2>
@@ -63,22 +89,25 @@ result.append(points[-1])</code></pre>
         <thead><tr><th>函数</th><th>职责</th><th>重要限制</th></tr></thead>
         <tbody>
           <tr><td><code>points_to_route()</code></td><td>把二维点摆成航点，写入速度和高度。</td><td>不决策 r，所有 <code>r=0</code>。</td></tr>
-          <tr><td><code>assign_transition_radius()</code></td><td>给直线-直线内部拐点补 <code>r=turn_radius_m</code>。</td><td>首末点不补；邻段已有曲线则不补。</td></tr>
-          <tr><td><code>bake_transition_arcs()</code></td><td>当 <code>allow_arc=True</code> 时把交接半径烘焙成曲率航段。</td><td>半径过大导致切点越出腿长时保留原折线。</td></tr>
+          <tr><td><code>bake_obstacle_hug_arcs()</code></td><td>把连续贴同一圆的拐点串折叠成膨胀半径大弧。</td><td>只处理满足条件的圆；失败时安全退化。</td></tr>
+          <tr><td><code>check_route_feasibility()</code></td><td>校验折叠后真正要飞的直线骨架与显式弧。</td><td>校验必须发生在补 r 与最终烘焙之前。</td></tr>
+          <tr><td><code>assign_transition_radius()</code></td><td>给剩余直线-直线内部拐点补 <code>r=turn_radius_m</code>。</td><td>首末点不补；邻段已有曲线则不补。</td></tr>
+          <tr><td><code>bake_transition_arcs()</code></td><td>当 <code>allow_arc=True</code> 时把剩余交接半径烘焙成曲率航段。</td><td>半径过大导致切点越出腿长时保留原折线。</td></tr>
         </tbody>
       </table>
     </section>
     <section>
       <h2>simplify_clearance_m 的意义</h2>
-      <p>A* 搜索用 <code>clearance_m</code>，去冗余可以用 <code>simplify_clearance_m</code>。两者默认相同，但允许分开：搜索时可以保守一点，去冗余时可以按另一套安全边界判断拉直线段。</p>
-      <div class="warning note">如果去冗余的 clearance 太小，折线可能被拉得更直，但也更接近真实障碍；如果太大，路径会保留更多拐点。</div>
+      <p>A* 搜索使用 <code>clearance_m</code>，去冗余使用 <code>simplify_clearance_m</code>。两者默认相同，但允许分开：搜索时可以保守一点，去冗余时可以按另一套安全边界判断拉直线段。</p>
+      <p><code>simplify_clearance_m</code> 还有两项合同：它是候选路径全量复核时使用的安全距离，也是圆形障碍贴障弧的半径增量，即 <code>obstacle.radius + simplify_clearance_m</code>。</p>
+      <div class="warning note">调小该值通常能减少拐点，但也会同时改变全量漏筛复核边界和贴障弧半径。它不是单纯的显示或去冗余参数。</div>
     </section>
     <section>
       <h2>本章检查题</h2>
       <ol>
         <li>为什么 <code>points_to_route()</code> 不直接设置转弯半径？</li>
-        <li>视线去冗余为什么要逐点采样，而不是只检查两端？</li>
-        <li><code>simplify_clearance_m</code> 小于 <code>clearance_m</code> 时，拐点数量通常会怎么变？</li>
+        <li>为什么 <code>_first_blocker()</code> 返回障碍对象比只返回 True / False 更有价值？</li>
+        <li><code>simplify_clearance_m</code> 除了影响拐点数量，还影响哪两项安全或几何行为？</li>
       </ol>
       <div class="nav"><a href="06-转向惩罚.html">上一页：06 转向惩罚</a><a href="08-圆弧与可飞性.html">下一页：08 圆弧与可飞性</a></div>
     </section>

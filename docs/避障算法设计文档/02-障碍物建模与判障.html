@@ -10,7 +10,7 @@
   <header>
     <a href="避障学习目录.html">返回目录</a>
     <h1>02 障碍物建模与判障</h1>
-    <p>避障的第一个核心不是 A*，而是“什么算被障碍挡住”。项目把这个判断集中在 `obstacle.py`，A* 和可飞性校验都复用它。</p>
+    <p>避障的第一个核心不是 A*，而是“什么算被障碍挡住”。项目把圆、轴对齐矩形与 polygon 的判定集中在 <code>obstacle.py</code>，A*、视线去冗余和可飞性校验复用同一套语义。</p>
   </header>
   <main>
     <section>
@@ -18,14 +18,15 @@
       <pre><code>@dataclass
 class ObstacleS:
     id: str
-    kind: str  # "circle" | "rect"
+    kind: str  # "circle" | "rect" | "polygon"
     center: PosInEarthS
     radius: float
     min_e: float
     min_n: float
     max_e: float
-    max_n: float</code></pre>
-      <p>圆形障碍用圆心和半径；矩形障碍用 east/north 方向上的最小最大边界。高度字段不参与避障，因为本期只做水平面避障。</p>
+    max_n: float
+    vertices: list[PosInEarthS]</code></pre>
+      <p>圆形障碍用圆心和半径；<code>rect</code> 用 east/north 方向上的最小最大边界；旋转矩形和任意多边形用顶点序列。polygon 在构造时同时缓存轴对齐包围盒，后续热点判障无需反复扫描顶点求边界。高度字段不参与避障，因为当前仍做二维水平避障。</p>
     </section>
     <section>
       <h2>膨胀判障</h2>
@@ -33,13 +34,20 @@ class ObstacleS:
         <div>
           <p><code>inside()</code> 的语义是：点是否落在“障碍 + clearance”里面，边界算内。</p>
           <pre><code>if obstacle.kind == "circle":
-    return hypot(east - center.east, north - center.north) \
-        <= obstacle.radius + clearance
+    radius = obstacle.radius + clearance
+    if abs(de) > radius or abs(dn) > radius:
+        return False
+    return de * de + dn * dn <= radius * radius
 
-return (
-    min_e - clearance <= east <= max_e + clearance
-    and min_n - clearance <= north <= max_n + clearance
-)</code></pre>
+if obstacle.kind == "polygon":
+    if outside_cached_bbox(east, north, clearance):
+        return False
+    if point_inside_polygon(east, north):
+        return True
+    return any(distance_to_edge_sq(east, north, edge)
+               <= clearance * clearance for edge in edges)
+
+return inside_expanded_rect(east, north, clearance)</code></pre>
         </div>
         <svg class="diagram" viewBox="0 0 560 320" role="img" aria-label="障碍膨胀示意">
           <g font-family="Microsoft YaHei, sans-serif">
@@ -54,14 +62,27 @@ return (
           </g>
         </svg>
       </div>
-      <div class="note">A* 实际绕开的不是黑色真实障碍，而是橙色虚线代表的膨胀障碍。这样路径即使贴着膨胀边界走，也和真实障碍留出安全距离。</div>
+      <div class="note">A* 实际绕开的不是黑色真实障碍，而是橙色虚线代表的膨胀障碍。轴对齐 <code>rect</code> 是方角外扩；polygon 使用“内部或到任一边的距离不超过 clearance”，因此凸角呈圆角，旋转矩形不会退化成轴对齐大包围盒。</div>
     </section>
     <section>
       <h2>为什么要有 blocked()</h2>
       <pre><code>def blocked(obstacles, east, north, clearance=0.0):
     return any(inside(obstacle, east, north, clearance)
                for obstacle in obstacles)</code></pre>
-      <p>A* 要判断格心是否可通行，可飞性要判断圆弧采样点是否触障。两者如果各写一套几何判断，很容易出现“A* 认为安全、圆弧校验认为不安全”的不一致。所以工程把形状判断收敛到同一个函数。</p>
+      <p>A* 要判断格心是否可通行，视线去冗余要判断线段采样点，可飞性要判断直线与圆弧采样点。各阶段如果分别实现形状几何，很容易产生安全边界不一致，因此工程把最终点判定收敛到 <code>inside()</code>。</p>
+    </section>
+    <section>
+      <h2>判障热路径优化</h2>
+      <table>
+        <thead><tr><th>优化</th><th>减少的工作</th><th>不改变的语义</th></tr></thead>
+        <tbody>
+          <tr><td>polygon 构造时缓存 bounds</td><td>不再为每次 <code>obstacle_bounds()</code> 扫描全部顶点。</td><td>精确判障仍使用原始顶点。</td></tr>
+          <tr><td>圆和 polygon 先做包围盒排除</td><td>远场点无需进入平方距离、射线法或逐边循环。</td><td>包围盒只负责提前返回 False。</td></tr>
+          <tr><td>比较距离平方</td><td>圆判定和点到边判定避免热点中的反复开方。</td><td><code>d² ≤ clearance²</code> 与距离比较等价。</td></tr>
+          <tr><td>线段再预筛候选障碍</td><td>密集采样点只检查与线段扩展包围盒相交的障碍。</td><td>被排除的障碍在几何上不可能命中该线段。</td></tr>
+        </tbody>
+      </table>
+      <div class="warning note">这些优化只做“便宜的否定”：能够证明不可能命中时才提前退出。候选预筛后的完整路径还会接受全量障碍复核，安全规则见第 05 章。</div>
     </section>
     <section>
       <h2>配置到对象</h2>
@@ -70,17 +91,34 @@ return (
         <tbody>
           <tr><td><code>type: circle</code></td><td><code>kind="circle"</code></td><td>使用圆心和半径。</td></tr>
           <tr><td><code>type: rect</code></td><td><code>kind="rect"</code></td><td>使用 east/north 上下界。</td></tr>
+          <tr><td><code>type: polygon</code></td><td><code>kind="polygon"</code></td><td>使用顶点序列，可表达旋转矩形和地形轮廓。</td></tr>
+          <tr><td>经纬度 <code>points</code></td><td>内部 polygon 顶点</td><td>使用基础航线 origin 转换为 ENU，保持旋转和轮廓形状。</td></tr>
           <tr><td><code>enabled</code></td><td>UI 勾选状态</td><td>未启用的障碍不会传给规划。</td></tr>
           <tr><td><code>clearance_m</code></td><td><code>clearance</code></td><td>规划判障时统一传入。</td></tr>
         </tbody>
       </table>
     </section>
     <section>
+      <h2>显示边界必须与判障边界一致</h2>
+      <p>早期显示层把 polygon 膨胀角画成 miter 尖角，而后端判障使用圆角距离边界，造成“航线穿过橙色安全框”的视觉假象。当前显示已经改成圆角外扩，与 <code>inside()</code> 一致。</p>
+      <div class="image-grid">
+        <figure>
+          <img src="assets/避障-擦角-修复前-miter尖角.png" alt="修复前 polygon 膨胀边界使用尖角显示" loading="lazy">
+          <figcaption>修复前：显示层的 miter 尖角比后端真实判障边界更向外凸。</figcaption>
+        </figure>
+        <figure>
+          <img src="assets/避障-擦角-修复后-圆角残余弓高.png" alt="修复后 polygon 膨胀边界使用圆角显示" loading="lazy">
+          <figcaption>修复后：显示边界与判障圆角一致，剩余极小切入来自直线弦逼近曲线的弓高。</figcaption>
+        </figure>
+      </div>
+      <div class="note">弓高吃掉的是部分安全裕度，不等于触及真实障碍。若业务要求整条折线始终保持完整 clearance，需要加密路径或生成贴边曲线，而不是再次扩大显示轮廓。</div>
+    </section>
+    <section>
       <h2>本章检查题</h2>
       <ol>
         <li>为什么边界点也算障碍内？</li>
         <li>如果 <code>clearance_m</code> 调大，A* 搜索空间会变宽还是变窄？</li>
-        <li>为什么新增一种障碍形状时，优先改 <code>inside()</code> 而不是改 A*？</li>
+        <li>为什么 polygon 同时保存原始顶点和轴对齐 bounds，而不能只保留 bounds？</li>
       </ol>
       <div class="nav"><a href="01-避障总览.html">上一页：01 避障总览</a><a href="03-栅格化与坐标转换.html">下一页：03 栅格化与坐标转换</a></div>
     </section>

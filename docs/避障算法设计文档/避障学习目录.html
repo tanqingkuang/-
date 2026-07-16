@@ -9,7 +9,7 @@
 <body>
   <header>
     <h1>避障学习目录</h1>
-    <p>这组页面按工程真实调用链讲解避障：配置与 UI 入口、障碍建模、栅格化、A*、工程规则、转向惩罚、去冗余、圆弧与可飞性。每章都尽量用代码片段、图表和小例子对应源码。</p>
+    <p>这组页面按当前工程调用链讲解避障：外部航线与障碍文件、经纬高到 ENU、障碍建模、性能快路径、A*、去冗余、贴障弧、可飞性校验与航线采用。每章都尽量用代码片段、图表和小例子对应源码。</p>
   </header>
   <main>
     <section>
@@ -17,23 +17,23 @@
       <div class="chapter-list">
         <a class="chapter-card" href="01-避障总览.html">
           <strong>01 避障总览</strong>
-          <span>从配置和 UI 入口开始，看避障如何一路生成可采用的长机航线。</span>
+          <span>从文件引用和 UI 入口开始，看避障如何生成、预览、输出并采用长机航线。</span>
         </a>
         <a class="chapter-card" href="02-障碍物建模与判障.html">
           <strong>02 障碍物建模与判障</strong>
-          <span>理解圆形、矩形障碍，膨胀安全距离，以及 `blocked()` 为什么是共享基元。</span>
+          <span>理解圆形、轴对齐矩形与 polygon，膨胀边界，以及判障热路径如何优化。</span>
         </a>
         <a class="chapter-card" href="03-栅格化与坐标转换.html">
           <strong>03 栅格化与坐标转换</strong>
-          <span>把连续的 east/north 坐标变成 A* 可搜索的离散格点。</span>
+          <span>把外部经纬高统一转换为内部 ENU，再离散成 A* 可搜索的格点。</span>
         </a>
         <a class="chapter-card" href="04-A星搜索核心.html">
           <strong>04 A* 搜索核心</strong>
-          <span>逐步看 open、closed、g、h、f、came_from 如何协作。</span>
+          <span>逐步看 open、closed、g、h、f、came_from，并理解什么情况下才真正进入 A*。</span>
         </a>
         <a class="chapter-card" href="05-工程安全规则.html">
           <strong>05 工程安全规则</strong>
-          <span>端点精确判障、禁止对角切角、网格规模保护等非教材但关键的实现细节。</span>
+          <span>直线快判、候选障碍裁剪、全量复核与回退，以及其它工程安全规则。</span>
         </a>
         <a class="chapter-card" href="06-转向惩罚.html">
           <strong>06 转向惩罚</strong>
@@ -41,11 +41,11 @@
         </a>
         <a class="chapter-card" href="07-去冗余与航线转换.html">
           <strong>07 去冗余与航线转换</strong>
-          <span>把 A* 锯齿格点拉直，并转换为 `WayPointInputS`。</span>
+          <span>把 A* 锯齿格点拉直，记录拐点来源，并为贴障弧准备输入。</span>
         </a>
         <a class="chapter-card" href="08-圆弧与可飞性.html">
           <strong>08 圆弧与可飞性</strong>
-          <span>解释转弯半径、腿长约束、圆弧触障和最终 `PlanResult`。</span>
+          <span>解释固定 R 倒角、贴障大弧、后置可飞性校验和最终 PlanResult。</span>
         </a>
       </div>
     </section>
@@ -59,13 +59,15 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td><code>src/ui/gui/main_window.py</code></td><td>配置解析、避障窗口、生成航线、采用航线。</td></tr>
+          <tr><td><code>src/ui/gui/main_window_avoidance.py</code></td><td>避障窗口、参数交互、生成、预览、输出与采用。</td></tr>
+          <tr><td><code>src/runner/gui_application.py</code></td><td>GUI 与算法之间的应用层边界、规划结果投影与航线输出。</td></tr>
+          <tr><td><code>src/data/config_loader.py</code></td><td>展开 route_file / obstacles_file，并把经纬高转换为内部 ENU。</td></tr>
           <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/obstacle.py</code></td><td>障碍数据结构、膨胀判障。</td></tr>
           <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/astar.py</code></td><td>栅格化与 A* 内核。</td></tr>
-          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/path_to_route.py</code></td><td>视线去冗余、航点转换、交接半径、圆弧烘焙。</td></tr>
-          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/feasibility.py</code></td><td>转弯角、腿长、圆弧触障可飞性校验。</td></tr>
-          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/planner.py</code></td><td>把所有步骤串成 `plan_avoidance_route()`。</td></tr>
-          <tr><td><code>src/runner/sim_control.py</code></td><td>采用避障航线后替换长机原航线，清除时恢复。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/path_to_route.py</code></td><td>线段候选预筛、去冗余 cause、贴障弧、交接半径与圆弧烘焙。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/feasibility.py</code></td><td>直线、转角、腿长、固定 R 圆弧与贴障弧可飞性校验。</td></tr>
+          <tr><td><code>src/algorithm/units/process/tra_plan/avoidance/planner.py</code></td><td>性能快路径、全量回退与 plan_avoidance_route() 总编排。</td></tr>
+          <tr><td><code>src/runner/sim_controller.py</code></td><td>采用避障航线后替换长机原航线，清除时恢复。</td></tr>
         </tbody>
       </table>
     </section>
