@@ -302,13 +302,14 @@ def _task_step(
 
     ctx.posCalcStatus.join_exited = leader_join_exited
     ctx.posCalcStatus.planned_path_length_m = leader_path_length_m
+    ctx.clock.now_s = now_s
     output = RallyTaskOutputS(cmd=ctx.cmd)
     task.step(
         RallyTaskInputS(
             remote=RemoteCmdS(remote),
             cmd=ctx.cmd,
             followerStates=states or [],
-            now_s=now_s,
+            clock=ctx.clock,
             posCalcStatus=ctx.posCalcStatus,
         ),
         output,
@@ -1161,7 +1162,7 @@ class FollowerStatusTests(unittest.TestCase):
         inbound = FollowerStatus()
         inbound.init(None)
         inbound.step(
-            FollowerStatusInputS(inbox=outbound_output.outbox, now_s=5.0),
+            FollowerStatusInputS(inbox=outbound_output.outbox, clock=AlgorithmClockS(now_s=5.0)),
             FollowerStatusOutputS(followerStates=states),
         )
 
@@ -1177,13 +1178,13 @@ class FollowerStatusTests(unittest.TestCase):
         valid = _follower_status_msg("R02")
         valid.payload["planned_path_length_m"] = 1000.0
         inbound.step(
-            FollowerStatusInputS(inbox=[valid], now_s=5.0),
+            FollowerStatusInputS(inbox=[valid], clock=AlgorithmClockS(now_s=5.0)),
             FollowerStatusOutputS(followerStates=states),
         )
         invalid = _follower_status_msg("R02", pos_east=99.0)
         invalid.payload["planned_path_length_m"] = -2.0
         inbound.step(
-            FollowerStatusInputS(inbox=[invalid], now_s=6.0),
+            FollowerStatusInputS(inbox=[invalid], clock=AlgorithmClockS(now_s=6.0)),
             FollowerStatusOutputS(followerStates=states),
         )
 
@@ -1201,7 +1202,7 @@ class FollowerStatusTests(unittest.TestCase):
         message = _follower_status_msg("R02", rally_state=RALLY_STATE_STANDBY, pos_east=8.0)
         message.payload["planned_path_length_m"] = -1.0
         inbound.step(
-            FollowerStatusInputS(inbox=[message], now_s=5.0),
+            FollowerStatusInputS(inbox=[message], clock=AlgorithmClockS(now_s=5.0)),
             FollowerStatusOutputS(followerStates=states),
         )
 
@@ -1233,7 +1234,7 @@ class FollowerStatusTests(unittest.TestCase):
                     _follower_status_msg("R02", pos_east=1.0, pos_north=2.0, pos_h=3.0, pos_err_m=4.0),
                     _follower_status_msg("R03", pos_east=5.0, pos_north=6.0, pos_h=7.0, arrived=1),
                 ],
-                now_s=10.0,
+                clock=AlgorithmClockS(now_s=10.0),
             ),
             FollowerStatusOutputS(followerStates=states),
         )
@@ -1252,7 +1253,7 @@ class FollowerStatusTests(unittest.TestCase):
                     MessageEnvelope(FOLLOWER_STATUS_TOPIC, "R04", "R01", 0.0, {"pos_east": 1.0}),
                     _follower_status_msg("R02", pos_east=8.0, pos_err_m=1.5),
                 ],
-                now_s=11.0,
+                clock=AlgorithmClockS(now_s=11.0),
             ),
             FollowerStatusOutputS(followerStates=states),
         )
@@ -1265,7 +1266,10 @@ class FollowerStatusTests(unittest.TestCase):
 
         msg = _follower_status_msg("R05")
         msg.payload["id"] = "伪造ID"
-        inbound.step(FollowerStatusInputS(inbox=[msg], now_s=12.0), FollowerStatusOutputS(followerStates=states))
+        inbound.step(
+            FollowerStatusInputS(inbox=[msg], clock=AlgorithmClockS(now_s=12.0)),
+            FollowerStatusOutputS(followerStates=states),
+        )
         self.assertEqual(states[-1].id, "R05")
 
     def test_follower_status_defaults_missing_rally_state_to_legacy_flying(self) -> None:
@@ -1287,7 +1291,10 @@ class FollowerStatusTests(unittest.TestCase):
             },
         )
 
-        inbound.step(FollowerStatusInputS(inbox=[msg], now_s=5.0), FollowerStatusOutputS(followerStates=states))
+        inbound.step(
+            FollowerStatusInputS(inbox=[msg], clock=AlgorithmClockS(now_s=5.0)),
+            FollowerStatusOutputS(followerStates=states),
+        )
 
         self.assertEqual(len(states), 1)
         self.assertEqual(states[0].rally_state, RALLY_STATE_FLYING)
@@ -1316,7 +1323,7 @@ class FollowerStatusTests(unittest.TestCase):
                 msg.payload[field_name] = invalid_value
 
                 inbound.step(
-                    FollowerStatusInputS(inbox=[msg], now_s=11.0),
+                    FollowerStatusInputS(inbox=[msg], clock=AlgorithmClockS(now_s=11.0)),
                     FollowerStatusOutputS(followerStates=states),
                 )
 
@@ -1331,7 +1338,7 @@ class FollowerStatusTests(unittest.TestCase):
         malformed.payload["pos_err_m"] = "非法数值"
         states = [baseline]
         inbound.step(
-            FollowerStatusInputS(inbox=[malformed], now_s=11.0),
+            FollowerStatusInputS(inbox=[malformed], clock=AlgorithmClockS(now_s=11.0)),
             FollowerStatusOutputS(followerStates=states),
         )
         self.assertEqual(baseline.pos, _pos(1.0, 2.0, 3.0))
@@ -1340,7 +1347,7 @@ class FollowerStatusTests(unittest.TestCase):
         new_invalid = _follower_status_msg("R03")
         new_invalid.payload["planned_path_length_m"] = float("inf")
         inbound.step(
-            FollowerStatusInputS(inbox=[new_invalid], now_s=11.0),
+            FollowerStatusInputS(inbox=[new_invalid], clock=AlgorithmClockS(now_s=11.0)),
             FollowerStatusOutputS(followerStates=states),
         )
         self.assertEqual([state.id for state in states], ["R02"])
@@ -1475,9 +1482,11 @@ class RallyCommunicationTests(unittest.TestCase):
         broadcast_input = RallyLeaderBroadcastInputS(
             cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=0),
             selfState=_motion(),
-            t_ref=180.0,
-            t_ref_valid=True,
-            loop_counts={"A01": 0, "A02": 2},
+            rallyPlan=RallyPlanS(
+                t_ref=180.0,
+                valid=True,
+                loop_counts={"A01": 0, "A02": 2},
+            ),
         )
         broadcast_output = OutboundOutputS()
         outbound.step(broadcast_input, broadcast_output)
@@ -1544,9 +1553,11 @@ class RallyCommunicationTests(unittest.TestCase):
                 broadcast_input = RallyLeaderBroadcastInputS(
                     cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=0),
                     selfState=_motion(),
-                    t_ref=180.0,
-                    t_ref_valid=True,
-                    loop_counts=invalid_plan,  # type: ignore[arg-type]
+                    rallyPlan=RallyPlanS(
+                        t_ref=180.0,
+                        valid=True,
+                        loop_counts=invalid_plan,  # type: ignore[arg-type]
+                    ),
                 )
 
                 with self.assertRaises(ValueError):
@@ -1564,8 +1575,7 @@ class RallyCommunicationTests(unittest.TestCase):
             RallyLeaderBroadcastInputS(
                 cmd=FormSnapshotS(stage=FormStageE.RALLY, pattern=0, step=2),
                 selfState=_motion(east=1.0, north=2.0, h=3.0, v_east=4.0),
-                t_ref=12.0,
-                t_ref_valid=True,
+                rallyPlan=RallyPlanS(t_ref=12.0, valid=True),
             ),
             output,
         )
@@ -3384,7 +3394,9 @@ class RallyEntityTests(unittest.TestCase):
         plan_payload = plan_message[0].payload
         self.assertTrue(plan_payload["t_ref_valid"])
         self.assertEqual(plan_payload["loop_counts"], {"A01": 3, "A02": 1, "A03": 0, "A04": 0, "A05": 0})
-        self.assertIsNot(leader._outbound_u.loop_counts, leader._task_y.loopCounts)
+        self.assertIs(leader._task_y.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._outbound_u.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._task_u.clock, leader.cxt.clock)
         locked_t_ref = plan_payload["t_ref"]
         locked_loop_counts = dict(plan_payload["loop_counts"])
 

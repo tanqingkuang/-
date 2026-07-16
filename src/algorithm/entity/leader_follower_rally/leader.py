@@ -69,16 +69,16 @@ class RallyLeaderEntity(EntityBase):
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
         # 绑定端口
-        self._inbound_u = FollowerStatusInputS(inbox=self._get_inbox_ref(), now_s=0.0)
+        self._inbound_u = FollowerStatusInputS(inbox=self._get_inbox_ref(), clock=self.cxt.clock)
         self._inbound_y = FollowerStatusOutputS(followerStates=self.cxt.followerStates)
         self._task_u = RallyTaskInputS(
             remote=self._remote,
             cmd=self.cxt.cmd,
             followerStates=self.cxt.followerStates,
-            now_s=0.0,
+            clock=self.cxt.clock,
             posCalcStatus=self.cxt.posCalcStatus,
         )
-        self._task_y = RallyTaskOutputS(cmd=self.cxt.cmd)
+        self._task_y = RallyTaskOutputS(cmd=self.cxt.cmd, rallyPlan=self.cxt.rallyPlan)
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine)
         self._pos_calc_u = PosCalcInputS(
@@ -111,6 +111,7 @@ class RallyLeaderEntity(EntityBase):
             cmd=self.cxt.cmd,
             selfState=self.cxt.selfState,
             leaderCmd=self._effective_cmd,
+            rallyPlan=self.cxt.rallyPlan,
         )
         self._outbound_y = OutboundOutputS(outbox=self._outbox)
 
@@ -128,22 +129,11 @@ class RallyLeaderEntity(EntityBase):
 
         self._inbox.clear()
         self._inbox.extend(u.inbox)
-        self._inbound_u.now_s = u.now_s
-        self._task_u.now_s = u.now_s
 
         # 通信槽位不区分 STANDBY/RALLY/HOLD，阶段推进只交给任务槽位判断。
         self._inbound.step(self._inbound_u, self._inbound_y)
 
         self._task.step(self._task_u, self._task_y)
-
-        # 同步 t_ref 到上下文（供广播）
-        self.cxt.rally_t_ref = self._task_y.t_ref
-        self.cxt.rally_t_ref_valid = self._task_y.t_ref_valid
-        self.cxt.rally_loop_counts.clear()
-        self.cxt.rally_loop_counts.update(self._task_y.loopCounts)
-        self._outbound_u.t_ref = self.cxt.rally_t_ref
-        self._outbound_u.t_ref_valid = self.cxt.rally_t_ref_valid
-        self._outbound_u.loop_counts = dict(self._task_y.loopCounts)
 
         stage = self.cxt.cmd.stage
         self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)

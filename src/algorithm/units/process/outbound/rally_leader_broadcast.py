@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 
-from src.algorithm.context.leaf_types import CommDirE, MotionProfS
+from src.algorithm.context.leaf_types import CommDirE, MotionProfS, RallyPlanS
 from src.algorithm.units.process.inbound.rally_leader_follower import LEADER_BROADCAST_TOPIC
 from src.algorithm.units.process.outbound.base import OutboundBase, OutboundInitS, OutboundInputS, OutboundOutputS
 from src.common.envelope import MessageEnvelope
@@ -36,9 +36,20 @@ class RallyLeaderBroadcastInputS(OutboundInputS):
 
     # 继承 cmd: FormSnapshotS, selfState: MotionProfS
     leaderCmd: MotionProfS | None = None  # 长机跟踪指令，供僚机建立槽位坐标系。
-    t_ref: float = 0.0  # 固定公共到达时刻，仅供各机全航程协调调速
-    t_ref_valid: bool = False  # 是否已生成可执行的固定协调计划
-    loop_counts: dict[str, int] = field(default_factory=dict)  # 决定各机跨 M_i 后继续盘旋的完整圈数
+    rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 端口 → Context.rallyPlan
+    t_ref: InitVar[float | None] = None  # 兼容旧 Hold 调用；Rally 应直接绑定 rallyPlan
+    t_ref_valid: InitVar[bool | None] = None  # 兼容旧 Hold 调用；Rally 应直接绑定 rallyPlan
+
+    def __post_init__(
+        self,
+        t_ref: float | None,
+        t_ref_valid: bool | None,
+    ) -> None:
+        """接收旧标量参数。注意：仅在构造期写入计划对象，不参与运行期同步。"""
+        if t_ref is not None:
+            self.rallyPlan.t_ref = t_ref
+        if t_ref_valid is not None:
+            self.rallyPlan.valid = t_ref_valid
 
 
 class RallyLeaderBroadcast(OutboundBase):
@@ -64,7 +75,7 @@ class RallyLeaderBroadcast(OutboundBase):
             or not isinstance(count, int)
             or isinstance(count, bool)
             or count < 0
-            for node_id, count in u.loop_counts.items()
+            for node_id, count in u.rallyPlan.loop_counts.items()
         ):
             raise ValueError("RallyLeaderBroadcast loop_counts 必须由字符串节点 ID 映射到非负整数")
         leader_cmd = u.leaderCmd or u.selfState
@@ -85,9 +96,9 @@ class RallyLeaderBroadcast(OutboundBase):
                         "step": int(u.cmd.step),
                         "leader": _motion_payload(leader_cmd),
                     },
-                    "t_ref": u.t_ref,
-                    "t_ref_valid": u.t_ref_valid,
-                    "loop_counts": dict(u.loop_counts),
+                    "t_ref": u.rallyPlan.t_ref,
+                    "t_ref_valid": u.rallyPlan.valid,
+                    "loop_counts": dict(u.rallyPlan.loop_counts),
                 },
             )
         )

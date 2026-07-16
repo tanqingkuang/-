@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 
 from src.algorithm.context.leaf_types import (
+    AlgorithmClockS,
     FollowerStateS,
     FormStageE,
     PosCalcStatusS,
     RallyPhaseE,
+    RallyPlanS,
 )
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
@@ -50,23 +52,36 @@ class RallyTaskInitS(FormationTaskInitS):
 
 @dataclass
 class RallyTaskInputS(FormationTaskInputS):
-    """Rally 任务输入端口。注意：followerStates 绑到 Context.followerStates。"""
+    """Rally 任务输入端口。注意：动态状态均绑定到 Context 黑板对象。"""
 
     # 继承 remote: RemoteCmdS, cmd: FormSnapshotS
     followerStates: list[FollowerStateS] | None = None  # 端口 → Context.followerStates
-    now_s: float = 0.0  # 当前仿真时间（秒），由实体从边界输入注入，用于超时判断
+    clock: AlgorithmClockS | None = None  # 端口 → Context.clock，用于超时判断和计划起点
     posCalcStatus: PosCalcStatusS | None = None  # 端口 → Context.posCalcStatus，读取长机上一拍位置解算反馈
 
 
 @dataclass
 class RallyTaskOutputS(FormationTaskOutputS):
-    """Rally 任务输出端口。"""
+    """Rally 任务输出端口。注意：协调计划原地写入绑定的黑板对象。"""
 
     # 继承 cmd: FormSnapshotS
     rallyCompleted: bool = False  # COMPRESS→HOLD 正常完成时置 True，仅该拍有效
-    t_ref: float = 0.0  # 本帧集结基准时刻：全队整数圈可达区间的最早公共时刻
-    t_ref_valid: bool = False  # 是否已收齐全队基础航程并生成固定计划
-    loopCounts: dict[str, int] = field(default_factory=dict)  # 各节点在基础航程后增加的完整盘旋圈数
+    rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 端口 → Context.rallyPlan
+
+    @property
+    def t_ref(self) -> float:
+        """返回公共到达时刻。注意：仅兼容既有任务单测读取。"""
+        return self.rallyPlan.t_ref
+
+    @property
+    def t_ref_valid(self) -> bool:
+        """返回计划有效标记。注意：仅兼容既有任务单测读取。"""
+        return self.rallyPlan.valid
+
+    @property
+    def loopCounts(self) -> dict[str, int]:
+        """返回圈数映射。注意：仅兼容既有任务单测读取。"""
+        return self.rallyPlan.loop_counts
 
 
 class Rally(FormationTaskBase):
@@ -127,13 +142,13 @@ class Rally(FormationTaskBase):
 
     def step(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
-        if y.cmd is None:
-            raise ValueError("Rally output ports must be bound")
+        if y.cmd is None or u.clock is None:
+            raise ValueError("Rally ports must be bound")
         y.rallyCompleted = False
         self._write_plan(y)
 
         remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
-        now_s = u.now_s if hasattr(u, "now_s") else 0.0
+        now_s = u.clock.now_s
         states = u.followerStates if u.followerStates is not None else []
 
         if remote_stage == FormStageE.NONE:
@@ -278,11 +293,12 @@ class Rally(FormationTaskBase):
         self._loop_counts = {}
 
     def _write_plan(self, output: RallyTaskOutputS) -> None:
-        """每拍复制当前锁存计划，避免输出对象保留旧值或共享内部映射。"""
+        """把锁存计划原地写入黑板。注意：不得替换共享对象及其圈数映射。"""
 
-        output.t_ref = self._t_ref
-        output.t_ref_valid = self._plan_ready
-        output.loopCounts = dict(self._loop_counts)
+        output.rallyPlan.t_ref = self._t_ref
+        output.rallyPlan.valid = self._plan_ready
+        output.rallyPlan.loop_counts.clear()
+        output.rallyPlan.loop_counts.update(self._loop_counts)
 
     def _collect_path_lengths(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from src.algorithm.context.leaf_types import FollowerStateS
+from src.algorithm.context.leaf_types import AlgorithmClockS, FollowerStateS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_FLYING
 from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
@@ -20,10 +20,10 @@ class FollowerStatusInitS(InboundInitS):
 
 @dataclass
 class FollowerStatusInputS(InboundInputS):
-    """长机入站输入端口。注意：now_s 由实体从边界注入，写入 lastUpdate_s。"""
+    """长机入站输入端口。注意：时钟绑定到 Context 黑板。"""
 
     # 继承 inbox: list[MessageEnvelope]
-    now_s: float = 0.0  # 当前仿真时间，写入 FollowerStateS.lastUpdate_s
+    clock: AlgorithmClockS | None = None  # 端口 → Context.clock，提供状态更新时间
 
 
 @dataclass
@@ -42,8 +42,8 @@ class FollowerStatus(InboundBase):
 
     def step(self, u: FollowerStatusInputS, y: FollowerStatusOutputS) -> None:
         """推进 FollowerStatus 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
-        if y.followerStates is None:
-            raise ValueError("FollowerStatus output port must be bound")
+        if y.followerStates is None or u.clock is None:
+            raise ValueError("FollowerStatus ports must be bound")
         # followerStates 是 Context 中被 Rally 任务单元共享的列表，必须原地更新，不能整体替换。
         # 空 inbox 表示本帧未收到回报，不清 valid，也不刷新 lastUpdate_s，由 Rally 按超时判失效。
         # 同一帧多条同源消息按遍历顺序覆盖，保留最后一条，匹配通信层“后到为准”的语义。
@@ -94,7 +94,7 @@ class FollowerStatus(InboundBase):
             entry.reachedSlotOnce = reached_slot_once
             entry.id = node_id
             entry.valid = True
-            entry.lastUpdate_s = u.now_s
+            entry.lastUpdate_s = u.clock.now_s
 
     def reset(self) -> None:
         """复位 FollowerStatus 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
