@@ -9,6 +9,7 @@ from pathlib import Path
 from scripts.run_st import main as run_st_main
 from src.runner.sim_control_types import CommandResult
 from tests.st.support.baseline_diff import diff_trajectory
+from tests.st.support.invariants import check_dynamic_limits
 from tests.st.support.runner import ScenarioRun, read_jsonl
 from tests.st.support.trajectory_extract import extract_trajectory, trajectory_json_bytes
 
@@ -32,8 +33,8 @@ def _config() -> dict:
                 "max_descent_rate_mps": 5.0,
                 "nx_min": -1.0,
                 "nx_max": 1.0,
-                "nz_min": 0.0,
-                "nz_max": 4.0,
+                "n_normal_min": 0.0,
+                "n_normal_max": 4.0,
                 "phi_min_deg": -70.0,
                 "phi_max_deg": 70.0,
             },
@@ -110,6 +111,56 @@ def test_baseline_diff_locates_point_and_ignores_tolerance() -> None:
     tolerated = json.loads(json.dumps(baseline))
     tolerated["samples"][0]["nodes"][0]["x_m"] += 0.004
     assert diff_trajectory(baseline, tolerated) == []
+
+
+def test_dynamic_load_limit_checks_normal_magnitude_not_signed_right_axis() -> None:
+    """UT-03 应允许负的右向载荷分量，并只对法向合过载执行包线检查。"""
+
+    snapshots = read_jsonl(FIXTURE)
+    node = snapshots[-1]["nodes"][0]
+    node.update({"ny": 0.0, "nz": -3.0, "n_normal": 3.0})
+    run = ScenarioRun(
+        scenario="st_fake",
+        config_path=Path("st_fake.json"),
+        result=CommandResult("OK", "finished"),
+        run_dir=None,
+        snapshots=[snapshots[-1]],
+        events=[],
+        config=_config(),
+        wall_time_s=0.01,
+    )
+
+    assert check_dynamic_limits(run) == []
+
+    node["n_normal"] = 4.5
+    issues = check_dynamic_limits(run)
+    assert len(issues) == 1
+    assert issues[0].field == "n_normal"
+
+
+def test_dynamic_yaw_limit_uses_air_rate_not_wind_affected_ground_rate() -> None:
+    """横风可改变地面航迹率；UT-03 的滚转包线只能裁决空速航向率。"""
+
+    snapshots = read_jsonl(FIXTURE)
+    node = snapshots[-1]["nodes"][0]
+    node.update({"psi_dot_deg_s": 9999.0, "air_psi_dot_deg_s": 0.0})
+    run = ScenarioRun(
+        scenario="st_fake",
+        config_path=Path("st_fake.json"),
+        result=CommandResult("OK", "finished"),
+        run_dir=None,
+        snapshots=[snapshots[-1]],
+        events=[],
+        config=_config(),
+        wall_time_s=0.01,
+    )
+
+    assert check_dynamic_limits(run) == []
+
+    node["air_psi_dot_deg_s"] = 9999.0
+    issues = check_dynamic_limits(run)
+    assert len(issues) == 1
+    assert issues[0].field == "air_psi_dot_deg_s"
 
 
 def test_run_st_contract_ok_failure_and_update_baseline(tmp_path: Path) -> None:

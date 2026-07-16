@@ -21,9 +21,11 @@ x = [E, N, U, V, theta, psi]^T
 
 - 不建模刚体六自由度姿态动力学。
 - 不建模角速度、惯量、舵面、发动机、升阻力气动系数。
-- `phi` 仅作为三自由度质点模型中的滚转输入 / 协调转弯分配量，不表示完整姿态动力学。
+- `phi` 仅作为三自由度质点模型中的滚转输入 / 协调转弯分配量，不表示完整姿态动力学；右倾/右翼下沉为正。
 
 ## 2. 坐标系
+
+本节采用 [`docs/0-坐标系约定.md`](0-坐标系约定.md) 的统一契约；动力学模型使用空速航迹 FUR，不能用制导地速航迹系替代。
 
 ### 2.1 东北天坐标系 `I`
 
@@ -46,24 +48,24 @@ I = [E, N, U]
 
 ### 2.2 航迹坐标系 `k`
 
-航迹坐标系随速度方向定义：
+动力学航迹坐标系随空速方向定义，采用右手 FUR 轴序：
 
-- `e_v`：沿速度方向。
-- `e_theta`：航迹倾角增大方向。
-- `e_psi`：航向角增大方向。
+- `e_x`：沿空速方向，前向。
+- `e_y`：航迹倾角增大方向，上法向。
+- `e_z`：右侧向；与航向角增大的左转方向相反。
 
 在东北天坐标系下：
 
 ```text
-e_v     = [ cos(theta) cos(psi),  cos(theta) sin(psi), sin(theta)]^T
-e_theta = [-sin(theta) cos(psi), -sin(theta) sin(psi), cos(theta)]^T
-e_psi   = [-sin(psi),             cos(psi),            0         ]^T
+e_x = [ cos(theta) cos(psi),  cos(theta) sin(psi), sin(theta)]^T
+e_y = [-sin(theta) cos(psi), -sin(theta) sin(psi), cos(theta)]^T
+e_z = [ sin(psi),            -cos(psi),            0         ]^T
 ```
 
 令：
 
 ```text
-C_k^I = [e_v, e_theta, e_psi]
+C_k^I = [e_x, e_y, e_z]
 ```
 
 则东北天向量转换到航迹坐标系：
@@ -95,22 +97,26 @@ f_I = [a_E, a_N, a_U + g]^T
 再转换到航迹坐标系：
 
 ```text
-[a_v, a_theta, a_psi]^T = (C_k^I)^T f_I
+[f_x, f_y, f_z]^T = (C_k^I)^T f_I
 ```
 
 由航迹坐标系加速度分量得到三自由度质点模型输入：
 
 ```text
-N_x = a_v / g
-N_z = sqrt(a_theta^2 + a_psi^2) / g
-phi = atan2(a_psi, a_theta)
+nx = f_x / g
+ny = f_y / g
+nz = f_z / g
+n_normal = sqrt(ny^2 + nz^2)
+phi = atan2(nz, ny)
 ```
 
 其中：
 
-- `N_x`：切向过载输入，控制速度变化。
-- `N_z`：法向过载输入，控制航迹弯曲能力。
-- `phi`：滚转输入，用于把法向过载分配到爬升平面和转弯平面。
+- `nx`：前向有符号过载，控制速度变化。
+- `ny`：上法向有符号过载，控制航迹倾角变化。
+- `nz`：右侧向有符号过载，控制航向变化。
+- `n_normal`：法向合过载，恒非负，用于统一载荷包线限幅。
+- `phi`：由 `ny/nz` 派生的滚转角，右倾为正。
 
 ## 4. 二阶内回路
 
@@ -182,23 +188,25 @@ x = [
 
 ## 6. 三自由度质点方程
 
-滤波后的东北天加速度经过重力补偿和坐标转换后，形成 `N_x / N_z / phi`，再进入原三自由度质点模型：
+滤波后的东北天加速度经过重力补偿和坐标转换后，形成 `nx/ny/nz`；`n_normal/phi` 由法向分量派生：
 
 ```text
 E_dot     = V cos(theta) cos(psi)
 N_dot     = V cos(theta) sin(psi)
 U_dot     = V sin(theta)
 
-V_dot     = g (N_x - sin(theta))
-theta_dot = g / V * (N_z cos(phi) - cos(theta))
-psi_dot   = g N_z sin(phi) / (V cos(theta))
+V_dot     = g (nx - sin(theta))
+theta_dot = g / V * (ny - cos(theta))
+          = g / V * (n_normal cos(phi) - cos(theta))
+psi_dot   = -g nz / (V cos(theta))
+          = -g n_normal sin(phi) / (V cos(theta))
 ```
 
 其中：
 
-- `N_x`：由滤波后东北天加速度转换得到的切向过载。
-- `N_z`：由滤波后东北天加速度转换得到的法向过载。
-- `phi`：由滤波后东北天加速度转换得到的滚转输入。
+- `nx/ny/nz`：由滤波后东北天加速度转换得到的空速航迹 FUR 有符号过载分量。
+- `n_normal=sqrt(ny^2+nz^2)`：法向合过载。
+- `phi=atan2(nz,ny)`：右倾为正；因此 `phi>0` 对应右转、`psi_dot<0`。
 
 工程实现需要对以下奇异点做保护：
 
@@ -223,6 +231,8 @@ U_dot = V sin(theta)          + wind_U
 
 风扰不直接进入东北天加速度二阶内回路。
 
+`V/theta/psi` 始终描述空速航迹；供制导使用的地速为 `v_ground=v_air+wind_I`，其航迹角需从地速重新计算，不能直接复用空速 `theta/psi`。
+
 `inject_wind` 接口的 `direction_deg` 采用**数学角约定**（0° 指东、90° 指北、逆时针为正），与气象角约定（从哪个方向吹来）相反。调用方注意区分。
 
 ## 8. 输入限幅
@@ -231,7 +241,7 @@ U_dot = V sin(theta)          + wind_U
 
 1. 东北天加速度指令限幅，避免算法输出异常。
 2. 二阶滤波后的东北天加速度再做安全夹紧，避免滤波超调导致异常输入。
-3. 转换后的 `N_x / N_z / phi` 限幅，保证三自由度模型输入物理可接受。
+3. 转换后的 `nx/n_normal/phi` 按统一载荷包线限幅，再由限幅后的 `n_normal/phi` 还原 `ny/nz`，保证三自由度模型输入物理可接受。
 
 建议默认值：
 
@@ -239,9 +249,9 @@ U_dot = V sin(theta)          + wind_U
 g = 9.80665 m/s^2
 V_min = 1.0 m/s
 
-N_x in [-1.0,  1.0]
-N_z in [ 0.0,  4.0]
-phi in [-70 deg, 70 deg]
+nx       in [-1.0,  1.0]
+n_normal in [ 0.0,  4.0]
+phi      in [-70 deg, 70 deg]  # 右倾为正
 ```
 
 模型**不约束终端速度上限**。无气动模型时持续正切向过载会导致速度无界增长，属设计固有特性（无阻力）。算法侧应自行管理速度目标；如需速度包线，可通过 `max_speed_mps` 扩展配置项引入。
@@ -272,8 +282,8 @@ phi in [-70 deg, 70 deg]
       "max_descent_rate_mps": 8.0,
       "nx_min": -1.0,
       "nx_max": 1.0,
-      "nz_min": 0.0,
-      "nz_max": 4.0,
+      "n_normal_min": 0.0,
+      "n_normal_max": 4.0,
       "phi_min_deg": -70.0,
       "phi_max_deg": 70.0
     }
@@ -315,16 +325,23 @@ phi in [-70 deg, 70 deg]
 | `speed_mps` | 初始速度 `V` | `5.0` |
 | `theta_deg` | 初始航迹倾角 | `0.0` |
 | `psi_v_deg` | 初始航向角 `psi` | `0.0` |
-| `nx` | 初始切向过载 | `sin(theta)` |
-| `nz` | 初始法向过载 | `cos(theta)` |
-| `phi_deg` | 初始滚转输入 | `0.0` |
+| `vx_mps/vy_mps/vz_mps` | 初始空速的 ENU 东/北/天分量；`vz_mps` 可省略为 0 | 不与球面写法同时使用 |
+| `nx` | 初始前向过载 | `sin(theta)` |
+| `ny/nz` | 初始上法向/右侧向过载分量 | `cos(theta) / 0.0` |
+| `n_normal/phi_deg` | 初始法向合过载及滚转角（右倾为正），作为 `ny/nz` 的极坐标替代写法 | `cos(theta) / 0.0` |
+
+初始空速只能二选一：使用 `speed_mps/theta_deg/psi_v_deg` 球面写法，或使用 `vx_mps/vy_mps/vz_mps` ENU 分量写法。两套表示不能混用；分量写法必须给出 `vx_mps/vy_mps`，模型由最终矢量唯一反算 `V/theta/psi`，避免标量、角度和分量拼出第三个未声明的速度矢量。
+
+`ny/nz` 分量写法与 `n_normal/phi_deg` 极坐标写法同样不能混用。使用极坐标时，由 `ny=n_normal cos(phi)`、`nz=n_normal sin(phi)` 还原分量；状态和快照同时提供 `nx/ny/nz/n_normal/phi`。
 
 平飞配平时：
 
 ```text
 theta = 0
-N_x = 0
-N_z = 1
+nx = 0
+ny = 1
+nz = 0
+n_normal = 1
 phi = 0
 ```
 
@@ -351,10 +368,12 @@ AircraftState(
     speed_mps, theta_rad, psi_rad,  # 速度、航迹倾角、航向角
     ax_mps2, ay_mps2, az_mps2,     # 滤波后的东北天加速度
     ax_rate_mps3, ay_rate_mps3, az_rate_mps3,  # 加速度变化率
-    nx, nz, phi_rad,  # 转换后的质点模型输入
+    nx, ny, nz,       # 空速航迹 FUR 有符号过载分量
     psi_dot_deg_s,    # 航迹偏航角速率（度/秒），左转为正
 )
 ```
+
+`AircraftState.n_normal` 和 `AircraftState.phi_rad` 是分别由 `hypot(ny,nz)`、`atan2(nz,ny)` 计算的只读派生属性；对外快照将滚转角转换为右倾为正的 `phi_deg`。
 
 节点角色（`role`）、健康状态（`health`）、侧偏（`cross_track_error_m`）等属于仿真控制 / 制导层，不在模型层管理。
 
@@ -373,7 +392,7 @@ AccelerationCommand(
 1. 对东北天加速度指令做二阶滤波。
 2. 对滤波后的东北天加速度做重力补偿。
 3. 东北天坐标系到航迹坐标系转换。
-4. 转换为 `N_x / N_z / phi`。
+4. 转换为 `nx/ny/nz`，并派生 `n_normal/phi`。
 5. 推进三自由度质点方程。
 
 ## 13. 与仿真控制的关系
@@ -387,7 +406,7 @@ AccelerationCommand(
 5. 模型内部完成加速度二阶滤波、控制分配和三自由度积分。
 6. 仿真控制读取新状态并生成快照。
 
-仿真控制不理解 `N_x / N_z / phi` 的物理含义，也不直接调用坐标转换；这些都属于模型迭代模块。
+仿真控制不解释 `nx/ny/nz/n_normal/phi` 的动力学物理含义，也不直接调用坐标转换；这些都属于模型迭代模块。
 
 ## 14. 扩展边界
 

@@ -11,8 +11,9 @@ from tests.st.support.runner import ScenarioRun
 from tests.st.support.types import CheckIssue
 
 _NUMERIC_NODE_FIELDS = (
-    "x_m", "y_m", "altitude_m", "psi_v_deg", "speed_mps", "vx_mps", "vy_mps", "vz_mps",
-    "phi_deg", "psi_dot_deg_s", "nx", "nz",
+    "x_m", "y_m", "altitude_m", "psi_v_deg", "speed_mps", "airspeed_mps",
+    "air_psi_v_deg", "air_theta_deg", "air_psi_dot_deg_s", "ground_speed_mps",
+    "vx_mps", "vy_mps", "vz_mps", "phi_deg", "psi_dot_deg_s", "nx", "ny", "nz", "n_normal",
 )
 
 
@@ -81,7 +82,10 @@ def check_numeric_health(run: ScenarioRun) -> list[CheckIssue]:
             previous = previous_by_id.get(node_id)
             if previous is not None and previous_time is not None:
                 dt = max(time_s - previous_time, 0.0)
-                observed_speed = max(float(previous.get("speed_mps", 0.0)), float(node.get("speed_mps", 0.0)), speed_max)
+                # 位置按地速积分；老日志没有 ground_speed_mps 时回退空速字段。
+                previous_ground_speed = float(previous.get("ground_speed_mps", previous.get("speed_mps", 0.0)))
+                ground_speed = float(node.get("ground_speed_mps", node.get("speed_mps", 0.0)))
+                observed_speed = max(previous_ground_speed, ground_speed, speed_max)
                 jump_limit = observed_speed * dt * thresholds.TELEPORT_MARGIN_FACTOR + 1.0
                 distance = _distance3d(previous, node)
                 if distance > jump_limit:
@@ -100,7 +104,7 @@ def check_numeric_health(run: ScenarioRun) -> list[CheckIssue]:
 
 
 def check_dynamic_limits(run: ScenarioRun) -> list[CheckIssue]:
-    """UT-03 动力学限幅。注意：speed/phi/nx/nz/psi_dot 的限值均由配置派生。"""
+    """UT-03 动力学限幅。注意：speed/phi/nx/n_normal/psi_dot 的限值均由配置派生。"""
 
     issues: list[CheckIssue] = []
     scenario = run.scenario
@@ -112,8 +116,8 @@ def check_dynamic_limits(run: ScenarioRun) -> list[CheckIssue]:
     phi_max = float(limits.get("phi_max_deg", float("inf")))
     nx_min = float(limits.get("nx_min", -float("inf")))
     nx_max = float(limits.get("nx_max", float("inf")))
-    nz_min = float(limits.get("nz_min", -float("inf")))
-    nz_max = float(limits.get("nz_max", float("inf")))
+    n_normal_min = float(limits.get("n_normal_min", -float("inf")))
+    n_normal_max = float(limits.get("n_normal_max", float("inf")))
     gravity = float(run.config.get("model", {}).get("gravity_mps2", 9.80665)) if isinstance(run.config.get("model"), dict) else 9.80665
     yaw_limit = math.degrees(gravity * math.tan(math.radians(max(abs(phi_min), abs(phi_max)))) / max(speed_min, 1.0))
     for snapshot in run.snapshots:
@@ -123,10 +127,24 @@ def check_dynamic_limits(run: ScenarioRun) -> list[CheckIssue]:
             _range_issue(issues, scenario, "UT-03", time_s, node_id, "speed_mps", node.get("speed_mps"), speed_min, speed_max)
             _range_issue(issues, scenario, "UT-03", time_s, node_id, "phi_deg", node.get("phi_deg"), phi_min, phi_max)
             _range_issue(issues, scenario, "UT-03", time_s, node_id, "nx", node.get("nx"), nx_min, nx_max)
-            _range_issue(issues, scenario, "UT-03", time_s, node_id, "nz", node.get("nz"), nz_min, nz_max)
-            psi_dot = abs(float(node.get("psi_dot_deg_s", 0.0)))
-            if psi_dot > yaw_limit + thresholds.LIMIT_EPS:
-                issues.append(CheckIssue(scenario, "UT-03", "航向角速率超过滚转/速度派生限幅", time_s=time_s, node=node_id, field="psi_dot_deg_s", actual=round(psi_dot, 3), limit=round(yaw_limit, 3)))
+            # nz 是航迹系右向有符号分量，载荷包线约束的是 y-z 平面合量。
+            _range_issue(
+                issues,
+                scenario,
+                "UT-03",
+                time_s,
+                node_id,
+                "n_normal",
+                node.get("n_normal"),
+                n_normal_min,
+                n_normal_max,
+            )
+            # 物理滚转包线约束空速航向率；地面航迹率会受风矢量影响，不能拿同一公式裁决。
+            air_psi_dot = abs(
+                float(node.get("air_psi_dot_deg_s", node.get("psi_dot_deg_s", 0.0)))
+            )
+            if air_psi_dot > yaw_limit + thresholds.LIMIT_EPS:
+                issues.append(CheckIssue(scenario, "UT-03", "空速航向角速率超过滚转/速度派生限幅", time_s=time_s, node=node_id, field="air_psi_dot_deg_s", actual=round(air_psi_dot, 3), limit=round(yaw_limit, 3)))
     return issues
 
 

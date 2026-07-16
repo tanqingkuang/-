@@ -1662,7 +1662,7 @@ class RallyCommunicationTests(unittest.TestCase):
 
 
 class RallyLooseTargetTests(unittest.TestCase):
-    """直接单测 rally_loose_target()：旋转、右侧轴符号、缩放、高度固定差，逐项隔离验证。"""
+    """直接单测 rally_loose_target() 的 ENU 水平集结平面语义。"""
 
     def test_pure_forward_offset_at_zero_heading(self) -> None:
         """heading=0（正东）时，纯前向偏置（x 分量）应直接映射为东向偏置，北向不变。"""
@@ -1712,6 +1712,19 @@ class RallyLooseTargetTests(unittest.TestCase):
         self.assertAlmostEqual(m_i.east, 1020.0)
         self.assertAlmostEqual(m_i.north, 2000.0)
         self.assertAlmostEqual(m_i.h, 500.0)
+
+    def test_climbing_first_segment_still_uses_horizontal_rally_plane(self) -> None:
+        """首航段有非零倾角时，M_i 仍是水平盘旋几何，不能误套三维 FUR 倾角旋转。"""
+        from src.algorithm.entity.leader_follower_rally import rally_loose_target, route_heading_rad
+
+        route = _route((0.0, 0.0, 100.0), (100.0, 0.0, 200.0))
+        heading = route_heading_rad(route)
+        m_i = rally_loose_target(route[0].pos, heading, 1.0, FormPosS("R02", 10.0, 5.0, 0.0))
+
+        self.assertAlmostEqual(heading, 0.0)
+        self.assertAlmostEqual(m_i.east, 10.0)
+        self.assertAlmostEqual(m_i.north, 0.0)
+        self.assertAlmostEqual(m_i.h, 105.0)
 
 
 class RallyLoiterSpeedBoundsTests(unittest.TestCase):
@@ -2814,8 +2827,8 @@ class RallyJoinPosTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.v.vEast, 25.0)
         self.assertAlmostEqual(ctx.selfCmd.v.vNorth, -2.5)
 
-    def test_slot_geometry_altitude_fixed_not_scaled(self) -> None:
-        """验证高度偏置不随 scale 扩展：slot.y=30 时，h = leader.h + 30，与 scale 无关。"""
+    def test_slot_geometry_up_normal_offset_not_scaled_in_level_flight(self) -> None:
+        """验证平飞时上法向偏置不随 scale 扩展；此时 FUR 的上轴恰与 ENU 天轴重合。"""
 
         comm_init_alt = FormCommInitS(
             netWork=[
@@ -2850,9 +2863,9 @@ class RallyJoinPosTests(unittest.TestCase):
             PosCalcOutputS(selfCmd=ctx.selfCmd),
         )
 
-        # 高度固定差：leader.h + slot.y = 500 + 30 = 530（不随 scale=2 变化，非 500+2*30=560）
+        # 平飞时上法向与天向重合：leader.h + slot.y = 530（不随 scale=2 变化）。
         self.assertAlmostEqual(ctx.selfCmd.pos.h, 530.0,
-            msg="altitude must equal leader.h + slot.y regardless of scale")
+            msg="平飞时未缩放的上法向偏置应等于 ENU 高度差")
         # 水平位置仍按 scale 扩展
         self.assertAlmostEqual(ctx.selfCmd.pos.east, 80.0)
         self.assertAlmostEqual(ctx.selfCmd.pos.north, 210.0)

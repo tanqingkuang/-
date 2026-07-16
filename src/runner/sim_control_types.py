@@ -50,6 +50,12 @@ class DisturbanceType(StrEnum):
 class NodeState:
     """面向 UI/CLI 的单个飞机节点状态。注意：字段单位为界面展示契约。"""
 
+    # 节点位置只采用东北天 ENU 地面系，禁止在对外快照中混入航迹系分量。
+    # 航向与俯仰展示字段描述地面航迹，横风下不等同于机体的空速方向。
+    # speed_mps 延续历史空速语义，新增代码应优先读取语义更明确的 airspeed_mps。
+    # vx/vy/vz 是 ENU 地速分量，可与相邻位置快照直接进行差分校核。
+    # nx/ny/nz 采用前上右 FUR 航迹系，三轴符号不能按 ENU 字段名推断。
+    # phi_deg 由 ny/nz 派生，采用右倾为正的苏联系右手约定。
     node_id: str
     role: str
     health: str
@@ -57,18 +63,32 @@ class NodeState:
     x_m: float
     y_m: float
     altitude_m: float
-    psi_v_deg: float  # 航迹偏航角（度）。
-    theta_deg: float  # 航迹俯仰角（度）。
-    speed_mps: float  # 合速度大小。
-    # ENU 三轴速度分量。
+    psi_v_deg: float  # 地面航迹偏航角（度），自东向逆时针为正。
+    theta_deg: float  # 地面航迹俯仰角（度），爬升为正。
+    speed_mps: float  # 空速大小；保留历史字段名以兼容现有调用方。
+    # ENU 三轴地速分量。
     vx_mps: float
     vy_mps: float
     vz_mps: float
-    nx: float  # 切向过载。
-    nz: float  # 法向过载。
-    phi_deg: float  # 滚转角（度）。
-    psi_dot_deg_s: float  # 航迹偏航角速率（度/秒）。
+    nx: float  # 航迹系 x 前向过载。
+    nz: float  # 航迹系 z 右向过载。
+    phi_deg: float  # 滚转角（度），右倾为正。
+    psi_dot_deg_s: float  # 地面航迹偏航角速率（度/秒），左转为正。
+    # 新增字段放在历史必填字段之后并提供默认值，旧日志仍可按原字段集离线读取。
+    ground_speed_mps: float = 0.0  # 三维地速大小。
+    ny: float = 0.0  # 航迹系 y 上向过载。
+    n_normal: float = 0.0  # y-z 法向平面的合过载。
+    # 显式空速字段用于区分空气动力学状态与受风影响的地面运动状态。
+    airspeed_mps: float = 0.0  # 显式空速别名；数值与兼容字段 speed_mps 相同。
+    air_psi_v_deg: float = 0.0  # 空速航向角（度），左转为正。
+    air_theta_deg: float = 0.0  # 空速航迹倾角（度），爬升为正。
+    air_psi_dot_deg_s: float = 0.0  # 空速航向角速率（度/秒），用于物理限幅。
+    # ground_speed_mps 是三维地速模长，而算法 vd 另有“水平地速”契约，二者不可互换。
+    # air_psi_v_deg 与 psi_v_deg 在无风时相同，横风时分别代表机头气流方向和地面航迹方向。
+    # air_theta_deg 与 theta_deg 在垂向风存在时可能不同，日志需同时保留以便追因。
+    # air_psi_dot_deg_s 服务动力学包线判断，psi_dot_deg_s 服务航线跟踪与画面展示。
     # 位置/速度指令，采用 ENU 命名。
+    # cmd_pos_* 与 cmd_vel_* 均采用 ENU，不能直接与 FUR 槽位量逐分量相减。
     cmd_pos_east_m: float = 0.0
     cmd_pos_north_m: float = 0.0
     cmd_pos_h_m: float = 0.0
@@ -83,6 +103,8 @@ class NodeState:
     vel_err_north_mps: float = 0.0
     vel_err_up_mps: float = 0.0
     # 航迹坐标系误差，采用 x/y/z 命名。
+    # track_pos_err_* 与 track_vel_err_* 采用前上右 FUR，z 正值表示目标在右侧。
+    # ENU 误差用于世界坐标诊断，FUR 误差用于控制品质诊断，两套字段都保留物理出处。
     track_pos_err_x_m: float = 0.0
     track_pos_err_y_m: float = 0.0
     track_pos_err_z_m: float = 0.0
@@ -90,6 +112,8 @@ class NodeState:
     track_vel_err_y_mps: float = 0.0
     track_vel_err_z_mps: float = 0.0
     # 相对当前航段的侧偏与待飞距，无航线时为 None。
+    # cross_track_error_m 以航迹右侧为正，符号与 FUR 的 z 轴保持一致。
+    # distance_to_go_m 是沿航段方向的投影距离，不是 ENU 三维直线距离。
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
     rally_phase: str = ""  # 集结阶段字符串，如 JOINING/FLYING、CATCHUP、LOOSE、COMPRESS、HOLD

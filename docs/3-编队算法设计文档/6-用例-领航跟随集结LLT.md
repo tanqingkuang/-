@@ -333,9 +333,11 @@ def _rally_cfg(
 | `test_both_unconfigured_uses_valid_defaults` | 两侧都不配置时退回默认 `(14.0, 25.0)`，自洽，不报错 |
 | `test_both_explicitly_configured_and_consistent_passes_through` | 两侧都显式配置且自洽（如 18/22）时原样透传，不受默认值影响 |
 
-**`rally_loose_target()` 直接单测**（M_i 的旋转/右侧轴符号/缩放/高度计算，位于
+**`rally_loose_target()` 直接单测**（M_i 的 ENU 水平集结平面旋转/右侧轴符号/缩放/高度计算，位于
 `tests/llt/test_formation_rally.py::RallyLooseTargetTests`；此前只被实体级测试间接覆盖，未单独验证过
-旋转矩阵方向、右手轴符号、`looseScale` 是否只缩放水平分量）：
+旋转矩阵方向、右手轴符号、`looseScale` 是否只缩放水平分量）。这里的 M_i 是基于航线首段水平航向的
+静态盘旋圆几何，等价于任务航向对齐、倾角为零的合成平飞 FUR，不是随当前航迹旋转的实时三维 FUR
+槽位；进入 CATCHUP/LOOSE/COMPRESS 后由 `SlotGeometry` 接管三维变换：
 
 | 测试名 | 断言 |
 | ------ | ---- |
@@ -344,6 +346,7 @@ def _rally_cfg(
 | `test_rotates_forward_offset_with_heading` | `heading=90°`（正北）时，纯前向偏置旋转成北向偏置，验证旋转矩阵方向而不只测 `heading=0` 这一特例 |
 | `test_looseScale_multiplies_horizontal_offset_only` | `looseScale` 线性放大水平偏置（east/north），但高度偏置（`slot.y`）保持固定、不随 scale 扩展 |
 | `test_route_start_offset_carries_through` | 集结区起点 A 非原点时，M_i 在 A 的基础上叠加旋转/缩放后的偏置，而非忽略 A |
+| `test_climbing_first_segment_still_uses_horizontal_rally_plane` | 第一航段存在非零爬升倾角时，仍只用首段水平航向生成 ENU 平面 M_i；`slot.y` 保持天向固定差，禁止误套三维 FUR 倾角旋转 |
 
 | 测试名 | 断言 |
 | ------ | ---- |
@@ -374,10 +377,13 @@ def _rally_cfg(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_scale_one_matches_slot_geometry_position_and_velocity` | `scale=1.0/scaleRate=0` 时，位置和速度与现有 `SlotGeometry` 一致 |
-| `test_scale_two_doubles_position_offset` | `scale=2.0` 时槽位偏置相对长机扩大 2 倍 |
-| `test_scale_rate_adds_compression_velocity` | `scaleRate<0` 时速度多出 `scaleRate * R(heading) * offset` 分量 |
+| `test_scale_two_doubles_position_offset` | 平飞时 `scale=2.0` 使 FUR 的 `x/z` 偏置扩大 2 倍，`y` 不变 |
+| `test_scale_rate_adds_compression_velocity` | `scaleRate<0` 时速度多出由 FUR 的 `x/z` 映射到 ENU 的压缩分量 |
 | `test_turn_feedforward_uses_scaled_offset` | 长机 `dVPsi!=0` 时，刚体旋转速度使用 `scale * slot.x/z` |
-| `test_slot_geometry_altitude_fixed_not_scaled` | 高度偏置固定不随 `scale` 放大：`pos.h == leader.h + slot.y`（与 `scale` 无关），`vUp` 保持标准槽位写入值，不含 `scaleRate` 修正项 |
+| `test_slot_geometry_up_normal_offset_not_scaled_in_level_flight` | 平飞时上法向与天向重合，`slot.y` 不随 `scale` 放大；爬升时不作“固定世界高度差”推论 |
+| `test_slot_geometry_uses_full_fur_basis_while_leader_climbs` | 非零爬升角下 `x/y` 随倾角旋转，`z` 保持水平右侧向 |
+| `test_slot_geometry_yaw_velocity_uses_fur_right_axis_and_mirrors_turn` | 三维偏航刚体速度符合 FUR 公式，左右转严格镜像 |
+| `test_slot_geometry_td_seed_projects_full_enu_offset_to_fur` | TD 首拍把当前三维 ENU 相对位置反投影到 FUR，避免坐标轴切换阶跃 |
 | `test_velocity_scalar_and_heading_are_recomputed` | 输出 `vd=hypot(vEast,vNorth)`，`vPsi=atan2(vNorth,vEast)` |
 | `test_undefined_leader_track_falls_back_consistently` | 长机水平速度为 0 时，按现有 `SlotGeometry` 的东向兜底策略计算 |
 | `test_missing_pattern_or_slot_raises` | 未知 `pattern` 或找不到本机槽位时抛 `ValueError` |
@@ -457,7 +463,7 @@ def _rally_cfg(
 | 统一长机广播保持既有 payload 并携带默认/动态 `slot_scale` | TestRallyLeaderBroadcastAndInbound |
 | 僚机解析长机 `slot_scale`，缺字段默认 | TestRallyLeaderBroadcastAndInbound |
 | RallyJoinPos 切入盘旋圆、圆弧汇合、切出航向 | TestRallyJoinPos |
-| `rally_loose_target()` 旋转/右侧轴符号/缩放/高度 | TestRallyLooseTarget |
+| `rally_loose_target()` ENU 水平集结几何、右侧轴符号、缩放/高度及非零倾角边界 | TestRallyLooseTarget |
 | `loiter_speed_bounds()` 上下限推导与序校验 | TestRallyLoiterSpeedBounds |
 | SlotGeometry 缩放、压缩速度前馈、转弯前馈 | TestSlotGeometry |
 | RallyLeaderEntity/RallyFollowerEntity 主链路（JOINING→CATCHUP/LOOSE/COMPRESS、NONE 复位） | TestRallyEntity |

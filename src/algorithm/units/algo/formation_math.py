@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 from src.algorithm.context.leaf_types import MotionProfS
+from src.common.coordinates import enu_to_fur, fur_basis_from_velocity, fur_to_enu
 
 
 def clamp(value: float, lower: float, upper: float) -> float:
@@ -18,22 +19,20 @@ def clamp(value: float, lower: float, upper: float) -> float:
 def enu_to_track(vector: tuple[float, float, float], state: MotionProfS) -> tuple[float, float, float]:
     """把 ENU 向量转换到苏联式航迹系。注意：输出轴序为前向、法向/上向、侧向右。"""
 
-    forward, normal, lateral_right = _track_basis(state)
-    return (
-        _dot(vector, forward),
-        _dot(vector, normal),
-        _dot(vector, lateral_right),
+    # 算法层只负责从运动状态取地速，基向量和投影公式统一交给公共坐标模块。
+    return enu_to_fur(
+        vector,
+        fur_basis_from_velocity((state.v.vEast, state.v.vNorth, state.v.vUp)),
     )
 
 
 def track_to_enu(vector: tuple[float, float, float], state: MotionProfS) -> tuple[float, float, float]:
     """把苏联式航迹系向量转换回 ENU 坐标。注意：输入轴序为前向、法向/上向、侧向右。"""
 
-    forward, normal, lateral_right = _track_basis(state)
-    return (
-        vector[0] * forward[0] + vector[1] * normal[0] + vector[2] * lateral_right[0],
-        vector[0] * forward[1] + vector[1] * normal[1] + vector[2] * lateral_right[1],
-        vector[0] * forward[2] + vector[1] * normal[2] + vector[2] * lateral_right[2],
+    # 与 enu_to_track 复用同一建基入口，避免往返变换因公式副本漂移而不互逆。
+    return fur_to_enu(
+        vector,
+        fur_basis_from_velocity((state.v.vEast, state.v.vNorth, state.v.vUp)),
     )
 
 
@@ -42,6 +41,7 @@ def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
 
     vx = state.v.vEast
     vy = state.v.vNorth
+    # 该二维基有意忽略 vUp，只能用于明确声明为 ENU 水平平面的几何。
     ground = math.hypot(vx, vy)
     if ground <= 0.0:
         raise ValueError("horizontal track frame requires non-zero horizontal velocity")
@@ -51,40 +51,16 @@ def horizontal_track_basis(state: MotionProfS) -> tuple[float, float]:
 def horizontal_track_to_enu(vector: tuple[float, float], state: MotionProfS) -> tuple[float, float]:
     """把水平航迹坐标点转换为 ENU 点。注意：轴序为前向、侧向右，高度由调用方显式给出。"""
 
-    # 队形槽位只按水平航迹旋转，不把长机爬升/下降角耦合进平面偏移。
+    # 该二维辅助仅供明确采用水平平面的几何（如集结松散点）；三维槽位使用公共 FUR 变换。
     return horizontal_track_vector_to_enu(vector, horizontal_track_basis(state))
 
 
 def horizontal_track_vector_to_enu(vector: tuple[float, float], track: tuple[float, float]) -> tuple[float, float]:
-    """用预先计算的水平基向量转换航迹向量。注意：水平第二轴为侧向右。"""
+    """在 ENU 水平面用预先计算的航向基转换向量。注意：二维第二轴为侧向右。"""
 
     track_x, track_y = track
+    # 水平第二轴为右轴，所以正东航向下正值映射到负北向，不能套用左法向公式。
     return (
         vector[0] * track_x + vector[1] * track_y,
         vector[0] * track_y - vector[1] * track_x,
     )
-
-
-def _track_basis(state: MotionProfS) -> tuple[tuple[float, float, float], tuple[float, float, float], tuple[float, float, float]]:
-    """计算苏联式航迹坐标基。注意：轴序为前向、法向/上向、侧向右。"""
-    vx = state.v.vEast
-    vy = state.v.vNorth
-    vz = state.v.vUp
-    ground = math.hypot(vx, vy)
-    speed = math.sqrt(vx * vx + vy * vy + vz * vz)
-    if speed <= 0.0 or ground <= 0.0:
-        raise ValueError("track frame requires non-zero horizontal velocity")
-
-    cos_theta = ground / speed
-    sin_theta = vz / speed
-    cos_psi = vx / ground
-    sin_psi = vy / ground
-    forward = (cos_theta * cos_psi, cos_theta * sin_psi, sin_theta)
-    normal = (-sin_theta * cos_psi, -sin_theta * sin_psi, cos_theta)
-    lateral_right = (sin_psi, -cos_psi, 0.0)
-    return forward, normal, lateral_right
-
-
-def _dot(left: tuple[float, float, float], right: tuple[float, float, float]) -> float:
-    """计算三维向量点积。注意：仅用于本模块的小型几何运算。"""
-    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2]

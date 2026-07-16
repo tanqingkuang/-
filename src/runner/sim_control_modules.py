@@ -562,9 +562,13 @@ class _DataLogger:
     # snapshots/events 分开落盘，便于 run-to-run 对比和告警检索。
     # 数值序列化统一在本类完成，控制器和快照模块不需要关心日志精度。
     # 输出目录集中在 logs/run-*，测试清理时可以按运行目录粒度处理生成物。
+    # 日志同时保留空速与地速字段，离线分析不得再用同一速度名混合两种物理含义。
+    # ENU 速度按长度单位精度记录，FUR 过载按无量纲载荷精度单独记录。
+    # 有符号 nz 表示右向分量，不能替代始终非负的法向合过载 n_normal。
+    # 四个载荷字段采用相同小数位，便于离线重算 n_normal 与滚转角并核对契约。
     _TIME_KEYS = {"time_s", "duration_s", "step_s"}
     _SNAPSHOT_OMIT_KEYS = {"step_s", "route", "route_segments"}
-    _LOAD_FACTOR_KEYS = {"nx", "nz"}
+    _LOAD_FACTOR_KEYS = {"nx", "ny", "nz", "n_normal"}
     _ANGLE_SUFFIXES = ("_deg", "_deg_s")
     _ACCELERATION_SUFFIXES = ("_mps2", "_mps3")
     _SPEED_SUFFIXES = ("_mps",)
@@ -616,6 +620,9 @@ class _DataLogger:
 
     def write_snapshot(self, snapshot: SimulationSnapshot) -> bool:
         """写入一帧仿真快照。注意：文件失败返回 False，内存记录仍保留。"""
+        # 内存快照保留完整浮点精度，避免落盘舍入反向影响在线控制或 UI。
+        # asdict 只展开对外快照，不读取环境模型内部状态，字段语义已经在快照边界裁决。
+        # 空速、地速和 FUR 载荷同时落盘，离线工具可据此检查风场与坐标转换。
         self.snapshots.append(snapshot)
         if self._snapshot_file is not None:
             record = self._serialize_record(asdict(snapshot), omit_keys=self._SNAPSHOT_OMIT_KEYS)
@@ -686,12 +693,16 @@ class _DataLogger:
     @classmethod
     def _serialize_record(cls, record: dict[str, Any], *, omit_keys: set[str] | None = None) -> dict[str, Any]:
         """按日志精度规则序列化记录。注意：只改变落盘值，不改内存快照。"""
+        # omit_keys 只裁剪冗余展示字段，不得删除空速/地速或三轴载荷等物理证据。
+        # 嵌套节点字典递归沿用同一字段名规则，保证顶层和节点层精度口径一致。
         ignored = omit_keys or set()
         return {key: cls._round_log_value(key, value) for key, value in record.items() if key not in ignored}
 
     @classmethod
     def _round_log_value(cls, key: str, value: Any) -> Any:
         """按字段语义四舍五入日志值。注意：嵌套列表和字典递归处理。"""
+        # 非有限值不参与 Decimal 量化，后续由 ST 数值健康门禁单独报告。
+        # 字段名决定精度而不改变单位，序列化阶段不会执行 ENU 与 FUR 变换。
         if isinstance(value, dict):
             return cls._serialize_record(value)
         if isinstance(value, list):
@@ -707,6 +718,9 @@ class _DataLogger:
     @classmethod
     def _decimals_for_key(cls, key: str) -> int | None:
         """返回日志字段小数位规则。注意：未知物理量保持原始精度。"""
+        # nx/ny/nz/n_normal 都是无量纲过载，统一四位小数便于重算法向合量。
+        # 空速和地速都以后缀 _mps 命中同一精度，但字段名仍承担参考系区分责任。
+        # 角度与角速率只在显示层使用度制，算法边界的弧度值不会写入这些字段。
         if key in cls._TIME_KEYS:
             return 3
         if key in cls._LOAD_FACTOR_KEYS:

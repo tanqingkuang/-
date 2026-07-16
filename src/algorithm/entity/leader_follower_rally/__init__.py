@@ -50,6 +50,7 @@ def route_heading_rad(route: list[WayPointInputS]) -> float:
     a1 = route[1].pos
     d_e = a1.east - a.east
     d_n = a1.north - a.north
+    # 集结盘旋圆是 ENU 水平几何，因此这里只定义首航段的水平任务航向，不计算航迹倾角。
     if math.hypot(d_e, d_n) < _MIN_FIRST_SEGMENT_HORIZ_M:
         # atan2(0, 0) 静默返回 0（正东），会悄悄算出错误的 M_i/盘旋圆而不报错——必须显式拒绝。
         raise ValueError(
@@ -60,10 +61,18 @@ def route_heading_rad(route: list[WayPointInputS]) -> float:
 
 
 def rally_loose_target(route_start: PosInEarthS, heading_rad: float, scale: float, slot: FormPosS) -> PosInEarthS:
-    """按集结区起点 A、任务航向、松散放大倍数与队形槽位，计算本机松散目标点 M_i。"""
+    """在 ENU 水平集结平面计算本机松散目标点 M_i。
+
+    注意：这里的 ``heading_rad`` 是任务水平航向，M_i 后续用于构造水平盘旋圆，因此将 FUR 槽位
+    实例化在与任务航向对齐、倾角为零的合成平飞 FUR 中：``slot.x/z`` 投影到 ENU 水平面，
+    ``slot.y`` 成为固定天向高度差。即使首航段爬升，也不能把该静态几何误作随当前航迹倾角旋转的
+    三维 FUR 实时槽位；后者由 ``SlotGeometry`` 负责。
+    """
+    # 这里等价于在 theta=0 的合成平飞 FUR 中实例化槽位，而不是改写 FormPosS 的三维轴义。
     east_off, north_off = horizontal_track_vector_to_enu(
         (slot.x, slot.z), (math.cos(heading_rad), math.sin(heading_rad))
     )
+    # looseScale 只扩大水平疏散间距；高度分层仍由 slot.y 的固定天向差表达。
     return PosInEarthS(
         east=route_start.east + scale * east_off,
         north=route_start.north + scale * north_off,

@@ -34,21 +34,24 @@ def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
     """把环境模型状态转换为算法运动状态。注意：单位和坐标系必须保持一致。"""
     # 本函数是环境模型和编队算法之间的单位边界，新增字段时优先在这里转换。
     # 环境状态内部角度为弧度，日志/快照显示角度另在快照模块转换。
-    # 地速取水平面速度模长（不含垂向分量）。
-    ground_speed = (state.vx_mps * state.vx_mps + state.vy_mps * state.vy_mps) ** 0.5
+    # 制导算法跟踪的是地面航线，因此横风下必须观察地速而不是空速分量。
+    # 地速仍以东北天 ENU 表示，算法内部需要 FUR 时由统一坐标转换函数处理。
+    # vPsi 和 vTheta 都从地速向量派生，避免角度与速度分量来自不同参考系。
+    # vd 按算法既有契约表示水平地速，不把爬升或下降速度计入前向速度标量。
+    # dVPsi 表示地面航迹转率，空速航向转率只用于环境模型的物理积分与限幅。
     return MotionProfS(
         # 位置直接映射 ENU 三轴。
         pos=PosInEarthS(state.x_m, state.y_m, state.altitude_m),
         # 速度含三轴分量、航迹角与地速，供算法做编队/航线解算。
         v=VdInEarthS(
-            vEast=state.vx_mps,
-            vNorth=state.vy_mps,
-            vUp=state.vz_mps,
-            vTheta=state.theta_rad,
-            vPsi=state.psi_rad,
-            vd=ground_speed,
-            # 航迹偏航角速率：模型以 deg/s 输出(俯视图左偏为正)，与算法 vPsi(自东向逆时针)同向，转 rad/s。
-            dVPsi=math.radians(state.psi_dot_deg_s),
+            vEast=state.ground_vx_mps,
+            vNorth=state.ground_vy_mps,
+            vUp=state.ground_vz_mps,
+            vTheta=state.ground_theta_rad,
+            vPsi=state.ground_psi_rad,
+            vd=state.ground_horizontal_speed_mps,
+            # 地面航迹角速率左转为正，与 vPsi（自东向逆时针）同向；边界处转为 rad/s。
+            dVPsi=math.radians(state.ground_psi_dot_deg_s),
         ),
     )
 
@@ -142,6 +145,10 @@ def _parse_slot_list(
     prefix: str,
 ) -> list[FormPosS]:
     """解析单个队形的槽位列表并按节点顺序输出。注意：每个已知节点都必须有槽位，缺一即报错。"""
+    # 槽位 x/y/z 固定解释为前上右 FUR，不接受历史“x 前、y 右、z 上”轴序。
+    # FUR 轴序形成右手系，前向叉乘上向得到右向，禁止在入口处交换 y/z 补偿旧配置。
+    # 槽位只描述相对队形几何，转换到 ENU 必须结合长机当前地面航迹姿态。
+    # 坐标声明由上层统一校验，本函数只负责数值与节点映射，避免出现双重裁决。
     if not isinstance(slot_config, list) or not slot_config:
         raise ValueError(f"{prefix} must be a non-empty list")
 
@@ -416,6 +423,9 @@ def _default_leader_wpi() -> list[WayPointInputS]:
 
 def _route_point_from_config(raw: object, field_name: str) -> PosInEarthS:
     """从配置读取航点坐标。注意：兼容数组和对象两种写法。"""
+    # 航点属于固定地面参考，所有别名最终都归一到东北天 ENU。
+    # x_m/east 表示东向，y_m/north 表示北向，altitude_m/h 表示天向高度。
+    # 此入口不接受 FUR 相对量，避免随航向变化的槽位被误当作绝对航点。
     if not isinstance(raw, dict):
         raise ValueError(f"{field_name} must be an object")
     # 兼容 x_m/east、y_m/north、altitude_m/h 两套字段名，统一为 ENU 坐标。
@@ -441,6 +451,9 @@ def _leader_id_from_nodes(nodes: list[object]) -> str:
 
 def _route_state_from_wayline(route: WayLineS) -> RouteState:
     """根据当前航段生成航线状态。注意：用于快照显示和航段跟踪。"""
+    # RouteState 的起终点与圆心全部保持 ENU，绘图层无需再次旋转坐标。
+    # turn_sign 在 ENU 俯视平面按逆时针左转为正，与航向角增长方向一致。
+    # 右侧偏差的正方向仍由 FUR z 轴定义，不应从 turn_sign 的符号反推。
     from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius
     radius_m = _arc_radius(route) if route.start.turnSign != 0.0 else 0.0
     return RouteState(

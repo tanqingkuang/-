@@ -29,6 +29,7 @@ from src.runner.sim_control import (
     _build_formation_comm_init,
     _build_leader_route,
     _build_vel_cmd_limit,
+    _motion_from_aircraft_state,
     _route_state_from_wayline,
 )
 from tests.llt._geo_route import geodetic_route
@@ -74,8 +75,8 @@ def _aircraft_state(node_id: str, x_m: float, y_m: float, altitude_m: float = 12
         ay_rate_mps3=0.0,
         az_rate_mps3=0.0,
         nx=0.0,
-        nz=1.0,
-        phi_rad=0.0,
+        ny=1.0,
+        nz=0.0,
         psi_dot_deg_s=0.0,
     )
 
@@ -116,6 +117,56 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(snapshot.links[0].latency_ms, 31.0)
             self.assertEqual(snapshot.links[0].loss_rate, 0.04)
             self.assertTrue(controller.get_recent_events())
+            controller.close()
+
+    def test_motion_boundary_uses_ground_velocity_and_ground_track_rate(self) -> None:
+        """横风下算法运动状态必须使用地速，不能把空速航向伪装成地面航迹。"""
+
+        state = _aircraft_state("A01", 0.0, 0.0)
+        state.speed_mps = 10.0
+        state.wind_north_mps = 10.0
+        state.ground_psi_dot_deg_s = 2.5
+
+        motion = _motion_from_aircraft_state(state)
+
+        self.assertAlmostEqual(motion.v.vEast, 10.0)
+        self.assertAlmostEqual(motion.v.vNorth, 10.0)
+        self.assertAlmostEqual(motion.v.vUp, 0.0)
+        self.assertAlmostEqual(motion.v.vd, math.sqrt(200.0))
+        self.assertAlmostEqual(motion.v.vPsi, math.radians(45.0))
+        self.assertAlmostEqual(motion.v.vTheta, 0.0)
+        self.assertAlmostEqual(motion.v.dVPsi, math.radians(2.5))
+
+    def test_snapshot_exposes_air_speed_ground_track_and_fur_loads(self) -> None:
+        """节点快照应区分空速标量与地速航迹，并完整输出前、上、右载荷。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.assertEqual(controller.load_config(str(_write_config(Path(tmp)))).code, "OK")
+            controller._model.inject_wind(
+                DisturbanceCommand(
+                    "wind",
+                    params={"speed_mps": 5.0, "direction_deg": 90.0},
+                )
+            )
+
+            node = controller._make_snapshot_unlocked().nodes[0]
+
+            self.assertAlmostEqual(node.speed_mps, 5.0)
+            self.assertAlmostEqual(node.airspeed_mps, 5.0)
+            self.assertAlmostEqual(node.air_psi_v_deg, 0.0)
+            self.assertAlmostEqual(node.air_theta_deg, 0.0)
+            self.assertAlmostEqual(node.air_psi_dot_deg_s, 0.0)
+            self.assertAlmostEqual(node.ground_speed_mps, math.sqrt(50.0))
+            self.assertAlmostEqual(node.vx_mps, 5.0)
+            self.assertAlmostEqual(node.vy_mps, 5.0)
+            self.assertAlmostEqual(node.vz_mps, 0.0)
+            self.assertAlmostEqual(node.psi_v_deg, 45.0)
+            self.assertAlmostEqual(node.theta_deg, 0.0)
+            self.assertAlmostEqual(node.nx, 0.0)
+            self.assertAlmostEqual(node.ny, 1.0)
+            self.assertAlmostEqual(node.nz, 0.0)
+            self.assertAlmostEqual(node.n_normal, 1.0)
             controller.close()
 
     def test_config_rejects_step_larger_than_timed_snapshot_period(self) -> None:
@@ -1269,12 +1320,15 @@ class SimulationControllerTests(unittest.TestCase):
                         psi_v_deg=12.345,
                         theta_deg=1.235,
                         speed_mps=40.555,
+                        ground_speed_mps=41.665,
                         vx_mps=1.235,
                         vy_mps=2.345,
                         vz_mps=-3.455,
                         nx=0.12345,
-                        nz=1.23456,
-                        phi_deg=6.785,
+                        ny=0.98765,
+                        nz=-0.23456,
+                        n_normal=1.01513,
+                        phi_deg=-13.365,
                         psi_dot_deg_s=3.456,
                         cmd_pos_east_m=10.005,
                         cmd_pos_north_m=20.005,
@@ -1322,11 +1376,14 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(node["x_m"], 1.24)
             self.assertEqual(node["altitude_m"], 1234.57)
             self.assertEqual(node["speed_mps"], 40.56)
+            self.assertEqual(node["ground_speed_mps"], 41.67)
             self.assertEqual(node["vx_mps"], 1.24)
             self.assertEqual(node["nx"], 0.1235)
-            self.assertEqual(node["nz"], 1.2346)
+            self.assertEqual(node["ny"], 0.9877)
+            self.assertEqual(node["nz"], -0.2346)
+            self.assertEqual(node["n_normal"], 1.0151)
             self.assertEqual(node["psi_v_deg"], 12.35)
-            self.assertEqual(node["phi_deg"], 6.79)
+            self.assertEqual(node["phi_deg"], -13.37)
             self.assertEqual(node["psi_dot_deg_s"], 3.46)
             self.assertEqual(node["cmd_pos_east_m"], 10.01)
             self.assertEqual(node["cmd_vel_up_mps"], 6.67)
