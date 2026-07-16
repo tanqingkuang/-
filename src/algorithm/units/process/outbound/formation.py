@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from src.algorithm.context.context import FormContextS
-from src.algorithm.context.leaf_types import CommDirE, dist3d
+from src.algorithm.context.leaf_types import CommDirE, FormStageE, dist3d
 from src.algorithm.units.process.formation_protocol import (
     FOLLOWER_STATUS_TOPIC,
     LEADER_BROADCAST_TOPIC,
@@ -104,6 +104,7 @@ class FormationOutbound(OutboundBase):
         # 状态、任务指令和公共计划必须来自同一拍黑板快照。
         # effectiveCmd 是位置跟踪限幅后的有效指令，僚机据此建立槽位坐标系。
         # timestamp 仍由外层通信系统填写，算法协议固定输出 0。
+        leader_cmd = context.selfCmd if context.cmd.stage == FormStageE.STANDBY else context.effectiveCmd
         y.outbox.append(
             MessageEnvelope(
                 topic=LEADER_BROADCAST_TOPIC,
@@ -116,7 +117,7 @@ class FormationOutbound(OutboundBase):
                         "stage": int(context.cmd.stage),
                         "pattern": int(context.cmd.pattern),
                         "step": int(context.cmd.step),
-                        "leader": motion_payload(context.effectiveCmd),
+                        "leader": motion_payload(leader_cmd),
                     },
                     "t_ref": context.rallyPlan.t_ref,
                     "t_ref_valid": context.rallyPlan.valid,

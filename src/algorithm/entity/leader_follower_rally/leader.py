@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import replace
 
-from src.algorithm.context.context import FormContextS, reset_context
+from src.algorithm.context.context import reset_context
 from src.algorithm.context.leaf_types import (
     FormationAnalysisS,
     FormStageE,
@@ -15,29 +15,24 @@ from src.algorithm.context.leaf_types import (
     copy_pos_track_diag,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
-from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
-from src.algorithm.units.algo.pos_track import PosTrackInputS, PosTrackManager, PosTrackOutputS
-from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
-from src.algorithm.units.process.inbound import (
-    FormationInbound,
-    FormationInboundInitS,
-    FormationInboundOutputS,
-    InboundInputS,
-)
+from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityManagerInitS, EntityOutputS
+from src.algorithm.units.algo.pos_calc import loiter_speed_bounds
+from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
+from src.algorithm.units.process.inbound import FormationInboundInitS
 from src.algorithm.units.process.outbound import (
-    FormationOutbound,
     FormationOutboundInitS,
-    FormationOutboundInputS,
-    OutboundOutputS,
+    OutboundMessageE,
 )
-from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
-from src.algorithm.entity.leader_follower_rally import fill_output
-from src.algorithm.units.algo.pos_calc.rally_join_pos import loiter_speed_bounds
+from src.algorithm.entity.leader_follower_rally import (
+    RALLY_LEADER_PROFILE,
+    fill_output,
+)
 
 
 class RallyLeaderEntity(EntityBase):
     """集结长机实体：JOINING 阶段平等参与汇合，完成后沿任务航线飞行并编排队形压缩。"""
+
+    PROFILE = RALLY_LEADER_PROFILE
 
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 RallyLeaderEntity。"""
@@ -47,121 +42,52 @@ class RallyLeaderEntity(EntityBase):
         if not isinstance(rally_cfg, RallyTaskInitS):
             raise ValueError("RallyLeaderEntity: rally_cfg must be RallyTaskInitS")
 
-        self.cxt = FormContextS()
-        self._remote = RemoteCmdS()
-        self._outbox: list = []
         self._rally_completed = False
         self._expected_follower_ids: list[str] = list(rally_cfg.expectedFollowerIds)
         self._tight_radius_m: float = rally_cfg.tightRadius_m
         self._stale_timeout_s: float = rally_cfg.staleTimeout_s
         loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
 
-        # 单元实例
-        self._inbound = FormationInbound()
-        self._task = Rally()
-        self._tra_plan = TraPlanManager()
-        self._pos_track = PosTrackManager()
-        self._outbound = FormationOutbound()
+        # 固定流程类和端口由基类定义；策略流程读取本实例绑定的 Profile。
+        self._initialize_process_chain(
+            {
+                "inbound": FormationInboundInitS(cfg.selfInit.id),
+                "formation_task": replace(
+                    rally_cfg,
+                    leaderId=cfg.selfInit.id,
+                    loiter_speed_min_mps=loiter_min,
+                    loiter_speed_max_mps=loiter_max,
+                ),
+                "tra_plan": EntityManagerInitS(cfg, self.profile.processes.tra_plan),
+                "pos_calc": EntityManagerInitS(cfg, self.profile.processes.pos_calc),
+                "pos_track": EntityManagerInitS(cfg, self.profile.processes.pos_track),
+                "outbound": FormationOutboundInitS(
+                    selfId=cfg.selfInit.id,
+                    netWork=cfg.commInit.netWork,
+                    messageType=OutboundMessageE.LEADER_BROADCAST,
+                ),
+            },
+        )
 
-        # 单元初始化
-        self._inbound.init(FormationInboundInitS(cfg.selfInit.id))
-        self._task.init(replace(
-            rally_cfg,
-            leaderId=cfg.selfInit.id,
-            loiter_speed_min_mps=loiter_min,
-            loiter_speed_max_mps=loiter_max,
-        ))
-        self._tra_plan.init(cfg)
-        self._pos_track.init(cfg)
-        self._outbound.init(FormationOutboundInitS(
-            selfId=cfg.selfInit.id,
-            netWork=cfg.commInit.netWork,
-            messageType=cfg.outbound_message,
-        ))
-
-        # 绑定端口
-        self._inbound_u = InboundInputS(inbox=self._get_inbox_ref())
-        self._inbound_y = FormationInboundOutputS(context=self.cxt)
-        self._task_u = RallyTaskInputS(
-            remote=self._remote,
-            cmd=self.cxt.cmd,
-            followerStates=self.cxt.followerStates,
-            clock=self.cxt.clock,
-            posCalcStatus=self.cxt.posCalcStatus,
-        )
-        self._task_y = RallyTaskOutputS(cmd=self.cxt.cmd, rallyPlan=self.cxt.rallyPlan)
-        self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
-        self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine, nextWayLine=self.cxt.nextWayLine)
-        self._pos_calc_u = PosCalcInputS(
-            selfState=self.cxt.selfState,
-            cmd=self.cxt.cmd,
-            wayLine=self.cxt.wayLine,
-            nextWayLine=self.cxt.nextWayLine,
-            clock=self.cxt.clock,
-            rallyPlan=self.cxt.rallyPlan,
-        )
-        self._pos_calc_y = PosCalcOutputS(
-            selfCmd=self.cxt.selfCmd,
-            status=self.cxt.posCalcStatus,
-            posTrackCommand=self.cxt.posTrackCommand,
-        )
-        self._pos_calc = PosCalcManager()
-        self._pos_calc.init(cfg)
-        self._pos_track_u = PosTrackInputS(
-            command=self.cxt.posTrackCommand,
-            selfCmd=self.cxt.selfCmd,
-            selfState=self.cxt.selfState,
-        )
-        self._pos_track_diag = PosTrackDiagS()
-        self._pos_track_y = PosTrackOutputS(
-            accCmd=self.cxt.selfAccCmd,
-            diag=self._pos_track_diag,
-            effectiveCmd=self.cxt.effectiveCmd,
-        )
-        self._outbound_u = FormationOutboundInputS(context=self.cxt)
-        self._outbound_y = OutboundOutputS(outbox=self._outbox)
-
-        self._inbox: list = []
-        self._inbound_u.inbox = self._inbox
-
-    def step(self, u: EntityInputS, y: EntityOutputS) -> None:
-        """推进 RallyLeaderEntity 一个处理周期。"""
+    def _prepare_input(self, u: EntityInputS) -> None:
+        """写入长机边界输入。注意：业务流程由 EntityBase.step 统一推进。"""
         if u.selfState is not None:
             copy_motion(u.selfState, self.cxt.selfState)
         if u.remote is not None:
             self._remote.stage = u.remote.stage
         self.cxt.clock.now_s = u.now_s
-        previous_stage = self.cxt.cmd.stage
+        self._previous_stage = self.cxt.cmd.stage
 
         self._inbox.clear()
         self._inbox.extend(u.inbox)
 
-        # 通信槽位不区分 STANDBY/RALLY/HOLD，阶段推进只交给任务槽位判断。
-        self._inbound.step(self._inbound_u, self._inbound_y)
-
-        self._task.step(self._task_u, self._task_y)
-
+    def _finish_output(self, u: EntityInputS, y: EntityOutputS) -> None:
+        """完成长机边界输出和完成事件分析。注意：不得在此重复推进流程。"""
         stage = self.cxt.cmd.stage
-        self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)
-
-        if stage == FormStageE.NONE:
-            # NONE 是停控空策略，仍保持原有早退语义，和 STANDBY 待命盘旋无关。
-            if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
-                self._rally_completed = False
-                self.cxt.followerStates.clear()
-            self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
-            self._pos_track.step(self._pos_track_u, self._pos_track_y)
-            self._outbound.step(self._outbound_u, self._outbound_y)
-            fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
-            return
-
-        self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
-        self._pos_track.step(self._pos_track_u, self._pos_track_y)
-        if stage == FormStageE.STANDBY:
-            # effective_cmd 跟随本地盘旋目标，保证输出诊断和跟踪目标一致。
-            copy_motion(self.cxt.selfCmd, self.cxt.effectiveCmd)
-
-        self._outbound.step(self._outbound_u, self._outbound_y)
+        if stage == FormStageE.NONE and self._previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
+            # NONE 只清除本轮完成锁存和僚机回报，具体停控由各 Manager 的 NOOP 产品完成。
+            self._rally_completed = False
+            self.cxt.followerStates.clear()
 
         # 集结完成判断（仅首帧输出 FormationAnalysisS）
         if self._task_y.rallyCompleted and not self._rally_completed:
@@ -182,12 +108,9 @@ class RallyLeaderEntity(EntityBase):
         """复位 RallyLeaderEntity 的动态状态。"""
         reset_context(self.cxt)
         self._remote.stage = RemoteCmdS().stage
+        self._previous_stage = FormStageE.NONE
         self._rally_completed = False
-        self._task.reset()
-        self._tra_plan.reset()
-        self._pos_calc.reset()
-        self._pos_track.reset()
-        self._outbound.reset()
+        self._reset_processes()
         copy_pos_track_diag(PosTrackDiagS(), self._pos_track_diag)
         self._outbox.clear()
         self._inbox.clear()
@@ -195,12 +118,6 @@ class RallyLeaderEntity(EntityBase):
     def close(self) -> None:
         """释放 RallyLeaderEntity 持有的资源。"""
         return None
-
-    def _get_inbox_ref(self) -> list:
-        """返回内部 inbox 列表引用，供端口绑定使用。"""
-        if not hasattr(self, "_inbox"):
-            self._inbox = []
-        return self._inbox
 
 
 def _compute_formation_analysis(

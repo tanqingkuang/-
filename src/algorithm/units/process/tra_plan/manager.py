@@ -20,7 +20,7 @@ from src.algorithm.units.process.tra_plan.leader_route import (
 from src.algorithm.units.process.tra_plan.noop import Noop
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS
+    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS
 
 
 class TraPlanManager:
@@ -31,28 +31,33 @@ class TraPlanManager:
         self._default_strategy: TraPlanStrategyE | None = None
         self._registry: dict[TraPlanStrategyE, TraPlanBase] = {}
 
-    def init(self, cfg: EntityInitS) -> None:
-        """按实体配置创建全部已声明产品。注意：不得隐式补充策略。"""
+    def init(self, cfg: EntityManagerInitS) -> None:
+        """按实体身份证创建全部已声明产品。注意：不得隐式补充策略。"""
         # 配置表是实例能力的唯一来源，Manager 不根据角色补默认产品。
         # 枚举必须严格校验，普通整数会掩盖配置生成阶段的类型错误。
-        default_strategy = _require_strategy(cfg.tra_plan_default, "tra_plan_default")
+        process_spec = cfg.process
+        default_strategy = _require_strategy(process_spec.default_strategy, "tra_plan.default_strategy")
         strategies = tuple(
-            _require_strategy(strategy, "tra_plan_strategies") for strategy in cfg.tra_plan_strategies
+            _require_strategy(strategy, "tra_plan.strategies") for strategy in process_spec.strategies
         )
         if not strategies:
-            raise ValueError("tra_plan_strategies 不得为空")
+            raise ValueError("processes.tra_plan.strategies 不得为空")
         if len(strategies) != len(set(strategies)):
-            raise ValueError("tra_plan_strategies 不得包含重复策略")
+            raise ValueError("processes.tra_plan.strategies 不得包含重复策略")
         if default_strategy not in strategies:
-            raise ValueError("tra_plan_default 必须包含在 tra_plan_strategies 中")
+            raise ValueError(
+                "processes.tra_plan.default_strategy 必须包含在 processes.tra_plan.strategies 中"
+            )
         if TraPlanStrategyE.NOOP not in strategies:
-            raise ValueError("tra_plan_strategies 必须显式包含 NOOP")
+            raise ValueError("processes.tra_plan.strategies 必须显式包含 NOOP")
 
         self._default_strategy = default_strategy
         # 产品只在初始化阶段创建一次，运行期路由只查表切换引用。
         # LeaderRoute 保存跨帧航段索引，因此绝不能在阶段切换时重新构造。
         # registry 保存产品对象而非类，切换策略不会丢失各自内部状态。
-        self._registry = {strategy: self._create_strategy(strategy, cfg) for strategy in strategies}
+        self._registry = {
+            strategy: self._create_strategy(strategy, cfg.entity) for strategy in strategies
+        }
 
     def step(self, u: TraPlanInputS, y: TraPlanOutputS) -> None:
         """按任务指令选择缓存产品并推进一拍。注意：本方法不创建产品。"""

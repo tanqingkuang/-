@@ -17,7 +17,12 @@ from src.algorithm.entity.leader_follower_hold.leader import (
     _default_tracker_init,
     _follower_tracker_init,
 )
-from src.algorithm.entity.types import EntityInitS, VelCmdLimitS
+from src.algorithm.entity.types import (
+    EntityInitS,
+    EntityManagerInitS,
+    EntityProcessSpecS,
+    VelCmdLimitS,
+)
 from src.algorithm.units.algo.pos_track import (
     PosTrackInputS,
     PosTrackManager,
@@ -52,6 +57,15 @@ def _ports(command: PosTrackCommandE) -> tuple[PosTrackInputS, PosTrackOutputS]:
     )
 
 
+def _entity_cfg(strategies: tuple[object, ...]) -> EntityManagerInitS:
+    """构造仅配置位置跟踪流程的实体初始化参数。"""
+
+    return EntityManagerInitS(
+        entity=EntityInitS(),
+        process=EntityProcessSpecS(strategies=strategies),
+    )
+
+
 class PosTrackManagerTests(unittest.TestCase):
     """验证显式配置、固定映射和缓存产品。"""
 
@@ -59,15 +73,13 @@ class PosTrackManagerTests(unittest.TestCase):
         """空表、重复策略和缺少 NOOP 均应在初始化期失败。"""
 
         cases = (
-            (EntityInitS(), "不得为空"),
+            (_entity_cfg(()), "不得为空"),
             (
-                EntityInitS(
-                    pos_track_strategies=(PosTrackStrategyE.NOOP, PosTrackStrategyE.NOOP)
-                ),
+                _entity_cfg((PosTrackStrategyE.NOOP, PosTrackStrategyE.NOOP)),
                 "不得包含重复策略",
             ),
             (
-                EntityInitS(pos_track_strategies=(PosTrackStrategyE.PID_SPEED,)),
+                _entity_cfg((PosTrackStrategyE.PID_SPEED,)),
                 "必须显式包含 NOOP",
             ),
         )
@@ -80,12 +92,12 @@ class PosTrackManagerTests(unittest.TestCase):
 
         manager = PosTrackManager()
         manager.init(
-            EntityInitS(
-                pos_track_strategies=(
+            _entity_cfg(
+                (
                     PosTrackStrategyE.NOOP,
                     PosTrackStrategyE.PID_SPEED,
                     PosTrackStrategyE.PID_POSITION,
-                )
+                ),
             )
         )
         product_ids = {key: id(value) for key, value in manager._registry.items()}
@@ -109,9 +121,7 @@ class PosTrackManagerTests(unittest.TestCase):
 
         manager = PosTrackManager()
         manager.init(
-            EntityInitS(
-                pos_track_strategies=(PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED)
-            )
+            _entity_cfg((PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED))
         )
         u, y = _ports(PosTrackCommandE.POSITION_TRACK)
 
@@ -122,7 +132,7 @@ class PosTrackManagerTests(unittest.TestCase):
         """运行期命令必须使用语义枚举，普通整数不得绕过接口契约。"""
 
         manager = PosTrackManager()
-        manager.init(EntityInitS(pos_track_strategies=(PosTrackStrategyE.NOOP,)))
+        manager.init(_entity_cfg((PosTrackStrategyE.NOOP,)))
         u, y = _ports(PosTrackCommandE.NOOP)
         assert u.command is not None
         u.command.mode = 0  # type: ignore[assignment]
@@ -134,7 +144,7 @@ class PosTrackManagerTests(unittest.TestCase):
         """NOOP 应只清零加速度并保留既有诊断和 PosCalc 目标快照。"""
 
         manager = PosTrackManager()
-        manager.init(EntityInitS(pos_track_strategies=(PosTrackStrategyE.NOOP,)))
+        manager.init(_entity_cfg((PosTrackStrategyE.NOOP,)))
         u, y = _ports(PosTrackCommandE.NOOP)
         assert y.accCmd is not None
         assert y.diag is not None

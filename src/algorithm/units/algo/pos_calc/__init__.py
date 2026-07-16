@@ -7,6 +7,7 @@ from src.algorithm.units.algo.pos_calc.base import (
     PosCalcStrategyE,
 )
 from src.algorithm.units.algo.pos_calc.manager import PosCalcManager
+from src.algorithm.units.algo.pos_calc.rally_join_pos import loiter_speed_bounds
 
 __all__ = [
     "PosCalcInputS",
@@ -14,4 +15,5 @@ __all__ = [
     "PosCalcOutputS",
     "PosCalcStatusS",
     "PosCalcStrategyE",
+    "loiter_speed_bounds",
 ]

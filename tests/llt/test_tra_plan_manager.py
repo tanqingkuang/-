@@ -16,7 +16,7 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.leader_follower_hold.leader import (
     waypoint_inputs_to_waylines as legacy_waypoint_inputs_to_waylines,
 )
-from src.algorithm.entity.types import EntityInitS
+from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityProcessSpecS
 from src.algorithm.units.process.tra_plan import (
     TraPlanInputS,
     TraPlanManager,
@@ -35,27 +35,43 @@ def _route() -> list[WayPointInputS]:
     ]
 
 
+def _entity_cfg(
+    default_strategy: object,
+    strategies: tuple[object, ...],
+    **kwargs: object,
+) -> EntityManagerInitS:
+    """构造仅配置轨迹规划流程的实体初始化参数。"""
+
+    return EntityManagerInitS(
+        entity=EntityInitS(**kwargs),
+        process=EntityProcessSpecS(
+            default_strategy=default_strategy,
+            strategies=strategies,
+        ),
+    )
+
+
 class TraPlanManagerTests(unittest.TestCase):
     """验证显式配置、阶段路由和有状态产品缓存。"""
 
     def test_init_rejects_incomplete_strategy_table(self) -> None:
         """验证缺省、重复和默认产品未登记的配置均在初始化期失败。"""
         cases = (
-            (EntityInitS(), "tra_plan_default 必须是 TraPlanStrategyE"),
+            (_entity_cfg(None, ()), "tra_plan.default_strategy 必须是 TraPlanStrategyE"),
             (
-                EntityInitS(
-                    tra_plan_default=TraPlanStrategyE.NOOP,
-                    tra_plan_strategies=(TraPlanStrategyE.NOOP, TraPlanStrategyE.NOOP),
+                _entity_cfg(
+                    TraPlanStrategyE.NOOP,
+                    (TraPlanStrategyE.NOOP, TraPlanStrategyE.NOOP),
                 ),
                 "不得包含重复策略",
             ),
             (
-                EntityInitS(
+                _entity_cfg(
+                    TraPlanStrategyE.LEADER_ROUTE,
+                    (TraPlanStrategyE.NOOP,),
                     route=_route(),
-                    tra_plan_default=TraPlanStrategyE.LEADER_ROUTE,
-                    tra_plan_strategies=(TraPlanStrategyE.NOOP,),
                 ),
-                "必须包含在 tra_plan_strategies",
+                "必须包含在 processes.tra_plan.strategies",
             ),
         )
 
@@ -82,10 +98,10 @@ class TraPlanManagerTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "显式包含 NOOP"):
             manager.init(
-                EntityInitS(
+                _entity_cfg(
+                    TraPlanStrategyE.LEADER_ROUTE,
+                    (TraPlanStrategyE.LEADER_ROUTE,),
                     route=_route(),
-                    tra_plan_default=TraPlanStrategyE.LEADER_ROUTE,
-                    tra_plan_strategies=(TraPlanStrategyE.LEADER_ROUTE,),
                 )
             )
 
@@ -93,10 +109,7 @@ class TraPlanManagerTests(unittest.TestCase):
         """验证僚机显式只配置 NOOP 时可在任意正常阶段执行。"""
         manager = TraPlanManager()
         manager.init(
-            EntityInitS(
-                tra_plan_default=TraPlanStrategyE.NOOP,
-                tra_plan_strategies=(TraPlanStrategyE.NOOP,),
-            )
+            _entity_cfg(TraPlanStrategyE.NOOP, (TraPlanStrategyE.NOOP,))
         )
         way_line = WayLineS(idx=9)
 
@@ -111,10 +124,10 @@ class TraPlanManagerTests(unittest.TestCase):
         """验证待命不推进航段，恢复任务航线后继续使用同一产品状态。"""
         manager = TraPlanManager()
         manager.init(
-            EntityInitS(
+            _entity_cfg(
+                TraPlanStrategyE.LEADER_ROUTE,
+                (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE),
                 route=_route(),
-                tra_plan_default=TraPlanStrategyE.LEADER_ROUTE,
-                tra_plan_strategies=(TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE),
             )
         )
         product_ids = {strategy: id(product) for strategy, product in manager._registry.items()}

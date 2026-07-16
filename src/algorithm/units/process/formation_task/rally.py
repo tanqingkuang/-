@@ -48,6 +48,7 @@ class RallyTaskInitS(FormationTaskInitS):
     altitude_separation_m: float = 60.0  # 待命/JOINING/CATCHUP 各机高度层间隔，米
     loiter_speed_min_mps: float = 14.0  # 盘旋速度下限，用于可达时间区间的最慢整圈时间
     loiter_speed_max_mps: float = 25.0  # 盘旋速度上限，用于可达时间区间的最快整圈时间
+    passive: bool = False  # 僚机被动模式：保留入站 cmd，仅允许本地 STANDBY 覆盖
 
 
 @dataclass
@@ -124,6 +125,7 @@ class Rally(FormationTaskBase):
         self._loiter_circumference_m = 2.0 * math.pi * cfg.loiter_radius_m
         self._speed_min = cfg.loiter_speed_min_mps
         self._speed_max = cfg.loiter_speed_max_mps
+        self._passive = bool(cfg.passive)
         # 运行期计时器
         self._catchup_stable_timer: float = 0.0
         self._stable_timer: float = 0.0
@@ -145,6 +147,13 @@ class Rally(FormationTaskBase):
         if y.cmd is None or u.clock is None:
             raise ValueError("Rally ports must be bound")
         y.rallyCompleted = False
+        if self._passive:
+            # 僚机的任务指令已由 Inbound 写入黑板；本流程只保证本地待命优先于旧广播。
+            remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
+            if remote_stage == FormStageE.STANDBY:
+                y.cmd.stage = FormStageE.STANDBY
+                y.cmd.step = RallyPhaseE.JOINING
+            return
         self._write_plan(y)
 
         remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE

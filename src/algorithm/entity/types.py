@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import IntEnum
 
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
@@ -15,12 +16,6 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
 )
 from src.common.envelope import MessageEnvelope
-from src.algorithm.units.algo.pos_calc.base import PosCalcStrategyE
-from src.algorithm.units.algo.pos_track.base import PosTrackStrategyE
-from src.algorithm.units.process.outbound.base import OutboundMessageE
-from src.algorithm.units.process.tra_plan.base import TraPlanStrategyE
-
-
 DEFAULT_CONTROL_PERIOD_S = 0.05
 
 
@@ -32,6 +27,41 @@ class VelCmdLimitS:
     forwardMax: float = float("inf")  # 前向速度指令上限
     verticalMin: float = float("-inf")  # 垂向速度指令下限(下降速度上限取负)
     verticalMax: float = float("inf")  # 垂向速度指令上限(爬升速度上限)
+
+
+@dataclass(frozen=True)
+class EntityProcessSpecS:
+    """单个流程策略规格。注意：空规格表示固定流程没有可配置策略。"""
+
+    default_strategy: object | None = None  # 常规阶段默认策略；无策略流程保持 None
+    strategies: tuple[object, ...] = ()  # 本实例允许创建和选择的全部/附加策略
+
+
+@dataclass(frozen=True)
+class EntityProcessTableS:
+    """实体固定流程装配表。注意：字段顺序就是 EntityBase 的标准执行顺序。"""
+
+    inbound: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 收消息流程
+    formation_task: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 任务编排流程
+    tra_plan: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 轨迹规划流程
+    pos_calc: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 位置解算流程
+    pos_track: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 位置跟踪流程
+    outbound: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 发消息流程
+
+
+class EntityProfileE(IntEnum):
+    """实体身份枚举。注意：外部只选择身份，不拼装流程策略。"""
+
+    RALLY_LEADER = 1  # 集结长机：集结位置解算、任务航线和速度控制
+    RALLY_FOLLOWER = 2  # 集结僚机：集结/槽位位置解算和速度/位置控制
+
+
+@dataclass(frozen=True)
+class EntityProfileS:
+    """实体不可变身份证。注意：同一身份的实例共享配置，不共享运行状态。"""
+
+    identity: EntityProfileE  # 工厂选择键
+    processes: EntityProcessTableS  # 本身份固定启用的流程策略
 
 
 @dataclass
@@ -47,12 +77,14 @@ class EntityInitS:
     rally_approach_speed_mps: float = 20.0  # 僚机飞向 M_i 的速度
     rally_leader_id: str = ""  # 僚机回报消息的发送目标（来自节点配置 leader_id）
     rally_layer_altitude_m: float | None = None  # 待命/JOINING/CATCHUP 分层目标高度；None 表示沿用集结槽位高度
-    pos_calc_default: PosCalcStrategyE = PosCalcStrategyE.NOOP  # 常规阶段位置解算策略
-    pos_calc_routes: tuple[PosCalcStrategyE, ...] = ()  # 相对默认策略额外启用的位置解算能力
-    pos_track_strategies: tuple[PosTrackStrategyE, ...] = ()  # 本实例启用的全部位置跟踪产品
-    tra_plan_default: TraPlanStrategyE | None = None  # 常规阶段轨迹规划策略；必须显式配置
-    tra_plan_strategies: tuple[TraPlanStrategyE, ...] = ()  # 本实例启用的全部轨迹规划产品
-    outbound_message: OutboundMessageE | None = None  # 本实例固定发送的出站消息类型；必须显式配置
+
+
+@dataclass(frozen=True)
+class EntityManagerInitS:
+    """流程 Manager 内部初始化参数。注意：由 Entity 根据自身 Profile 生成。"""
+
+    entity: EntityInitS  # 每架飞机不同的运行初始化参数
+    process: EntityProcessSpecS  # 当前流程所属实体身份的固定策略规格
 
 
 @dataclass

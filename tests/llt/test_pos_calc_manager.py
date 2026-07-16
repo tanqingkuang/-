@@ -22,7 +22,7 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     WayPointS,
 )
-from src.algorithm.entity.types import EntityInitS
+from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityProcessSpecS
 from src.algorithm.units.algo.pos_calc import (
     PosCalcInputS,
     PosCalcManager,
@@ -70,6 +70,20 @@ def _ports() -> tuple[PosCalcInputS, PosCalcOutputS]:
     )
 
 
+def _entity_cfg(
+    default_strategy: object,
+    strategies: tuple[object, ...] = (),
+    **kwargs: object,
+) -> EntityManagerInitS:
+    """构造仅配置位置解算流程的实体初始化参数。"""
+
+    return EntityManagerInitS(
+        entity=EntityInitS(**kwargs),
+        process=EntityProcessSpecS(
+            default_strategy=default_strategy,
+            strategies=strategies,
+        ),
+    )
 class PosCalcManagerTests(unittest.TestCase):
     """验证 Manager 的配置校验、缓存路由和统一输出。"""
 
@@ -81,9 +95,9 @@ class PosCalcManagerTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             manager.init(
-                EntityInitS(
-                    pos_calc_default=PosCalcStrategyE.ROUTE_INTERP,
-                    pos_calc_routes=(PosCalcStrategyE.RALLY_JOIN, PosCalcStrategyE.RALLY_JOIN),
+                _entity_cfg(
+                    PosCalcStrategyE.ROUTE_INTERP,
+                    (PosCalcStrategyE.RALLY_JOIN, PosCalcStrategyE.RALLY_JOIN),
                 )
             )
 
@@ -94,7 +108,7 @@ class PosCalcManagerTests(unittest.TestCase):
         manager = PosCalcManager()
 
         with self.assertRaises(ValueError):
-            manager.init(EntityInitS(pos_calc_default=PosCalcStrategyE.NOOP))
+            manager.init(_entity_cfg(PosCalcStrategyE.NOOP))
 
     def test_noop_writes_current_position_and_zero_velocity(self) -> None:
         """NONE 阶段应选择系统空策略并完整输出停控目标。"""
@@ -106,7 +120,7 @@ class PosCalcManagerTests(unittest.TestCase):
         u.cmd.stage = FormStageE.NONE
         u.selfState.pos = PosInEarthS(12.0, 34.0, 560.0)
         manager = PosCalcManager()
-        manager.init(EntityInitS(pos_calc_default=PosCalcStrategyE.ROUTE_INTERP))
+        manager.init(_entity_cfg(PosCalcStrategyE.ROUTE_INTERP))
 
         manager.step(u, y)
 
@@ -122,7 +136,9 @@ class PosCalcManagerTests(unittest.TestCase):
 
         u, y = _ports()
         assert u.cmd is not None
-        cfg = EntityInitS(
+        cfg = _entity_cfg(
+            PosCalcStrategyE.ROUTE_INTERP,
+            (PosCalcStrategyE.RALLY_JOIN,),
             selfInit=FormSelfInitS("A01"),
             commInit=FormCommInitS(
                 formPat=["wedge"],
@@ -130,8 +146,6 @@ class PosCalcManagerTests(unittest.TestCase):
             ),
             route=_route(),
             rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
-            pos_calc_default=PosCalcStrategyE.ROUTE_INTERP,
-            pos_calc_routes=(PosCalcStrategyE.RALLY_JOIN,),
         )
         manager = PosCalcManager()
         manager.init(cfg)
@@ -166,7 +180,9 @@ class PosCalcManagerTests(unittest.TestCase):
         status = y.status
         manager = PosCalcManager()
         manager.init(
-            EntityInitS(
+            _entity_cfg(
+                PosCalcStrategyE.ROUTE_INTERP,
+                (PosCalcStrategyE.RALLY_JOIN,),
                 selfInit=FormSelfInitS("A01"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],
@@ -174,8 +190,6 @@ class PosCalcManagerTests(unittest.TestCase):
                 ),
                 route=_route(),
                 rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
-                pos_calc_default=PosCalcStrategyE.ROUTE_INTERP,
-                pos_calc_routes=(PosCalcStrategyE.RALLY_JOIN,),
             )
         )
         u.cmd.stage = FormStageE.STANDBY
@@ -196,7 +210,9 @@ class PosCalcManagerTests(unittest.TestCase):
         u.rallyPlan = RallyPlanS(t_ref=80.0, valid=True, loop_counts={"A01": 2})
         manager = PosCalcManager()
         manager.init(
-            EntityInitS(
+            _entity_cfg(
+                PosCalcStrategyE.ROUTE_INTERP,
+                (PosCalcStrategyE.RALLY_JOIN,),
                 selfInit=FormSelfInitS("A01"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],
@@ -204,8 +220,6 @@ class PosCalcManagerTests(unittest.TestCase):
                 ),
                 route=_route(),
                 rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
-                pos_calc_default=PosCalcStrategyE.ROUTE_INTERP,
-                pos_calc_routes=(PosCalcStrategyE.RALLY_JOIN,),
             )
         )
 

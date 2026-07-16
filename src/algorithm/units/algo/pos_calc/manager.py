@@ -34,7 +34,7 @@ from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGe
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, VelCmdLimitS
+    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, VelCmdLimitS
 
 
 _LEADER_L1_DISTANCE_M = 0.0  # 长机航线目标不使用额外 L1 前视距离
@@ -79,28 +79,34 @@ class PosCalcManager:
         self._registry: dict[PosCalcStrategyE, PosCalcBase] = {}  # 已初始化产品缓存
         self._active_strategy: PosCalcStrategyE | None = None  # 上一拍执行产品，用于边沿复位
 
-    def init(self, cfg: EntityInitS) -> None:
-        """按 EntityInitS 建造并缓存所需策略。注意：运行期不得再次调用。"""
+    def init(self, cfg: EntityManagerInitS) -> None:
+        """按实体身份证建造并缓存策略。注意：运行期不得再次调用。"""
         # 配置边界只接受枚举，防止普通整数绕过策略语义。
-        default_strategy = _require_strategy(cfg.pos_calc_default, "pos_calc_default")
-        routes = tuple(_require_strategy(item, "pos_calc_routes") for item in cfg.pos_calc_routes)
+        entity_cfg = cfg.entity
+        process_spec = cfg.process
+        default_strategy = _require_strategy(process_spec.default_strategy, "pos_calc.default_strategy")
+        routes = tuple(_require_strategy(item, "pos_calc.strategies") for item in process_spec.strategies)
         # 同一能力重复登记通常意味着配置表拼接错误，应在初始化期暴露。
         if len(routes) != len(set(routes)):
-            raise ValueError("pos_calc_routes 不得包含重复策略")
+            raise ValueError("processes.pos_calc.strategies 不得包含重复策略")
         # 当前阶段路由只定义了 RALLY_JOIN，其他产品只能作为角色默认策略。
         unsupported_routes = set(routes) - {PosCalcStrategyE.RALLY_JOIN}
         if unsupported_routes:
             names = ", ".join(sorted(item.name for item in unsupported_routes))
-            raise ValueError(f"pos_calc_routes 包含不支持的附加能力: {names}")
+            raise ValueError(f"processes.pos_calc.strategies 包含不支持的附加能力: {names}")
         # NOOP 是系统保底，RALLY_JOIN 是附加阶段能力，均不能充当常规飞行策略。
         if default_strategy in (PosCalcStrategyE.NOOP, PosCalcStrategyE.RALLY_JOIN):
-            raise ValueError("pos_calc_default 只允许 ROUTE_INTERP 或 SLOT_GEOMETRY")
+            raise ValueError(
+                "processes.pos_calc.default_strategy 只允许 ROUTE_INTERP 或 SLOT_GEOMETRY"
+            )
 
         self._default_strategy = default_strategy
         self._routes = routes
         # 产品只在此处创建一次，运行期路由只切换缓存引用。
         required = {PosCalcStrategyE.NOOP, default_strategy, *routes}
-        self._registry = {strategy: self._create_strategy(strategy, cfg) for strategy in required}
+        self._registry = {
+            strategy: self._create_strategy(strategy, entity_cfg) for strategy in required
+        }
         self._active_strategy = None
 
     def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
@@ -187,7 +193,7 @@ class PosCalcManager:
             return strategy
         if strategy_type == PosCalcStrategyE.SLOT_GEOMETRY:  # 僚机队形槽位解算产品
             strategy = SlotGeometry()
-            rally_enabled = PosCalcStrategyE.RALLY_JOIN in cfg.pos_calc_routes
+            rally_enabled = PosCalcStrategyE.RALLY_JOIN in self._routes
             if rally_enabled:  # 集结实体保留 CATCHUP 分层高度且不启用重构 TD
                 init_cfg = SlotGeometryInitS(
                     cfg.selfInit.id,

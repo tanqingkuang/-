@@ -22,7 +22,7 @@ from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackA
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, VelCmdLimitS
+    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, VelCmdLimitS
 
 
 _LATERAL_ROLL_MAX_RAD = math.radians(40.0)  # 执行层滚转角限幅
@@ -162,19 +162,19 @@ class PosTrackManager:
         """初始化空管理器。注意：必须先调用 init。"""
         self._registry: dict[PosTrackStrategyE, PosTrackBase] = {}
 
-    def init(self, cfg: EntityInitS) -> None:
-        """按实体配置创建全部控制产品。注意：不得隐式补充策略。"""
+    def init(self, cfg: EntityManagerInitS) -> None:
+        """按实体身份证创建全部控制产品。注意：不得隐式补充策略。"""
         # 实体配置明确声明能力集合，Manager 不按角色猜测缺失产品。
         # NOOP 是异常/停控路径的系统能力，也必须在配置中显式出现。
-        strategies = tuple(_require_strategy(item) for item in cfg.pos_track_strategies)
+        strategies = tuple(_require_strategy(item) for item in cfg.process.strategies)
         if not strategies:
-            raise ValueError("pos_track_strategies 不得为空")
+            raise ValueError("processes.pos_track.strategies 不得为空")
         if len(strategies) != len(set(strategies)):
-            raise ValueError("pos_track_strategies 不得包含重复策略")
+            raise ValueError("processes.pos_track.strategies 不得包含重复策略")
         if PosTrackStrategyE.NOOP not in strategies:
-            raise ValueError("pos_track_strategies 必须显式包含 NOOP")
+            raise ValueError("processes.pos_track.strategies 必须显式包含 NOOP")
         # 每个 PID 产品只构造一次，积分器状态随产品对象跨帧保留。
-        self._registry = {strategy: _BUILDERS[strategy](cfg) for strategy in strategies}
+        self._registry = {strategy: _BUILDERS[strategy](cfg.entity) for strategy in strategies}
 
     def step(self, u: PosTrackInputS, y: PosTrackOutputS) -> None:
         """按控制命令执行缓存产品。注意：命令与策略固定一一对应。"""
@@ -203,7 +203,7 @@ class PosTrackManager:
 def _require_strategy(value: object) -> PosTrackStrategyE:
     """校验控制产品策略枚举。注意：禁止普通整数绕过配置语义。"""
     if not isinstance(value, PosTrackStrategyE):
-        raise ValueError("pos_track_strategies 必须是 PosTrackStrategyE")
+        raise ValueError("processes.pos_track.strategies 必须是 PosTrackStrategyE")
     if value not in _BUILDERS:
         raise ValueError(f"不支持的位置跟踪策略: {value!r}")
     return value

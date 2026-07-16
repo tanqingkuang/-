@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from fractions import Fraction
 from itertools import product
 from unittest.mock import patch
@@ -35,8 +36,15 @@ from src.algorithm.context.leaf_types import (
 )
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+from src.algorithm.entity.leader_follower_rally import create_rally_entity
 from src.algorithm.entity.types import EntityInitS as _EntityInitS
-from src.algorithm.entity.types import EntityInputS, EntityOutputS, VelCmdLimitS
+from src.algorithm.entity.types import (
+    EntityInputS,
+    EntityOutputS,
+    EntityProfileE,
+    VelCmdLimitS,
+)
+from src.algorithm.units.algo.pos_calc import PosCalcManager
 from src.algorithm.units.algo.pos_calc.base import PosCalcInputS, PosCalcOutputS, PosCalcStrategyE
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
@@ -47,7 +55,7 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RallyJoinPosInitS,
 )
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
-from src.algorithm.units.algo.pos_track import PosTrackStrategyE
+from src.algorithm.units.algo.pos_track import PosTrackManager
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound import (
     FormationInbound,
@@ -75,7 +83,7 @@ from src.algorithm.units.process.outbound.rally_leader_broadcast import (
     RallyLeaderBroadcastInputS,
     _motion_payload,
 )
-from src.algorithm.units.process.tra_plan import TraPlanStrategyE
+from src.algorithm.units.process.tra_plan import TraPlanManager
 from src.common.envelope import MessageEnvelope
 
 
@@ -84,36 +92,9 @@ def EntityInitS(*args: object, **kwargs: object) -> _EntityInitS:
 
     cfg = _EntityInitS(*args, **kwargs)
     if cfg.rally_cfg is not None:
-        cfg.pos_calc_default = (
-            PosCalcStrategyE.SLOT_GEOMETRY
-            if cfg.rally_leader_id
-            else PosCalcStrategyE.ROUTE_INTERP
-        )
-        cfg.pos_calc_routes = (PosCalcStrategyE.RALLY_JOIN,)
-        cfg.tra_plan_default = (
-            TraPlanStrategyE.NOOP
-            if cfg.rally_leader_id
-            else TraPlanStrategyE.LEADER_ROUTE
-        )
-        cfg.tra_plan_strategies = (
-            (TraPlanStrategyE.NOOP,)
-            if cfg.rally_leader_id
-            else (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE)
-        )
-        cfg.pos_track_strategies = (
-            (
-                PosTrackStrategyE.NOOP,
-                PosTrackStrategyE.PID_SPEED,
-                PosTrackStrategyE.PID_POSITION,
-            )
-            if cfg.rally_leader_id
-            else (PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED)
-        )
-        cfg.outbound_message = (
-            OutboundMessageE.FOLLOWER_STATUS
-            if cfg.rally_leader_id
-            else OutboundMessageE.LEADER_BROADCAST
-        )
+        follower = bool(cfg.rally_leader_id)
+        if isinstance(cfg.rally_cfg, RallyTaskInitS):
+            cfg.rally_cfg = replace(cfg.rally_cfg, passive=follower)
     return cfg
 
 
@@ -1192,6 +1173,25 @@ class FormationOutboundTests(unittest.TestCase):
         self.assertEqual(message.payload["cmd"]["leader"]["pos"]["east"], 4.0)
         self.assertEqual(message.payload["t_ref"], 90.0)
         self.assertEqual(message.payload["loop_counts"], {"R01": 0, "R02": 1})
+
+    def test_standby_broadcast_uses_unsaturated_position_command(self) -> None:
+        """STANDBY 广播应保持旧语义，使用本地盘旋 selfCmd 而不是跟踪限幅结果。"""
+
+        cxt = FormContextS()
+        cxt.cmd.stage = FormStageE.STANDBY
+        cxt.selfCmd = _motion(east=7.0)
+        cxt.effectiveCmd = _motion(east=9.0)
+        outbound = FormationOutbound()
+        outbound.init(FormationOutboundInitS(
+            selfId="R01",
+            netWork=[NetWorkS("R01", "R02", CommDirE.SIMPLEX)],
+            messageType=OutboundMessageE.LEADER_BROADCAST,
+        ))
+        output = OutboundOutputS()
+
+        outbound.step(FormationOutboundInputS(context=cxt), output)
+
+        self.assertEqual(output.outbox[0].payload["cmd"]["leader"]["pos"]["east"], 7.0)
 
     def test_writes_follower_status_from_context(self) -> None:
         """僚机回报应直接读取位置解算状态，不需要实体手工同步端口字段。"""
@@ -3433,6 +3433,57 @@ class RallyJoinPosTests(unittest.TestCase):
 
 class RallyEntityTests(unittest.TestCase):
     """验证集结长机和僚机实体的主链路。"""
+
+    def test_factory_creates_independent_entities_bound_to_immutable_profiles(self) -> None:
+        """工厂应按身份创建独立实体，而同类实例共享不可变 Profile。"""
+
+        leader_a = create_rally_entity(EntityProfileE.RALLY_LEADER)
+        leader_b = create_rally_entity(EntityProfileE.RALLY_LEADER)
+        follower = create_rally_entity(EntityProfileE.RALLY_FOLLOWER)
+
+        self.assertIsInstance(leader_a, RallyLeaderEntity)
+        self.assertIsInstance(follower, RallyFollowerEntity)
+        self.assertIsNot(leader_a, leader_b)
+        self.assertIs(leader_a.profile, leader_b.profile)
+        self.assertEqual(leader_a.profile.identity, EntityProfileE.RALLY_LEADER)
+        self.assertEqual(follower.profile.identity, EntityProfileE.RALLY_FOLLOWER)
+        self.assertNotIn("processes", _EntityInitS.__dataclass_fields__)
+
+    def test_entities_inherit_fixed_step_and_bind_configured_process_order(self) -> None:
+        """Rally 实体不得覆盖 step，六个流程应按外部配置表锁定到基类执行链。"""
+
+        route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
+        rally_cfg = _rally_cfg(expected=("R02",))
+        leader = RallyLeaderEntity()
+        leader.init(EntityInitS(
+            selfInit=FormSelfInitS("R01"),
+            commInit=_comm_init(),
+            route=route,
+            rally_cfg=rally_cfg,
+        ))
+        follower = RallyFollowerEntity()
+        follower.init(EntityInitS(
+            selfInit=FormSelfInitS("R02"),
+            commInit=_comm_init(),
+            route=route,
+            rally_cfg=rally_cfg,
+            rally_leader_id="R01",
+        ))
+
+        self.assertNotIn("step", RallyLeaderEntity.__dict__)
+        self.assertNotIn("step", RallyFollowerEntity.__dict__)
+        expected_types = [
+            FormationInbound,
+            Rally,
+            TraPlanManager,
+            PosCalcManager,
+            PosTrackManager,
+            FormationOutbound,
+        ]
+        self.assertEqual([type(item.process) for item in leader._process_steps], expected_types)
+        self.assertEqual([type(item.process) for item in follower._process_steps], expected_types)
+        self.assertFalse(leader._task._passive)
+        self.assertTrue(follower._task._passive)
 
     def test_follower_reset_does_not_restore_plan_from_empty_inbox(self) -> None:
         """有效计划后复位僚机实体，下一拍空 inbox 不得回灌旧 T_ref 和圈数。"""
