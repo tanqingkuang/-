@@ -49,6 +49,11 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
 from src.algorithm.units.algo.pos_track import PosTrackStrategyE
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
+from src.algorithm.units.process.inbound import (
+    FormationInbound,
+    FormationInboundInitS,
+    FormationInboundOutputS,
+)
 from src.algorithm.units.process.inbound.base import InboundInputS
 from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInputS, FollowerStatusOutputS
 from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
@@ -1091,6 +1096,53 @@ class RallyTaskTests(unittest.TestCase):
         _task_step(task, ctx, remote=FormStageE.RALLY, states=[state], now_s=0.0)
 
         self.assertEqual(ctx.cmd.step, 2)
+
+
+class FormationInboundTests(unittest.TestCase):
+    """验证统一入站按 topic 原子更新黑板。"""
+
+    def test_routes_mixed_topics_and_keeps_blackboard_on_empty_inbox(self) -> None:
+        """同一邮箱中的长机广播和僚机状态应分别写入对应黑板区域。"""
+
+        cxt = FormContextS()
+        cxt.clock.now_s = 12.0
+        inbound = FormationInbound()
+        inbound.init(FormationInboundInitS("R02"))
+        messages = [
+            MessageEnvelope("unknown", "X", "R02", 0.0, {}),
+            _follower_status_msg("R03", pos_east=30.0, planned_path_length_m=800.0),
+            _leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R02": 2}),
+        ]
+
+        inbound.step(InboundInputS(inbox=messages), FormationInboundOutputS(context=cxt))
+
+        self.assertEqual(cxt.cmd.stage, FormStageE.RALLY)
+        self.assertAlmostEqual(cxt.leaderState.pos.east, 100.0)
+        self.assertEqual(cxt.leaderCmd, cxt.leaderState)
+        self.assertEqual((cxt.rallyPlan.t_ref, cxt.rallyPlan.valid), (90.0, True))
+        self.assertEqual(cxt.rallyPlan.loop_counts, {"R01": 0, "R02": 2})
+        self.assertEqual([state.id for state in cxt.followerStates], ["R03"])
+        self.assertAlmostEqual(cxt.followerStates[0].lastUpdate_s, 12.0)
+        snapshot = deepcopy(cxt)
+
+        inbound.step(InboundInputS(), FormationInboundOutputS(context=cxt))
+
+        self.assertEqual(cxt, snapshot)
+
+    def test_plan_is_invalid_when_self_has_no_loop_assignment(self) -> None:
+        """长机计划缺少本机圈数时应保存计划内容，但不得标记为可执行。"""
+
+        cxt = FormContextS()
+        inbound = FormationInbound()
+        inbound.init(FormationInboundInitS("R02"))
+
+        inbound.step(
+            InboundInputS(inbox=[_leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R03": 1})]),
+            FormationInboundOutputS(context=cxt),
+        )
+
+        self.assertFalse(cxt.rallyPlan.valid)
+        self.assertEqual(cxt.rallyPlan.loop_counts, {"R01": 0, "R03": 1})
 
 
 class FollowerStatusTests(unittest.TestCase):

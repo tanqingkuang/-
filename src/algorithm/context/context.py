@@ -29,6 +29,7 @@ class FormContextS:
     wayLine: WayLineS = field(default_factory=WayLineS)  # 当前跟踪航段(航路规划产出)
     nextWayLine: WayLineS = field(default_factory=WayLineS)  # 下一航段(供曲率前馈前瞻跨段采样)
     leaderState: MotionProfS = field(default_factory=MotionProfS)  # 长机状态(僚机由入站解析得到)
+    leaderCmd: MotionProfS = field(default_factory=MotionProfS)  # 长机目标指令(僚机由入站解析得到)
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
@@ -74,6 +75,7 @@ def reset_context(dst: FormContextS) -> None:
     copy_wayline(fresh.wayLine, dst.wayLine)  # 重置当前航段
     copy_wayline(fresh.nextWayLine, dst.nextWayLine)  # 重置下一航段
     copy_motion(fresh.leaderState, dst.leaderState)  # 重置长机状态
+    copy_motion(fresh.leaderCmd, dst.leaderCmd)  # 重置长机目标指令
     copy_motion(fresh.selfCmd, dst.selfCmd)  # 重置本机目标状态
     copy_motion(fresh.selfState, dst.selfState)  # 重置本机实测状态
     # 加速度指令逐分量清零(无 copy 辅助函数，直接赋值)

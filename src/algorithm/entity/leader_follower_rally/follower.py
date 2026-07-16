@@ -5,7 +5,6 @@ from __future__ import annotations
 from src.algorithm.context.context import FormContextS, reset_context
 from src.algorithm.context.leaf_types import (
     FormStageE,
-    MotionProfS,
     PosTrackDiagS,
     RallyPhaseE,
     copy_motion,
@@ -16,8 +15,12 @@ from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
 from src.algorithm.units.algo.pos_track import PosTrackInputS, PosTrackManager, PosTrackOutputS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
-from src.algorithm.units.process.inbound.base import InboundInputS
-from src.algorithm.units.process.inbound.rally_leader_follower import RallyLeaderFollower, RallyLeaderFollowerOutputS
+from src.algorithm.units.process.inbound import (
+    FormationInbound,
+    FormationInboundInitS,
+    FormationInboundOutputS,
+    InboundInputS,
+)
 from src.algorithm.units.process.outbound.base import OutboundOutputS
 from src.algorithm.units.process.outbound.follower_broadcast import FollowerBroadcast, FollowerBroadcastInitS, FollowerBroadcastInputS
 from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
@@ -37,17 +40,15 @@ class RallyFollowerEntity(EntityBase):
         self.cxt = FormContextS()
         self._inbox: list = []
         self._outbox: list = []
-        self._leader_cmd = MotionProfS()
-        self._self_id = cfg.selfInit.id
 
         # 单元实例
-        self._inbound = RallyLeaderFollower()
+        self._inbound = FormationInbound()
         self._tra_plan = TraPlanManager()
         self._pos_track = PosTrackManager()
         self._outbound = FollowerBroadcast()
 
         # 单元初始化
-        self._inbound.init(None)
+        self._inbound.init(FormationInboundInitS(cfg.selfInit.id))
         self._tra_plan.init(cfg)
         self._pos_track.init(cfg)
         self._outbound.init(FollowerBroadcastInitS(
@@ -58,17 +59,13 @@ class RallyFollowerEntity(EntityBase):
 
         # 绑定端口
         self._inbound_u = InboundInputS(inbox=self._inbox)
-        self._inbound_y = RallyLeaderFollowerOutputS(
-            leaderState=self.cxt.leaderState,
-            leaderCmd=self._leader_cmd,
-            cmd=self.cxt.cmd,
-        )
+        self._inbound_y = FormationInboundOutputS(context=self.cxt)
         self._tra_plan_u = TraPlanInputS(cmd=self.cxt.cmd, wayLine=self.cxt.wayLine, selfState=self.cxt.selfState)
         self._tra_plan_y = TraPlanOutputS(wayLine=self.cxt.wayLine)
         self._pos_calc_u = PosCalcInputS(
             selfState=self.cxt.selfState,
             leaderState=self.cxt.leaderState,
-            leaderCmd=self._leader_cmd,
+            leaderCmd=self.cxt.leaderCmd,
             cmd=self.cxt.cmd,
             clock=self.cxt.clock,
             rallyPlan=self.cxt.rallyPlan,
@@ -106,11 +103,6 @@ class RallyFollowerEntity(EntityBase):
 
         # 通信槽位先正常解析长机广播，待命只在后续阶段选择覆盖本机位置解算。
         self._inbound.step(self._inbound_u, self._inbound_y)
-        self.cxt.rally_t_ref = self._inbound_y.t_ref
-        self.cxt.rally_loop_counts.clear()
-        self.cxt.rally_loop_counts.update(self._inbound_y.loopCounts)
-        has_assignment = self._self_id in self._inbound_y.loopCounts
-        self.cxt.rally_t_ref_valid = self._inbound_y.t_ref_valid and has_assignment
         if standby_requested:
             # 本地远控阶段只决定本机 pos_calc 策略，不阻断长机广播解析。
             self.cxt.cmd.stage = FormStageE.STANDBY
@@ -141,7 +133,6 @@ class RallyFollowerEntity(EntityBase):
     def reset(self) -> None:
         """复位 RallyFollowerEntity 的动态状态。"""
         reset_context(self.cxt)
-        copy_motion(MotionProfS(), self._leader_cmd)
         self._inbound.reset()
         self._tra_plan.reset()
         self._pos_calc.reset()

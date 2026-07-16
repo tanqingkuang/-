@@ -20,7 +20,12 @@ from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityOutputS
 from src.algorithm.units.algo.pos_calc import PosCalcInputS, PosCalcManager, PosCalcOutputS
 from src.algorithm.units.algo.pos_track import PosTrackInputS, PosTrackManager, PosTrackOutputS
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
-from src.algorithm.units.process.inbound.follower_status import FollowerStatus, FollowerStatusInitS, FollowerStatusInputS, FollowerStatusOutputS
+from src.algorithm.units.process.inbound import (
+    FormationInbound,
+    FormationInboundInitS,
+    FormationInboundOutputS,
+    InboundInputS,
+)
 from src.algorithm.units.process.outbound.base import OutboundInitS, OutboundOutputS
 from src.algorithm.units.process.outbound.rally_leader_broadcast import RallyLeaderBroadcast, RallyLeaderBroadcastInputS
 from src.algorithm.units.process.tra_plan import TraPlanInputS, TraPlanManager, TraPlanOutputS
@@ -50,14 +55,14 @@ class RallyLeaderEntity(EntityBase):
         loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
 
         # 单元实例
-        self._inbound = FollowerStatus()
+        self._inbound = FormationInbound()
         self._task = Rally()
         self._tra_plan = TraPlanManager()
         self._pos_track = PosTrackManager()
         self._outbound = RallyLeaderBroadcast()
 
         # 单元初始化
-        self._inbound.init(FollowerStatusInitS())
+        self._inbound.init(FormationInboundInitS(cfg.selfInit.id))
         self._task.init(replace(
             rally_cfg,
             leaderId=cfg.selfInit.id,
@@ -69,8 +74,8 @@ class RallyLeaderEntity(EntityBase):
         self._outbound.init(OutboundInitS(cfg.selfInit.id, cfg.commInit.netWork))
 
         # 绑定端口
-        self._inbound_u = FollowerStatusInputS(inbox=self._get_inbox_ref(), clock=self.cxt.clock)
-        self._inbound_y = FollowerStatusOutputS(followerStates=self.cxt.followerStates)
+        self._inbound_u = InboundInputS(inbox=self._get_inbox_ref())
+        self._inbound_y = FormationInboundOutputS(context=self.cxt)
         self._task_u = RallyTaskInputS(
             remote=self._remote,
             cmd=self.cxt.cmd,
