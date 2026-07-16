@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
 
+from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
     FormCommInitS,
@@ -85,6 +86,17 @@ class EntityManagerInitS:
 
     entity: EntityInitS  # 每架飞机不同的运行初始化参数
     process: EntityProcessSpecS  # 当前流程所属实体身份的固定策略规格
+
+
+@dataclass
+class EntityRuntimeS:
+    """实体流程共享运行环境。注意：各流程自行绑定所需对象，Entity 不维护具体端口。"""
+
+    context: FormContextS = field(default_factory=FormContextS)  # 算法共享黑板
+    remote: RemoteCmdS = field(default_factory=RemoteCmdS)  # 外部任务指令
+    inbox: list[MessageEnvelope] = field(default_factory=list)  # 本拍收件箱
+    outbox: list[MessageEnvelope] = field(default_factory=list)  # 本拍发件箱
+    posTrackDiag: PosTrackDiagS = field(default_factory=PosTrackDiagS)  # 控制诊断输出
 
 
 @dataclass

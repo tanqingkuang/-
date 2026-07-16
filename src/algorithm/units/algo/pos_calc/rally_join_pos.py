@@ -30,16 +30,34 @@ import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
+    AlgorithmClockS,
     FormCommInitS,
     FormPosS,
+    FormSnapshotS,
     FormStageE,
+    MotionProfS,
+    PosCalcStatusS,
+    PosCalcStrategyE,
     PosInEarthS,
+    PosTrackCommandE,
+    PosTrackCommandS,
+    RallyPlanS,
     WayPointInputS,
+    copy_motion,
+    copy_snapshot,
 )
 from src.algorithm.units.algo.arc_path import common_tangent
 from src.algorithm.units.algo.formation_math import clamp, horizontal_track_vector_to_enu
-from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.base import (
+    PosCalcBase,
+    PosCalcInitS,
+    PosCalcInputS,
+    PosCalcOutputS,
+    copy_pos_calc_status,
+    reset_pos_calc_status,
+)
 
 if TYPE_CHECKING:
     from src.algorithm.entity.types import VelCmdLimitS
@@ -198,8 +216,45 @@ class RallyJoinPosInitS(PosCalcInitS):
     standby_altitude_m: float | None = None  # 本地待命目标高度；None 表示保持进入待命首帧高度
 
 
+@dataclass
+class RallyJoinPosInputS:
+    """集结位置解算内部输入快照。注意：只包含本策略实际读取的数据。"""
+
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+    cmd: FormSnapshotS = field(default_factory=FormSnapshotS)
+    clock: AlgorithmClockS = field(default_factory=AlgorithmClockS)
+    rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)
+
+
+@dataclass
+class RallyJoinPosOutputS:
+    """集结位置解算内部输出快照。注意：计算成功后统一提交到黑板。"""
+
+    selfCmd: MotionProfS = field(default_factory=MotionProfS)
+    status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
+    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
+
+
+_RallyInputS = PosCalcInputS | RallyJoinPosInputS
+_RallyOutputS = PosCalcOutputS | RallyJoinPosOutputS
+
+
 class RallyJoinPos(PosCalcBase):
     """集结汇合位置解算器，提供锁存的基础航程及其当前剩余值。"""
+
+    def __init__(self) -> None:
+        """建立内部快照。注意：具体算法配置仍由 init 完成。"""
+        # 黑板引用只允许在读取和提交边界使用。
+        self._cxt: FormContextS | None = None
+        # 输入输出对象跨帧复用，运行期不产生端口临时对象。
+        self._u = RallyJoinPosInputS()
+        self._y = RallyJoinPosOutputS()
+        self._empty_cmd = MotionProfS()
+
+    def bind(self, cxt: FormContextS) -> None:
+        """绑定黑板。注意：运行时只通过读取和提交函数访问黑板。"""
+        # Manager只负责转交引用，不了解本策略读取哪些字段。
+        self._cxt = cxt
 
     def init(self, cfg: RallyJoinPosInitS) -> None:
         """按配置初始化 RallyJoinPos。"""
@@ -296,10 +351,31 @@ class RallyJoinPos(PosCalcBase):
         """返回是否已至少一次路过松散点 M_i，供汇合过程诊断。"""
         return self._reached_slot_once
 
-    def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
-        """推进 RallyJoinPos 一个处理周期。"""
+    def step(
+        self,
+        u: _RallyInputS | None = None,
+        y: _RallyOutputS | None = None,
+    ) -> None:
+        """推进集结解算。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
+        if u is None and y is None:
+            # 新实体使用事务式读取、计算、提交路径。
+            self._read_context()
+            # 输出先恢复默认值，避免复杂状态分支漏写时沿用上一拍。
+            self._reset_output()
+            self._calculate(self._u, self._y)
+            self._write_context()
+            return
+        if u is None or y is None:
+            # 显式兼容调用同样必须保持输入输出成对。
+            raise ValueError("RallyJoinPos 输入输出端口必须同时提供")
+        self._calculate(u, y)
+        self._fill_common_output(y)
+
+    def _calculate(self, u: _RallyInputS, y: _RallyOutputS) -> None:
+        """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
         if u.selfState is None or u.cmd is None or y.selfCmd is None:
             raise ValueError("RallyJoinPos ports must be bound")
+        # 从这里到返回只允许访问策略输入输出和内部跨帧状态。
         # 实体会在固定计划生效后每拍重复发送同一圈数；这里只接受首个有效值，
         # 避免飞机已经消耗的圈数被后续重复报文恢复。
         plan = u.rallyPlan
@@ -337,6 +413,45 @@ class RallyJoinPos(PosCalcBase):
         if self._planned_path_length_m >= 0.0:
             self._remaining_path_length_m = self._remaining_base_path_m(u.selfState.pos)
 
+    def _read_context(self) -> None:
+        """从黑板生成本拍输入快照。"""
+        if self._cxt is None:
+            raise ValueError("RallyJoinPos 尚未绑定黑板")
+        # 运动状态和任务指令按值复制，算法无法反向修改黑板输入。
+        copy_motion(self._cxt.selfState, self._u.selfState)
+        copy_snapshot(self._cxt.cmd, self._u.cmd)
+        self._u.clock.now_s = self._cxt.clock.now_s
+        self._u.rallyPlan.t_ref = self._cxt.rallyPlan.t_ref
+        self._u.rallyPlan.valid = self._cxt.rallyPlan.valid
+        # 圈数映射是可变对象，必须清空后复制而不是共享字典引用。
+        self._u.rallyPlan.loop_counts.clear()
+        self._u.rallyPlan.loop_counts.update(self._cxt.rallyPlan.loop_counts)
+
+    def _reset_output(self) -> None:
+        """清理内部输出，避免未覆盖字段沿用上一拍。"""
+        # 默认运动剖面在构造期建立，避免每拍重新分配MotionProfS。
+        copy_motion(self._empty_cmd, self._y.selfCmd)
+        self._fill_common_output(self._y)
+
+    def _fill_common_output(self, y: _RallyOutputS) -> None:
+        """完整填写集结策略公共及专有状态。"""
+        if y.status is not None:
+            # Rally拥有全部集结专有字段，因此每拍完整覆盖对应诊断。
+            reset_pos_calc_status(y.status, PosCalcStrategyE.RALLY_JOIN)
+            self._write_rally_status(y.status)
+        if y.posTrackCommand is not None:
+            y.posTrackCommand.mode = PosTrackCommandE.SPEED_TRACK
+
+    def _write_context(self) -> None:
+        """把完整计算结果原地提交到黑板。"""
+        assert self._cxt is not None
+        # 仅当本拍所有几何和时序计算成功后才提交结果。
+        self._fill_common_output(self._y)
+        # 写回采用原地复制，不能替换PosTrack和Outbound已绑定的对象。
+        copy_motion(self._y.selfCmd, self._cxt.selfCmd)
+        copy_pos_calc_status(self._y.status, self._cxt.posCalcStatus)
+        self._cxt.posTrackCommand.mode = self._y.posTrackCommand.mode
+
     def reset(self) -> None:
         """复位 RallyJoinPos 的动态状态。注意：盘旋圆几何（圆心/切出点）由 init 时的任务航向定死，reset 不清除。"""
         self._state = RALLY_STATE_FLYING
@@ -362,12 +477,25 @@ class RallyJoinPos(PosCalcBase):
         self._entry_point = None
         self._theta_entry = 0.0
         self._reached_slot_once = False
+        if self._cxt is not None:
+            # NONE边沿由Manager触发reset，专有诊断同步回到初始FLYING语义。
+            self._write_rally_status(self._cxt.posCalcStatus)
+
+    def _write_rally_status(self, status: PosCalcStatusS) -> None:
+        """写入集结专有诊断。注意：不修改当前活动策略。"""
+        # active_strategy由当前实际运行的子类写入，reset不能抢占该字段。
+        status.rally_state = self._state
+        status.planned_path_length_m = self._planned_path_length_m
+        status.remaining_path_length_m = self._remaining_path_length_m
+        status.remaining_loops = self._remaining_loops
+        status.reached_slot_once = self._reached_slot_once
+        status.join_exited = self._state == RALLY_STATE_EXITED
 
     # ------------------------------------------------------------------ #
     # 内部阶段实现
     # ------------------------------------------------------------------ #
 
-    def _enter_standby(self, u: PosCalcInputS) -> None:
+    def _enter_standby(self, u: _RallyInputS) -> None:
         """进入本地待命盘旋。注意：待命圆按进入待命这一拍的本机位置和航向反推。"""
         assert u.selfState is not None
         heading = u.selfState.v.vPsi
@@ -399,7 +527,7 @@ class RallyJoinPos(PosCalcBase):
         self._reached_slot_once = False
         self._state = RALLY_STATE_STANDBY
 
-    def _leave_standby(self, u: PosCalcInputS) -> None:
+    def _leave_standby(self, u: _RallyInputS) -> None:
         """离开本地待命并按本拍位置一次性规划两圆转移路径。"""
         assert self._standby_center_e is not None and self._standby_center_n is not None
         self._state = RALLY_STATE_FLYING
@@ -474,7 +602,7 @@ class RallyJoinPos(PosCalcBase):
         self._tangent_length_m = math.hypot(entry_e - local_e, entry_n - local_n)
         return _TRANSIT_ARC_TO_TANGENT
 
-    def _step_standby(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
+    def _step_standby(self, u: _RallyInputS, y: _RallyOutputS) -> None:
         """在本地待命阶段输出沿本机待命圆的 CCW 盘旋指令。"""
         assert u.selfState is not None
         assert self._standby_center_e is not None and self._standby_center_n is not None
@@ -490,8 +618,8 @@ class RallyJoinPos(PosCalcBase):
 
     def _write_ccw_circle_cmd(
         self,
-        u: PosCalcInputS,
-        y: PosCalcOutputS,
+        u: _RallyInputS,
+        y: _RallyOutputS,
         *,
         center_e: float,
         center_n: float,
@@ -517,7 +645,7 @@ class RallyJoinPos(PosCalcBase):
         y.selfCmd.v.dVPsi = speed / self._loiter_radius
         y.selfCmd.v.vTheta = 0.0
 
-    def _step_flying(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
+    def _step_flying(self, u: _RallyInputS, y: _RallyOutputS) -> None:
         """在直飞阶段生成指向盘旋圆切入点 T 的指令，到达 T 附近后转入圆弧飞行。"""
         if self._transit_phase == _TRANSIT_ARC_TO_TANGENT:
             self._step_arc_to_tangent(u, y)
@@ -566,7 +694,7 @@ class RallyJoinPos(PosCalcBase):
             # 也避免刚到 T 这一拍还输出已经过期的直飞指令。
             self._step_loitering(u, y)
 
-    def _step_arc_to_tangent(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
+    def _step_arc_to_tangent(self, u: _RallyInputS, y: _RallyOutputS) -> None:
         """沿待命圆接近锁存切出点，进入角度窗口后切换到公切线直飞。"""
         assert self._standby_center_e is not None and self._standby_center_n is not None
         theta = math.atan2(
@@ -647,7 +775,7 @@ class RallyJoinPos(PosCalcBase):
             return self._rally_arc_to_slot_m(theta)
         return 0.0
 
-    def _coordinated_speed(self, u: PosCalcInputS) -> float:
+    def _coordinated_speed(self, u: _RallyInputS) -> float:
         """按完整剩余航程和固定计划剩余时间计算水平协调速度。"""
         if not self._plan_applied:
             return self._approach_speed
@@ -670,7 +798,7 @@ class RallyJoinPos(PosCalcBase):
             return self._speed_max
         return clamp(remaining_m / remaining_s, self._speed_min, self._speed_max)
 
-    def _step_loitering(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
+    def _step_loitering(self, u: _RallyInputS, y: _RallyOutputS) -> None:
         """在盘旋阶段更新切出判定并生成圆周飞行指令。"""
         pos_e = u.selfState.pos.east
         pos_n = u.selfState.pos.north
@@ -738,11 +866,11 @@ class RallyJoinPos(PosCalcBase):
             target_h=self._slot.h,
         )
 
-    def _step_exited(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
+    def _step_exited(self, u: _RallyInputS, y: _RallyOutputS) -> None:
         """在已切出阶段持续输出沿任务航向飞行的过渡指令。"""
         self._set_exit_cmd(u, y)
 
-    def _set_exit_cmd(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
+    def _set_exit_cmd(self, u: _RallyInputS, y: _RallyOutputS) -> None:
         """写入从松散点沿任务航向直飞的目标位置与速度。"""
         vd = self._mission_speed
         heading = self._mission_heading

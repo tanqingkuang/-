@@ -22,7 +22,7 @@ from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackA
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, VelCmdLimitS
+    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityRuntimeS, VelCmdLimitS
 
 
 _LATERAL_ROLL_MAX_RAD = math.radians(40.0)  # 执行层滚转角限幅
@@ -162,6 +162,20 @@ class PosTrackManager:
         """初始化空管理器。注意：必须先调用 init。"""
         self._registry: dict[PosTrackStrategyE, PosTrackBase] = {}
 
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：位置跟踪流程自行维护控制端口。"""
+        cxt = runtime.context
+        self._bound_input = PosTrackInputS(
+            command=cxt.posTrackCommand,
+            selfCmd=cxt.selfCmd,
+            selfState=cxt.selfState,
+        )
+        self._bound_output = PosTrackOutputS(
+            accCmd=cxt.selfAccCmd,
+            diag=runtime.posTrackDiag,
+            effectiveCmd=cxt.effectiveCmd,
+        )
+
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证创建全部控制产品。注意：不得隐式补充策略。"""
         # 实体配置明确声明能力集合，Manager 不按角色猜测缺失产品。
@@ -176,8 +190,17 @@ class PosTrackManager:
         # 每个 PID 产品只构造一次，积分器状态随产品对象跨帧保留。
         self._registry = {strategy: _BUILDERS[strategy](cfg.entity) for strategy in strategies}
 
-    def step(self, u: PosTrackInputS, y: PosTrackOutputS) -> None:
+    def step(
+        self,
+        u: PosTrackInputS | None = None,
+        y: PosTrackOutputS | None = None,
+    ) -> None:
         """按控制命令执行缓存产品。注意：命令与策略固定一一对应。"""
+        if u is None and y is None:
+            u = self._bound_input
+            y = self._bound_output
+        elif u is None or y is None:
+            raise ValueError("PosTrackManager 输入输出端口必须同时提供")
         # command 来自 PosCalc 的统一输出，不允许 Entity 二次改写。
         # 未配置产品属于装配错误，不能临时回退到另一控制器。
         if u.command is None:

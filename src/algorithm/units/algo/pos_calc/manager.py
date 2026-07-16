@@ -5,13 +5,11 @@ from __future__ import annotations
 import math
 from typing import TYPE_CHECKING
 
+from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     FormStageE,
     PosInEarthS,
-    PosTrackCommandE,
     RallyPhaseE,
-    copy_position,
-    zero_velocity,
 )
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
@@ -20,8 +18,8 @@ from src.algorithm.units.algo.pos_calc.base import (
     PosCalcOutputS,
     PosCalcStrategyE,
 )
+from src.algorithm.units.algo.pos_calc.noop import NoopPosCalc
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
-    RALLY_STATE_EXITED,
     RallyJoinPos,
     RallyJoinPosInitS,
     loiter_speed_bounds,
@@ -34,7 +32,7 @@ from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGe
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, VelCmdLimitS
+    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityRuntimeS, VelCmdLimitS
 
 
 _LEADER_L1_DISTANCE_M = 0.0  # 长机航线目标不使用额外 L1 前视距离
@@ -42,42 +40,23 @@ _LEADER_FF_LEAD_TIME_S = 0.5  # 长机速度前馈时间
 _SLOT_TD_VMAX_LATERAL_DEFAULT = 6.0  # 槽位横侧向默认速度权限
 _SLOT_TD_VMAX_FORWARD_FALLBACK = 5.0  # 前向权限无法推导时的兜底值
 _SLOT_TD_VMAX_VERTICAL_FALLBACK = 3.0  # 垂向权限无法推导时的兜底值
-_POS_TRACK_COMMAND_BY_STRATEGY = {
-    PosCalcStrategyE.NOOP: PosTrackCommandE.NOOP,
-    PosCalcStrategyE.RALLY_JOIN: PosTrackCommandE.SPEED_TRACK,
-    PosCalcStrategyE.ROUTE_INTERP: PosTrackCommandE.SPEED_TRACK,
-    PosCalcStrategyE.SLOT_GEOMETRY: PosTrackCommandE.POSITION_TRACK,
-}
-
-
-class _NoopPosCalc(PosCalcBase):
-    """NONE 阶段位置解算空策略。注意：完整写出当前位置和零速度。"""
-
-    def init(self, cfg: PosCalcInitS) -> None:
-        """初始化空策略。注意：空策略没有构造参数和动态资源。"""
-        return None
-
-    def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
-        """输出当前位置和零速度。注意：输入输出端口必须完成绑定。"""
-        if u.selfState is None or y.selfCmd is None:
-            raise ValueError("NoopPosCalc ports must be bound")
-        copy_position(u.selfState.pos, y.selfCmd.pos)
-        zero_velocity(y.selfCmd.v)
-
-    def reset(self) -> None:
-        """复位空策略。注意：空策略没有运行期状态。"""
-        return None
 
 
 class PosCalcManager:
     """创建、缓存并路由位置解算策略。注意：Entity 不应访问具体策略对象。"""
 
     def __init__(self) -> None:
-        """初始化空管理器。注意：产品只在 init 时创建，端口由每拍 step 显式传入。"""
+        """初始化空管理器。注意：产品只在 init 时创建，运行期不重建。"""
         self._default_strategy = PosCalcStrategyE.NOOP  # 非特殊阶段使用的角色默认产品
         self._routes: tuple[PosCalcStrategyE, ...] = ()  # 该实体额外启用的阶段能力
         self._registry: dict[PosCalcStrategyE, PosCalcBase] = {}  # 已初始化产品缓存
         self._active_strategy: PosCalcStrategyE | None = None  # 上一拍执行产品，用于边沿复位
+        self._cxt: FormContextS | None = None
+
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：Manager只转交黑板，不创建统一输入输出端口。"""
+        # Manager只保存选择策略所需的黑板引用，具体字段访问留给子策略。
+        self._cxt = runtime.context
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证建造并缓存策略。注意：运行期不得再次调用。"""
@@ -107,62 +86,52 @@ class PosCalcManager:
         self._registry = {
             strategy: self._create_strategy(strategy, entity_cfg) for strategy in required
         }
+        if self._cxt is not None:
+            # 每个产品自行建立专属输入输出快照，Manager不参与端口构造。
+            for strategy in self._registry.values():
+                strategy.bind(self._cxt)
         self._active_strategy = None
 
-    def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
-        """按当前 cmd 选择缓存策略并推进一拍。注意：本方法不创建或重新初始化策略。"""
-        if u.cmd is None:
+    def step(
+        self,
+        u: PosCalcInputS | None = None,
+        y: PosCalcOutputS | None = None,
+    ) -> None:
+        """选择并调用缓存策略。注意：所有黑板读写均由具体子类完成。"""
+        if u is None and y is None:
+            # 新实体固定流程走无参入口，命令直接从共享黑板读取。
+            if self._cxt is None:
+                raise ValueError("PosCalcManager 尚未绑定黑板")
+            cmd = self._cxt.cmd
+        elif u is None or y is None:
+            raise ValueError("PosCalcManager 输入输出端口必须同时提供")
+        elif u.cmd is None:
             raise ValueError("PosCalcManager cmd port must be bound")
+        else:
+            # 显式端口仅服务尚未迁移的Hold实体和低层兼容测试。
+            cmd = u.cmd
         # cmd 是唯一运行期路由依据，Entity 不参与具体产品判断。
-        strategy_type = self._select_strategy(u.cmd.stage, u.cmd.step)
+        strategy_type = self._select_strategy(cmd.stage, cmd.step)
         # 进入停控阶段时只复位一次集结产品，避免每拍清空刚生成的停控输出。
         if strategy_type == PosCalcStrategyE.NOOP and self._active_strategy != PosCalcStrategyE.NOOP:
             rally_join = self._registry.get(PosCalcStrategyE.RALLY_JOIN)
             if rally_join is not None:
                 rally_join.reset()
-        # 所有产品共享同一套端口，切换产品不改变黑板对象引用。
-        self._registry[strategy_type].step(u, y)
-        self._write_pos_track_command(strategy_type, y)
+        strategy = self._registry[strategy_type]
+        if u is None and y is None:
+            # 子策略完成快照读取、内部计算和黑板提交的完整事务。
+            strategy.step()
+        else:
+            # 旧入口仍由同一个策略实例执行，不建立第二套算法状态。
+            strategy.step(u, y)
         self._active_strategy = strategy_type
-        self._write_status(y)
 
     def reset(self) -> None:
-        """复位全部缓存策略。注意：保留初始化配置和统一端口绑定。"""
+        """复位全部缓存策略。注意：保留初始化配置、实例和黑板绑定。"""
         # reset 清动态状态但保留产品实例和初始化参数。
         for strategy in self._registry.values():
             strategy.reset()
         self._active_strategy = None
-
-    def _write_status(self, y: PosCalcOutputS) -> None:
-        """原地更新统一状态输出。注意：保持黑板绑定对象的引用不变。"""
-        status = y.status
-        if status is None:
-            return
-        status.active_strategy = self._active_strategy  # 先发布通用策略诊断
-        rally_join = self._registry.get(PosCalcStrategyE.RALLY_JOIN)
-        # 未装配集结产品时显式写默认值，不能遗留上一轮实体状态。
-        if not isinstance(rally_join, RallyJoinPos):
-            status.rally_state = ""
-            status.planned_path_length_m = -1.0
-            status.remaining_path_length_m = -1.0
-            status.remaining_loops = 0
-            status.reached_slot_once = False
-            status.join_exited = False
-            return
-        # 集结细节只在 Manager 内部读取具体产品，再统一投影到黑板状态。
-        status.rally_state = rally_join.state
-        status.planned_path_length_m = rally_join.planned_path_length_m
-        status.remaining_path_length_m = rally_join.remaining_path_length_m
-        status.remaining_loops = rally_join.remaining_loops
-        status.reached_slot_once = rally_join.reached_slot_once
-        status.join_exited = rally_join.state == RALLY_STATE_EXITED
-
-    @staticmethod
-    def _write_pos_track_command(strategy_type: PosCalcStrategyE, y: PosCalcOutputS) -> None:
-        """发布与本拍位置解算产品对应的控制命令。注意：不泄漏具体控制器类型。"""
-        if y.posTrackCommand is None:
-            return
-        y.posTrackCommand.mode = _POS_TRACK_COMMAND_BY_STRATEGY[strategy_type]
 
     def _select_strategy(self, stage: FormStageE, step: int) -> PosCalcStrategyE:
         """由任务指令选择策略枚举。注意：集结子状态路由不向 Entity 配置层暴露。"""
@@ -179,7 +148,7 @@ class PosCalcManager:
     def _create_strategy(self, strategy_type: PosCalcStrategyE, cfg: EntityInitS) -> PosCalcBase:
         """创建并初始化单个产品。注意：只允许由 init 调用一次。"""
         if strategy_type == PosCalcStrategyE.NOOP:  # 系统停控产品无需业务配置
-            strategy = _NoopPosCalc()
+            strategy = NoopPosCalc()
             strategy.init(PosCalcInitS())
             return strategy
         if strategy_type == PosCalcStrategyE.ROUTE_INTERP:  # 长机任务航线解算产品

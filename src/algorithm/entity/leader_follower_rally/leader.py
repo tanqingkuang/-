@@ -90,7 +90,7 @@ class RallyLeaderEntity(EntityBase):
             self.cxt.followerStates.clear()
 
         # 集结完成判断（仅首帧输出 FormationAnalysisS）
-        if self._task_y.rallyCompleted and not self._rally_completed:
+        if self._task.rally_completed and not self._rally_completed:
             self._rally_completed = True
             y.formationAnalysis = _compute_formation_analysis(
                 self.cxt.followerStates,

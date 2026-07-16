@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import copy_follower_state, copy_motion, copy_snapshot
@@ -12,6 +13,9 @@ from src.algorithm.units.process.inbound.follower_status import _parse_follower_
 from src.algorithm.units.process.inbound.rally_leader_follower import (
     _parse_leader_broadcast,
 )
+
+if TYPE_CHECKING:
+    from src.algorithm.entity.types import EntityRuntimeS
 
 
 @dataclass
@@ -31,6 +35,11 @@ class FormationInboundOutputS(InboundOutputS):
 class FormationInbound(InboundBase):
     """按 topic 解析所有编队报文。注意：不感知实体角色和任务阶段。"""
 
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：入站流程自行维护协议端口。"""
+        self._bound_input = InboundInputS(inbox=runtime.inbox)
+        self._bound_output = FormationInboundOutputS(context=runtime.context)
+
     def init(self, cfg: FormationInboundInitS) -> None:
         """记录本机身份。注意：所有飞机使用同一套消息路由。"""
         # selfId 只用于验证公共计划是否包含本机，不参与消息类型选择。
@@ -39,8 +48,17 @@ class FormationInbound(InboundBase):
             raise ValueError("FormationInbound selfId must be non-empty")
         self._self_id = cfg.selfId
 
-    def step(self, u: InboundInputS, y: FormationInboundOutputS) -> None:
+    def step(
+        self,
+        u: InboundInputS | None = None,
+        y: FormationInboundOutputS | None = None,
+    ) -> None:
         """处理本帧邮箱。注意：空邮箱不清空黑板，未知 topic 直接忽略。"""
+        if u is None and y is None:
+            u = self._bound_input
+            y = self._bound_output
+        elif u is None or y is None:
+            raise ValueError("FormationInbound 输入输出端口必须同时提供")
         # 输出端口长期绑定实体黑板，禁止替换 context 或内部列表引用。
         # 空邮箱表示没有新数据，不能清除上一拍仍有效的长机状态和公共计划。
         cxt = y.context

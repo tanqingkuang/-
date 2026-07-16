@@ -5,14 +5,27 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     FormPosS,
+    FormSnapshotS,
     FormStageE,
     MotionProfS,
+    PosCalcStatusS,
+    PosCalcStrategyE,
+    PosTrackCommandE,
+    PosTrackCommandS,
     RallyPhaseE,
+    copy_motion,
+    copy_snapshot,
     copy_velocity,
 )
-from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.base import (
+    PosCalcBase,
+    PosCalcInitS,
+    PosCalcInputS,
+    PosCalcOutputS,
+)
 from src.algorithm.units.algo.td_han import TdHan, TdHanInitS
 from src.common.coordinates import (
     FurBasis,
@@ -52,6 +65,25 @@ class SlotGeometryInitS(PosCalcInitS):
     catchupAltitudeM: float | None = None  # 集结 CATCHUP 阶段分层高度；普通保持场景不配置
 
 
+@dataclass
+class SlotGeometryInputS:
+    """槽位解算内部输入快照。注意：只包含本策略实际读取的数据。"""
+
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+    leaderState: MotionProfS = field(default_factory=MotionProfS)
+    leaderCmd: MotionProfS = field(default_factory=MotionProfS)
+    cmd: FormSnapshotS = field(default_factory=FormSnapshotS)
+
+
+@dataclass
+class SlotGeometryOutputS:
+    """槽位解算内部输出快照。注意：计算成功后统一提交到黑板。"""
+
+    selfCmd: MotionProfS = field(default_factory=MotionProfS)
+    status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
+    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
+
+
 class SlotGeometry(PosCalcBase):
     """僚机槽位目标计算器。注意：槽位使用长机三维 FUR 航迹系，前向待飞距闭环交给 PidCompose。"""
 
@@ -68,6 +100,15 @@ class SlotGeometry(PosCalcBase):
         self._td_z = TdHan()
         self._seeded = False
         self._catchup_altitude_m: float | None = None
+        self._cxt: FormContextS | None = None
+        self._u = SlotGeometryInputS()
+        self._y = SlotGeometryOutputS()
+        self._empty_cmd = MotionProfS()
+
+    def bind(self, cxt: FormContextS) -> None:
+        """绑定黑板。注意：运行时只通过读取和提交函数访问黑板。"""
+        # 算法主体只感知专属_u/_y，完整黑板仅供边界同步使用。
+        self._cxt = cxt
 
     def init(self, cfg: SlotGeometryInitS) -> None:
         """按配置初始化 SlotGeometry。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -84,10 +125,34 @@ class SlotGeometry(PosCalcBase):
             self._td_z.init(TdHanInitS(r=cfg.rLateral, h=h, vMax=cfg.vMaxLateral))
         self._seeded = False
 
-    def step(self, u: PosCalcInputS, y: PosCalcOutputS) -> None:
-        """推进 SlotGeometry 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
+    def step(
+        self,
+        u: PosCalcInputS | SlotGeometryInputS | None = None,
+        y: PosCalcOutputS | SlotGeometryOutputS | None = None,
+    ) -> None:
+        """推进槽位解算。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
+        if u is None and y is None:
+            # 新架构每拍先冻结输入，再运行有状态TD，最后统一提交。
+            self._read_context()
+            # 输出运动剖面复用同一对象，首拍前清零避免遗留字段参与控制。
+            copy_motion(self._empty_cmd, self._y.selfCmd)
+            self._calculate(self._u, self._y)
+            self._write_context()
+            return
+        if u is None or y is None:
+            # 旧显式入口不允许只传一侧端口。
+            raise ValueError("SlotGeometry 输入输出端口必须同时提供")
+        self._calculate(u, y)
+
+    def _calculate(
+        self,
+        u: PosCalcInputS | SlotGeometryInputS,
+        y: PosCalcOutputS | SlotGeometryOutputS,
+    ) -> None:
+        """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
         if u.leaderState is None or u.cmd is None or y.selfCmd is None:
             raise ValueError("SlotGeometry ports must be bound")
+        # 后续几何和TD计算只读取传入快照，不接触黑板。
         # cmd.pattern 是纯整型队形索引，直接作为 formPos 行号（0 起）。
         row_index = int(u.cmd.pattern)
         if row_index < 0 or row_index >= len(self._form_pos):
@@ -162,7 +227,35 @@ class SlotGeometry(PosCalcBase):
             else 0.0
         )
         y.selfCmd.v.vTheta = math.atan2(y.selfCmd.v.vUp, y.selfCmd.v.vd)
+        self._write_common_output(y)
         return None
+
+    def _read_context(self) -> None:
+        """从黑板生成本拍输入快照。"""
+        if self._cxt is None:
+            raise ValueError("SlotGeometry 尚未绑定黑板")
+        # 本机、长机和任务指令必须来自同一处理拍，避免混用跨拍引用。
+        copy_motion(self._cxt.selfState, self._u.selfState)
+        copy_motion(self._cxt.leaderState, self._u.leaderState)
+        copy_motion(self._cxt.leaderCmd, self._u.leaderCmd)
+        copy_snapshot(self._cxt.cmd, self._u.cmd)
+
+    def _write_common_output(self, y: PosCalcOutputS | SlotGeometryOutputS) -> None:
+        """完整填写本策略公共输出。"""
+        if y.status is not None:
+            # 槽位策略只拥有活动策略字段，不清除已完成的集结诊断。
+            y.status.active_strategy = PosCalcStrategyE.SLOT_GEOMETRY
+        if y.posTrackCommand is not None:
+            y.posTrackCommand.mode = PosTrackCommandE.POSITION_TRACK
+
+    def _write_context(self) -> None:
+        """把完整计算结果原地提交到黑板。"""
+        assert self._cxt is not None
+        # 计算成功后一次性提交目标运动剖面和控制语义。
+        copy_motion(self._y.selfCmd, self._cxt.selfCmd)
+        # 黑板对象原地更新，保证PosTrack持有的引用持续有效。
+        self._cxt.posCalcStatus.active_strategy = self._y.status.active_strategy
+        self._cxt.posTrackCommand.mode = self._y.posTrackCommand.mode
 
     def reset(self) -> None:
         """复位 SlotGeometry 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -174,7 +267,10 @@ class SlotGeometry(PosCalcBase):
         return None
 
     def _smooth_slot(
-        self, slot: FormPosS, basis: FurBasis | None, u: PosCalcInputS
+        self,
+        slot: FormPosS,
+        basis: FurBasis | None,
+        u: PosCalcInputS | SlotGeometryInputS,
     ) -> tuple[float, float, float, float, float, float]:
         """对相对槽位 (x前向, y上, z右) 三路做 Han TD 软化，返回 (sx, sy, sz, vfx, vfy, vfz)。
 
@@ -195,7 +291,11 @@ class SlotGeometry(PosCalcBase):
             return sx, sy, sz, 0.0, 0.0, 0.0  # 仅位置软化；速度前馈默认关(见 slotVelFf 说明)
         return sx, sy, sz, vfx * 0.2, vfy * 0.2, vfz * 0.2
 
-    def _seed_from_current(self, basis: FurBasis, u: PosCalcInputS) -> None:
+    def _seed_from_current(
+        self,
+        basis: FurBasis,
+        u: PosCalcInputS | SlotGeometryInputS,
+    ) -> None:
         """把本机当前位置换算成长机三维 FUR 相对偏移，作为三路 TD 初值，避免起步大阶跃。"""
         assert u.selfState is not None and u.leaderState is not None
         rel_e = u.selfState.pos.east - u.leaderState.pos.east

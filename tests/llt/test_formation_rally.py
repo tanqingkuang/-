@@ -53,8 +53,14 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_STANDBY,
     RallyJoinPos,
     RallyJoinPosInitS,
+    RallyJoinPosInputS,
 )
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
+from src.algorithm.units.algo.pos_calc.route_interp import RouteInterpInputS
+from src.algorithm.units.algo.pos_calc.slot_geometry import (
+    SlotGeometry,
+    SlotGeometryInitS,
+    SlotGeometryInputS,
+)
 from src.algorithm.units.algo.pos_track import PosTrackManager
 from src.algorithm.units.process.formation_task.rally import Rally, RallyTaskInitS, RallyTaskInputS, RallyTaskOutputS
 from src.algorithm.units.process.inbound import (
@@ -3482,8 +3488,23 @@ class RallyEntityTests(unittest.TestCase):
         ]
         self.assertEqual([type(item.process) for item in leader._process_steps], expected_types)
         self.assertEqual([type(item.process) for item in follower._process_steps], expected_types)
+        for entity in (leader, follower):
+            for process_name in ("inbound", "task", "tra_plan", "pos_calc", "pos_track", "outbound"):
+                self.assertFalse(hasattr(entity, f"_{process_name}_u"))
+                self.assertFalse(hasattr(entity, f"_{process_name}_y"))
         self.assertFalse(leader._task._passive)
         self.assertTrue(follower._task._passive)
+        leader_route = leader._pos_calc._registry[PosCalcStrategyE.ROUTE_INTERP]
+        leader_rally = leader._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
+        follower_slot = follower._pos_calc._registry[PosCalcStrategyE.SLOT_GEOMETRY]
+        follower_rally = follower._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
+        self.assertIsInstance(leader_route._u, RouteInterpInputS)
+        self.assertIsInstance(leader_rally._u, RallyJoinPosInputS)
+        self.assertIsInstance(follower_slot._u, SlotGeometryInputS)
+        self.assertIsInstance(follower_rally._u, RallyJoinPosInputS)
+        self.assertIsNot(leader_route._u.selfState, leader.cxt.selfState)
+        self.assertIsNot(leader_rally._u.selfState, leader.cxt.selfState)
+        self.assertIsNot(follower_slot._u.selfState, follower.cxt.selfState)
 
     def test_follower_reset_does_not_restore_plan_from_empty_inbox(self) -> None:
         """有效计划后复位僚机实体，下一拍空 inbox 不得回灌旧 T_ref 和圈数。"""
@@ -3574,9 +3595,9 @@ class RallyEntityTests(unittest.TestCase):
         plan_payload = plan_message[0].payload
         self.assertTrue(plan_payload["t_ref_valid"])
         self.assertEqual(plan_payload["loop_counts"], {"A01": 3, "A02": 1, "A03": 0, "A04": 0, "A05": 0})
-        self.assertIs(leader._task_y.rallyPlan, leader.cxt.rallyPlan)
-        self.assertIs(leader._outbound_u.context, leader.cxt)
-        self.assertIs(leader._task_u.clock, leader.cxt.clock)
+        self.assertIs(leader._task._bound_output.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._outbound._bound_input.context, leader.cxt)
+        self.assertIs(leader._task._bound_input.clock, leader.cxt.clock)
         locked_t_ref = plan_payload["t_ref"]
         locked_loop_counts = dict(plan_payload["loop_counts"])
 
@@ -3827,11 +3848,11 @@ class RallyEntityTests(unittest.TestCase):
         tra_plan_calls: list[FormStageE] = []
         original_step = follower._tra_plan.step
 
-        def record_tra_plan_step(u: object, y: object) -> None:
+        def record_tra_plan_step() -> None:
             """记录待命阶段是否进入轨迹规划槽位。"""
 
             tra_plan_calls.append(follower.cxt.cmd.stage)
-            original_step(u, y)
+            original_step()
 
         follower._tra_plan.step = record_tra_plan_step  # type: ignore[method-assign]
 
@@ -4149,12 +4170,12 @@ class RallyEntityTests(unittest.TestCase):
         task_calls: list[FormStageE] = []
         original_step = leader._task.step
 
-        def record_task_step(u: object, y: object) -> None:
+        def record_task_step() -> None:
             """记录待命阶段是否进入任务编排槽位。"""
 
-            assert getattr(u, "remote").stage == FormStageE.STANDBY
-            task_calls.append(getattr(u, "remote").stage)
-            original_step(u, y)
+            assert leader._remote.stage == FormStageE.STANDBY
+            task_calls.append(leader._remote.stage)
+            original_step()
 
         leader._task.step = record_task_step  # type: ignore[method-assign]
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import CommDirE, FormStageE, dist3d
@@ -21,6 +21,9 @@ from src.algorithm.units.process.outbound.base import (
     OutboundOutputS,
 )
 from src.common.envelope import MessageEnvelope
+
+if TYPE_CHECKING:
+    from src.algorithm.entity.types import EntityRuntimeS
 
 
 @dataclass
@@ -48,6 +51,11 @@ class FormationOutbound(OutboundBase):
         self._net_work = []
         self._writer: Callable[[FormContextS, OutboundOutputS], None] | None = None
 
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：出站流程自行维护组包端口。"""
+        self._bound_input = FormationOutboundInputS(context=runtime.context)
+        self._bound_output = OutboundOutputS(outbox=runtime.outbox)
+
     def init(self, cfg: FormationOutboundInitS) -> None:
         """锁定出站消息类型和寻址配置。注意：不在 step 中重新选择消息类型。"""
         # 消息类型属于实体装配结果，而不是运行期任务状态。
@@ -68,8 +76,17 @@ class FormationOutbound(OutboundBase):
             OutboundMessageE.FOLLOWER_STATUS: self._write_follower_status,
         }[cfg.messageType]
 
-    def step(self, u: FormationOutboundInputS, y: OutboundOutputS) -> None:
+    def step(
+        self,
+        u: FormationOutboundInputS | None = None,
+        y: OutboundOutputS | None = None,
+    ) -> None:
         """按固定消息类型生成本帧报文。注意：每帧先清空 outbox，避免重复发送。"""
+        if u is None and y is None:
+            u = self._bound_input
+            y = self._bound_output
+        elif u is None or y is None:
+            raise ValueError("FormationOutbound 输入输出端口必须同时提供")
         # context 是唯一业务输入，继承的旧端口字段仅服务兼容类。
         # 每帧覆盖 outbox，通信层拿到的始终是本拍完整快照。
         # 组包失败时也不能残留上一拍可发送消息。

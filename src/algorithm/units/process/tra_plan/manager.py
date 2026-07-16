@@ -20,7 +20,7 @@ from src.algorithm.units.process.tra_plan.leader_route import (
 from src.algorithm.units.process.tra_plan.noop import Noop
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS
+    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityRuntimeS
 
 
 class TraPlanManager:
@@ -30,6 +30,19 @@ class TraPlanManager:
         """初始化空管理器。注意：必须先调用 init 才能执行 step。"""
         self._default_strategy: TraPlanStrategyE | None = None
         self._registry: dict[TraPlanStrategyE, TraPlanBase] = {}
+
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：轨迹规划流程自行维护航段端口。"""
+        cxt = runtime.context
+        self._bound_input = TraPlanInputS(
+            cmd=cxt.cmd,
+            wayLine=cxt.wayLine,
+            selfState=cxt.selfState,
+        )
+        self._bound_output = TraPlanOutputS(
+            wayLine=cxt.wayLine,
+            nextWayLine=cxt.nextWayLine,
+        )
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证创建全部已声明产品。注意：不得隐式补充策略。"""
@@ -59,8 +72,17 @@ class TraPlanManager:
             strategy: self._create_strategy(strategy, cfg.entity) for strategy in strategies
         }
 
-    def step(self, u: TraPlanInputS, y: TraPlanOutputS) -> None:
+    def step(
+        self,
+        u: TraPlanInputS | None = None,
+        y: TraPlanOutputS | None = None,
+    ) -> None:
         """按任务指令选择缓存产品并推进一拍。注意：本方法不创建产品。"""
+        if u is None and y is None:
+            u = self._bound_input
+            y = self._bound_output
+        elif u is None or y is None:
+            raise ValueError("TraPlanManager 输入输出端口必须同时提供")
         # cmd 是任务单元发布的统一路由指令，Entity 不参与产品选择。
         # 查表失败说明配置能力与运行期指令不一致，应立即暴露而非降级。
         if u.cmd is None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from fractions import Fraction
+from typing import TYPE_CHECKING
 
 from src.algorithm.context.leaf_types import (
     AlgorithmClockS,
@@ -23,6 +24,9 @@ from src.algorithm.units.process.formation_task.base import (
     FormationTaskInputS,
     FormationTaskOutputS,
 )
+
+if TYPE_CHECKING:
+    from src.algorithm.entity.types import EntityRuntimeS
 
 
 @dataclass
@@ -88,6 +92,23 @@ class RallyTaskOutputS(FormationTaskOutputS):
 class Rally(FormationTaskBase):
     """集结任务编排器：管理 JOINING→CATCHUP→LOOSE→COMPRESS→HOLD 单向状态机。"""
 
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定实体运行环境。注意：任务流程自行维护黑板端口。"""
+        cxt = runtime.context
+        self._bound_input = RallyTaskInputS(
+            remote=runtime.remote,
+            cmd=cxt.cmd,
+            followerStates=cxt.followerStates,
+            clock=cxt.clock,
+            posCalcStatus=cxt.posCalcStatus,
+        )
+        self._bound_output = RallyTaskOutputS(cmd=cxt.cmd, rallyPlan=cxt.rallyPlan)
+
+    @property
+    def rally_completed(self) -> bool:
+        """返回本拍正常完成事件。注意：仅在 COMPRESS 切入 HOLD 的一拍有效。"""
+        return self._bound_output.rallyCompleted
+
     def init(self, cfg: RallyTaskInitS) -> None:
         """按配置初始化 Rally。注意：校验参数合法性，违反则抛 ValueError。"""
         if not cfg.leaderId:
@@ -142,8 +163,17 @@ class Rally(FormationTaskBase):
         """运行时切换目标队形索引。注意：集结完成进入 HOLD 后，下一拍广播生效。"""
         self._target_pattern = int(index)
 
-    def step(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
+    def step(
+        self,
+        u: RallyTaskInputS | None = None,
+        y: RallyTaskOutputS | None = None,
+    ) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
+        if u is None and y is None:
+            u = self._bound_input
+            y = self._bound_output
+        elif u is None or y is None:
+            raise ValueError("Rally 输入输出端口必须同时提供")
         if y.cmd is None or u.clock is None:
             raise ValueError("Rally ports must be bound")
         y.rallyCompleted = False
