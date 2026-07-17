@@ -132,7 +132,110 @@ def load_terrain_layout(path: str | Path) -> dict[str, Any]:
     data = json.loads(layout_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("terrain layout root must be an object")
+    _validate_layout_numbers(data)
     return data
+
+
+# 布局数值字段清单:前置校验只做类型与有限性检查,正负/范围约束仍由各消费点按原语义处理。
+_DETAIL_INTEGER_FIELDS = ("grid_resolution", "low_spec_grid_resolution", "seed")
+_MAP_NUMERIC_FIELDS = ("effective_extent_km", "render_extent_km")
+_CHAIN_NUMERIC_FIELDS = ("ridge_width_km", "saddle_height_factor")
+_PEAK_NUMERIC_FIELDS = (
+    "height_m",
+    "base_radius_km",
+    "aspect_ratio",
+    "risk_radius_km",
+    "buffer_radius_km",
+    "station",
+    "lateral_offset_km",
+)
+_LINK_NUMERIC_FIELDS = ("ridge_width_km", "height_m")
+
+
+def _validate_layout_numbers(layout: dict[str, Any]) -> None:
+    """前置校验布局数值字段。注意：768² 场生成约 4s,坏数据(如字符串 \"NaN\")必须在
+    加载阶段毫秒级拒绝;否则后台线程会把整张场算完才被末端 isfinite 检查拦下,
+    且主线程 peek 已经把这条注定失败的生成线程踢了出去。"""
+
+    def _ensure_value_finite(value: Any, label: str) -> None:
+        """校验单个值可转 float 且有限。注意：错误标签必须指向布局中的完整路径。"""
+
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{label} 不是数值: {value!r}") from error
+        if not math.isfinite(numeric):
+            raise ValueError(f"{label} 非有限值: {numeric}")
+
+    def _ensure_finite(container: dict[str, Any], field: str, label: str) -> None:
+        """字段存在时校验可转 float 且有限。注意：缺省字段由消费点默认值兜底,不在此报错。"""
+
+        if field in container:
+            _ensure_value_finite(container[field], f"{label}.{field}")
+
+    def _ensure_integer(container: dict[str, Any], field: str, label: str) -> None:
+        """字段存在时校验可转整数。注意：保持消费点 int(...) 的既有兼容语义。"""
+
+        if field not in container:
+            return
+        try:
+            int(container[field])
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(f"{label}.{field} 不是整数: {container[field]!r}") from error
+
+    def _ensure_pair_finite(value: Any, label: str) -> None:
+        """二维坐标被消费点识别时校验前两轴。注意：非坐标条目仍按既有语义跳过。"""
+
+        if not _is_pair(value):
+            return
+        _ensure_value_finite(value[0], f"{label}[0]")
+        _ensure_value_finite(value[1], f"{label}[1]")
+
+    def _ensure_coordinate_list(container: dict[str, Any], field: str, label: str) -> None:
+        """校验坐标序列内会被消费的二维点。注意：字段类型异常仍由消费点按原语义处理。"""
+
+        points = container.get(field)
+        for point_index, point in enumerate(points if isinstance(points, (list, tuple)) else []):
+            _ensure_pair_finite(point, f"{label}.{field}[{point_index}]")
+
+    detail = layout.get("detail")
+    if isinstance(detail, dict):
+        for field in _DETAIL_INTEGER_FIELDS:
+            _ensure_integer(detail, field, "detail")
+    map_config = layout.get("map")
+    if isinstance(map_config, dict):
+        for field in _MAP_NUMERIC_FIELDS:
+            _ensure_finite(map_config, field, "map")
+    flight = layout.get("flight")
+    if isinstance(flight, dict):
+        for field in ("original_route_uv", "planned_route_uv"):
+            _ensure_coordinate_list(flight, field, "flight")
+
+    chains = layout.get("mountain_chains")
+    for chain_index, chain in enumerate(chains if isinstance(chains, list) else []):
+        # 非字典条目由各消费点按既有语义跳过,这里保持同样的容忍度。
+        if not isinstance(chain, dict):
+            continue
+        chain_label = f"mountain_chains[{chain_index}]"
+        for field in _CHAIN_NUMERIC_FIELDS:
+            _ensure_finite(chain, field, chain_label)
+        _ensure_coordinate_list(chain, "polyline_uv", chain_label)
+        peaks = chain.get("peaks")
+        for peak_index, peak in enumerate(peaks if isinstance(peaks, list) else []):
+            if not isinstance(peak, dict):
+                continue
+            for field in _PEAK_NUMERIC_FIELDS:
+                _ensure_finite(peak, field, f"{chain_label}.peaks[{peak_index}]")
+    links = layout.get("saddle_links")
+    for link_index, link in enumerate(links if isinstance(links, list) else []):
+        if not isinstance(link, dict):
+            continue
+        link_label = f"saddle_links[{link_index}]"
+        for field in _LINK_NUMERIC_FIELDS:
+            _ensure_finite(link, field, link_label)
+        for field in ("from_uv", "to_uv"):
+            if field in link:
+                _ensure_pair_finite(link[field], f"{link_label}.{field}")
 
 
 def generate_terrain_field_from_file(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> TerrainField:

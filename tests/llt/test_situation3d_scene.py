@@ -707,23 +707,78 @@ class Situation3DSceneDataTests(unittest.TestCase):
         mutations = [
             ("grid_resolution 类型错误", lambda data: data["detail"].__setitem__("grid_resolution", "很多")),
             ("render_extent_km 为零", lambda data: data["map"].__setitem__("render_extent_km", 0)),
+            ("噪声 seed NaN", lambda data: data["detail"].__setitem__("seed", "NaN")),
             ("风险峰 height_m NaN", lambda data: data["mountain_chains"][4]["peaks"][0].__setitem__("height_m", "NaN")),
             ("风险峰 risk_radius_km NaN", lambda data: data["mountain_chains"][4]["peaks"][0].__setitem__("risk_radius_km", "NaN")),
+            ("鞍部起点 NaN", lambda data: data["saddle_links"][0]["from_uv"].__setitem__(0, "NaN")),
         ]
         for label, mutate in mutations:
             with self.subTest(label):
-                broken = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
+                # 坏布局从小容量 fixture 派生:若防线失守踢起后台生成,烧掉的是 129 场
+                # 而不是 768 场,不会把数秒 CPU 摊派给后续用例。
+                broken = json.loads(LLT_TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
                 mutate(broken)
                 with tempfile.TemporaryDirectory() as temp_dir:
                     broken_path = Path(temp_dir) / "broken_layout.json"
                     broken_path.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
                     snapshot = self._snapshot()
                     snapshot.terrain_display_file = str(broken_path)
-                    with self.assertLogs("src.ui.gui.situation3d.scene_data", level="WARNING"):
-                        payload = build_scene_payload(snapshot)
+                    # 直接守住非阻塞生成入口，避免瞬时 _PENDING_KEYS 因线程提前结束而产生假阴性。
+                    with patch.object(scene_data, "peek_terrain_field") as peek:
+                        with self.assertLogs("src.ui.gui.situation3d.scene_data", level="WARNING"):
+                            payload = build_scene_payload(snapshot)
+                    peek.assert_not_called()
                 self.assertEqual(payload["terrain"]["surface"]["mode"], "procedural", label)
                 # 末端防线:payload 必须可被 QML JSON.parse 消费,不含 NaN/Inf。
                 json.dumps(payload, ensure_ascii=False, allow_nan=False)
+
+    def test_broken_layout_rejected_at_load_time_before_generation(self) -> None:
+        """坏数值必须在布局加载阶段被拒绝,而不是把整张场算完才被末端 isfinite 拦下。
+        768 场生成约 4s,后台线程为注定失败的布局白算是生产缺陷。"""
+
+        import tempfile
+
+        base = json.loads(LLT_TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))
+        cases = [
+            (
+                "字符串 NaN 峰高",
+                lambda data: data["mountain_chains"][0]["peaks"][0].__setitem__("height_m", "NaN"),
+                "非有限值",
+            ),
+            (
+                "非数值风险半径",
+                lambda data: data["mountain_chains"][0]["peaks"][0].__setitem__("risk_radius_km", "很多"),
+                "不是数值",
+            ),
+            ("字符串 NaN 噪声种子", lambda data: data["detail"].__setitem__("seed", "NaN"), "不是整数"),
+            (
+                "山脉折线坐标 NaN",
+                lambda data: data["mountain_chains"][0]["polyline_uv"][0].__setitem__(0, "NaN"),
+                "非有限值",
+            ),
+            (
+                "鞍部端点坐标 NaN",
+                lambda data: data["saddle_links"][0]["from_uv"].__setitem__(0, "NaN"),
+                "非有限值",
+            ),
+            (
+                "航线坐标 NaN",
+                lambda data: data["flight"]["original_route_uv"][0].__setitem__(0, "NaN"),
+                "非有限值",
+            ),
+        ]
+        for label, mutate, message in cases:
+            with self.subTest(label):
+                broken = json.loads(json.dumps(base))
+                mutate(broken)
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    broken_path = Path(temp_dir) / "broken_layout.json"
+                    broken_path.write_text(json.dumps(broken, ensure_ascii=False), encoding="utf-8")
+                    with patch.object(terrain_field_module, "generate_terrain_field") as generate:
+                        with self.assertRaisesRegex(ValueError, message):
+                            generate_terrain_field_from_file(broken_path, resolution=768)
+                    # 比墙钟阈值更直接：布局加载失败后不得进入任何分辨率的高度场生成。
+                    generate.assert_not_called()
 
     def test_release_scripts_bundle_terrain_detail_textures(self) -> None:
         """验证 3D 地形位图存在，并以 --add-data 形式进入双平台打包参数。"""
@@ -1362,7 +1417,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         adapter = ControllerSimulationAdapter()
         try:
-            snapshot = adapter.load_config(str(MOUNTAIN_CONFIG_PATH))
+            # 屏蔽 load_config 附带的高度场预热:预热线程会按正式 768 分辨率白烧
+            # 数秒 CPU 并摊派给后续用例;本用例只断言元数据透传,与预热无关。
+            with patch("src.ui.gui.simulation_adapter._warm_terrain_field_cache"):
+                snapshot = adapter.load_config(str(MOUNTAIN_CONFIG_PATH))
             self.assertEqual(adapter.last_result_code, "OK")
             self.assertEqual(snapshot.terrain_display_file, str(TERRAIN_LAYOUT_PATH.resolve()))
             self.assertIsNotNone(snapshot.route)
