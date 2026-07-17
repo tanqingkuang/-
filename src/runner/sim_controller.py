@@ -102,11 +102,13 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._step_s = 0.005
         self._time_s = 0.0
         self._tick_index = 0
-        self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
         self._playback_rate = 1.0
         self._cpu_utilization = 0.0
         self._algorithm_decimation = _DEFAULT_ALGORITHM_DECIMATION
         self._algorithm_period_s = self._step_s * self._algorithm_decimation
+        # 日志采样周期取 10Hz 与算法周期中更快者；构造期默认值随配置加载刷新。
+        self._log_sample_period_s = min(_LOG_SAMPLE_PERIOD_S, self._algorithm_period_s)
+        self._next_log_sample_time_s = self._log_sample_period_s
         # 对外状态和事件缓存用于 GUI 状态栏、日志窗口和测试断言。
         self._run_state = RunState.UNLOADED
         self._control_report: ControlReport = "待命"
@@ -660,10 +662,13 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._playback_rate = float(config.get("playback_rate", 1.0))
         self._algorithm_decimation = int(config.get("algorithm_decimation", _DEFAULT_ALGORITHM_DECIMATION))
         self._algorithm_period_s = self._step_s * self._algorithm_decimation
+        # 日志采样不得低于控制频率（docs/codex指标.md §6.2）：算法快于 10Hz 时对齐算法节拍，
+        # 否则耗时/原始指令/饱和序列会隔拍丢失，P95/峰值/TV/占空比漏掉瞬态。
+        self._log_sample_period_s = min(_LOG_SAMPLE_PERIOD_S, self._algorithm_period_s)
         # 时间与计数归零，保证每次初始化都是干净起点。
         self._time_s = 0.0
         self._tick_index = 0
-        self._next_log_sample_time_s = _LOG_SAMPLE_PERIOD_S
+        self._next_log_sample_time_s = self._log_sample_period_s
         self._last_display_wall_s = 0.0
         self._cpu_utilization = 0.0
         # 按依赖顺序初始化各子系统：先模型（提供初始状态），再通信，再扰动（依赖前两者）。
@@ -864,19 +869,19 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         should_refresh_display = (
             self._should_refresh_display_unlocked() or self._run_state == RunState.FINISHED
         )
-        # 日志按仿真时间固定 10Hz 采样，保证不同播放倍率得到一致的离线数据点。
+        # 日志按仿真时间等间隔采样（10Hz 与算法频率取快者），不同播放倍率数据点一致。
         should_log_snapshot = self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s
         # 快照生成按墙钟显示频率限流；日志采样点额外生成，避免漏记关键状态。
         snapshot: SimulationSnapshot | None = None
         if force_snapshot or should_refresh_display or should_log_snapshot:
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
-        # 关键数据定时记录固定 10Hz；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
+        # 关键数据按采样周期定时记录；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
         if should_log_snapshot and snapshot is not None:
             if not self._logger.write_snapshot(snapshot):
                 self._append_event_unlocked("WARN", "DataLogger", f"snapshot log failed: {self._logger.last_error_message}")
             while self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s:
-                self._next_log_sample_time_s += _LOG_SAMPLE_PERIOD_S
+                self._next_log_sample_time_s += self._log_sample_period_s
         # 仅当强制产帧、达到显示刷新间隔或仿真结束时才回传快照，否则返回 None 抑制 UI 刷新。
         if force_snapshot or should_refresh_display:
             return self._latest_snapshot

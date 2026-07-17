@@ -9,7 +9,7 @@ from pathlib import Path
 from scripts.run_st import main as run_st_main
 from src.runner.sim_control_types import CommandResult
 from tests.st.support.baseline_diff import diff_trajectory
-from tests.st.support.invariants import check_dynamic_limits
+from tests.st.support.invariants import check_dynamic_limits, check_run_completed
 from tests.st.support.runner import ScenarioRun, read_jsonl
 from tests.st.support.trajectory_extract import extract_trajectory, trajectory_json_bytes
 
@@ -91,6 +91,53 @@ def test_trajectory_extract_is_deterministic_and_normalized() -> None:
     ]
     assert b"run-x" not in trajectory_json_bytes(first)
     assert b"drop-me" not in trajectory_json_bytes(first)
+
+
+def test_trajectory_extract_prefers_frame_closest_to_bucket_time() -> None:
+    """算法频率高于 10Hz 时，整秒桶必须取最接近桶时刻的帧，不能被先到的 0.95s 帧占位。"""
+
+    def frame(time_s: float, x_m: float) -> dict:
+        return {
+            "time_s": time_s,
+            "nodes": [
+                {"node_id": "S01", "x_m": x_m, "y_m": 0.0, "altitude_m": 1000.0, "psi_v_deg": 0.0, "speed_mps": 25.0}
+            ],
+        }
+
+    # 0.05s 采样网格：0.95/1.0/1.05 都落在 1s 桶的容差窗口内，必须选中精确的 1.0s 帧。
+    trajectory = extract_trajectory([frame(0.95, 23.75), frame(1.0, 25.0), frame(1.05, 26.25)])
+
+    assert len(trajectory["samples"]) == 1
+    assert trajectory["samples"][0]["time_s"] == 1.0
+    assert trajectory["samples"][0]["nodes"][0]["x_m"] == 25.0
+
+
+def test_frame_count_expectation_follows_algorithm_rate_sampling() -> None:
+    """UT-01 帧数期望必须跟随"10Hz 与算法频率取快者"的日志采样契约。"""
+
+    def run_with(frame_count: int, period_s: float) -> ScenarioRun:
+        snapshots = [{"time_s": round((i + 1) * period_s, 6), "nodes": []} for i in range(frame_count)]
+        return ScenarioRun(
+            scenario="synthetic",
+            config_path=Path("synthetic.json"),
+            result=CommandResult("OK", "finished"),
+            run_dir=None,
+            snapshots=snapshots,
+            events=[],
+            # step 0.005 × 默认分频 10 → 算法周期 0.05s，日志采样应为 20Hz。
+            config={"duration_s": 1.0, "step_s": 0.005},
+            wall_time_s=0.01,
+        )
+
+    frame_issues = [
+        issue for issue in check_run_completed(run_with(20, 0.05)) if issue.message == "快照帧数与日志采样周期不匹配"
+    ]
+    assert frame_issues == []
+    # 旧的固定 10Hz 帧数（10 帧）在该配置下反而应判为不匹配。
+    stale_issues = [
+        issue for issue in check_run_completed(run_with(10, 0.1)) if issue.message == "快照帧数与日志采样周期不匹配"
+    ]
+    assert stale_issues
 
 
 def test_baseline_diff_locates_point_and_ignores_tolerance() -> None:

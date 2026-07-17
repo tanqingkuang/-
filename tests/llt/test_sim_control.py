@@ -970,7 +970,7 @@ class SimulationControllerTests(unittest.TestCase):
             controller.close()
 
     def test_realtime_logging_uses_sim_time_10_hz(self) -> None:
-        """实时 tick 路径下日志应按仿真时间 10Hz 记录，避免不同倍频采样点不一致。"""
+        """实时 tick 路径下日志应按仿真时间等间隔记录（算法快于 10Hz 时对齐算法节拍），倍率不得影响采样点。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             config = {
@@ -1004,7 +1004,9 @@ class SimulationControllerTests(unittest.TestCase):
 
             logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
 
-            self.assertEqual(logged_times, [0.1, 0.2, 0.3, 0.4, 0.5])
+            # step 0.005 × 分频 3 → 算法周期 0.015s（约 66.7Hz）快于 10Hz，
+            # 采样对齐算法节拍：100 个 tick 共 0.5s，应得 0.015 等距的 33 个样本。
+            self.assertEqual(logged_times, [round(0.015 * k, 3) for k in range(1, 34)])
             controller.close()
 
     def test_read_timed_snapshots_returns_incremental_immutable_batches(self) -> None:
@@ -1027,13 +1029,14 @@ class SimulationControllerTests(unittest.TestCase):
             first_cursor, first_batch = controller.read_timed_snapshots(cursor)
             self.assertIsInstance(first_batch, tuple)
             self.assertIsNot(first_batch, controller._logger.snapshots)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in first_batch], [0.1])
-            self.assertEqual(first_cursor.next_index, 1)
+            # step 0.005 × 默认分频 10 → 算法周期 0.05s，采样对齐算法节拍。
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in first_batch], [0.05, 0.1])
+            self.assertEqual(first_cursor.next_index, 2)
 
             controller.step(20)
             second_cursor, second_batch = controller.read_timed_snapshots(first_cursor)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in second_batch], [0.2])
-            self.assertEqual(second_cursor.next_index, 2)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in second_batch], [0.15, 0.2])
+            self.assertEqual(second_cursor.next_index, 4)
             unchanged_cursor, empty_batch = controller.read_timed_snapshots(second_cursor)
             self.assertEqual(unchanged_cursor, second_cursor)
             self.assertEqual(empty_batch, ())
@@ -1053,7 +1056,8 @@ class SimulationControllerTests(unittest.TestCase):
             controller._logger._file_logging_disabled = True
             controller.step(20)
             old_cursor, old_batch = controller.read_timed_snapshots(None)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in old_batch], [0.1])
+            # step 0.005 × 默认分频 10 → 算法周期 0.05s，采样对齐算法节拍。
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in old_batch], [0.05, 0.1])
 
             self.assertEqual(controller.reset().code, "OK")
             controller._logger._file_logging_disabled = True
@@ -1061,8 +1065,8 @@ class SimulationControllerTests(unittest.TestCase):
             new_cursor, new_batch = controller.read_timed_snapshots(old_cursor)
 
             self.assertNotEqual(new_cursor.run_generation, old_cursor.run_generation)
-            self.assertEqual(new_cursor.next_index, 1)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in new_batch], [0.1])
+            self.assertEqual(new_cursor.next_index, 2)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in new_batch], [0.05, 0.1])
             controller.close()
 
     def test_realtime_snapshot_generation_is_limited_to_display_rate(self) -> None:
@@ -1215,6 +1219,34 @@ class SimulationControllerTests(unittest.TestCase):
 
             self.assertEqual(result.code, "OK")
             self.assertEqual(len(list((Path(tmp) / "logs").glob("run-*"))), 1)
+
+    def test_snapshot_log_sampling_follows_algorithm_rate(self) -> None:
+        """算法频率高于 10Hz 时日志采样必须对齐算法频率，评测序列不得漏拍。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                result = controller.run_until_complete(
+                    {
+                        # step 0.005 × 默认分频 10 → 算法周期 0.05s（20Hz），高于 10Hz 落盘节拍。
+                        "duration_s": 0.2,
+                        "step_s": 0.005,
+                        "log_enabled": True,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.code, "OK")
+            run_dirs = list((Path(tmp) / "logs").glob("run-*"))
+            lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+            times = [round(json.loads(line)["time_s"], 6) for line in lines]
+            # 每个算法拍都要有对应日志样本，耗时/指令/饱和序列才不会隔拍丢失。
+            self.assertEqual(times, [0.05, 0.1, 0.15, 0.2])
 
     def test_timed_data_logger_persists_snapshot_files(self) -> None:
         """关键数据日志应落盘到 logs/run-*/snapshots.jsonl，便于仿真后查找。"""

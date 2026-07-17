@@ -255,6 +255,54 @@ class ControlEffectAnalysisTests(unittest.TestCase):
             self.assertAlmostEqual(samples["W02"]["e_rigid_z"][0][1], 10.0)
             self.assertNotIn("e_rigid_z", samples["L01"])
 
+    def test_all_target_time_series_metrics_aggregate_per_node(self) -> None:
+        """all 目标的总变差与时间积分必须逐机计算后求和，不得跨机差分。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "two.snapshots.jsonl"
+            # A01 的 pos_x 序列 0→100→0（TV=200、积分=100），A02 恒为 0（TV=0、积分=0）。
+            records = []
+            for t, a01 in ((0.0, 0.0), (1.0, 100.0), (2.0, 0.0)):
+                node_a = {**self._node("A01", 0.0), "track_pos_err_x_m": a01}
+                node_b = {**self._node("A02", 0.0), "track_pos_err_x_m": 0.0}
+                records.append({"time_s": t, "nodes": [node_a, node_b]})
+            path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+            source = load_snapshot_samples(path, label="A")
+            all_summary = summary_for(source, "all", "pos_x", 0.0, 2.0)
+            a01_summary = summary_for(source, "A01", "pos_x", 0.0, 2.0)
+            a02_summary = summary_for(source, "A02", "pos_x", 0.0, 2.0)
+
+            assert all_summary is not None and a01_summary is not None and a02_summary is not None
+            # 跨机拼接的错误实现会把"A01→A02"的机间差当成时间变化，TV 远大于逐机之和。
+            self.assertAlmostEqual(all_summary.tv, a01_summary.tv + a02_summary.tv)
+            self.assertAlmostEqual(all_summary.integral, a01_summary.integral + a02_summary.integral)
+            self.assertAlmostEqual(all_summary.tv, 200.0)
+            self.assertAlmostEqual(all_summary.integral, 100.0)
+            # 分布类指标仍按合并样本统计，不受聚合口径调整影响。
+            self.assertEqual(all_summary.count, 6)
+            self.assertAlmostEqual(all_summary.max_abs, 100.0)
+
+    def test_e_out_integral_clips_negative_part(self) -> None:
+        """e_out 的时间积分是外甩面积 ∫max(e_out,0)dt，内侧偏差不得抵消外侧。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "eout.snapshots.jsonl"
+            records = []
+            # 左转（turn_sign=+1）时 e_out = cross_track_error_m；构造 [2, -2] 正负交替。
+            for t, cte in ((0.0, 2.0), (1.0, -2.0)):
+                node = {**self._node("A01", 0.0), "cross_track_error_m": cte}
+                records.append({"time_s": t, "route": {"turn_sign": 1.0}, "nodes": [node]})
+            path.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+
+            source = load_snapshot_samples(path, label="A", channels=GUI_CHANNELS)
+            e_out = summary_for(source, "A01", "e_out", 0.0, 1.0)
+            e_perp = summary_for(source, "A01", "e_perp", 0.0, 1.0)
+
+            assert e_out is not None and e_perp is not None
+            # 截正部后梯形积分：max([2,-2],0)=[2,0] 在 [0,1] 上积分为 1。
+            self.assertAlmostEqual(e_out.integral, 1.0)
+            # 普通有符号通道保持原口径：e_perp=[-2,2] 的梯形积分为 0。
+            self.assertAlmostEqual(e_perp.integral, 0.0)
+
     def test_sliding_window_decimates_anchors_over_limit(self) -> None:
         """锚点超过上限时应均匀抽稀，同时保证首尾锚点仍被覆盖。"""
         count = MAX_WINDOW_ANCHORS * 2 + 100

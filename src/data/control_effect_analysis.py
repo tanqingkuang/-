@@ -6,7 +6,7 @@ import csv
 import json
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Iterable
 
@@ -31,6 +31,8 @@ class AnalysisChannel:
     optional: bool = False
     # 派生通道：不直接读节点字段，由每帧记录跨字段/跨节点计算（见 _append_derived_samples）。
     derived: bool = False
+    # 积分只取正部：时间积分按 ∫max(v,0)dt 计算（如外甩面积），负值不得抵消正值。
+    integral_positive_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,7 +114,8 @@ EXTENDED_CHANNELS: tuple[AnalysisChannel, ...] = (
     # e_perp 取航线左侧为正，与快照 cross_track_error_m（右正）符号相反。
     AnalysisChannel("e_perp", "航线横偏(左正)", "m", "", optional=True, derived=True),
     # e_out=-sgn(κ)·e_perp，弯道外侧统一为正；直线段（turn_sign=0）不产生样本。
-    AnalysisChannel("e_out", "弯道外甩偏差", "m", "", optional=True, derived=True),
+    # 外甩面积口径为 ∫max(e_out,0)dt（docs/codex指标.md §4.3），积分只取正部。
+    AnalysisChannel("e_out", "弯道外甩偏差", "m", "", optional=True, derived=True, integral_positive_only=True),
     # 刚性槽位误差 R_L^T(p_i-p_L)-(r_i*-r_L*)，长机 FUR 轴序前/上/右；长机自身不产生样本。
     AnalysisChannel("e_rigid_x", "刚性槽位误差 前向", "m", "", optional=True, derived=True),
     AnalysisChannel("e_rigid_y", "刚性槽位误差 上向", "m", "", optional=True, derived=True),
@@ -158,6 +161,10 @@ CSV_FIELD_NAMES: tuple[str, ...] = (
 )
 # 滑窗曲线锚点上限：同时约束计算量与图表点数，超过时对锚点均匀抽稀。
 MAX_WINDOW_ANCHORS = 2000
+# 积分只取正部的通道键集合，供只持有 channel_key 的统计路径查询口径。
+_INTEGRAL_POSITIVE_KEYS = frozenset(
+    channel.key for channel in GUI_CHANNELS if channel.integral_positive_only
+)
 
 
 def load_snapshot_samples(
@@ -444,9 +451,28 @@ def summary_for(
     start_s: float,
     end_s: float,
 ) -> MetricSummary | None:
-    """计算某个输入源、对象和通道的时间段汇总指标。"""
+    """计算某个输入源、对象和通道的时间段汇总指标。
+
+    分布类指标（均值/方差/RMS/P95/最大值）在 all 目标下按合并样本统计；
+    时序类指标（总变差/时间积分）跨机拼接会把机间差当成时间变化，
+    因此 all 目标必须逐机计算后求和（全队总控制活动量/总面积口径）。
+    """
+    positive_integral = channel_key in _INTEGRAL_POSITIVE_KEYS
     t, v = series_for(source, target, channel_key, start_s, end_s)
-    return _summary_from_arrays(t, v)
+    summary = _summary_from_arrays(t, v, positive_integral=positive_integral)
+    if summary is None or target != "all":
+        return summary
+    start, end = normalized_time_range(start_s, end_s)
+    tv_total = 0.0
+    integral_total = 0.0
+    for node_id in source.arrays:
+        if node_id == "all":
+            continue
+        node_t, node_v = series_for(source, node_id, channel_key, start, end)
+        if len(node_t) > 1:
+            tv_total += float(np.sum(np.abs(np.diff(node_v))))
+            integral_total += _integral_from_arrays(node_t, node_v, positive_integral)
+    return replace(summary, tv=tv_total, integral=integral_total)
 
 
 def calc_summary(points: list[tuple[float, float]]) -> MetricSummary | None:
@@ -459,7 +485,20 @@ def calc_summary(points: list[tuple[float, float]]) -> MetricSummary | None:
     return _summary_from_arrays(t, v)
 
 
-def _summary_from_arrays(t: np.ndarray, v: np.ndarray) -> MetricSummary | None:
+def _integral_from_arrays(t: np.ndarray, v: np.ndarray, positive_only: bool) -> float:
+    """按梯形法计算时间积分；positive_only 时先截取正部（如外甩面积口径）。"""
+    if len(v) < 2:
+        return 0.0
+    values = np.maximum(v, 0.0) if positive_only else v
+    return float(np.trapezoid(values, t))
+
+
+def _summary_from_arrays(
+    t: np.ndarray,
+    v: np.ndarray,
+    *,
+    positive_integral: bool = False,
+) -> MetricSummary | None:
     """按 numpy 数组计算全套汇总指标。注意：t 必须升序，扩展指标依赖时间顺序。"""
     count = int(len(v))
     if count == 0:
@@ -473,7 +512,7 @@ def _summary_from_arrays(t: np.ndarray, v: np.ndarray) -> MetricSummary | None:
     max_index = int(np.argmax(abs_v))
     # 总变差衡量抖动；单样本无差分，积分同理为 0。
     tv = float(np.sum(np.abs(np.diff(v)))) if count > 1 else 0.0
-    integral = float(np.trapezoid(v, t)) if count > 1 else 0.0
+    integral = _integral_from_arrays(t, v, positive_integral)
     return MetricSummary(
         count=count,
         mean=mean,
