@@ -30,7 +30,6 @@ class RallyPhaseE(IntEnum):
     JOINING = 0
     CATCHUP = 1
     LOOSE = 2
-    COMPRESS = 3
 
 
 class PosCalcStrategyE(IntEnum):

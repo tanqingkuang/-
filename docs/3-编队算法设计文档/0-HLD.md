@@ -212,7 +212,7 @@ class Entity:
 
 ### 5.1 目录结构
 
-编队算法位于 `src/algorithm/`，按 HLD 四层组织；L2 单元按「一个单元 = 一个策略族」拆子包（`base.py` 放族抽象 + I/O 端口结构体，其余文件为具体策略）；L1 实体按「场景 × 实体方式」组织。
+编队算法位于 `src/algorithm/`，按 HLD 四层组织；L2 单元按「一个单元 = 一个策略族」拆子包（`base.py` 放族抽象 + I/O 端口结构体，其余文件为具体策略）；L1 实体按身份 Profile 装配固定六步流程链。
 
 ```
 src/algorithm/
@@ -220,33 +220,35 @@ src/algorithm/
 ├── context/                         # L3 黑板 + L4 叶类型
 │   ├── context.py                   #   ContextS：黑板根，聚合全部叶类型
 │   └── leaf_types.py                #   叶类型：枚举（FormationMode…）+ 结构体
-├── entity/                          # L1 实体（对象组）——实体方式族
-│   ├── base.py                      #   EntityBase：init/step/reset/close
-│   ├── types.py                     #   EntityInitS / EntityInputS / EntityOutputS
-│   └── leader_follower_hold/        #   场景：领航跟随保持（用例 5）
-│       ├── leader.py                #     LeaderEntity：长机实体方式
-│       └── follower.py              #     FollowerEntity：僚机实体方式
+├── entity/                          # L1 实体（对象组）——身份与固定流程链
+│   ├── base.py                      #   EntityBase：固定六步 init/step/reset/close
+│   ├── types.py                     #   边界结构体、Profile 与运行时表
+│   └── leader_follower_rally/       #   通用领航跟随实体（保持/集结共用）
+│       ├── __init__.py              #     长机/僚机不可变 Profile 与实体工厂
+│       ├── leader.py                #     RallyLeaderEntity：通用长机
+│       └── follower.py              #     RallyFollowerEntity：通用僚机
 └── units/                           # L2 单元
     ├── algo/                        # 算法组（不碰 Mode）
     │   ├── pos_calc/                #   PosCalc 位置解算
-    │   │   ├── base.py              #     PosCalcBase + InitS/InputS/OutputS
+    │   │   ├── manager.py           #     按 Profile 路由位置解算产品
     │   │   ├── route_interp.py      #     航线插值（长机）
-    │   │   └── slot_geometry.py     #     槽位几何（普通保持 scale=1，集结压缩 scale 动态变化）
-    │   ├── pos_track/               #   PosTrack 跟踪（含求偏差）→ pid_compose.py
+    │   │   ├── slot_geometry.py     #     最终槽位几何（不做槽位缩放）
+    │   │   └── rally_join_pos.py    #     集结切入、盘旋与切出
+    │   ├── pos_track/               #   PosTrack Manager 与控制产品
     │   ├── ctrl/                    #   Ctrl 原子控制律 → pid.py
     │   └── formation_math/          #   FormationMath 纯工具函数（非策略族）
     └── process/                     # 流程组（碰 Mode）
-        ├── inbound/                 #   Inbound 收 → rally_leader_follower.py（保持/集结共用）
-        ├── outbound/                #   Outbound 发 → rally_leader_broadcast.py（保持/集结共用）
-        ├── formation_task/          #   FormationTask 编排 → hold.py（恒"保持"）
-        └── tra_plan/                #   TraPlan 轨迹规划 → leader_route.py
+        ├── inbound/                 #   FormationInbound：统一协议解析
+        ├── outbound/                #   FormationOutbound：按配置发送或静默
+        ├── formation_task/          #   Rally：enabled=False 直接保持，True 执行集结
+        └── tra_plan/                #   TraPlan Manager：航线规划或空产品
 ```
 
 约定：
 
 * **一个单元一个子包**：`base.py` 为策略族抽象（接口 `init/step/reset`）并声明 `XXXInitS/XXXInputS/XXXOutputS` 端口结构体；同目录其余文件为具体策略实现；
 * **算法组 / 流程组** 分置 `units/algo` 与 `units/process`，对应「不碰 Mode / 碰 Mode」；
-* **实体方式族**：`EntityBase` 为抽象，每种实体方式（如长机 / 僚机）是子类，在 `init` 里实例化所需单元子类并绑定端口、在 `step` 里按本方式顺序串联；同一场景 1~3 种方式同放一个场景目录，新场景另建目录复用同一批 `units/` 子类；
+* **身份 Profile**：`EntityBase` 固定执行 Inbound → FormationTask → TraPlan → PosCalc → PosTrack → Outbound；长机/僚机子类只提供不可变 Profile 和初始化参数，Manager 按 Profile 创建产品，运行期不替换流程；
 * **通用数学** 不建策略族，为纯函数模块（不持实例态）。
 
 > 注：`coord/`、`node/`、`base.py` 用于兼容协调本体和飞机本体的组织方式。

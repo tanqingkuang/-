@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import unittest
 from copy import deepcopy
-from dataclasses import replace
 from fractions import Fraction
 from itertools import product
 from unittest.mock import patch
@@ -37,8 +36,8 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
 from src.algorithm.entity.leader_follower_rally import create_rally_entity
-from src.algorithm.entity.types import EntityInitS as _EntityInitS
 from src.algorithm.entity.types import (
+    EntityInitS,
     EntityInputS,
     EntityOutputS,
     EntityProfileE,
@@ -99,17 +98,6 @@ from src.algorithm.units.process.outbound.rally_leader_broadcast import (
 )
 from src.algorithm.units.process.tra_plan import TraPlanManager
 from src.common.envelope import MessageEnvelope
-
-
-def EntityInitS(*args: object, **kwargs: object) -> _EntityInitS:
-    """构造测试实体配置，并按集结长短机角色补齐流程策略表。"""
-
-    cfg = _EntityInitS(*args, **kwargs)
-    if cfg.rally_cfg is not None:
-        follower = bool(cfg.rally_leader_id)
-        if isinstance(cfg.rally_cfg, RallyTaskInitS):
-            cfg.rally_cfg = replace(cfg.rally_cfg, passive=follower)
-    return cfg
 
 
 def _entity_rally_join(entity: RallyLeaderEntity | RallyFollowerEntity) -> RallyJoinPos:
@@ -278,7 +266,6 @@ def _rally_task(
     leader_id: str = "R01",
     dt_s: float = 0.1,
     stable_hold_s: float = 0.2,
-    compress_time_s: float = 1.0,
     catchup_radius_m: float = 200.0,
     catchup_stable_s: float = 0.0,
     loiter_radius_m: float = 200.0,
@@ -294,7 +281,6 @@ def _rally_task(
             looseScale=3.0,
             convergenceRadius_m=5.0,
             stableHold_s=stable_hold_s,
-            compressTime_s=compress_time_s,
             tightRadius_m=2.0,
             expectedFollowerIds=list(expected),
             staleTimeout_s=0.5,
@@ -467,7 +453,6 @@ def _rally_cfg(
     expected: tuple[str, ...] = ("R02", "R03"),
     dt_s: float = 0.1,
     stable_hold_s: float = 0.1,
-    compress_time_s: float = 0.1,
     catchup_stable_s: float = 0.0,
 ) -> RallyTaskInitS:
     """构造实体测试用集结配置。"""
@@ -476,7 +461,6 @@ def _rally_cfg(
         looseScale=3.0,
         convergenceRadius_m=5.0,
         stableHold_s=stable_hold_s,
-        compressTime_s=compress_time_s,
         tightRadius_m=2.0,
         expectedFollowerIds=list(expected),
         staleTimeout_s=1.0,
@@ -547,16 +531,16 @@ class EntityBoundaryTypesTests(unittest.TestCase):
 
 
 class RallyPhaseEnumTests(unittest.TestCase):
-    """验证 RallyPhaseE 枚举值与历史整数协议兼容，并检查状态机写出枚举键名。"""
+    """验证 RallyPhaseE 只保留当前有效阶段，并检查状态机写出枚举键名。"""
 
-    def test_rally_phase_e_values_match_legacy_integers(self) -> None:
-        """RallyPhaseE 的整数值必须与历史裸整数协议一致，以防向后不兼容。"""
+    def test_rally_phase_e_excludes_removed_compress_phase(self) -> None:
+        """渐进压缩能力删除后不得继续暴露 COMPRESS 阶段。"""
         from src.algorithm.context.leaf_types import RallyPhaseE
 
         self.assertEqual(int(RallyPhaseE.JOINING), 0)
         self.assertEqual(int(RallyPhaseE.CATCHUP), 1)
         self.assertEqual(int(RallyPhaseE.LOOSE), 2)
-        self.assertEqual(int(RallyPhaseE.COMPRESS), 3)
+        self.assertFalse(hasattr(RallyPhaseE, "COMPRESS"))
 
     def test_task_writes_rally_phase_e_to_cmd_step(self) -> None:
         """Rally 任务写入 cmd.step 的值应为 RallyPhaseE 成员，可按名称反查。"""
@@ -578,7 +562,6 @@ class RallyTaskTests(unittest.TestCase):
 
         invalid_cases = [
             RallyTaskInitS(looseScale=0.9),
-            RallyTaskInitS(compressTime_s=0.0),
             RallyTaskInitS(staleTimeout_s=0.0),
             RallyTaskInitS(dt_s=0.0),
             RallyTaskInitS(loiter_radius_m=0.0),
@@ -623,10 +606,9 @@ class RallyTaskTests(unittest.TestCase):
         task = _rally_task(expected=("R02",), dt_s=0.1)
         ctx = FormContextS()
         ctx.cmd.stage = FormStageE.STANDBY
-        ctx.cmd.step = RallyPhaseE.COMPRESS
+        ctx.cmd.step = RallyPhaseE.LOOSE
         task._stable_timer = 8.0
         task._catchup_stable_timer = 7.0
-        task._compress_elapsed = 6.0
         task._t_ref = 123.0
         task._plan_ready = True
         task._loop_counts = {"R01": 4, "R02": 2}
@@ -640,7 +622,6 @@ class RallyTaskTests(unittest.TestCase):
         self.assertEqual(output.loopCounts, {"R01": 4, "R02": 2})
         self.assertAlmostEqual(task._stable_timer, 0.0)
         self.assertAlmostEqual(task._catchup_stable_timer, 0.0)
-        self.assertAlmostEqual(task._compress_elapsed, 0.0)
 
     def test_set_pattern_index_changes_hold_output(self) -> None:
         """验证 Rally 完成集结进入 HOLD 后，也能按运行期索引切换目标队形。"""
@@ -913,7 +894,6 @@ class RallyTaskTests(unittest.TestCase):
             RallyPhaseE.JOINING,
             RallyPhaseE.CATCHUP,
             RallyPhaseE.LOOSE,
-            RallyPhaseE.COMPRESS,
         ):
             ctx.cmd.stage = FormStageE.RALLY
             ctx.cmd.step = phase
@@ -1035,14 +1015,14 @@ class RallyTaskTests(unittest.TestCase):
         self.assertTrue(completed.t_ref_valid)
         self.assertAlmostEqual(completed.t_ref, 30.0 + expected_duration_s)
 
-    def test_loose_and_compress_gate_on_position_error(self) -> None:
-        """验证 CATCHUP/LOOSE/COMPRESS 使用位置误差阈值依次推进到 HOLD 并只在转换拍置完成标志。"""
+    def test_loose_stability_transitions_directly_to_hold(self) -> None:
+        """验证 LOOSE 收敛稳定后直接进入 HOLD，并只在转换拍置完成标志。"""
 
         # catchup_radius_m=3：pos_err>=3 滞留 CATCHUP(1)，pos_err<3 进 LOOSE(2)
         # convergenceRadius_m=5（默认）：pos_err>=5 滞留 LOOSE(2)，pos_err<5 开始计时
         task = _rally_task(
             expected=("R02",), dt_s=0.1, stable_hold_s=0.1,
-            compress_time_s=0.2, catchup_radius_m=3.0,
+            catchup_radius_m=3.0,
         )
         ctx = FormContextS()
         ok = [_follower_state("R02", pos_err_m=1.0, arrived=1, valid=True, last_update_s=0.0)]
@@ -1064,14 +1044,7 @@ class RallyTaskTests(unittest.TestCase):
         _task_step(task, ctx, remote=FormStageE.RALLY, states=bad, now_s=0.0)
         self.assertEqual(ctx.cmd.step, 2)
 
-        # LOOSE(2)：pos_err=1 < loose=5，计时器 dt=0.1 >= stable=0.1 → 进 COMPRESS(3)
-        _task_step(task, ctx, remote=FormStageE.RALLY, states=ok, now_s=0.0)
-        self.assertEqual(ctx.cmd.step, 3)
-
-        first_compress = _task_step(task, ctx, remote=FormStageE.RALLY, states=ok, now_s=0.0)
-        self.assertEqual(ctx.cmd.stage, FormStageE.RALLY)
-        self.assertFalse(first_compress.rallyCompleted)
-
+        # LOOSE(2)：pos_err=1 < loose=5，稳定计时满足后直接进入 HOLD。
         completed = _task_step(task, ctx, remote=FormStageE.RALLY, states=ok, now_s=0.0)
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
         self.assertTrue(completed.rallyCompleted)
@@ -1087,11 +1060,9 @@ class RallyTaskTests(unittest.TestCase):
             expected=("R02",),
             dt_s=0.1,
             stable_hold_s=0.1,
-            compress_time_s=0.1,
         )
         ctx = FormContextS()
         ok = [_follower_state("R02", pos_err_m=1.0, arrived=1, valid=True, last_update_s=0.0)]
-        _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
@@ -1580,7 +1551,7 @@ class RallyCommunicationTests(unittest.TestCase):
         expected = deepcopy((ctx.leaderState, ctx.cmd))
 
         invalid_states = (
-            (FormStageE.HOLD, RallyPhaseE.COMPRESS),
+            (FormStageE.HOLD, RallyPhaseE.LOOSE),
             (FormStageE.RALLY, 9),
             (FormStageE.RECONFIG, RallyPhaseE.JOINING),
         )
@@ -3546,13 +3517,38 @@ class RallyEntityTests(unittest.TestCase):
         self.assertIs(leader_a.profile, leader_b.profile)
         self.assertEqual(leader_a.profile.identity, EntityProfileE.RALLY_LEADER)
         self.assertEqual(follower.profile.identity, EntityProfileE.RALLY_FOLLOWER)
-        self.assertNotIn("processes", _EntityInitS.__dataclass_fields__)
+        self.assertNotIn("processes", EntityInitS.__dataclass_fields__)
+
+    def test_direct_hold_skips_rally_products_and_loiter_speed_validation(self) -> None:
+        """通用实体执行直接 HOLD 时不得创建未启用的集结位置解算产品。"""
+
+        route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
+        common = {
+            "commInit": _comm_init(),
+            "route": route,
+            "rally_cfg": RallyTaskInitS(leaderId=""),
+            "velCmdLimit": VelCmdLimitS(forwardMin=30.0),
+            "rally_enabled": False,
+        }
+        leader = create_rally_entity(EntityProfileE.RALLY_LEADER)
+        leader.init(EntityInitS(selfInit=FormSelfInitS("R01"), **common))
+        follower = create_rally_entity(EntityProfileE.RALLY_FOLLOWER)
+        follower.init(
+            EntityInitS(
+                selfInit=FormSelfInitS("R02"),
+                **common,
+            )
+        )
+
+        self.assertNotIn(PosCalcStrategyE.RALLY_JOIN, leader._pos_calc._registry)
+        self.assertNotIn(PosCalcStrategyE.RALLY_JOIN, follower._pos_calc._registry)
 
     def test_entities_inherit_fixed_step_and_bind_configured_process_order(self) -> None:
         """Rally 实体不得覆盖 step，六个流程应按基类固定顺序执行。"""
 
         route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
         rally_cfg = _rally_cfg(expected=("R02",))
+        rally_cfg.passive = True  # 实体身份必须覆盖调用方给出的相反模式
         leader = RallyLeaderEntity()
         leader.init(EntityInitS(
             selfInit=FormSelfInitS("R01"),

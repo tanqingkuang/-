@@ -49,7 +49,6 @@ def _rally_config() -> dict[str, object]:
             "loose_scale": 3.0,
             "convergence_radius_m": 5.0,
             "stable_hold_s": 0.1,
-            "compress_time_s": 0.2,
             "tight_radius_m": 2.0,
             "stale_timeout_s": 1.0,
             "altitude_separation_m": 60.0,
@@ -144,6 +143,7 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertEqual(task_init.targetPattern, 0)
         self.assertAlmostEqual(task_init.dt_s, 0.025)
         self.assertAlmostEqual(task_init.tightRadius_m, 2.0)
+        self.assertFalse(hasattr(task_init, "compressTime_s"))
 
     def test_formation_comm_init_accepts_rally_roles_in_slots(self) -> None:
         """验证集结角色同样使用展开后的队形槽位注入通信初始化结构。"""

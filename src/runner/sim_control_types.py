@@ -116,7 +116,7 @@ class NodeState:
     # distance_to_go_m 是沿航段方向的投影距离，不是 ENU 三维直线距离。
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
-    rally_phase: str = ""  # 集结阶段字符串，如 JOINING/FLYING、CATCHUP、LOOSE、COMPRESS、HOLD
+    rally_phase: str = ""  # 集结阶段字符串，如 JOINING/FLYING、CATCHUP、LOOSE、HOLD
 
 
 @dataclass(frozen=True)

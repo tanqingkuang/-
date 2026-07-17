@@ -91,7 +91,7 @@ class PosCalcManagerTests(unittest.TestCase):
     """验证 Manager 的配置校验、缓存路由和统一输出。"""
 
     def test_profile_expands_change_points_into_complete_pos_calc_routes(self) -> None:
-        """长机只填写三个变化点，初始化后应覆盖全部七个合法状态。"""
+        """长机只填写三个变化点，初始化后应覆盖全部六个合法状态。"""
 
         expected = {
             (FormStageE.NONE, RallyPhaseE.JOINING): PosCalcStrategyE.NOOP,
@@ -99,7 +99,6 @@ class PosCalcManagerTests(unittest.TestCase):
             (FormStageE.RALLY, RallyPhaseE.JOINING): PosCalcStrategyE.RALLY_JOIN,
             (FormStageE.RALLY, RallyPhaseE.CATCHUP): PosCalcStrategyE.ROUTE_INTERP,
             (FormStageE.RALLY, RallyPhaseE.LOOSE): PosCalcStrategyE.ROUTE_INTERP,
-            (FormStageE.RALLY, RallyPhaseE.COMPRESS): PosCalcStrategyE.ROUTE_INTERP,
             (FormStageE.HOLD, RallyPhaseE.JOINING): PosCalcStrategyE.ROUTE_INTERP,
         }
 
@@ -294,6 +293,7 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.init(cfg)
 
         slot_product = manager._registry[PosCalcStrategyE.SLOT_GEOMETRY]
+        self.assertNotIn(PosCalcStrategyE.RALLY_JOIN, manager._registry)
         self.assertTrue(slot_product._td_enabled)  # type: ignore[attr-defined]
 
     def test_manager_writes_runtime_status_to_bound_output(self) -> None:

@@ -1,4 +1,4 @@
-"""集结任务编排：管理 JOINING→CATCHUP→LOOSE→COMPRESS→HOLD 状态机。"""
+"""集结任务编排：管理 JOINING→CATCHUP→LOOSE→HOLD 状态机。"""
 
 from __future__ import annotations
 
@@ -34,11 +34,10 @@ class RallyTaskInitS(FormationTaskInitS):
     """Rally 任务初始化参数。注意：dt_s 在 init 时校验，违反则抛异常。"""
 
     leaderId: str = "R01"  # 长机节点 ID，用于输出长机自身的完整圈分配
-    looseScale: float = 3.0  # 松散槽位放大倍数（松散间距=最终间距×looseScale）
-    convergenceRadius_m: float = 5.0  # LOOSE→COMPRESS 槽位误差阈值，米
-    stableHold_s: float = 5.0  # LOOSE→COMPRESS 需稳定的时间
-    compressTime_s: float = 30.0  # COMPRESS 阶段最短持续时间
-    tightRadius_m: float = 2.0  # COMPRESS→HOLD 精度阈值，米
+    looseScale: float = 3.0  # 集结圆目标点的水平槽位偏置倍数，不参与运行期队形缩放
+    convergenceRadius_m: float = 5.0  # LOOSE→HOLD 槽位误差阈值，米
+    stableHold_s: float = 5.0  # LOOSE→HOLD 需稳定的时间
+    tightRadius_m: float = 2.0  # 完成分析中的入位判定阈值，米
     expectedFollowerIds: list[str] = field(default_factory=list)  # 期望参与集结的僚机 ID；空列表→立即通过（测试用）
     staleTimeout_s: float = 2.0  # 超过此时长未收到某机报文则视为数据失效
     targetPattern: int = 0  # 集结目标队形索引；集结只用单队形，恒为 0（formPos 第 0 行）
@@ -53,6 +52,7 @@ class RallyTaskInitS(FormationTaskInitS):
     loiter_speed_min_mps: float = 14.0  # 盘旋速度下限，用于可达时间区间的最慢整圈时间
     loiter_speed_max_mps: float = 25.0  # 盘旋速度上限，用于可达时间区间的最快整圈时间
     passive: bool = False  # 僚机被动模式：保留入站 cmd，仅允许本地 STANDBY 覆盖
+    enabled: bool = True  # 是否启用集结状态机；直接 HOLD 实体关闭后只响应 NONE/HOLD
 
 
 @dataclass
@@ -71,7 +71,7 @@ class RallyTaskOutputS:
     """Rally 任务输出端口。注意：协调计划原地写入绑定的黑板对象。"""
 
     cmd: FormSnapshotS | None = None  # 输出的编队指令
-    rallyCompleted: bool = False  # COMPRESS→HOLD 正常完成时置 True，仅该拍有效
+    rallyCompleted: bool = False  # LOOSE→HOLD 正常完成时置 True，仅该拍有效
     rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 端口 → Context.rallyPlan
 
     @property
@@ -91,7 +91,7 @@ class RallyTaskOutputS:
 
 
 class Rally(FormationTaskBase):
-    """集结任务编排器：管理 JOINING→CATCHUP→LOOSE→COMPRESS→HOLD 单向状态机。"""
+    """集结任务编排器：管理 JOINING→CATCHUP→LOOSE→HOLD 单向状态机。"""
 
     def bind(self, runtime: EntityRuntimeS) -> None:
         """绑定实体运行环境。注意：任务流程自行维护黑板端口。"""
@@ -107,24 +107,24 @@ class Rally(FormationTaskBase):
 
     @property
     def rally_completed(self) -> bool:
-        """返回本拍正常完成事件。注意：仅在 COMPRESS 切入 HOLD 的一拍有效。"""
+        """返回本拍正常完成事件。注意：仅在 LOOSE 切入 HOLD 的一拍有效。"""
         return self._y.rallyCompleted
 
     def init(self, cfg: RallyTaskInitS) -> None:
         """按配置初始化 Rally。注意：校验参数合法性，违反则抛 ValueError。"""
-        if not cfg.leaderId:
+        if cfg.enabled and not cfg.leaderId:
             raise ValueError("leaderId must be non-empty")
-        if cfg.looseScale < 1.0:
+        if cfg.enabled and cfg.looseScale < 1.0:
             raise ValueError("looseScale must be >= 1.0")
-        if cfg.compressTime_s <= 0:
-            raise ValueError("compressTime_s must be > 0")
-        if cfg.staleTimeout_s <= 0:
+        if cfg.enabled and cfg.staleTimeout_s <= 0:
             raise ValueError("staleTimeout_s must be > 0")
-        if cfg.dt_s <= 0:
+        if cfg.enabled and cfg.dt_s <= 0:
             raise ValueError("dt_s must be > 0")
-        if not math.isfinite(cfg.loiter_radius_m) or cfg.loiter_radius_m <= 0:
+        if cfg.enabled and (
+            not math.isfinite(cfg.loiter_radius_m) or cfg.loiter_radius_m <= 0
+        ):
             raise ValueError("loiter_radius_m must be > 0")
-        if (
+        if cfg.enabled and (
             not math.isfinite(cfg.loiter_speed_min_mps)
             or not math.isfinite(cfg.loiter_speed_max_mps)
             or cfg.loiter_speed_min_mps <= 0
@@ -133,8 +133,6 @@ class Rally(FormationTaskBase):
             raise ValueError("loiter speed bounds must satisfy 0 < min < max")
         self._conv_radius_m = cfg.convergenceRadius_m
         self._stable_hold_s = cfg.stableHold_s
-        self._compress_time_s = cfg.compressTime_s
-        self._tight_radius_m = cfg.tightRadius_m
         self._catchup_radius_m = cfg.catchup_radius_m
         self._catchup_heading_thresh_rad = cfg.catchup_heading_thresh_rad
         self._catchup_stable_s = cfg.catchup_stable_s
@@ -148,10 +146,10 @@ class Rally(FormationTaskBase):
         self._speed_min = cfg.loiter_speed_min_mps
         self._speed_max = cfg.loiter_speed_max_mps
         self._passive = bool(cfg.passive)
+        self._enabled = bool(cfg.enabled)
         # 运行期计时器
         self._catchup_stable_timer: float = 0.0
         self._stable_timer: float = 0.0
-        self._compress_elapsed: float = 0.0
         # 首次接受 RALLY 后锁存生命周期；NONE 只停控，不能替代显式 reset 开启新任务。
         self._rally_started: bool = False
         # 协调计划只在每轮集结首次收齐航程时生成，之后不再跟随回报变化。
@@ -173,6 +171,13 @@ class Rally(FormationTaskBase):
         if y.cmd is None or u.clock is None:
             raise ValueError("Rally ports must be bound")
         y.rallyCompleted = False
+        if not self._enabled:
+            # 直接 HOLD 共用同一任务流程容器，但不进入任何集结子阶段。
+            remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
+            y.cmd.stage = FormStageE.NONE if remote_stage == FormStageE.NONE else FormStageE.HOLD
+            y.cmd.step = RallyPhaseE.JOINING
+            y.cmd.pattern = 0 if y.cmd.stage == FormStageE.NONE else self._target_pattern
+            return
         if self._passive:
             # 僚机的任务指令已由 Inbound 写入黑板；本流程只保证本地待命优先于旧广播。
             remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
@@ -243,7 +248,7 @@ class Rally(FormationTaskBase):
         state_map: dict[str, FollowerStateS] = {s.id: s for s in states}
 
         # Rally 任务只看僚机回报的离散门控，不直接读取飞机连续状态。
-        # JOINING 使用 EXITED 锁存；CATCHUP 使用位置和航向误差；LOOSE/COMPRESS 使用位置误差。
+        # JOINING 使用 EXITED 锁存；CATCHUP 使用位置和航向误差；LOOSE 使用位置误差。
         # 计时器只在连续满足条件时累加，任一僚机失效或超阈值都会清零。
         if step == RallyPhaseE.JOINING:
             if not self._plan_ready:
@@ -283,27 +288,15 @@ class Rally(FormationTaskBase):
             if self._all_followers_ok(state_map, now_s, self._conv_radius_m):
                 self._stable_timer += self._dt_s
                 if self._stable_timer >= self._stable_hold_s:
-                    next_step = RallyPhaseE.COMPRESS
+                    y.cmd.stage = FormStageE.HOLD
+                    y.cmd.step = RallyPhaseE.JOINING
+                    y.rallyCompleted = True
                     self._stable_timer = 0.0
                 else:
-                    next_step = RallyPhaseE.LOOSE
+                    y.cmd.step = RallyPhaseE.LOOSE
             else:
                 self._stable_timer = 0.0
-                next_step = RallyPhaseE.LOOSE
-            y.cmd.step = next_step
-            y.cmd.pattern = self._target_pattern
-
-        else:  # step == RallyPhaseE.COMPRESS
-            self._compress_elapsed += self._dt_s
-            if self._compress_elapsed >= self._compress_time_s and self._all_followers_ok(
-                state_map, now_s, self._tight_radius_m
-            ):
-                y.cmd.stage = FormStageE.HOLD
-                y.cmd.step = RallyPhaseE.JOINING
-                y.rallyCompleted = True
-            else:
-                y.cmd.stage = FormStageE.RALLY
-                y.cmd.step = RallyPhaseE.COMPRESS
+                y.cmd.step = RallyPhaseE.LOOSE
             y.cmd.pattern = self._target_pattern
 
     def reset(self) -> None:
@@ -317,7 +310,6 @@ class Rally(FormationTaskBase):
         """清零阶段推进计时器，不影响已锁存的一次性协调计划。"""
         self._catchup_stable_timer = 0.0
         self._stable_timer = 0.0
-        self._compress_elapsed = 0.0
 
     def _reset_plan(self) -> None:
         """仅供显式复位清除一次性协调计划。"""
@@ -546,7 +538,7 @@ class Rally(FormationTaskBase):
         return True
 
     def _all_followers_ok(self, state_map: dict[str, FollowerStateS], now_s: float, threshold_m: float) -> bool:
-        """LOOSE→COMPRESS 和 COMPRESS→HOLD 门控：期望僚机全部有效且槽位误差收敛。"""
+        """LOOSE→HOLD 门控：期望僚机全部有效且槽位误差收敛。"""
         if not self._expected_ids:
             return True
         for fid in self._expected_ids:

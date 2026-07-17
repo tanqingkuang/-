@@ -259,7 +259,7 @@ class SimulationControllerSnapshotMixin:
         algorithms = list(self._node_algorithms.values())
         stages = [algorithm.current_stage() for algorithm in algorithms]
         rally_phases = [algorithm.current_rally_phase_str() for algorithm in algorithms]
-        active_rally_phases = {"RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
+        active_rally_phases = {"RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE"}
         # 按优先级聚合各节点编队阶段：重构 > 集结 > 保持 > 待命。
         if any(stage == FormStageE.RECONFIG for stage in stages):
             return "重构"

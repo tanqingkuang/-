@@ -33,7 +33,6 @@ RALLY_STATE_SEQUENCE = (
     (FormStageE.RALLY, RallyPhaseE.JOINING),
     (FormStageE.RALLY, RallyPhaseE.CATCHUP),
     (FormStageE.RALLY, RallyPhaseE.LOOSE),
-    (FormStageE.RALLY, RallyPhaseE.COMPRESS),
     (FormStageE.HOLD, RallyPhaseE.JOINING),
 )
 """集结 Entity 的合法状态及变化点继承顺序。"""

@@ -1,4 +1,4 @@
-"""集结场景僚机实体：集结期间平等飞行 → 盘旋等待 → 切出，之后跟随松散/压缩编队。"""
+"""集结场景僚机实体：集结期间平等飞行 → 盘旋等待 → 切出，之后跟随最终编队。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from src.algorithm.entity.leader_follower_rally import (
 
 
 class RallyFollowerEntity(EntityBase):
-    """集结僚机实体：JOINING 阶段平等飞行/盘旋，LOOSE/COMPRESS 阶段跟随松散槽位，HOLD 阶段维持编队。"""
+    """集结僚机实体：JOINING 阶段平等飞行/盘旋，LOOSE 阶段等待收敛，HOLD 阶段维持编队。"""
 
     PROFILE = RALLY_FOLLOWER_PROFILE
 
@@ -48,6 +48,8 @@ class RallyFollowerEntity(EntityBase):
                 "formation_task": replace(
                     cfg.rally_cfg,
                     leaderId=cfg.rally_leader_id,
+                    passive=True,
+                    enabled=cfg.rally_enabled,
                 ),
                 "tra_plan": EntityManagerInitS(cfg, self.profile),
                 "pos_calc": EntityManagerInitS(

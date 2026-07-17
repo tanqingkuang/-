@@ -1,4 +1,4 @@
-"""集结场景长机实体：JOINING 阶段平等飞行/盘旋，完成后切换到任务航线并驱动 LOOSE→COMPRESS→HOLD。"""
+"""集结场景长机实体：JOINING 阶段平等飞行/盘旋，完成后切换到任务航线并驱动 LOOSE→HOLD。"""
 
 from __future__ import annotations
 
@@ -46,7 +46,19 @@ class RallyLeaderEntity(EntityBase):
         self._expected_follower_ids: list[str] = list(rally_cfg.expectedFollowerIds)
         self._tight_radius_m: float = rally_cfg.tightRadius_m
         self._stale_timeout_s: float = rally_cfg.staleTimeout_s
-        loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
+        task_cfg = replace(
+            rally_cfg,
+            leaderId=cfg.selfInit.id,
+            passive=False,
+            enabled=cfg.rally_enabled,
+        )
+        if cfg.rally_enabled:
+            loiter_min, loiter_max = loiter_speed_bounds(cfg.velCmdLimit)
+            task_cfg = replace(
+                task_cfg,
+                loiter_speed_min_mps=loiter_min,
+                loiter_speed_max_mps=loiter_max,
+            )
 
         # 固定流程类和端口由基类定义；策略流程读取本实例绑定的 Profile。
         # 直接 HOLD 与集结任务共享同一长机流程链，差异只来自运行期任务命令。
@@ -55,12 +67,7 @@ class RallyLeaderEntity(EntityBase):
         self._initialize_process_chain(
             {
                 "inbound": FormationInboundInitS(cfg.selfInit.id),
-                "formation_task": replace(
-                    rally_cfg,
-                    leaderId=cfg.selfInit.id,
-                    loiter_speed_min_mps=loiter_min,
-                    loiter_speed_max_mps=loiter_max,
-                ),
+                "formation_task": task_cfg,
                 "tra_plan": EntityManagerInitS(cfg, self.profile),
                 "pos_calc": EntityManagerInitS(
                     entity=cfg,

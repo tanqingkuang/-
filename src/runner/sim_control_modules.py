@@ -212,7 +212,6 @@ class _NodeAlgorithm:
                 dt_s=control_period_s,
             )
         )
-        entity_rally_cfg = replace(base_rally_cfg, passive=not leader_role)
         # 所有角色统一使用集结实体；旧 leader/wingman 仅作为直接进入 HOLD 的配置标签兼容。
         profile = EntityProfileE.RALLY_LEADER if leader_role else EntityProfileE.RALLY_FOLLOWER
         self._entity: EntityBase = create_rally_entity(profile)
@@ -223,7 +222,7 @@ class _NodeAlgorithm:
                 route=leader_route or [],
                 control_period_s=control_period_s,
                 velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
-                rally_cfg=entity_rally_cfg,
+                rally_cfg=base_rally_cfg,
                 rally_leader_id=self._rally_leader_id,
                 rally_approach_speed_mps=rally_approach_speed_mps,
                 rally_layer_altitude_m=rally_layer_altitude_m,

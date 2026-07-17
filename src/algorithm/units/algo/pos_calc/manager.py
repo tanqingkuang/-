@@ -73,6 +73,9 @@ class PosCalcManager:
             _require_strategy(strategies.pos_calc, "route_table.pos_calc")
             for strategies in profile.route_table.values()
         }
+        if not entity_cfg.rally_enabled:
+            # 直接 HOLD 不会进入 Profile 中的集结状态，不创建或校验集结专用产品。
+            required.discard(PosCalcStrategyE.RALLY_JOIN)
         self._registry = {
             strategy: self._create_strategy(strategy, entity_cfg, profile.identity)
             for strategy in required
@@ -140,7 +143,7 @@ class PosCalcManager:
         if strategy_type == PosCalcStrategyE.SLOT_GEOMETRY:  # 僚机队形槽位解算产品
             strategy = SlotGeometry()
             if cfg.rally_enabled:  # 集结任务保留 CATCHUP 分层高度且不启用重构 TD
-                # 集结期间槽位由状态机连续压缩，不能再叠加普通保持的 TD 过渡。
+                # 集结期间直接使用最终槽位，不能再叠加普通保持的 TD 过渡。
                 # 分层高度只在 CATCHUP 生效，进入 LOOSE 后恢复编队槽位高度。
                 init_cfg = SlotGeometryInitS(
                     cfg.selfInit.id,

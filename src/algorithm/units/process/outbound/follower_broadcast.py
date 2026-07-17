@@ -61,7 +61,7 @@ class FollowerBroadcast:
         # 僚机回报每帧只保留当前状态，先清 outbox 防止上帧消息重复发送。
         # target 使用显式 leaderId，而不是从拓扑反推，避免多长机/旁路链路场景误投递。
         # arrived 来自实体锁存值，不能由当前 pos_err_m 反算，否则越过 M_i 后会反复抖动。
-        # pos_err_m 跟随 selfCmd：APPROACH 表示到 M_i，LOOSE/CATCHUP/COMPRESS 表示到当前槽位。
+        # pos_err_m 跟随 selfCmd：JOINING 表示到 M_i，CATCHUP/LOOSE 表示到当前槽位。
         y.outbox.clear()
         pos_err_m = dist3d(u.selfState.pos, u.selfCmd.pos)
         heading_err_rad = abs(math.remainder(u.selfState.v.vPsi - u.selfCmd.v.vPsi, 2.0 * math.pi))

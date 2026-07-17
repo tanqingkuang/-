@@ -516,7 +516,6 @@ def _build_rally_task_init(
         looseScale=float(rally_cfg_raw.get("loose_scale", 3.0)),
         convergenceRadius_m=float(rally_cfg_raw.get("convergence_radius_m", 5.0)),
         stableHold_s=float(rally_cfg_raw.get("stable_hold_s", 5.0)),
-        compressTime_s=float(rally_cfg_raw.get("compress_time_s", 30.0)),
         tightRadius_m=float(rally_cfg_raw.get("tight_radius_m", 2.0)),
         expectedFollowerIds=expected_ids,
         staleTimeout_s=float(rally_cfg_raw.get("stale_timeout_s", 2.0)),
