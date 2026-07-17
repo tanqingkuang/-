@@ -132,7 +132,61 @@ def load_terrain_layout(path: str | Path) -> dict[str, Any]:
     data = json.loads(layout_path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("terrain layout root must be an object")
+    _validate_layout_numbers(data)
     return data
+
+
+# 布局数值字段清单:前置校验只做"可转 float 且有限",正负/范围约束仍由各消费点按原语义处理。
+_CHAIN_NUMERIC_FIELDS = ("ridge_width_km", "saddle_height_factor")
+_PEAK_NUMERIC_FIELDS = (
+    "height_m",
+    "base_radius_km",
+    "aspect_ratio",
+    "risk_radius_km",
+    "buffer_radius_km",
+    "station",
+    "lateral_offset_km",
+)
+_LINK_NUMERIC_FIELDS = ("ridge_width_km", "height_m")
+
+
+def _validate_layout_numbers(layout: dict[str, Any]) -> None:
+    """前置校验布局数值字段。注意：768² 场生成约 4s,坏数据(如字符串 \"NaN\")必须在
+    加载阶段毫秒级拒绝;否则后台线程会把整张场算完才被末端 isfinite 检查拦下,
+    且主线程 peek 已经把这条注定失败的生成线程踢了出去。"""
+
+    def _ensure_finite(container: dict[str, Any], field: str, label: str) -> None:
+        """字段存在时校验可转 float 且有限。注意：缺省字段由消费点默认值兜底,不在此报错。"""
+
+        if field not in container:
+            return
+        try:
+            value = float(container[field])
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{label}.{field} 不是数值: {container[field]!r}") from error
+        if not math.isfinite(value):
+            raise ValueError(f"{label}.{field} 非有限值: {value}")
+
+    chains = layout.get("mountain_chains")
+    for chain_index, chain in enumerate(chains if isinstance(chains, list) else []):
+        # 非字典条目由各消费点按既有语义跳过,这里保持同样的容忍度。
+        if not isinstance(chain, dict):
+            continue
+        chain_label = f"mountain_chains[{chain_index}]"
+        for field in _CHAIN_NUMERIC_FIELDS:
+            _ensure_finite(chain, field, chain_label)
+        peaks = chain.get("peaks")
+        for peak_index, peak in enumerate(peaks if isinstance(peaks, list) else []):
+            if not isinstance(peak, dict):
+                continue
+            for field in _PEAK_NUMERIC_FIELDS:
+                _ensure_finite(peak, field, f"{chain_label}.peaks[{peak_index}]")
+    links = layout.get("saddle_links")
+    for link_index, link in enumerate(links if isinstance(links, list) else []):
+        if not isinstance(link, dict):
+            continue
+        for field in _LINK_NUMERIC_FIELDS:
+            _ensure_finite(link, field, f"saddle_links[{link_index}]")
 
 
 def generate_terrain_field_from_file(path: str | Path, *, resolution: int = DEFAULT_TERRAIN_RESOLUTION) -> TerrainField:
