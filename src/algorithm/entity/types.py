@@ -40,8 +40,8 @@ class VelCmdLimitS:
 class EntityProfileE(IntEnum):
     """实体身份枚举。注意：外部只选择身份，不拼装流程策略。"""
 
-    RALLY_LEADER = 1  # 集结长机：集结位置解算、任务航线和速度控制
-    RALLY_FOLLOWER = 2  # 集结僚机：集结/槽位位置解算和速度/位置控制
+    LEADER = 1  # 通用长机：按任务状态选择集结、航线和速度控制产品
+    FOLLOWER = 2  # 通用僚机：按任务状态选择集结、槽位和跟踪控制产品
 
 
 EntityStateT = tuple[FormStageE, RallyPhaseE]

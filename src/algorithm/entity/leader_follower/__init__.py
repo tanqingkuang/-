@@ -1,4 +1,4 @@
-"""统一领航跟随实体包。注意：长机与僚机均支持集结后进入队形保持。"""
+"""通用领航跟随实体包。注意：同一套长机与僚机实体同时支持直接保持和集结后保持。"""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 # 渐进压缩能力删除后，LOOSE 稳定收敛便直接进入 HOLD，不再登记中间阶段。
 # HOLD 重新使用 JOINING 占位，使完成后的策略继承保持单一且可预测。
 # 入站协议也复用这份集合校验组合，不能只改任务状态机而遗漏此处。
-RALLY_STATE_SEQUENCE = (
+FORMATION_STATE_SEQUENCE = (
     (FormStageE.NONE, RallyPhaseE.JOINING),
     (FormStageE.STANDBY, RallyPhaseE.JOINING),
     (FormStageE.RALLY, RallyPhaseE.JOINING),
@@ -41,14 +41,14 @@ RALLY_STATE_SEQUENCE = (
     (FormStageE.RALLY, RallyPhaseE.LOOSE),
     (FormStageE.HOLD, RallyPhaseE.JOINING),
 )
-"""集结 Entity 的合法状态及变化点继承顺序。"""
-RALLY_STATE_SET = frozenset(RALLY_STATE_SEQUENCE)
-"""集结 Entity 合法状态集合。注意：供入站消息提交前校验。"""
+"""领航跟随 Entity 的合法状态及变化点继承顺序。"""
+FORMATION_STATE_SET = frozenset(FORMATION_STATE_SEQUENCE)
+"""领航跟随 Entity 合法状态集合。注意：供入站消息提交前校验。"""
 
 
-RALLY_LEADER_PROFILE = EntityProfileS(
-    identity=EntityProfileE.RALLY_LEADER,
-    state_sequence=RALLY_STATE_SEQUENCE,
+LEADER_PROFILE = EntityProfileS(
+    identity=EntityProfileE.LEADER,
+    state_sequence=FORMATION_STATE_SEQUENCE,
     route_changes=(
         # 冷启动停控：三个可切换流程全部选择空产品。
         EntityRouteChangeS(
@@ -81,12 +81,12 @@ RALLY_LEADER_PROFILE = EntityProfileS(
         ),
     ),
 )
-"""集结长机身份证。注意：所有长机实例共享此不可变策略配置。"""
+"""通用长机身份证。注意：所有长机实例共享此不可变策略配置。"""
 
 
-RALLY_FOLLOWER_PROFILE = EntityProfileS(
-    identity=EntityProfileE.RALLY_FOLLOWER,
-    state_sequence=RALLY_STATE_SEQUENCE,
+FOLLOWER_PROFILE = EntityProfileS(
+    identity=EntityProfileE.FOLLOWER,
+    state_sequence=FORMATION_STATE_SEQUENCE,
     route_changes=(
         # 僚机冷启动同样停控，等待本地待命或长机广播建立有效命令。
         EntityRouteChangeS(
@@ -119,20 +119,20 @@ RALLY_FOLLOWER_PROFILE = EntityProfileS(
         ),
     ),
 )
-"""集结僚机身份证。注意：所有僚机实例共享此不可变策略配置。"""
+"""通用僚机身份证。注意：所有僚机实例共享此不可变策略配置。"""
 
 
-def create_rally_entity(identity: EntityProfileE) -> EntityBase:
+def create_leader_follower_entity(identity: EntityProfileE) -> EntityBase:
     """按实体身份创建独立实例。注意：Profile 可共享，Entity 运行状态不可共享。"""
-    if identity == EntityProfileE.RALLY_LEADER:
-        from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+    if identity == EntityProfileE.LEADER:
+        from src.algorithm.entity.leader_follower.leader import LeaderEntity
 
-        return RallyLeaderEntity()
-    if identity == EntityProfileE.RALLY_FOLLOWER:
-        from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
+        return LeaderEntity()
+    if identity == EntityProfileE.FOLLOWER:
+        from src.algorithm.entity.leader_follower.follower import FollowerEntity
 
-        return RallyFollowerEntity()
-    raise ValueError(f"不支持的集结实体身份: {identity!r}")
+        return FollowerEntity()
+    raise ValueError(f"不支持的领航跟随实体身份: {identity!r}")
 
 
 def fill_output(cxt: FormContextS, diag: PosTrackDiagS, outbox: list, y: EntityOutputS) -> None:

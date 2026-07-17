@@ -1,4 +1,4 @@
-"""集结场景僚机实体：集结期间平等飞行 → 盘旋等待 → 切出，之后跟随最终编队。"""
+"""通用僚机实体：支持直接保持，也支持完成集结流程后跟随最终编队。"""
 
 from __future__ import annotations
 
@@ -20,23 +20,23 @@ from src.algorithm.units.process.outbound import (
     FormationOutboundInitS,
     OutboundMessageE,
 )
-from src.algorithm.entity.leader_follower_rally import (
-    RALLY_FOLLOWER_PROFILE,
+from src.algorithm.entity.leader_follower import (
+    FOLLOWER_PROFILE,
     fill_output,
 )
 
 
-class RallyFollowerEntity(EntityBase):
-    """集结僚机实体：JOINING 阶段平等飞行/盘旋，LOOSE 阶段等待收敛，HOLD 阶段维持编队。"""
+class FollowerEntity(EntityBase):
+    """通用僚机实体：按配置直接保持或参与集结，最终维持编队槽位。"""
 
-    PROFILE = RALLY_FOLLOWER_PROFILE
+    PROFILE = FOLLOWER_PROFILE
 
     def init(self, cfg: EntityInitS) -> None:
-        """按配置初始化 RallyFollowerEntity。"""
+        """按配置初始化 FollowerEntity。"""
         if len(cfg.route) < 2:
-            raise ValueError("RallyFollowerEntity: route 至少需要两个航点")
+            raise ValueError("FollowerEntity: route 至少需要两个航点")
         if not isinstance(cfg.rally_cfg, RallyTaskInitS):
-            raise ValueError("RallyFollowerEntity: rally_cfg must be RallyTaskInitS")
+            raise ValueError("FollowerEntity: rally_cfg must be RallyTaskInitS")
 
         # 固定流程类和端口由基类定义；空策略流程仍使用各自业务参数正常初始化。
         # 同一个实体类同时服务直接 HOLD 和集结后 HOLD，两者只在初始化配置上有差异。
@@ -86,7 +86,7 @@ class RallyFollowerEntity(EntityBase):
         fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
 
     def reset(self) -> None:
-        """复位 RallyFollowerEntity 的动态状态。"""
+        """复位 FollowerEntity 的动态状态。"""
         reset_context(self.cxt)
         self._remote.stage = RemoteCmdS().stage
         self._reset_processes()
@@ -95,5 +95,5 @@ class RallyFollowerEntity(EntityBase):
         self._outbox.clear()
 
     def close(self) -> None:
-        """释放 RallyFollowerEntity 持有的资源。"""
+        """释放 FollowerEntity 持有的资源。"""
         return None

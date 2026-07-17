@@ -14,8 +14,8 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 from src.common.envelope import MessageEnvelope
 from tests.llt._geo_route import geodetic_config
-from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
-from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+from src.algorithm.entity.leader_follower.follower import FollowerEntity
+from src.algorithm.entity.leader_follower.leader import LeaderEntity
 from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RallyJoinPos
 from src.runner.sim_control import (
@@ -119,7 +119,7 @@ def _snapshot_node_phases(controller: SimulationController) -> dict[str, str]:
     return {node.node_id: node.rally_phase for node in controller.get_snapshot().nodes}
 
 
-def _rally_join(entity: RallyLeaderEntity | RallyFollowerEntity) -> RallyJoinPos:
+def _rally_join(entity: LeaderEntity | FollowerEntity) -> RallyJoinPos:
     """取得 Manager 缓存的集结位置解算产品，供白盒几何断言使用。"""
 
     strategy = entity._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
@@ -170,9 +170,9 @@ class SimControlRallyTests(unittest.TestCase):
             snapshot = controller.get_snapshot()
 
             self.assertEqual(result.code, "OK")
-            self.assertIsInstance(controller._node_algorithms["R01"]._entity, RallyLeaderEntity)
-            self.assertIsInstance(controller._node_algorithms["R02"]._entity, RallyFollowerEntity)
-            self.assertIsInstance(controller._node_algorithms["R03"]._entity, RallyFollowerEntity)
+            self.assertIsInstance(controller._node_algorithms["R01"]._entity, LeaderEntity)
+            self.assertIsInstance(controller._node_algorithms["R02"]._entity, FollowerEntity)
+            self.assertIsInstance(controller._node_algorithms["R03"]._entity, FollowerEntity)
             self.assertIsNotNone(snapshot.route)
             assert snapshot.route is not None
             self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=3)

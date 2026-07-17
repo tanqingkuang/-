@@ -1,4 +1,4 @@
-"""集结场景长机实体：JOINING 阶段平等飞行/盘旋，完成后切换到任务航线并驱动 LOOSE→HOLD。"""
+"""通用长机实体：支持直接保持，也支持集结完成后沿任务航线保持编队。"""
 
 from __future__ import annotations
 
@@ -23,24 +23,24 @@ from src.algorithm.units.process.outbound import (
     FormationOutboundInitS,
     OutboundMessageE,
 )
-from src.algorithm.entity.leader_follower_rally import (
-    RALLY_LEADER_PROFILE,
+from src.algorithm.entity.leader_follower import (
+    LEADER_PROFILE,
     fill_output,
 )
 
 
-class RallyLeaderEntity(EntityBase):
-    """集结长机实体：JOINING 阶段平等参与汇合，完成后沿任务航线飞行并编排队形压缩。"""
+class LeaderEntity(EntityBase):
+    """通用长机实体：按配置直接保持或参与集结，随后沿任务航线飞行。"""
 
-    PROFILE = RALLY_LEADER_PROFILE
+    PROFILE = LEADER_PROFILE
 
     def init(self, cfg: EntityInitS) -> None:
-        """按配置初始化 RallyLeaderEntity。"""
+        """按配置初始化 LeaderEntity。"""
         if len(cfg.route) < 2:
-            raise ValueError("RallyLeaderEntity: route 至少需要两个航点")
+            raise ValueError("LeaderEntity: route 至少需要两个航点")
         rally_cfg = cfg.rally_cfg
         if not isinstance(rally_cfg, RallyTaskInitS):
-            raise ValueError("RallyLeaderEntity: rally_cfg must be RallyTaskInitS")
+            raise ValueError("LeaderEntity: rally_cfg must be RallyTaskInitS")
 
         self._rally_completed = False
         self._expected_follower_ids: list[str] = list(rally_cfg.expectedFollowerIds)
@@ -118,7 +118,7 @@ class RallyLeaderEntity(EntityBase):
         fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
 
     def reset(self) -> None:
-        """复位 RallyLeaderEntity 的动态状态。"""
+        """复位 LeaderEntity 的动态状态。"""
         reset_context(self.cxt)
         self._remote.stage = RemoteCmdS().stage
         self._previous_stage = FormStageE.NONE
@@ -129,7 +129,7 @@ class RallyLeaderEntity(EntityBase):
         self._inbox.clear()
 
     def close(self) -> None:
-        """释放 RallyLeaderEntity 持有的资源。"""
+        """释放 LeaderEntity 持有的资源。"""
         return None
 
 

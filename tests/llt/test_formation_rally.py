@@ -33,9 +33,9 @@ from src.algorithm.context.leaf_types import (
     copy_follower_state,
     copy_formation_analysis,
 )
-from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
-from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
-from src.algorithm.entity.leader_follower_rally import create_rally_entity
+from src.algorithm.entity.leader_follower.follower import FollowerEntity
+from src.algorithm.entity.leader_follower.leader import LeaderEntity
+from src.algorithm.entity.leader_follower import create_leader_follower_entity
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
@@ -100,7 +100,7 @@ from src.algorithm.units.process.tra_plan import TraPlanManager
 from src.common.envelope import MessageEnvelope
 
 
-def _entity_rally_join(entity: RallyLeaderEntity | RallyFollowerEntity) -> RallyJoinPos:
+def _entity_rally_join(entity: LeaderEntity | FollowerEntity) -> RallyJoinPos:
     """取得 Manager 缓存的 RallyJoinPos，仅供既有白盒轨迹夹具驱动内部状态。"""
 
     strategy = entity._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
@@ -2266,7 +2266,7 @@ def _cross_rally_slot(
 
 
 def _drive_follower_across_rally_slot(
-    follower: RallyFollowerEntity,
+    follower: FollowerEntity,
     *,
     start_now_s: float = 0.0,
 ) -> EntityOutputS:
@@ -3554,16 +3554,16 @@ class RallyEntityTests(unittest.TestCase):
     def test_factory_creates_independent_entities_bound_to_immutable_profiles(self) -> None:
         """工厂应按身份创建独立实体，而同类实例共享不可变 Profile。"""
 
-        leader_a = create_rally_entity(EntityProfileE.RALLY_LEADER)
-        leader_b = create_rally_entity(EntityProfileE.RALLY_LEADER)
-        follower = create_rally_entity(EntityProfileE.RALLY_FOLLOWER)
+        leader_a = create_leader_follower_entity(EntityProfileE.LEADER)
+        leader_b = create_leader_follower_entity(EntityProfileE.LEADER)
+        follower = create_leader_follower_entity(EntityProfileE.FOLLOWER)
 
-        self.assertIsInstance(leader_a, RallyLeaderEntity)
-        self.assertIsInstance(follower, RallyFollowerEntity)
+        self.assertIsInstance(leader_a, LeaderEntity)
+        self.assertIsInstance(follower, FollowerEntity)
         self.assertIsNot(leader_a, leader_b)
         self.assertIs(leader_a.profile, leader_b.profile)
-        self.assertEqual(leader_a.profile.identity, EntityProfileE.RALLY_LEADER)
-        self.assertEqual(follower.profile.identity, EntityProfileE.RALLY_FOLLOWER)
+        self.assertEqual(leader_a.profile.identity, EntityProfileE.LEADER)
+        self.assertEqual(follower.profile.identity, EntityProfileE.FOLLOWER)
         self.assertNotIn("processes", EntityInitS.__dataclass_fields__)
 
     def test_direct_hold_skips_rally_products_and_loiter_speed_validation(self) -> None:
@@ -3577,9 +3577,9 @@ class RallyEntityTests(unittest.TestCase):
             "velCmdLimit": VelCmdLimitS(forwardMin=30.0),
             "rally_enabled": False,
         }
-        leader = create_rally_entity(EntityProfileE.RALLY_LEADER)
+        leader = create_leader_follower_entity(EntityProfileE.LEADER)
         leader.init(EntityInitS(selfInit=FormSelfInitS("R01"), **common))
-        follower = create_rally_entity(EntityProfileE.RALLY_FOLLOWER)
+        follower = create_leader_follower_entity(EntityProfileE.FOLLOWER)
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -3596,14 +3596,14 @@ class RallyEntityTests(unittest.TestCase):
         route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
         rally_cfg = _rally_cfg(expected=("R02",))
         rally_cfg.passive = True  # 实体身份必须覆盖调用方给出的相反模式
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(EntityInitS(
             selfInit=FormSelfInitS("R01"),
             commInit=_comm_init(),
             route=route,
             rally_cfg=rally_cfg,
         ))
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(EntityInitS(
             selfInit=FormSelfInitS("R02"),
             commInit=_comm_init(),
@@ -3612,8 +3612,8 @@ class RallyEntityTests(unittest.TestCase):
             rally_leader_id="R01",
         ))
 
-        self.assertNotIn("step", RallyLeaderEntity.__dict__)
-        self.assertNotIn("step", RallyFollowerEntity.__dict__)
+        self.assertNotIn("step", LeaderEntity.__dict__)
+        self.assertNotIn("step", FollowerEntity.__dict__)
         expected_types = [
             FormationInbound,
             Rally,
@@ -3673,7 +3673,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_follower_reset_does_not_restore_plan_from_empty_inbox(self) -> None:
         """有效计划后复位僚机实体，下一拍空 inbox 不得回灌旧 T_ref 和圈数。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -3715,13 +3715,13 @@ class RallyEntityTests(unittest.TestCase):
             "A04": _motion(east=-2500.0, north=200.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
             "A05": _motion(east=-3500.0, north=-200.0, h=500.0, v_east=20.0, vd=20.0, v_psi=0.0),
         }
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(EntityInitS(
             selfInit=FormSelfInitS("A01"), commInit=comm_init, route=route, rally_cfg=rally_cfg,
         ))
-        followers: dict[str, RallyFollowerEntity] = {}
+        followers: dict[str, FollowerEntity] = {}
         for node_id in node_ids[1:]:
-            follower = RallyFollowerEntity()
+            follower = FollowerEntity()
             follower.init(EntityInitS(
                 selfInit=FormSelfInitS(node_id), commInit=comm_init, route=route,
                 rally_cfg=rally_cfg, rally_leader_id="A01",
@@ -3840,7 +3840,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_follower_does_not_accept_plan_without_own_loop_assignment(self) -> None:
         """广播缺少本机圈数时僚机不得把计划视为可执行。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -3867,7 +3867,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_follower_receives_own_fixed_loop_assignment(self) -> None:
         """僚机仅在收到本机非负圈数时启用同步计划并接线到位置解算。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -3894,7 +3894,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_follower_joining_uses_speed_only_forward_control(self) -> None:
         """JOINING 前向通道只跟踪协调速度，进入 CATCHUP 后恢复位置跟踪。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -3960,7 +3960,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_follower_standby_loiters_and_broadcasts_from_entity_layer(self) -> None:
         """验证僚机实体在 STANDBY 阶段自行本地盘旋，并继续发送待命回报。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4000,7 +4000,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_follower_standby_keeps_subject_flow_slots(self) -> None:
         """验证僚机待命不在实体主体流程早退，仍经过轨迹规划槽位后再进入位置解算。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4036,7 +4036,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_follower_catchup_keeps_layered_altitude_before_loose(self) -> None:
         """验证 CATCHUP 阶段仍保持分层高度，直到进入 LOOSE 后再收敛到正常槽位高度。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4074,7 +4074,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_follower_latches_arrival_and_uses_fixed_slot_after_step_one(self) -> None:
         """验证僚机到达松散点后进入 EXITED 上报，并在后续阶段使用固定槽位。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4115,7 +4115,7 @@ class RallyEntityTests(unittest.TestCase):
 
     def test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start(self) -> None:
         """验证冷启动尚无有效 T_ref 时，已到目标点的僚机进入盘旋而不是直接切出。"""
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4141,7 +4141,7 @@ class RallyEntityTests(unittest.TestCase):
 
     def test_rally_follower_none_clears_join_state_for_compatible_stop(self) -> None:
         """验证僚机进入兼容 NONE 停控时清除 EXITED 位置状态，但不声明新任务生命周期。"""
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4170,7 +4170,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_follower_none_outputs_current_position_zero_velocity(self) -> None:
         """验证僚机收到 NONE 时输出当前位置零速并清到达上报。"""
 
-        follower = RallyFollowerEntity()
+        follower = FollowerEntity()
         follower.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R02"),
@@ -4197,7 +4197,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_leader_completes_and_outputs_formation_analysis_once(self) -> None:
         """验证集结长机完成转换首帧输出编队分析，后续帧不重复输出。"""
 
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
@@ -4234,7 +4234,7 @@ class RallyEntityTests(unittest.TestCase):
 
     def test_rally_leader_none_clears_join_and_completion_latches(self) -> None:
         """验证长机进入兼容 NONE 停控时清理位置与完成显示锁存。"""
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
@@ -4262,7 +4262,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_leader_standby_parses_follower_status_and_broadcasts(self) -> None:
         """验证长机待命阶段正常解析僚机回报，并继续广播 STANDBY 阶段。"""
 
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
@@ -4294,7 +4294,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_leader_standby_does_not_clear_entity_state_before_flow(self) -> None:
         """验证 STANDBY 不在实体主体流程前清理已有状态，清理职责不属于待命位置解算。"""
 
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
@@ -4323,7 +4323,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_leader_standby_keeps_subject_flow_slots(self) -> None:
         """验证长机待命不在实体主体流程早退，仍经过任务编排槽位后再进入位置解算。"""
 
-        leader = RallyLeaderEntity()
+        leader = LeaderEntity()
         leader.init(
             EntityInitS(
                 selfInit=FormSelfInitS("R01"),
@@ -4361,7 +4361,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_leader_init_rejects_empty_route_list(self) -> None:
         """验证 route=[] 时抛出 ValueError 而非 IndexError。"""
         with self.assertRaises(ValueError):
-            RallyLeaderEntity().init(
+            LeaderEntity().init(
                 EntityInitS(
                     selfInit=FormSelfInitS("R01"),
                     commInit=_comm_init(),
@@ -4380,7 +4380,7 @@ class RallyEntityTests(unittest.TestCase):
     def test_rally_leader_init_rejects_horizontally_degenerate_route(self) -> None:
         """验证长机 init 时拒绝水平退化的统一 route 第一航段。"""
         with self.assertRaises(ValueError):
-            RallyLeaderEntity().init(
+            LeaderEntity().init(
                 EntityInitS(
                     selfInit=FormSelfInitS("R01"),
                     commInit=_comm_init(),

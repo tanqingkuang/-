@@ -225,10 +225,10 @@ src/algorithm/
 ├── entity/                          # L1 实体（对象组）——身份与固定流程链
 │   ├── base.py                      #   EntityBase：固定六步 init/step/reset/close
 │   ├── types.py                     #   边界结构体、Profile 与运行时表
-│   └── leader_follower_rally/       #   通用领航跟随实体（保持/集结共用）
+│   └── leader_follower/       #   通用领航跟随实体（保持/集结共用）
 │       ├── __init__.py              #     长机/僚机不可变 Profile 与实体工厂
-│       ├── leader.py                #     RallyLeaderEntity：通用长机
-│       └── follower.py              #     RallyFollowerEntity：通用僚机
+│       ├── leader.py                #     LeaderEntity：通用长机
+│       └── follower.py              #     FollowerEntity：通用僚机
 └── units/                           # L2 单元
     ├── algo/                        # 算法组（不碰 Mode）
     │   ├── pos_calc/                #   PosCalc 位置解算

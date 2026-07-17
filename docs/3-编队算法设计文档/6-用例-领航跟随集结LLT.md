@@ -17,8 +17,8 @@
 - `src/algorithm/units/process/inbound/rally_leader_follower.py`
 - `src/algorithm/units/algo/pos_calc/rally_join_pos.py`（原 `rally_approach.py`，已整体替换并删除）
 - `src/algorithm/units/algo/pos_calc/slot_geometry.py`（CATCHUP/LOOSE/HOLD 共用；原 `catchup_align.py` 已删除）
-- `src/algorithm/entity/leader_follower_rally/leader.py`
-- `src/algorithm/entity/leader_follower_rally/follower.py`
+- `src/algorithm/entity/leader_follower/leader.py`
+- `src/algorithm/entity/leader_follower/follower.py`
 - `src/runner/sim_control_modules.py`、`src/runner/sim_control_routes.py`、`src/runner/sim_controller.py`（原 `sim_control.py`，已拆分为多个模块）
 
 设计依据：`docs/3-编队算法设计文档/6-用例-领航跟随集结LLD.md`
@@ -375,7 +375,7 @@ def _rally_cfg(
 
 ## 11/12. TestRallyEntity - 集结长机/僚机实体主链路
 
-> 本节原分为 TestRallyLeaderEntity/TestRallyFollowerEntity 两节，列出的测试名（`test_rally_before_arrival_uses_rally_approach`、
+> 本节原分为 TestLeaderEntity/TestFollowerEntity 两节，列出的测试名（`test_rally_before_arrival_uses_rally_approach`、
 > `_self_arrived`、`_rally_target` 等）描述的是 `RallyApproach` 直飞 M_i、到达即锁存的旧流程测试点，随
 > `RallyJoinPos`（切线进圆）重构已全部替换。当前长机/僚机实体级测试合并为同一个 `RallyEntityTests`
 > 类（`tests/llt/test_formation_rally.py`），下表按实际用例重写。
@@ -400,7 +400,7 @@ def _rally_cfg(
 | ------ | ---- |
 | `test_repository_rally_demo_5_aircraft_config_loads` | `configs/rally_demo_5_aircraft.json` 存在且能被 `sim_control.load_config()` 正常解析，旧三机 `configs/rally_demo.json` 不再保留 |
 | `test_config_loader_rejects_removed_rally_route_fields` | 配置出现已移除的独立集结航线字段时明确报错，并提示统一使用 `route_file` |
-| `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `RallyLeaderEntity`，`role="rally_follower"` 创建 `RallyFollowerEntity` |
+| `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `LeaderEntity`，`role="rally_follower"` 创建 `FollowerEntity` |
 | `test_start_rally_first_tick_prime_does_not_advance_ordinary_nodes_or_communication` | `leader/wingman` 与集结角色共用通用实体，集结首拍预热不推进普通保持节点或通信 |
 | `test_rally_config_builds_expected_follower_ids` | `rally.expected_follower_ids` 注入 `RallyTaskInitS.expectedFollowerIds` |
 | `test_validate_accepts_rally_roles_with_route_only` | 集结角色只配置统一 `route` 时通过校验，首点作为集结中心、首段作为集结方向 |
@@ -447,7 +447,7 @@ def _rally_cfg(
 | `rally_loose_target()` ENU 水平集结几何、右侧轴符号、缩放/高度及非零倾角边界 | TestRallyLooseTarget |
 | `loiter_speed_bounds()` 上下限推导与序校验 | TestRallyLoiterSpeedBounds |
 | SlotGeometry 最终槽位与转弯前馈 | TestSlotGeometry |
-| RallyLeaderEntity/RallyFollowerEntity 主链路（JOINING→CATCHUP/LOOSE→HOLD、NONE 复位） | TestRallyEntity |
+| LeaderEntity/FollowerEntity 主链路（JOINING→CATCHUP/LOOSE→HOLD、NONE 复位） | TestRallyEntity |
 | FormationAnalysis 只在正常完成后输出一次 | TestRallyEntity |
 | 配置解析、角色映射、now_s 注入、remote=RALLY 接入、完成后自动切 HOLD、锁存清空 | TestRallySimControlIntegration |
 | 多机闭环集结、断链冻结、恢复继续、重启 | TestRallyEndToEndScenario |

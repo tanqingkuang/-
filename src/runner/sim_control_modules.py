@@ -22,7 +22,7 @@ from src.algorithm.context.leaf_types import (
     copy_motion,
 )
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.leader_follower_rally import create_rally_entity
+from src.algorithm.entity.leader_follower import create_leader_follower_entity
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
@@ -213,8 +213,8 @@ class _NodeAlgorithm:
             )
         )
         # 所有角色统一使用集结实体；旧 leader/wingman 仅作为直接进入 HOLD 的配置标签兼容。
-        profile = EntityProfileE.RALLY_LEADER if leader_role else EntityProfileE.RALLY_FOLLOWER
-        self._entity: EntityBase = create_rally_entity(profile)
+        profile = EntityProfileE.LEADER if leader_role else EntityProfileE.FOLLOWER
+        self._entity: EntityBase = create_leader_follower_entity(profile)
         self._entity.init(
             EntityInitS(
                 selfInit=FormSelfInitS(node_id),

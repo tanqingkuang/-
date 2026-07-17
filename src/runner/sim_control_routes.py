@@ -594,7 +594,7 @@ def _build_rally_approach_speed(config: dict[str, object] | None) -> float:
     """从 rally_cfg.approach_speed_mps 读取僚机集结接近速度。注意：未配置时保持 EntityInitS 默认 20 m/s。"""
     # approach_speed_mps 是僚机本地 APPROACH 速度，不属于长机 Rally 状态机门控。
     # 因此它不放进 RallyTaskInitS，避免长机任务单元携带僚机控制细节。
-    # 控制器在装配 RallyFollowerEntity 时单独把该值写入 EntityInitS。
+    # 控制器在装配 FollowerEntity 时单独把该值写入 EntityInitS。
     # 旧配置没有该字段时沿用 20 m/s，保持既有 demo 行为。
     # 若配置了负值，加载阶段直接失败，避免到实体初始化时才报模块初始化错误。
     rally_cfg_raw = (config or {}).get("rally_cfg")

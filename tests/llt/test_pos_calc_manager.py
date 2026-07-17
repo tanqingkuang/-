@@ -29,10 +29,10 @@ from src.algorithm.entity.types import (
     EntityRuntimeS,
     EntityStrategiesS,
 )
-from src.algorithm.entity.leader_follower_rally import (
-    RALLY_FOLLOWER_PROFILE,
-    RALLY_LEADER_PROFILE,
-    RALLY_STATE_SEQUENCE,
+from src.algorithm.entity.leader_follower import (
+    FOLLOWER_PROFILE,
+    LEADER_PROFILE,
+    FORMATION_STATE_SEQUENCE,
 )
 from src.algorithm.units.algo.pos_calc import (
     PosCalcManager,
@@ -74,7 +74,7 @@ def _runtime() -> EntityRuntimeS:
 
 
 def _entity_cfg(
-    profile: EntityProfileS = RALLY_LEADER_PROFILE,
+    profile: EntityProfileS = LEADER_PROFILE,
     **kwargs: object,
 ) -> EntityManagerInitS:
     """构造由完整 Profile 驱动的位置解算初始化参数。"""
@@ -105,7 +105,7 @@ class PosCalcManagerTests(unittest.TestCase):
         self.assertEqual(
             {
                 state: strategies.pos_calc
-                for state, strategies in RALLY_LEADER_PROFILE.route_table.items()
+                for state, strategies in LEADER_PROFILE.route_table.items()
             },
             expected,
         )
@@ -137,8 +137,8 @@ class PosCalcManagerTests(unittest.TestCase):
         """集结产品的角色初始化不应限制完整表只能出现一种普通位置策略。"""
 
         profile = EntityProfileS(
-            identity=EntityProfileE.RALLY_LEADER,
-            state_sequence=RALLY_STATE_SEQUENCE,
+            identity=EntityProfileE.LEADER,
+            state_sequence=FORMATION_STATE_SEQUENCE,
             route_changes=(
                 EntityRouteChangeS(
                     (FormStageE.NONE, RallyPhaseE.JOINING),
@@ -278,7 +278,7 @@ class PosCalcManagerTests(unittest.TestCase):
 
         runtime = _runtime()
         cfg = _entity_cfg(
-            RALLY_FOLLOWER_PROFILE,
+            FOLLOWER_PROFILE,
             selfInit=FormSelfInitS("A02"),
             commInit=FormCommInitS(
                 formPat=["wedge"],
@@ -398,7 +398,7 @@ class PosCalcManagerTests(unittest.TestCase):
         follower_manager.bind(follower_runtime)
         follower_manager.init(
             _entity_cfg(
-                RALLY_FOLLOWER_PROFILE,
+                FOLLOWER_PROFILE,
                 selfInit=FormSelfInitS("A02"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],
