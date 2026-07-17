@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from src.runner.sim_control_constants import _DEFAULT_ALGORITHM_DECIMATION
 from tests.st.support import thresholds
 from tests.st.support.metrics import _distance3d, _leader_id, _node_by_id, _obstacle_margin, _obstacles, _route_end
 from tests.st.support.runner import ScenarioRun
@@ -35,8 +36,16 @@ def run_invariants(run: ScenarioRun) -> list[CheckIssue]:
     return issues
 
 
+def _effective_log_sample_period_s(config: dict[str, Any]) -> float:
+    """按运行时契约计算日志采样周期：10Hz 与算法周期取更快者。"""
+
+    step_s = float(config.get("step_s", 0.005))
+    decimation = int(config.get("algorithm_decimation", _DEFAULT_ALGORITHM_DECIMATION))
+    return min(thresholds.LOG_SAMPLE_PERIOD_S, step_s * decimation)
+
+
 def check_run_completed(run: ScenarioRun) -> list[CheckIssue]:
-    """UT-01 运行完成性。注意：帧数按当前日志 10Hz 采样校验。"""
+    """UT-01 运行完成性。注意：帧数期望跟随"10Hz 与算法频率取快者"的采样契约。"""
 
     issues: list[CheckIssue] = []
     scenario = run.scenario
@@ -55,7 +64,7 @@ def check_run_completed(run: ScenarioRun) -> list[CheckIssue]:
     final_time = float(run.snapshots[-1].get("time_s", 0.0))
     if abs(final_time - duration) > thresholds.LOG_SAMPLE_PERIOD_S + thresholds.LIMIT_EPS:
         issues.append(CheckIssue(scenario, "UT-01", "仿真末帧未推进到配置时长", time_s=final_time, field="time_s", actual=final_time, limit=duration))
-    expected_frames = round(duration / thresholds.LOG_SAMPLE_PERIOD_S)
+    expected_frames = round(duration / _effective_log_sample_period_s(run.config))
     actual_frames = len(run.snapshots)
     if abs(actual_frames - expected_frames) > 1:
         issues.append(CheckIssue(scenario, "UT-01", "快照帧数与日志采样周期不匹配", field="snapshots", actual=actual_frames, limit=f"{expected_frames}±1"))

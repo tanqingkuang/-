@@ -998,7 +998,7 @@ class SimulationControllerTests(unittest.TestCase):
             controller.close()
 
     def test_realtime_logging_uses_sim_time_10_hz(self) -> None:
-        """实时 tick 路径下日志应按仿真时间 10Hz 记录，避免不同倍频采样点不一致。"""
+        """实时 tick 路径下日志应按仿真时间等间隔记录（算法快于 10Hz 时对齐算法节拍），倍率不得影响采样点。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             config = {
@@ -1032,7 +1032,9 @@ class SimulationControllerTests(unittest.TestCase):
 
             logged_times = [round(snapshot.time_s, 3) for snapshot in controller._logger.snapshots]
 
-            self.assertEqual(logged_times, [0.1, 0.2, 0.3, 0.4, 0.5])
+            # step 0.005 × 分频 3 → 算法周期 0.015s（约 66.7Hz）快于 10Hz，
+            # 采样对齐算法节拍：100 个 tick 共 0.5s，应得 0.015 等距的 33 个样本。
+            self.assertEqual(logged_times, [round(0.015 * k, 3) for k in range(1, 34)])
             controller.close()
 
     def test_read_timed_snapshots_returns_incremental_immutable_batches(self) -> None:
@@ -1055,13 +1057,14 @@ class SimulationControllerTests(unittest.TestCase):
             first_cursor, first_batch = controller.read_timed_snapshots(cursor)
             self.assertIsInstance(first_batch, tuple)
             self.assertIsNot(first_batch, controller._logger.snapshots)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in first_batch], [0.1])
-            self.assertEqual(first_cursor.next_index, 1)
+            # step 0.005 × 默认分频 10 → 算法周期 0.05s，采样对齐算法节拍。
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in first_batch], [0.05, 0.1])
+            self.assertEqual(first_cursor.next_index, 2)
 
             controller.step(20)
             second_cursor, second_batch = controller.read_timed_snapshots(first_cursor)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in second_batch], [0.2])
-            self.assertEqual(second_cursor.next_index, 2)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in second_batch], [0.15, 0.2])
+            self.assertEqual(second_cursor.next_index, 4)
             unchanged_cursor, empty_batch = controller.read_timed_snapshots(second_cursor)
             self.assertEqual(unchanged_cursor, second_cursor)
             self.assertEqual(empty_batch, ())
@@ -1081,7 +1084,8 @@ class SimulationControllerTests(unittest.TestCase):
             controller._logger._file_logging_disabled = True
             controller.step(20)
             old_cursor, old_batch = controller.read_timed_snapshots(None)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in old_batch], [0.1])
+            # step 0.005 × 默认分频 10 → 算法周期 0.05s，采样对齐算法节拍。
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in old_batch], [0.05, 0.1])
 
             self.assertEqual(controller.reset().code, "OK")
             controller._logger._file_logging_disabled = True
@@ -1089,8 +1093,8 @@ class SimulationControllerTests(unittest.TestCase):
             new_cursor, new_batch = controller.read_timed_snapshots(old_cursor)
 
             self.assertNotEqual(new_cursor.run_generation, old_cursor.run_generation)
-            self.assertEqual(new_cursor.next_index, 1)
-            self.assertEqual([round(snapshot.time_s, 6) for snapshot in new_batch], [0.1])
+            self.assertEqual(new_cursor.next_index, 2)
+            self.assertEqual([round(snapshot.time_s, 6) for snapshot in new_batch], [0.05, 0.1])
             controller.close()
 
     def test_realtime_snapshot_generation_is_limited_to_display_rate(self) -> None:
@@ -1196,6 +1200,82 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertEqual(logged_times, [0.1])
         controller.close()
 
+    def test_file_logging_disabled_by_default(self) -> None:
+        """文件日志默认关闭：不创建 logs/run-* 目录，内存快照仍正常记录。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.1,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                # 内存快照供 GUI 尾迹/回放消费，不受文件开关影响。
+                _cursor, timed_snapshots = controller.read_timed_snapshots(None)
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.code, "OK")
+            self.assertFalse((Path(tmp) / "logs").exists())
+            self.assertTrue(timed_snapshots)
+
+    def test_set_file_log_enabled_overrides_config_default(self) -> None:
+        """set_file_log_enabled(True) 应在配置未声明 log_enabled 时强制落盘，供 ST/批处理使用。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                controller.set_file_log_enabled(True)
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.1,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(len(list((Path(tmp) / "logs").glob("run-*"))), 1)
+
+    def test_snapshot_log_sampling_follows_algorithm_rate(self) -> None:
+        """算法频率高于 10Hz 时日志采样必须对齐算法频率，评测序列不得漏拍。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                result = controller.run_until_complete(
+                    {
+                        # step 0.005 × 默认分频 10 → 算法周期 0.05s（20Hz），高于 10Hz 落盘节拍。
+                        "duration_s": 0.2,
+                        "step_s": 0.005,
+                        "log_enabled": True,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    }
+                )
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+            self.assertEqual(result.code, "OK")
+            run_dirs = list((Path(tmp) / "logs").glob("run-*"))
+            lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+            times = [round(json.loads(line)["time_s"], 6) for line in lines]
+            # 每个算法拍都要有对应日志样本，耗时/指令/饱和序列才不会隔拍丢失。
+            self.assertEqual(times, [0.05, 0.1, 0.15, 0.2])
+
     def test_timed_data_logger_persists_snapshot_files(self) -> None:
         """关键数据日志应落盘到 logs/run-*/snapshots.jsonl，便于仿真后查找。"""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1207,6 +1287,8 @@ class SimulationControllerTests(unittest.TestCase):
                     {
                         "duration_s": 0.1,
                         "step_s": 0.01,
+                        # 文件日志默认关闭，落盘类用例需显式打开开关。
+                        "log_enabled": True,
                         "nodes": [{"node_id": "A01"}],
                         "links": [],
                     }
@@ -1234,6 +1316,8 @@ class SimulationControllerTests(unittest.TestCase):
                     {
                         "duration_s": 0.1,
                         "step_s": 0.01,
+                        # 文件日志默认关闭，落盘类用例需显式打开开关。
+                        "log_enabled": True,
                         "nodes": [{"node_id": "A01"}],
                         "links": [],
                     }
@@ -1266,9 +1350,20 @@ class SimulationControllerTests(unittest.TestCase):
                 "track_vel_err_x_mps",
                 "track_vel_err_y_mps",
                 "track_vel_err_z_mps",
+                # 评测补充字段：原始控制指令、饱和证据与算法耗时。
+                "cmd_acc_east_mps2",
+                "cmd_acc_north_mps2",
+                "cmd_acc_up_mps2",
+                "acc_saturated",
+                "lateral_saturated",
+                "algo_step_ms",
             ):
                 self.assertIn(key, node)
                 self.assertIsInstance(node[key], (int, float))
+            # 槽位上下文字段必须存在；默认队形下首节点占 (0,0,0) 槽位，无队形时为 None。
+            for key in ("slot_x_m", "slot_y_m", "slot_z_m"):
+                self.assertIn(key, node)
+                self.assertTrue(node[key] is None or isinstance(node[key], (int, float)))
 
     def test_data_logger_opens_files_only_after_first_tick(self) -> None:
         """加载配置和 reset 不应创建空 run 目录，首次推进仿真时才创建日志目录。"""
@@ -1278,6 +1373,8 @@ class SimulationControllerTests(unittest.TestCase):
                 os.chdir(tmp)
                 config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
                 controller = SimulationController()
+                # 文件日志默认关闭，本用例验证的是"目录延迟创建"语义，需强制开启。
+                controller.set_file_log_enabled(True)
                 self.assertEqual(controller.load_config(str(config_path)).code, "OK")
                 self.assertFalse((Path(tmp) / "logs").exists())
 
@@ -1308,6 +1405,8 @@ class SimulationControllerTests(unittest.TestCase):
             try:
                 os.chdir(tmp)
                 controller = SimulationController()
+                # 文件日志默认关闭，本用例验证的是"写失败降级"语义，需强制开启。
+                controller.set_file_log_enabled(True)
                 config_path = _write_config(Path(tmp), duration_s=0.1, step_s=0.01)
                 self.assertEqual(controller.load_config(str(config_path)).code, "OK")
                 self.assertEqual(controller.step(9).code, "OK")
@@ -1399,7 +1498,10 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(payload["time_s"], 1.235)
             self.assertEqual(payload["duration_s"], 2.346)
             self.assertNotIn("step_s", payload)
-            self.assertNotIn("route", payload)
+            # 当前航段几何自本版起落盘，供离线分析推导弯道外甩等裁判量；精度沿用 _m 两位小数。
+            self.assertEqual(payload["route"]["start_x_m"], 0.01)
+            self.assertEqual(payload["route"]["end_y_m"], 3.46)
+            self.assertIn("turn_sign", payload["route"])
             self.assertNotIn("route_segments", payload)
             self.assertEqual(node["x_m"], 1.24)
             self.assertEqual(node["altitude_m"], 1234.57)

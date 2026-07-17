@@ -793,7 +793,7 @@ class GuiViewInteractionTests(unittest.TestCase):
         self.assertEqual([point.path_distance for point in converted.nodes[0].trail], [12.0, 24.0])
 
     def test_adapter_trail_sampling_is_independent_of_gui_poll_frequency(self) -> None:
-        """相同仿真区间必须得到相同 10 Hz 尾迹，不能把 GUI 轮询频率当采样时钟。"""
+        """相同仿真区间必须得到相同的固定节拍尾迹，不能把 GUI 轮询频率当采样时钟。"""
 
         self._load_ui_config(duration_s=2.0, playback_rate=7.0)
         for _ in range(7):
@@ -808,7 +808,8 @@ class GuiViewInteractionTests(unittest.TestCase):
         delayed = self.window.sim.snapshot()
         delayed_times = [round(point.time, 6) for point in delayed.nodes[0].trail]
 
-        self.assertEqual(frequent_times, [round(index * 0.1, 6) for index in range(8)])
+        # step 0.005 × 默认分频 10 → 采样对齐算法节拍 0.05s：0.7s 仿真共 15 个尾迹点。
+        self.assertEqual(frequent_times, [round(index * 0.05, 6) for index in range(15)])
         self.assertEqual(delayed_times, frequent_times)
 
     def test_adapter_keeps_current_aircraft_position_outside_stable_trail_queue(self) -> None:
@@ -828,7 +829,11 @@ class GuiViewInteractionTests(unittest.TestCase):
         self._load_ui_config(duration_s=1.0, playback_rate=7.0)
         self.assertEqual(self.window.sim.controller.step(40).code, "OK")
         before_close = self.window.sim.snapshot()
-        self.assertEqual([round(point.time, 6) for point in before_close.nodes[0].trail], [0.0, 0.1, 0.2])
+        # 采样对齐算法节拍 0.05s：0.2s 仿真共 5 个尾迹点。
+        self.assertEqual(
+            [round(point.time, 6) for point in before_close.nodes[0].trail],
+            [0.0, 0.05, 0.1, 0.15, 0.2],
+        )
 
         self.window.sim.set_trail_seconds(0.0)
         self.assertEqual(self.window.sim.controller.step(40).code, "OK")

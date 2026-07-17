@@ -522,6 +522,11 @@ class ModelIterator:
             for node_id in self._states
         }
 
+    @property
+    def acceleration_command_limit_mps2(self) -> float:
+        """返回当前模型的 ENU 加速度指令幅值上限。注意：全部节点共用同一配置。"""
+        return self._config.acceleration_command_limit_mps2
+
     def read_states(self) -> dict[str, AircraftState]:
         """读取所有飞机的状态副本。注意：返回值供外部读取，不能作为内部状态引用使用。"""
 

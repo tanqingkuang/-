@@ -190,6 +190,7 @@ class PosTrackDiagS:
     track_vel_err_x_mps: float = 0.0  # 航迹系速度误差 x 分量，单位米每秒
     track_vel_err_y_mps: float = 0.0  # 航迹系速度误差 y 分量，单位米每秒
     track_vel_err_z_mps: float = 0.0  # 航迹系速度误差 z 分量，单位米每秒
+    lateral_saturated: bool = False  # 横侧向串级变限幅是否触发饱和；非串级配置恒为 False
 
 
 @dataclass

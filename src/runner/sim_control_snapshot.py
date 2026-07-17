@@ -35,8 +35,22 @@ class SimulationControllerSnapshotMixin:
             if self._run_state == RunState.READY
             else {nid: alg.current_rally_phase_str() for nid, alg in self._node_algorithms.items()}
         )
+        # 评测补充字段的公共上下文：原始指令饱和阈值与当前队形槽位表。
+        acc_limit = self._model.acceleration_command_limit_mps2
+        slot_rows = self._formation_slots
+        slot_row = (
+            slot_rows[self._formation_index]
+            if 0 <= self._formation_index < len(slot_rows)
+            else []
+        )
+        slot_by_id = {slot.id: slot for slot in slot_row}
         for state in self._model.read_states().values():
             diag = self._control_diagnostics.get(state.node_id, PosTrackDiagS())
+            control = self._current_controls.get(state.node_id)
+            # 原始控制指令取限幅前缓存值；任一 ENU 轴触达模型幅值上限即记饱和。
+            cmd_acc = control.as_vector() if control is not None else (0.0, 0.0, 0.0)
+            acc_saturated = any(abs(a) >= acc_limit - 1e-9 for a in cmd_acc)
+            slot = slot_by_id.get(state.node_id)
             cmd_pos_e = diag.cmd_pos_east_m
             cmd_pos_n = diag.cmd_pos_north_m
             # 快照是环境模型到 UI/日志的裁决边界，字段参考系在此一次性固定。
@@ -99,6 +113,16 @@ class SimulationControllerSnapshotMixin:
                     cross_track_error_m=self._cross_track_error(state, route),
                     distance_to_go_m=self._distance_to_go(state, route),
                     rally_phase=rally_phases.get(state.node_id, ""),
+                    # 评测补充：原始 ENU 加速度指令与饱和证据、算法耗时、标称槽位。
+                    cmd_acc_east_mps2=cmd_acc[0],
+                    cmd_acc_north_mps2=cmd_acc[1],
+                    cmd_acc_up_mps2=cmd_acc[2],
+                    acc_saturated=acc_saturated,
+                    lateral_saturated=diag.lateral_saturated,
+                    algo_step_ms=self._algo_step_ms.get(state.node_id, 0.0),
+                    slot_x_m=slot.x if slot is not None else None,
+                    slot_y_m=slot.y if slot is not None else None,
+                    slot_z_m=slot.z if slot is not None else None,
                 )
             )
         # 链路快照已折叠双向状态。
