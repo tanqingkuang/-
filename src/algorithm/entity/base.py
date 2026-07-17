@@ -1,10 +1,18 @@
-"""编队实体基础接口。注意：具体实体实现初始化、边界钩子、复位和关闭。"""
+"""编队实体基础接口。注意：具体实体只实现初始化与角色输出，公共边界和生命周期由基类管理。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
+from src.algorithm.context.context import reset_context
+from src.algorithm.context.leaf_types import (
+    FormStageE,
+    PosTrackDiagS,
+    RemoteCmdS,
+    copy_motion,
+    copy_pos_track_diag,
+)
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
@@ -50,6 +58,7 @@ class EntityBase:
     """编队实体模板基类。注意：固定流程由初始化表装配，运行期统一顺序执行。"""
 
     PROFILE: EntityProfileS | None = None
+    MISSING_REMOTE_STAGE: FormStageE | None = None
 
     @property
     def profile(self) -> EntityProfileS:
@@ -76,12 +85,17 @@ class EntityBase:
         self._finish_output(u, y)
 
     def reset(self) -> None:
-        """复位 EntityBase 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
-        raise NotImplementedError
+        """复位实体动态状态。注意：保留初始化期装配的流程和产品实例。"""
+        reset_context(self.cxt)
+        self._remote.stage = RemoteCmdS().stage
+        self._reset_processes()
+        copy_pos_track_diag(PosTrackDiagS(), self._pos_track_diag)
+        self._inbox.clear()
+        self._outbox.clear()
 
     def close(self) -> None:
-        """释放 EntityBase 持有的资源。注意：关闭后不应继续调用运行接口。"""
-        raise NotImplementedError
+        """释放实体资源。注意：当前流程均无外部资源，保留统一生命周期接口。"""
+        return None
 
     def _initialize_process_chain(self, init_configs: dict[str, Any]) -> None:
         """初始化实例黑板和固定流程链。注意：每次调用都会建立全新运行状态。"""
@@ -134,9 +148,35 @@ class EntityBase:
             getattr(self, attr_name).reset()
 
     def _prepare_input(self, u: EntityInputS) -> None:
-        """把实体边界输入写入黑板。注意：由具体角色实现，不得推进业务流程。"""
-        raise NotImplementedError
+        """把实体边界输入写入共享运行时。注意：空字段沿用上一拍状态。"""
+        if u.selfState is not None:
+            copy_motion(u.selfState, self.cxt.selfState)
+        if u.remote is not None:
+            self._remote.stage = u.remote.stage
+        elif self.MISSING_REMOTE_STAGE is not None:
+            # 僚机以空 remote 释放本地待命覆盖；其他身份默认沿用上一拍远控值。
+            self._remote.stage = self.MISSING_REMOTE_STAGE
+        self.cxt.clock.now_s = u.now_s
+        self._inbox.clear()
+        self._inbox.extend(u.inbox)
 
     def _finish_output(self, u: EntityInputS, y: EntityOutputS) -> None:
-        """把黑板结果回填实体边界。注意：由具体角色实现，不得重复推进业务流程。"""
-        raise NotImplementedError
+        """把共享运行时结果回填实体边界。注意：所有身份使用同一输出协议。"""
+        del u
+        if y.selfAccCmd is None:
+            y.selfAccCmd = self.cxt.selfAccCmd
+        else:
+            y.selfAccCmd.accEast = self.cxt.selfAccCmd.accEast
+            y.selfAccCmd.accNorth = self.cxt.selfAccCmd.accNorth
+            y.selfAccCmd.accUp = self.cxt.selfAccCmd.accUp
+        if y.selfCmd is None:
+            y.selfCmd = self.cxt.selfCmd
+        else:
+            copy_motion(self.cxt.selfCmd, y.selfCmd)
+        if y.controlDiag is None:
+            y.controlDiag = self._pos_track_diag
+        else:
+            copy_pos_track_diag(self._pos_track_diag, y.controlDiag)
+        y.outbox.clear()
+        y.outbox.extend(self._outbox)
+        y.rallyCompleted = self._task.rally_completed

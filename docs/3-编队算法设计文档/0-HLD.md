@@ -66,7 +66,7 @@
 
 * 接口定义
   * L1接口设计为：`init(self, cfg: XXXInitS)`、`step(self, u: XXXInputS, y: XXXOutputS)`、`reset(self)`、`close(self)`；其中 `y` 由 `step` 原地写出（无返回值）；
-  * L2接口设计为：`init(self, cfg: XXXInitS)`、`step(self, u: XXXInputS, y: XXXOutputS)`、`reset(self)`；（L2 不持有/实例化子单元，故无需 `close`）
+  * L2接口设计为：`bind(self, runtime: EntityRuntimeS)`、`init(self, cfg: XXXInitS)`、`step(self)`、`reset(self)`；各流程在 `bind` 时把私有输入输出端口绑定到共享运行时，运行期 `step` 不显式传参。（L2 不持有/实例化子单元，故无需 `close`）
 * 命名，XXX为单元名，因此涉及到的结构体为XXXInitS、XXXInputS和XXXOutputS；各个模块的XXX命名如下：
   * 对象组：Entity
   * 收发处理：收Inbound、发Outbound
@@ -126,7 +126,7 @@ class ContextS:
     node: NodeS = field(default_factory=NodeS)
     line: LineS = field(default_factory=LineS)
 
-# L2 单元：Input/Output 字段是「端口」，运行期绑定到黑板子对象
+# L2 单元：私有 Input/Output 字段是端口，bind 时绑定到运行环境
 @dataclass
 class XxxInputS:
     node: NodeS = None      # 端口：将绑定到 Context.node
@@ -136,30 +136,31 @@ class XxxOutputS:
     line: LineS = None      # 端口：将绑定到 Context.line
 
 class Xxx:
-    def step(self, u: XxxInputS, y: XxxOutputS) -> None:
-        # 只经端口读写，单元不感知黑板
-        y.line.a = u.node.x
-
-# L1 实体：实例化 + 端口绑定
-class Entity:
-    def init(self) -> None:
-        self.cxt = ContextS()               # 1) 实例化黑板
-        self.xxx = Xxx()                    # 2) 实例化单元及其 I/O
-        self.xxx_u = XxxInputS()
-        self.xxx_y = XxxOutputS()
-        # 3) 端口绑定：把单元 I/O 引用到黑板内部子对象
-        self.xxx_u.node = self.cxt.node
-        self.xxx_y.line = self.cxt.line
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        self._u = XxxInputS(node=runtime.context.node)
+        self._y = XxxOutputS(line=runtime.context.line)
 
     def step(self) -> None:
-        self.xxx.step(self.xxx_u, self.xxx_y)   # 实际读写的就是 cxt 的内存
+        # 正式运行接口无业务参数，只使用初始化期绑定的私有端口
+        self._y.line.a = self._u.node.x
+
+# L1 实体：建立独占运行环境并按固定表装配流程
+class Entity:
+    def init(self) -> None:
+        self.runtime = EntityRuntimeS()      # 1) 黑板与边界对象的唯一存储
+        self.xxx = Xxx()                    # 2) 创建流程容器
+        self.xxx.bind(self.runtime)         # 3) 流程自行建立并绑定私有端口
+        self.xxx.init(XxxInitS())
+
+    def step(self) -> None:
+        self.xxx.step()                     # 实际读写 runtime.context 的同一份对象
 ```
 
 每次 `Entity.step()`，单元读写的都是同一个 `cxt`，由此带来四点好处：
 
-1. **扩展隔离**：要给单元增减输入/输出，只要黑板里有对应数据，扩展 `XxxInputS` / `XxxOutputS` 并在 `init` 里加一行绑定即可，已实现的差异算法（策略族其他成员）不感知；
-2. **免拼接**：实体只做绑定，不在单元之间搬运数据；
-3. **数据流可见**：从各单元 I/O 的端口声明即可一眼看清数据走向，便于实体编排；
+1. **扩展隔离**：要给单元增减输入/输出，只修改该流程的私有端口和 `bind(runtime)`；实体固定链与其他策略不感知；
+2. **免拼接**：实体只提供共享运行环境，不在单元之间搬运业务字段；
+3. **数据流可见**：从各流程私有端口声明与 `bind` 即可看清数据走向；
 4. **抑制 I/O 结构体膨胀**：抽象层的 `Input` / `Output` 只暴露公共必要字段，与具体算法强相关的中间量下沉到子算法自己的 `self`，避免个别算法把公共 I/O 结构体撑大。
 
 ### 3.3 Context 边界与配置归属
@@ -167,7 +168,7 @@ class Entity:
 3.2 说明了数据如何在单元间流动，本节规定哪些数据放入 `Context`，哪些不放：
 
 * **进入 Context 的条件**：只有需要**跨拍保留**或**被多个单元读写**的工作状态才放入 `Context`，例如 `cmd/state`、`wayLine`、各 `MotionProfS`、`selfAccCmd`。两个条件满足其一即可。
-* **边界 I/O 不放入 Context**：只被单个单元使用的外部输入（`inbox` 收到的 `list[MessageEnvelope]`、`remote` 遥控指令）和外部输出（`outbox` 待发的 `list[MessageEnvelope]`），由对象组在边界持有。收到的 envelope 解析后，只将跨单元共享的数据写入 `Context`（长机实际运动状态写入 `leaderState`，模态与队形写入 `cmd`）；用于槽位坐标系建系的有效长机指令 `leaderCmd` 由对象组边界持有，不进入 `Context`。envelope 本身不保留。（`MessageEnvelope` 由通信模块定义，见《5-1-通信功能LLD.md》§4.1）
+* **边界 I/O 不放入 Context**：`inbox`、`outbox`、`remote` 和 `PosTrackDiagS` 由 `EntityRuntimeS` 持有。收到的 envelope 解析后，跨流程共享的 `leaderState/leaderCmd/cmd/rallyPlan/followerStates` 写入 `FormContextS`；envelope 本身不保留。（`MessageEnvelope` 由通信模块定义，见《5-1-通信功能LLD.md》§4.1）
 * **配置不放入 Context**：初始化配置（`FormCommInitS` 网络拓扑与队形几何、`FormSelfInitS` 机 ID、`RouteS` 航线）由对象组在 `init` 时持有，并注入各单元的 `self`。
 * **单枚举/标量作端口需包装**：见 3.2 注，端口只能绑定可变的叶类型对象。因此 `remote` 这类单个枚举需包成结构体（`RemoteCmdS{ FormStageE stage; }`）由对象组持有；实体每拍更新其字段，而非重新赋值整个对象。
 
@@ -177,14 +178,15 @@ class Entity:
 
 本节从**运行期**视角描述：一帧 `step` 内，实体如何按固定顺序串行调用各流程/算法单元，以及每个单元如何经黑板读写数据（数据如何组织见第 3 章）。单元之间不直接传参，全部通过黑板 `Context` 交换。
 
-领航跟随保持场景包含 1 个航段、集中式通信、长机僚机、PID 控制和三角队形。长机与僚机复用同一套单元，但因角色不同，调用链不同：
+领航跟随保持和集结的所有实体都执行同一条固定六步链：
 
-* **长机**：自身产模态、推进航线 → 算目标 → 跟踪 → **广播** envelope；不收消息；
-* **僚机**：先**收**长机广播并解析 → 执行空轨迹规划单元 → 基于长机位置+队形+槽位号算目标 → 跟踪；不发消息。
+```text
+FormationInbound → Rally → TraPlanManager → PosCalcManager → PosTrackManager → FormationOutbound
+```
 
-两机唯一的耦合点是长机末步广播的 `list[MessageEnvelope]` 喂入僚机首步的收消息；位置解算与跟踪两步两机同构，仅位置解算的输入来源不同（跟踪已并入求偏差）。
+身份差异不改变调用顺序。长机/僚机 Profile 只决定三个 Manager 在各任务状态使用的缓存产品；`Rally` 由实体身份固定主动/被动模式；`FormationOutbound` 在初始化时固定为长机广播、僚机状态回报或 Noop。两机唯一耦合点仍是长机 `outbox` 经通信系统进入僚机下一拍 `inbox`。
 
-图中：块间纵向箭头表示一帧内的**调用顺序**；每个有效步骤对右侧 `Context` 黑板各有一组**读（虚线）/ 写（实线）**箭头，体现单元只与黑板交互、彼此不直接传参（长机末步发送仅读黑板、僚机首步收消息仅写黑板）；灰色虚线块表示该场景下不读写黑板的空步骤。
+下方历史时序图只用于观察各身份的**有效产品和数据流**；图中未使用的步骤应理解为固定链中的 Noop 或无匹配消息处理，不能理解为跳过流程调用。
 
 | 长机时序 | 僚机时序 |
 | --- | --- |
@@ -223,10 +225,10 @@ src/algorithm/
 ├── entity/                          # L1 实体（对象组）——身份与固定流程链
 │   ├── base.py                      #   EntityBase：固定六步 init/step/reset/close
 │   ├── types.py                     #   边界结构体、Profile 与运行时表
-│   └── leader_follower_rally/       #   通用领航跟随实体（保持/集结共用）
+│   └── leader_follower/       #   通用领航跟随实体（保持/集结共用）
 │       ├── __init__.py              #     长机/僚机不可变 Profile 与实体工厂
-│       ├── leader.py                #     RallyLeaderEntity：通用长机
-│       └── follower.py              #     RallyFollowerEntity：通用僚机
+│       ├── leader.py                #     LeaderEntity：通用长机
+│       └── follower.py              #     FollowerEntity：通用僚机
 └── units/                           # L2 单元
     ├── algo/                        # 算法组（不碰 Mode）
     │   ├── pos_calc/                #   PosCalc 位置解算
@@ -246,7 +248,7 @@ src/algorithm/
 
 约定：
 
-* **一个单元一个子包**：`base.py` 为策略族抽象（接口 `init/step/reset`）并声明 `XXXInitS/XXXInputS/XXXOutputS` 端口结构体；同目录其余文件为具体策略实现；
+* **一个单元一个子包**：`base.py` 为策略族抽象（接口 `bind/init/step/reset`）并声明初始化配置；具体策略自行声明私有输入输出端口，同目录其余文件为策略实现；
 * **算法组 / 流程组** 分置 `units/algo` 与 `units/process`，对应「不碰 Mode / 碰 Mode」；
 * **身份 Profile**：`EntityBase` 固定执行 Inbound → FormationTask → TraPlan → PosCalc → PosTrack → Outbound；长机/僚机子类只提供不可变 Profile 和初始化参数，Manager 按 Profile 创建产品，运行期不替换流程；
 * **通用数学** 不建策略族，为纯函数模块（不持实例态）。

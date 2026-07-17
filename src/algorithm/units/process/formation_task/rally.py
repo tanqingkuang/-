@@ -17,8 +17,10 @@ from src.algorithm.context.leaf_types import (
     RallyPlanS,
     RemoteCmdS,
 )
+from src.algorithm.entity.types import EntityManagerInitS, EntityProfileE
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     RALLY_STATE_EXITED,
+    loiter_speed_bounds,
 )
 from src.algorithm.units.process.formation_task.base import (
     FormationTaskBase,
@@ -33,11 +35,10 @@ if TYPE_CHECKING:
 class RallyTaskInitS(FormationTaskInitS):
     """Rally 任务初始化参数。注意：dt_s 在 init 时校验，违反则抛异常。"""
 
-    leaderId: str = "R01"  # 长机节点 ID，用于输出长机自身的完整圈分配
     looseScale: float = 3.0  # 集结圆目标点的水平槽位偏置倍数，不参与运行期队形缩放
     convergenceRadius_m: float = 5.0  # LOOSE→HOLD 槽位误差阈值，米
     stableHold_s: float = 5.0  # LOOSE→HOLD 需稳定的时间
-    tightRadius_m: float = 2.0  # 完成分析中的入位判定阈值，米
+    tightRadius_m: float = 2.0  # 最终进入 HOLD 的入位判定阈值，米
     expectedFollowerIds: list[str] = field(default_factory=list)  # 期望参与集结的僚机 ID；空列表→立即通过（测试用）
     staleTimeout_s: float = 2.0  # 超过此时长未收到某机报文则视为数据失效
     targetPattern: int = 0  # 集结目标队形索引；集结只用单队形，恒为 0（formPos 第 0 行）
@@ -49,10 +50,6 @@ class RallyTaskInitS(FormationTaskInitS):
     catchup_heading_thresh_rad: float = 0.17  # CATCHUP→LOOSE 航向误差阈值，弧度（≈10°）
     catchup_stable_s: float = 3.0  # CATCHUP→LOOSE 需连续满足的时长，秒
     altitude_separation_m: float = 60.0  # 待命/JOINING/CATCHUP 各机高度层间隔，米
-    loiter_speed_min_mps: float = 14.0  # 盘旋速度下限，用于可达时间区间的最慢整圈时间
-    loiter_speed_max_mps: float = 25.0  # 盘旋速度上限，用于可达时间区间的最快整圈时间
-    passive: bool = False  # 僚机被动模式：保留入站 cmd，仅允许本地 STANDBY 覆盖
-    enabled: bool = True  # 是否启用集结状态机；直接 HOLD 实体关闭后只响应 NONE/HOLD
 
 
 @dataclass
@@ -110,43 +107,53 @@ class Rally(FormationTaskBase):
         """返回本拍正常完成事件。注意：仅在 LOOSE 切入 HOLD 的一拍有效。"""
         return self._y.rallyCompleted
 
-    def init(self, cfg: RallyTaskInitS) -> None:
-        """按配置初始化 Rally。注意：校验参数合法性，违反则抛 ValueError。"""
-        if cfg.enabled and not cfg.leaderId:
+    def init(self, cfg: EntityManagerInitS) -> None:
+        """按实体配置初始化 Rally。注意：角色参数由不可变 Profile 派生，调用方不能覆盖。"""
+        entity_cfg = cfg.entity
+        task_cfg = entity_cfg.rally_cfg
+        if not isinstance(task_cfg, RallyTaskInitS):
+            raise ValueError("Rally: rally_cfg must be RallyTaskInitS")
+        if cfg.profile.identity == EntityProfileE.LEADER:
+            leader_id = entity_cfg.selfInit.id
+            passive = False
+        elif cfg.profile.identity == EntityProfileE.FOLLOWER:
+            leader_id = entity_cfg.rally_leader_id
+            passive = True
+        else:
+            raise ValueError(f"Rally 不支持的实体身份: {cfg.profile.identity!r}")
+        enabled = entity_cfg.rally_enabled
+        if enabled and not leader_id:
             raise ValueError("leaderId must be non-empty")
-        if cfg.enabled and cfg.looseScale < 1.0:
+        if enabled and task_cfg.looseScale < 1.0:
             raise ValueError("looseScale must be >= 1.0")
-        if cfg.enabled and cfg.staleTimeout_s <= 0:
+        if enabled and task_cfg.staleTimeout_s <= 0:
             raise ValueError("staleTimeout_s must be > 0")
-        if cfg.enabled and cfg.dt_s <= 0:
+        if enabled and task_cfg.dt_s <= 0:
             raise ValueError("dt_s must be > 0")
-        if cfg.enabled and (
-            not math.isfinite(cfg.loiter_radius_m) or cfg.loiter_radius_m <= 0
+        if enabled and (
+            not math.isfinite(task_cfg.loiter_radius_m) or task_cfg.loiter_radius_m <= 0
         ):
             raise ValueError("loiter_radius_m must be > 0")
-        if cfg.enabled and (
-            not math.isfinite(cfg.loiter_speed_min_mps)
-            or not math.isfinite(cfg.loiter_speed_max_mps)
-            or cfg.loiter_speed_min_mps <= 0
-            or cfg.loiter_speed_max_mps <= cfg.loiter_speed_min_mps
-        ):
-            raise ValueError("loiter speed bounds must satisfy 0 < min < max")
-        self._conv_radius_m = cfg.convergenceRadius_m
-        self._stable_hold_s = cfg.stableHold_s
-        self._catchup_radius_m = cfg.catchup_radius_m
-        self._catchup_heading_thresh_rad = cfg.catchup_heading_thresh_rad
-        self._catchup_stable_s = cfg.catchup_stable_s
-        self._leader_id = cfg.leaderId
-        self._expected_ids: list[str] = list(cfg.expectedFollowerIds)
-        self._stale_timeout_s = cfg.staleTimeout_s
-        self._initial_pattern = int(cfg.targetPattern)
+        speed_min, speed_max = 0.0, 0.0
+        if enabled:
+            speed_min, speed_max = loiter_speed_bounds(entity_cfg.velCmdLimit)
+        self._conv_radius_m = task_cfg.convergenceRadius_m
+        self._stable_hold_s = task_cfg.stableHold_s
+        self._tight_radius_m = task_cfg.tightRadius_m
+        self._catchup_radius_m = task_cfg.catchup_radius_m
+        self._catchup_heading_thresh_rad = task_cfg.catchup_heading_thresh_rad
+        self._catchup_stable_s = task_cfg.catchup_stable_s
+        self._leader_id = leader_id
+        self._expected_ids: list[str] = list(task_cfg.expectedFollowerIds)
+        self._stale_timeout_s = task_cfg.staleTimeout_s
+        self._initial_pattern = int(task_cfg.targetPattern)
         self._target_pattern = self._initial_pattern
-        self._dt_s = cfg.dt_s
-        self._loiter_circumference_m = 2.0 * math.pi * cfg.loiter_radius_m
-        self._speed_min = cfg.loiter_speed_min_mps
-        self._speed_max = cfg.loiter_speed_max_mps
-        self._passive = bool(cfg.passive)
-        self._enabled = bool(cfg.enabled)
+        self._dt_s = task_cfg.dt_s
+        self._loiter_circumference_m = 2.0 * math.pi * task_cfg.loiter_radius_m
+        self._speed_min = speed_min
+        self._speed_max = speed_max
+        self._passive = passive
+        self._enabled = enabled
         # 运行期计时器
         self._catchup_stable_timer: float = 0.0
         self._stable_timer: float = 0.0
@@ -287,7 +294,11 @@ class Rally(FormationTaskBase):
         elif step == RallyPhaseE.LOOSE:
             if self._all_followers_ok(state_map, now_s, self._conv_radius_m):
                 self._stable_timer += self._dt_s
-                if self._stable_timer >= self._stable_hold_s:
+                # 粗收敛稳定只表示可以检查最终入位，完成事件仍要求全部僚机满足紧门限。
+                if (
+                    self._stable_timer >= self._stable_hold_s
+                    and self._all_followers_ok(state_map, now_s, self._tight_radius_m)
+                ):
                     y.cmd.stage = FormStageE.HOLD
                     y.cmd.step = RallyPhaseE.JOINING
                     y.rallyCompleted = True

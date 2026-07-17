@@ -18,9 +18,9 @@ from src.algorithm.entity.types import (
     EntityProfileS,
     EntityRuntimeS,
 )
-from src.algorithm.entity.leader_follower_rally import (
-    RALLY_FOLLOWER_PROFILE,
-    RALLY_LEADER_PROFILE,
+from src.algorithm.entity.leader_follower import (
+    FOLLOWER_PROFILE,
+    LEADER_PROFILE,
 )
 from src.algorithm.units.process.tra_plan import (
     TraPlanManager,
@@ -38,7 +38,7 @@ def _route() -> list[WayPointInputS]:
 
 
 def _entity_cfg(
-    profile: EntityProfileS = RALLY_LEADER_PROFILE,
+    profile: EntityProfileS = LEADER_PROFILE,
     **kwargs: object,
 ) -> EntityManagerInitS:
     """构造由完整 Profile 驱动的轨迹规划初始化参数。"""
@@ -60,7 +60,7 @@ class TraPlanManagerTests(unittest.TestCase):
         leader.bind(EntityRuntimeS())
         follower.bind(EntityRuntimeS())
         leader.init(_entity_cfg(route=_route()))
-        follower.init(_entity_cfg(RALLY_FOLLOWER_PROFILE))
+        follower.init(_entity_cfg(FOLLOWER_PROFILE))
 
         self.assertEqual(
             set(leader._registry),
@@ -75,7 +75,7 @@ class TraPlanManagerTests(unittest.TestCase):
         runtime.context.wayLine.idx = 9
         manager = TraPlanManager()
         manager.bind(runtime)
-        manager.init(_entity_cfg(RALLY_FOLLOWER_PROFILE))
+        manager.init(_entity_cfg(FOLLOWER_PROFILE))
 
         manager.step()
 

@@ -82,7 +82,6 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._blocked_display_route: list[WayLineS] | None = None  # 避障覆盖时保留的原配置航线，供 GUI 标示封锁状态。
         # 避障”采用”的长机航线覆盖：非 None 时替换配置生成的长机航线（reset 保留，load_config 清除）。
         self._leader_route_override: list[WayPointInputS] | None = None
-        self._formation_completed_analysis: object | None = None  # FormationAnalysisS；集结完成后锁存
         self._formation_names: list[str] = []  # 各队形名字（供界面下拉框显示，索引=队形序号）
         self._formation_index: int = 0  # 当前/初始队形索引，供界面下拉框预选
         self._rally_geometry: dict[str, object] = {}  # RallyPlanGeometryState 按 node_id 索引，供 GUI 展示两个盘旋圆。
@@ -712,7 +711,6 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._rally_geometry = _build_rally_join_geometry(
             list(nodes), leader_route, formation_comm_init, rally_task_init, states
         )
-        self._formation_completed_analysis = None
         rally_leader_id = _leader_id_from_nodes(list(nodes))
         rally_layer_altitudes = self._build_rally_layer_altitudes(
             list(nodes), leader_route, formation_comm_init, rally_task_init, rally_leader_id
@@ -884,9 +882,6 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             # 汇总各节点待发消息，统一在本轮末尾交给通信模块。
             outbox.extend(output.outbox)
             status_values.append(output.status)
-            # 集结完成首帧：锁存分析结果，供快照透传给 UI。
-            if output.formation_analysis is not None:
-                self._formation_completed_analysis = output.formation_analysis
         # 缓存本轮控制，供后续未跑算法的 tick 继续施加（保持-上次值语义）。
         self._current_controls = controls
         self._control_diagnostics = diagnostics

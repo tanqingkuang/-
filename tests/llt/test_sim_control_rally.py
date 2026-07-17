@@ -9,13 +9,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS, PosInEarthS, WayPointInputS
+from src.algorithm.context.leaf_types import FormStageE, PosInEarthS, WayPointInputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 from src.common.envelope import MessageEnvelope
 from tests.llt._geo_route import geodetic_config
-from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
-from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+from src.algorithm.entity.leader_follower.follower import FollowerEntity
+from src.algorithm.entity.leader_follower.leader import LeaderEntity
 from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RallyJoinPos
 from src.runner.sim_control import (
@@ -119,7 +119,7 @@ def _snapshot_node_phases(controller: SimulationController) -> dict[str, str]:
     return {node.node_id: node.rally_phase for node in controller.get_snapshot().nodes}
 
 
-def _rally_join(entity: RallyLeaderEntity | RallyFollowerEntity) -> RallyJoinPos:
+def _rally_join(entity: LeaderEntity | FollowerEntity) -> RallyJoinPos:
     """取得 Manager 缓存的集结位置解算产品，供白盒几何断言使用。"""
 
     strategy = entity._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
@@ -170,9 +170,9 @@ class SimControlRallyTests(unittest.TestCase):
             snapshot = controller.get_snapshot()
 
             self.assertEqual(result.code, "OK")
-            self.assertIsInstance(controller._node_algorithms["R01"]._entity, RallyLeaderEntity)
-            self.assertIsInstance(controller._node_algorithms["R02"]._entity, RallyFollowerEntity)
-            self.assertIsInstance(controller._node_algorithms["R03"]._entity, RallyFollowerEntity)
+            self.assertIsInstance(controller._node_algorithms["R01"]._entity, LeaderEntity)
+            self.assertIsInstance(controller._node_algorithms["R02"]._entity, FollowerEntity)
+            self.assertIsInstance(controller._node_algorithms["R03"]._entity, FollowerEntity)
             self.assertIsNotNone(snapshot.route)
             assert snapshot.route is not None
             self.assertAlmostEqual(snapshot.route.start_x_m, 0.0, places=3)
@@ -615,20 +615,19 @@ class SimControlRallyTests(unittest.TestCase):
                 for node in joining_snapshot.nodes
             ))
 
-    def test_snapshot_exposes_latched_rally_analysis(self) -> None:
-        """验证控制器快照透传集结完成后锁存的编队分析。"""
+    def test_snapshot_excludes_removed_rally_analysis(self) -> None:
+        """编队分析功能删除后，控制器和快照不得继续暴露旧接口。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()
             self.addCleanup(controller.close)
             controller.load_config(str(_write_json(Path(tmp), _rally_config())))
-            analysis = FormationAnalysisS(posErrMax_m=1.2, posErrRms_m=0.8, inPositionCount=2, totalCount=2)
 
             with controller._lock:
-                controller._formation_completed_analysis = analysis
                 snapshot = controller._make_snapshot_unlocked()
 
-            self.assertIs(snapshot.rally_analysis, analysis)
+            self.assertFalse(hasattr(controller, "_formation_completed_analysis"))
+            self.assertFalse(hasattr(snapshot, "rally_analysis"))
 
     def test_build_rally_task_init_ignores_removed_last_arrival_threshold_s(self) -> None:
         """last_arrival_threshold_s 已移除，配置中出现该键应被忽略，不影响加载，且结果中不携带该字段。"""

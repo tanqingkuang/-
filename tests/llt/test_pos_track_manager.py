@@ -19,9 +19,9 @@ from src.algorithm.entity.types import (
     EntityProfileS,
     EntityRuntimeS,
 )
-from src.algorithm.entity.leader_follower_rally import (
-    RALLY_FOLLOWER_PROFILE,
-    RALLY_LEADER_PROFILE,
+from src.algorithm.entity.leader_follower import (
+    FOLLOWER_PROFILE,
+    LEADER_PROFILE,
 )
 from src.algorithm.units.algo.pos_track import (
     PosTrackManager,
@@ -45,7 +45,7 @@ def _runtime(command: PosTrackCommandE) -> EntityRuntimeS:
     return runtime
 
 
-def _entity_cfg(profile: EntityProfileS = RALLY_LEADER_PROFILE) -> EntityManagerInitS:
+def _entity_cfg(profile: EntityProfileS = LEADER_PROFILE) -> EntityManagerInitS:
     """构造由完整 Profile 驱动的位置跟踪初始化参数。"""
 
     return EntityManagerInitS(
@@ -65,7 +65,7 @@ class PosTrackManagerTests(unittest.TestCase):
         leader.bind(_runtime(PosTrackCommandE.NOOP))
         follower.bind(_runtime(PosTrackCommandE.NOOP))
         leader.init(_entity_cfg())
-        follower.init(_entity_cfg(RALLY_FOLLOWER_PROFILE))
+        follower.init(_entity_cfg(FOLLOWER_PROFILE))
 
         self.assertEqual(
             set(leader._registry),

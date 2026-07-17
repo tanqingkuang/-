@@ -17,8 +17,8 @@
 - `src/algorithm/units/process/inbound/rally_leader_follower.py`
 - `src/algorithm/units/algo/pos_calc/rally_join_pos.py`（原 `rally_approach.py`，已整体替换并删除）
 - `src/algorithm/units/algo/pos_calc/slot_geometry.py`（CATCHUP/LOOSE/HOLD 共用；原 `catchup_align.py` 已删除）
-- `src/algorithm/entity/leader_follower_rally/leader.py`
-- `src/algorithm/entity/leader_follower_rally/follower.py`
+- `src/algorithm/entity/leader_follower/leader.py`
+- `src/algorithm/entity/leader_follower/follower.py`
 - `src/runner/sim_control_modules.py`、`src/runner/sim_control_routes.py`、`src/runner/sim_controller.py`（原 `sim_control.py`，已拆分为多个模块）
 
 设计依据：`docs/3-编队算法设计文档/6-用例-领航跟随集结LLD.md`
@@ -121,12 +121,16 @@ def _rally_task(
     catchup_stable_s: float = 0.0,
 ) -> Rally:
     task = Rally()
-    task.init(
-        RallyTaskInitS(
+    task_cfg = RallyTaskInitS(
             looseScale=3.0, convergenceRadius_m=5.0, stableHold_s=stable_hold_s,
             tightRadius_m=2.0, expectedFollowerIds=list(expected),
             staleTimeout_s=0.5, targetPattern=0, dt_s=dt_s,
             catchup_radius_m=catchup_radius_m, catchup_stable_s=catchup_stable_s,
+    )
+    task.init(
+        EntityManagerInitS(
+            EntityInitS(selfInit=FormSelfInitS("R01"), rally_cfg=task_cfg),
+            LEADER_PROFILE,
         )
     )
     return task
@@ -200,9 +204,7 @@ def _rally_cfg(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_follower_state_defaults_invalid` | `FollowerStateS()` 默认 `valid is False`、`arrived==0`、`lastUpdate_s==0.0` |
-| `test_formation_analysis_defaults_zero` | `FormationAnalysisS()` 默认误差、数量字段为 0 |
 | `test_copy_follower_state_copies_valid_and_last_update` | `copy_follower_state` 复制 `id/pos/posErr_m/arrived/valid/lastUpdate_s` |
-| `test_copy_formation_analysis_copies_all_fields` | `copy_formation_analysis` 覆盖所有诊断字段 |
 | `test_context_contains_rally_fields` | `FormContextS` 含公共计划与 `followerStates`，且列表默认独立 |
 | `test_reset_context_clears_rally_state` | `reset_context` 后公共计划和 `followerStates` 恢复默认值 |
 
@@ -214,7 +216,7 @@ def _rally_cfg(
 | ------ | ---- |
 | `test_entity_input_contains_now_s_default_zero` | `EntityInputS().now_s == 0.0` |
 | `test_entity_boundary_defaults_include_rally_fields` | `EntityInitS.route` 默认空列表且不再含 `rally_route`；M_i 由 init 按统一 `route` 前两点和队形槽位自动推导，`rally_cfg/rally_approach_speed_mps/rally_leader_id` 默认值符合 LLD（`rally_leader_id=""` 为默认值） |
-| `test_entity_output_contains_optional_formation_analysis` | `EntityOutputS().formationAnalysis is None` |
+| `test_entity_boundary_defaults_include_rally_fields` | `EntityOutputS().rallyCompleted is False`，且不再暴露已删除的 `formationAnalysis` |
 | `test_direct_hold_skips_rally_products_and_loiter_speed_validation` | 通用长机/僚机以 `rally_enabled=False` 直接保持时，不创建 RallyJoinPos，也不校验仅集结使用的盘旋速度范围 |
 
 ---
@@ -223,6 +225,7 @@ def _rally_cfg(
 
 | 测试名 | 断言 |
 | ------ | ---- |
+| `test_task_config_excludes_entity_assembly_fields` | `RallyTaskInitS` 不再包含身份、启用状态和速度权限等实体装配字段 |
 | `test_init_rejects_loose_scale_below_one` | `looseScale < 1.0` 抛 `ValueError` |
 | `test_init_rejects_zero_stale_timeout` | `staleTimeout_s <= 0` 抛 `ValueError` |
 | `test_init_rejects_zero_dt` | `dt_s <= 0` 抛 `ValueError` |
@@ -237,7 +240,7 @@ def _rally_cfg(
 | `test_remote_none_outputs_none` | `remote=NONE` 输出 `cmd.stage=NONE`、`pattern=NONE` |
 | `test_remote_none_resets_running_timers` | RALLY 中已累加计时器后切 `NONE`，再进 RALLY 不继承旧计时 |
 | `test_remote_hold_outputs_hold` | `remote=HOLD` 输出 `HOLD` 和 `targetPattern` |
-| `test_remote_hold_does_not_mark_rally_completed` | 外部强制 HOLD 不设置正常完成标志，实体不应输出 `FormationAnalysisS` |
+| `test_remote_hold_does_not_mark_rally_completed` | 外部强制 HOLD 不设置正常完成事件 |
 | `test_remote_rally_from_none_starts_approach` | `NONE + remote=RALLY` 重置计时器并输出 `RALLY/step=0/targetPattern` |
 | `test_remote_rally_after_completed_hold_does_not_restart` | 已正常完成到 `HOLD` 后继续 `remote=RALLY`，保持 `HOLD`，不回到 `APPROACH` |
 | `test_none_then_rally_allows_restart` | 完成后先发 `NONE` 再发 `RALLY`，允许重新从 `APPROACH` 开始 |
@@ -375,7 +378,7 @@ def _rally_cfg(
 
 ## 11/12. TestRallyEntity - 集结长机/僚机实体主链路
 
-> 本节原分为 TestRallyLeaderEntity/TestRallyFollowerEntity 两节，列出的测试名（`test_rally_before_arrival_uses_rally_approach`、
+> 本节原分为 TestLeaderEntity/TestFollowerEntity 两节，列出的测试名（`test_rally_before_arrival_uses_rally_approach`、
 > `_self_arrived`、`_rally_target` 等）描述的是 `RallyApproach` 直飞 M_i、到达即锁存的旧流程测试点，随
 > `RallyJoinPos`（切线进圆）重构已全部替换。当前长机/僚机实体级测试合并为同一个 `RallyEntityTests`
 > 类（`tests/llt/test_formation_rally.py`），下表按实际用例重写。
@@ -386,8 +389,8 @@ def _rally_cfg(
 | `test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start` | 冷启动尚无有效 T_ref（`t_ref_valid=False`）时，即便已到目标点附近，`RallyJoinPos` 进入 `LOITERING` 而非直接 `EXITED`，上报 `arrived=0` |
 | `test_rally_follower_none_resets_join_state_for_restart` | 已 `EXITED` 的僚机收到 `stage=NONE` 后，`RallyJoinPos` 复位回 `FLYING`，上报 `arrived=0`，允许下一轮重新执行 JOINING |
 | `test_rally_follower_none_outputs_current_position_zero_velocity` | `stage=NONE` 时 `selfCmd.pos` 复制本机当前位置、`selfCmd.v` 为零速，上报 `arrived=0` |
-| `test_rally_leader_completes_and_outputs_formation_analysis_once` | 长机汇合子状态置 `EXITED` 后推进多帧，LOOSE 收敛后直接进入 HOLD；`formationAnalysis` 只在首帧非 None，其余帧为 None |
-| `test_rally_leader_none_resets_join_and_completion_latches` | 长机处于 `HOLD` 且已 `EXITED`/`_rally_completed=True` 时收到 `remote=NONE`，`RallyJoinPos` 复位回 `FLYING`，`_rally_completed` 复位为 `False` |
+| `test_rally_leader_outputs_completion_event_once` | 长机汇合子状态置 `EXITED` 后推进多帧，LOOSE 收敛后直接进入 HOLD；`rallyCompleted` 只在转换首帧为 True |
+| `test_rally_leader_none_resets_join_state` | 长机处于 `HOLD` 且已 `EXITED` 时收到 `remote=NONE`，`RallyJoinPos` 复位回 `FLYING` |
 | `test_rally_leader_init_rejects_empty_route_list` | `route=[]`（空列表而非 `None`）时 `init()` 显式抛 `ValueError`，不应因空列表索引抛 `IndexError` |
 | `test_route_heading_rejects_horizontally_degenerate_first_segment` | 回归用例：`route_heading_rad()` 遇到 A/A1 水平坐标重合（仅高度不同也算）时显式抛 `ValueError`，不静默按 `atan2(0,0)` 退化为正东 |
 | `test_rally_leader_init_rejects_horizontally_degenerate_route` | 长机 `init()` 同样拒绝水平退化的统一 `route` 第一航段，而不是算出错误航向静默通过 |
@@ -400,7 +403,7 @@ def _rally_cfg(
 | ------ | ---- |
 | `test_repository_rally_demo_5_aircraft_config_loads` | `configs/rally_demo_5_aircraft.json` 存在且能被 `sim_control.load_config()` 正常解析，旧三机 `configs/rally_demo.json` 不再保留 |
 | `test_config_loader_rejects_removed_rally_route_fields` | 配置出现已移除的独立集结航线字段时明确报错，并提示统一使用 `route_file` |
-| `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `RallyLeaderEntity`，`role="rally_follower"` 创建 `RallyFollowerEntity` |
+| `test_rally_roles_select_rally_entities` | `role="rally_leader"` 创建 `LeaderEntity`，`role="rally_follower"` 创建 `FollowerEntity` |
 | `test_start_rally_first_tick_prime_does_not_advance_ordinary_nodes_or_communication` | `leader/wingman` 与集结角色共用通用实体，集结首拍预热不推进普通保持节点或通信 |
 | `test_rally_config_builds_expected_follower_ids` | `rally.expected_follower_ids` 注入 `RallyTaskInitS.expectedFollowerIds` |
 | `test_validate_accepts_rally_roles_with_route_only` | 集结角色只配置统一 `route` 时通过校验，首点作为集结中心、首段作为集结方向 |
@@ -411,8 +414,7 @@ def _rally_cfg(
 | `test_now_s_is_injected_to_entity_input` | `_NodeAlgorithm.step(..., time_s=t)` 构造 `EntityInputS(now_s=t)` |
 | `test_rally_leader_broadcast_reaches_rally_followers` | 通过通信通道，长机阶段、队形和公共计划广播到僚机 inbox 并被解析 |
 | `test_rally_status_reaches_leader` | 僚机 `formation.follower_status` 通过通信通道到达长机并更新 `followerStates` |
-| `test_rally_snapshot_exposes_formation_completed_analysis_when_complete` | 正常完成集结后，仿真快照字段 `formation_completed_analysis` 携带 `FormationAnalysisS` 诊断结果 |
-| `test_formation_completed_analysis_cleared_on_load_and_reset` | `load_config()` 和 `reset()` 后快照 `formation_completed_analysis is None`，不携带上次集结结果 |
+| `test_snapshot_excludes_removed_rally_analysis` | 编队分析删除后，控制器和仿真快照均不再暴露分析字段 |
 | `test_remote_stage_switches_to_hold_after_completion` | 集结完成后控制器自动将 `_remote_stage` 切为 `HOLD`，后续帧 `EntityInputS.remote.stage == HOLD` |
 
 ---
@@ -447,8 +449,8 @@ def _rally_cfg(
 | `rally_loose_target()` ENU 水平集结几何、右侧轴符号、缩放/高度及非零倾角边界 | TestRallyLooseTarget |
 | `loiter_speed_bounds()` 上下限推导与序校验 | TestRallyLoiterSpeedBounds |
 | SlotGeometry 最终槽位与转弯前馈 | TestSlotGeometry |
-| RallyLeaderEntity/RallyFollowerEntity 主链路（JOINING→CATCHUP/LOOSE→HOLD、NONE 复位） | TestRallyEntity |
-| FormationAnalysis 只在正常完成后输出一次 | TestRallyEntity |
+| LeaderEntity/FollowerEntity 主链路（JOINING→CATCHUP/LOOSE→HOLD、NONE 复位） | TestRallyEntity |
+| `rallyCompleted` 只在自然完成转换拍置位一次 | TestRallyEntity |
 | 配置解析、角色映射、now_s 注入、remote=RALLY 接入、完成后自动切 HOLD、锁存清空 | TestRallySimControlIntegration |
 | 多机闭环集结、断链冻结、恢复继续、重启 | TestRallyEndToEndScenario |
 

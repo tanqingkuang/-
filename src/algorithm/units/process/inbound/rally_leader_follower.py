@@ -13,7 +13,7 @@ from src.algorithm.context.leaf_types import (
     copy_motion,
     copy_snapshot,
 )
-from src.algorithm.entity.leader_follower_rally import RALLY_STATE_SET
+from src.algorithm.entity.leader_follower import FORMATION_STATE_SET
 from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC
 from src.algorithm.units.process.inbound.base import InboundInitS
 from src.common.envelope import MessageEnvelope
@@ -84,7 +84,7 @@ def _parse_cmd_payload(payload: object) -> FormSnapshotS:
         parsed_step = RallyPhaseE(step)
     except ValueError as exc:
         raise ValueError(f"集结子阶段非法: {step!r}") from exc
-    if (parsed_stage, parsed_step) not in RALLY_STATE_SET:
+    if (parsed_stage, parsed_step) not in FORMATION_STATE_SET:
         raise ValueError(f"集结任务状态组合非法: {(parsed_stage, parsed_step)!r}")
     return FormSnapshotS(stage=parsed_stage, pattern=pattern, step=parsed_step)
 

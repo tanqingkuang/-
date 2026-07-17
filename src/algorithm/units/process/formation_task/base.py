@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityRuntimeS
+    from src.algorithm.entity.types import EntityManagerInitS, EntityRuntimeS
 
 
 @dataclass
@@ -23,7 +23,7 @@ class FormationTaskBase:
         """绑定实体运行环境。注意：具体任务自行维护所需快照。"""
         raise NotImplementedError
 
-    def init(self, cfg: FormationTaskInitS) -> None:
+    def init(self, cfg: EntityManagerInitS) -> None:
         """按配置初始化 FormationTaskBase。注意：调用方需先准备好必要依赖和输入数据。"""
         raise NotImplementedError
 

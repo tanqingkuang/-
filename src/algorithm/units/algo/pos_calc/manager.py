@@ -195,10 +195,10 @@ def _rally_join_init(cfg: EntityInitS, identity: EntityProfileE) -> RallyJoinPos
 
     route_start = cfg.route[0].pos  # 统一航线起点同时作为长机松散点基准
     heading = route_heading_rad(cfg.route)
-    if identity == EntityProfileE.RALLY_LEADER:
+    if identity == EntityProfileE.LEADER:
         # 长机槽位位于航线起点，只按分层配置覆盖高度。
         loose_slot = PosInEarthS(route_start.east, route_start.north, route_start.h)
-    elif identity == EntityProfileE.RALLY_FOLLOWER:
+    elif identity == EntityProfileE.FOLLOWER:
         # 僚机先按目标队形找槽位，再按松散比例旋转到任务航迹系。
         slot = resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)
         if slot is None:
