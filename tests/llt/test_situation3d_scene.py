@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 import json
 import math
+import os
 import struct
 import time
 from types import SimpleNamespace
@@ -571,7 +572,10 @@ class Situation3DSceneDataTests(unittest.TestCase):
         clearance = float(layout["flight"]["clearance_m"])
         route = layout["flight"]["original_route_uv"]
         corridor = [point for point in route if point[0] <= 14.2] + [[14.2, 0.0]]
-        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=641)
+        # 航线净空是安全语义的末端防线:摘除 conftest 的分辨率上限,按真实 641 生成。
+        with patch.dict(os.environ):
+            os.environ.pop("SIM3D_TERRAIN_RESOLUTION_CAP", None)
+            field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=641)
         worst = 0.0
         for (u1, v1), (u2, v2) in zip(corridor, corridor[1:]):
             for step in range(300):
