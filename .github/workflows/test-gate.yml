@@ -100,6 +100,10 @@ jobs:
         # 覆盖率只统计 LLT；ST 是黑盒验收，刻意不计入（见 pyproject.toml [tool.coverage]）。
         # 2026-07 基线 91.9%，阈值取 90 防倒退；阈值只写在 CI 命令行，
         # 避免本地跑单个测试文件时被 fail-under 误伤。
+        env:
+          # sys.monitoring 覆盖率内核(Python 3.12+/coverage 7.4+):行覆盖场景下
+          # 插桩开销从约 +56% 降到约 +3%,覆盖率数值与默认内核一致。
+          COVERAGE_CORE: sysmon
         run: pytest tests/llt -q --cov --cov-report=term --cov-report=xml --cov-fail-under=90
 
       - name: 覆盖率写入 Job Summary
