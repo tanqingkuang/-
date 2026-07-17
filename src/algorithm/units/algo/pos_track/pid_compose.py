@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from src.algorithm.units.algo.ctrl.base import CtrlBase, CtrlInitS
 from src.algorithm.units.algo.ctrl.pid import Pid
 from src.algorithm.units.algo.ctrl.ppi import PPI, PPIInitS
-from src.algorithm.context.leaf_types import MotionProfS, copy_motion
+from src.algorithm.context.leaf_types import (
+    AccInEarthS,
+    MotionProfS,
+    PosTrackDiagS,
+    copy_motion,
+)
 from src.algorithm.units.algo.formation_math import enu_to_track, track_to_enu
-from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS, PosTrackInputS, PosTrackOutputS
+from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
+
+if TYPE_CHECKING:
+    from src.algorithm.entity.types import EntityRuntimeS
 
 
 def _uses_position_error(cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | None) -> bool:
@@ -63,6 +72,23 @@ class PidComposeInitS(PosTrackInitS):
     gainVertical: CtrlInitS | PPIInitS | None = None
 
 
+@dataclass
+class PidComposeInputS:
+    """组合控制器私有输入端口。"""
+
+    selfCmd: MotionProfS = field(default_factory=MotionProfS)
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+
+
+@dataclass
+class PidComposeOutputS:
+    """组合控制器私有输出端口。"""
+
+    accCmd: AccInEarthS = field(default_factory=AccInEarthS)
+    diag: PosTrackDiagS = field(default_factory=PosTrackDiagS)
+    effectiveCmd: MotionProfS = field(default_factory=MotionProfS)
+
+
 class PidCompose(PosTrackBase):
     """组合式 PID 位置跟踪器。注意：三轴统一用双通道 PID，前向走速度环(长机)或位置环(僚机)由增益决定，法向/侧向恒按位置误差闭环。"""
 
@@ -75,6 +101,20 @@ class PidCompose(PosTrackBase):
         self._vertical: CtrlBase = Pid()
         self._diag_pos_enabled = (False, False, False)
         self._diag_vel_enabled = (False, False, False)
+        self._u = PidComposeInputS()
+        self._y = PidComposeOutputS()
+        self._bound = False
+
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定控制器所需输入输出字段。"""
+        cxt = runtime.context
+        self._u = PidComposeInputS(selfCmd=cxt.selfCmd, selfState=cxt.selfState)
+        self._y = PidComposeOutputS(
+            accCmd=cxt.selfAccCmd,
+            diag=runtime.posTrackDiag,
+            effectiveCmd=cxt.effectiveCmd,
+        )
+        self._bound = True
 
     def init(self, cfg: PidComposeInitS) -> None:
         """按配置初始化 PidCompose。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -101,8 +141,14 @@ class PidCompose(PosTrackBase):
             _uses_velocity_error(cfg.gainLateral),
         )
 
-    def step(self, u: PosTrackInputS, y: PosTrackOutputS) -> None:
-        """推进 PidCompose 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
+    def step(self) -> None:
+        """推进组合控制器。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("PidCompose 尚未绑定端口")
+        self._calculate(self._u, self._y)
+
+    def _calculate(self, u: PidComposeInputS, y: PidComposeOutputS) -> None:
+        """根据输入快照计算加速度和诊断。注意：本方法不访问黑板。"""
         if u.selfCmd is None or u.selfState is None or y.accCmd is None:
             raise ValueError("PidCompose ports must be bound")
         if u.selfState.v.vd < self._v_min:

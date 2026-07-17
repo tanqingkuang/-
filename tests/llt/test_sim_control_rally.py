@@ -16,6 +16,8 @@ from src.common.envelope import MessageEnvelope
 from tests.llt._geo_route import geodetic_config
 from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
 from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
+from src.algorithm.units.algo.pos_calc.rally_join_pos import RallyJoinPos
 from src.runner.sim_control import (
     RallyPlanGeometryState,
     SimulationController,
@@ -47,7 +49,6 @@ def _rally_config() -> dict[str, object]:
             "loose_scale": 3.0,
             "convergence_radius_m": 5.0,
             "stable_hold_s": 0.1,
-            "compress_time_s": 0.2,
             "tight_radius_m": 2.0,
             "stale_timeout_s": 1.0,
             "altitude_separation_m": 60.0,
@@ -118,6 +119,14 @@ def _snapshot_node_phases(controller: SimulationController) -> dict[str, str]:
     return {node.node_id: node.rally_phase for node in controller.get_snapshot().nodes}
 
 
+def _rally_join(entity: RallyLeaderEntity | RallyFollowerEntity) -> RallyJoinPos:
+    """取得 Manager 缓存的集结位置解算产品，供白盒几何断言使用。"""
+
+    strategy = entity._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
+    assert isinstance(strategy, RallyJoinPos)
+    return strategy
+
+
 class SimControlRallyTests(unittest.TestCase):
     """验证控制器对集结场景的配置解析、实体装配和快照透传。"""
 
@@ -134,6 +143,7 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertEqual(task_init.targetPattern, 0)
         self.assertAlmostEqual(task_init.dt_s, 0.025)
         self.assertAlmostEqual(task_init.tightRadius_m, 2.0)
+        self.assertFalse(hasattr(task_init, "compressTime_s"))
 
     def test_formation_comm_init_accepts_rally_roles_in_slots(self) -> None:
         """验证集结角色同样使用展开后的队形槽位注入通信初始化结构。"""
@@ -191,7 +201,7 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertAlmostEqual(snapshot.route.end_x_m, 100.0)
             self.assertAlmostEqual(snapshot.route.end_y_m, 400.0)
             for node_id, algorithm in controller._node_algorithms.items():
-                rally_join = algorithm._entity._rally_join
+                rally_join = _rally_join(algorithm._entity)
                 geometry = snapshot.rally_geometry[node_id]
                 self.assertAlmostEqual(rally_join._mission_heading, math.pi / 2.0)
                 self.assertAlmostEqual(geometry.rally_center_east_m, rally_join._loiter_center_e)
@@ -326,11 +336,11 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertEqual(snapshot.control_report, "集结")
         self.assertNotEqual(set(phases.values()), {"LOCAL_LOITER"})
         for node_id, algorithm in controller._node_algorithms.items():
-            join = algorithm._entity._rally_join
+            join = _rally_join(algorithm._entity)
             self.assertIsNotNone(join._standby_center_e, msg=node_id)
             self.assertIsNotNone(join._standby_center_n, msg=node_id)
         self.assertEqual(
-            controller._node_algorithms["R02"]._entity._rally_join._transit_phase,
+            _rally_join(controller._node_algorithms["R02"]._entity)._transit_phase,
             "ARC_TO_TANGENT",
         )
 
@@ -349,7 +359,7 @@ class SimControlRallyTests(unittest.TestCase):
             self.assertEqual(result.code, "OK")
             self.assertEqual(controller._tick_index, 0)
             for node_id, algorithm in controller._node_algorithms.items():
-                join = algorithm._entity._rally_join
+                join = _rally_join(algorithm._entity)
                 self.assertIsNotNone(join._standby_center_e, msg=node_id)
                 self.assertIsNotNone(join._standby_center_n, msg=node_id)
 
@@ -448,7 +458,7 @@ class SimControlRallyTests(unittest.TestCase):
             follower = controller._node_algorithms["R02"]._entity
 
             self.assertEqual(result.code, "OK")
-            self.assertAlmostEqual(follower._rally_join._approach_speed, 16.0)
+            self.assertAlmostEqual(_rally_join(follower)._approach_speed, 16.0)
 
     def test_vel_cmd_limit_vertical_injected_into_follower_rally_join(self) -> None:
         """velCmdLimit.vertical 应注入僚机 RallyJoinPos 替换硬编码 ±3.0。"""
@@ -466,8 +476,8 @@ class SimControlRallyTests(unittest.TestCase):
             follower = controller._node_algorithms["R02"]._entity
 
             self.assertEqual(result.code, "OK")
-            self.assertAlmostEqual(follower._rally_join._v_up_min, -2.0)
-            self.assertAlmostEqual(follower._rally_join._v_up_max, 2.5)
+            self.assertAlmostEqual(_rally_join(follower)._v_up_min, -2.0)
+            self.assertAlmostEqual(_rally_join(follower)._v_up_max, 2.5)
 
     def test_manual_step_before_start_rally_stays_local_loiter(self) -> None:
         """验证点开始集结前，手动步进进入本地待命盘旋，并正常投递 STANDBY 广播。"""
@@ -577,7 +587,7 @@ class SimControlRallyTests(unittest.TestCase):
 
             for node_id, algorithm in controller._node_algorithms.items():
                 entity = algorithm._entity
-                join = entity._rally_join
+                join = _rally_join(entity)
                 center_distance = math.hypot(
                     join._loiter_center_e - join._standby_center_e,
                     join._loiter_center_n - join._standby_center_n,

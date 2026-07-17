@@ -11,7 +11,7 @@ from dataclasses import replace
 from typing import Callable
 
 from src.algorithm.context.leaf_types import FormPosS, PosTrackDiagS, WayLineS, WayPointInputS, to_display_inputs
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 from src.common.envelope import MessageEnvelope
 from src.environment.comm import CommunicationChannel
 from src.environment.model import AccelerationCommand, ModelIterator, node_id_from_config

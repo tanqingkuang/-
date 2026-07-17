@@ -6,7 +6,7 @@ import math
 import unittest
 
 from src.algorithm.units.algo.arc_path import arc_radius, segment_length
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 from src.algorithm.units.process.tra_plan.avoidance.astar import plan_path
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import (
     blocked,

@@ -135,6 +135,8 @@ def _coordinate_kind(data: object, where: str) -> str:
 
 def _point_to_enu(raw: dict[str, object], origin: GeoOrigin, where: str = "point") -> dict[str, object]:
     """把单个经纬高点转换为内部 ENU 点。注意：高度字段原样作为 altitude_m。"""
+    # 转换前先裁决坐标种类，禁止经纬度点夹带任一套 ENU 别名形成双重权威。
+    _coordinate_kind(raw, where)
     # 只把经纬度变成 east/north；高度不参与 ECEF/ENU 投影。
     # 增大经度对应东向正值、增大纬度对应北向正值，基准方向由独立 UT 锁定。
     latitude, longitude = _read_geodetic_coordinates(raw, where)

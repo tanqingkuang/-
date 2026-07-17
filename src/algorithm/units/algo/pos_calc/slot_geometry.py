@@ -5,14 +5,23 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     FormPosS,
     FormSnapshotS,
+    FormStageE,
     MotionProfS,
-    RallySlotScaleS,
+    PosCalcStatusS,
+    PosCalcStrategyE,
+    PosTrackCommandE,
+    PosTrackCommandS,
+    RallyPhaseE,
     copy_velocity,
 )
-from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.base import (
+    PosCalcBase,
+    PosCalcInitS,
+)
 from src.algorithm.units.algo.td_han import TdHan, TdHanInitS
 from src.common.coordinates import (
     FurBasis,
@@ -49,17 +58,26 @@ class SlotGeometryInitS(PosCalcInitS):
     # velFf 忠实驱动飞机按急减速走、ζ=0.65 回路跟不上反致过冲(比不加更差)；故默认关，仅用位置软化。
     # 后续把 r 按回路带宽调缓、或引入积分后再评估是否开启。见 docs/相对槽位TD。
     slotVelFf: bool = True
+    catchupAltitudeM: float | None = None  # 集结 CATCHUP 阶段分层高度；普通保持场景不配置
 
 
 @dataclass
-class SlotGeometryInputS(PosCalcInputS):
-    """槽位几何输入端口。注意：slotScale 为可选端口，未绑定时按 scale=1.0/scaleRate=0.0 处理。"""
+class SlotGeometryInputS:
+    """槽位解算私有输入端口。注意：只绑定本策略实际读取的数据。"""
 
-    leaderState: MotionProfS | None = None
-    leaderCmd: MotionProfS | None = None  # 长机跟踪指令；槽位坐标系方向优先使用它，位置原点仍取 leaderState。
-    cmd: FormSnapshotS | None = None
-    slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale；保持场景默认 scale=1，集结压缩动态变化
-    # selfState 继承自 PosCalcInputS：仅在启用 TD 时用于(重)挂载首拍播种，稳态几何目标解算不依赖本机状态。
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+    leaderState: MotionProfS = field(default_factory=MotionProfS)
+    leaderCmd: MotionProfS = field(default_factory=MotionProfS)
+    cmd: FormSnapshotS = field(default_factory=FormSnapshotS)
+
+
+@dataclass
+class SlotGeometryOutputS:
+    """槽位解算私有输出端口。注意：bind 后直接指向黑板输出对象。"""
+
+    selfCmd: MotionProfS = field(default_factory=MotionProfS)
+    status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
+    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
 
 
 class SlotGeometry(PosCalcBase):
@@ -77,6 +95,25 @@ class SlotGeometry(PosCalcBase):
         self._td_y = TdHan()
         self._td_z = TdHan()
         self._seeded = False
+        self._catchup_altitude_m: float | None = None
+        self._u = SlotGeometryInputS()
+        self._y = SlotGeometryOutputS()
+        self._bound = False
+
+    def bind(self, cxt: FormContextS) -> None:
+        """绑定专属输入输出端口。注意：后续 step 不再访问完整黑板。"""
+        self._u = SlotGeometryInputS(
+            selfState=cxt.selfState,
+            leaderState=cxt.leaderState,
+            leaderCmd=cxt.leaderCmd,
+            cmd=cxt.cmd,
+        )
+        self._y = SlotGeometryOutputS(
+            selfCmd=cxt.selfCmd,
+            status=cxt.posCalcStatus,
+            posTrackCommand=cxt.posTrackCommand,
+        )
+        self._bound = True
 
     def init(self, cfg: SlotGeometryInitS) -> None:
         """按配置初始化 SlotGeometry。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -85,6 +122,7 @@ class SlotGeometry(PosCalcBase):
         self._form_pos = [list(row) for row in cfg.formPos]
         self._td_enabled = cfg.control_period_s > 0.0
         self._ff_enabled = cfg.slotVelFf
+        self._catchup_altitude_m = cfg.catchupAltitudeM
         if self._td_enabled:
             h = cfg.control_period_s
             self._td_x.init(TdHanInitS(r=cfg.rForward, h=h, vMax=cfg.vMaxForward))
@@ -92,10 +130,21 @@ class SlotGeometry(PosCalcBase):
             self._td_z.init(TdHanInitS(r=cfg.rLateral, h=h, vMax=cfg.vMaxLateral))
         self._seeded = False
 
-    def step(self, u: SlotGeometryInputS, y: PosCalcOutputS) -> None:
-        """推进 SlotGeometry 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
+    def step(self) -> None:
+        """推进槽位解算。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("SlotGeometry 尚未绑定端口")
+        self._calculate(self._u, self._y)
+
+    def _calculate(
+        self,
+        u: SlotGeometryInputS,
+        y: SlotGeometryOutputS,
+    ) -> None:
+        """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
         if u.leaderState is None or u.cmd is None or y.selfCmd is None:
             raise ValueError("SlotGeometry ports must be bound")
+        # 后续几何和TD计算只读取传入快照，不接触黑板。
         # cmd.pattern 是纯整型队形索引，直接作为 formPos 行号（0 起）。
         row_index = int(u.cmd.pattern)
         if row_index < 0 or row_index >= len(self._form_pos):
@@ -109,12 +158,8 @@ class SlotGeometry(PosCalcBase):
 
         # 相对槽位 TD 软化：只对长机 FUR 航迹系下的 (x 前向, y 上法向, z 右) 三路做。
         # sx/sy/sz 为平滑后的相对偏移，vfx/vfy/vfz 为其导数(相对槽位切换速度前馈)。关闭或未播种时透传原始槽位。
-        # TD 工作在缩放前的槽位坐标中，使集结比例变化不会反向污染平滑器内部状态。
         sx, sy, sz, vfx, vfy, vfz = self._smooth_slot(slot, basis, u)
-        scale = u.slotScale.scale if u.slotScale is not None else 1.0
-        scale_rate = u.slotScale.scaleRate if u.slotScale is not None else 0.0
-        # 集结缩放只作用于队形平面尺寸 x/z；y 仍表示固定的上法向间隔。
-        slot_fur = (scale * sx, sy, scale * sz)
+        slot_fur = (sx, sy, sz)
         transform_basis = basis if basis is not None else fur_basis_from_angles(0.0, 0.0)
         # 长机航迹未定义时按“东向平飞”的 FUR 兜底，保持 x→东、y→天、z→南的旧行为。
         # 兜底基仍满足前上右手性，只是不声称能代表零水平速度时不存在的真实航向。
@@ -123,6 +168,13 @@ class SlotGeometry(PosCalcBase):
         y.selfCmd.pos.east = u.leaderState.pos.east + slot_east
         y.selfCmd.pos.north = u.leaderState.pos.north + slot_north
         y.selfCmd.pos.h = u.leaderState.pos.h + slot_up
+        if (
+            self._catchup_altitude_m is not None
+            and u.cmd.stage == FormStageE.RALLY
+            and u.cmd.step == RallyPhaseE.CATCHUP
+        ):
+            # CATCHUP 尚未形成松散队形，保持初始化时分配的错层高度；后续阶段恢复真实槽位高度。
+            y.selfCmd.pos.h = self._catchup_altitude_m
         copy_velocity(frame.v, y.selfCmd.v)
         # 槽位随长机指令航迹刚性旋转，避免长机实际速度受扰时把僚机坐标系带乱。
         y.selfCmd.v.dVPsi = frame.v.dVPsi
@@ -140,13 +192,8 @@ class SlotGeometry(PosCalcBase):
                 -slot_fur[2] * omega * sin_theta,
                 (-slot_fur[0] * cos_theta + slot_fur[1] * sin_theta) * omega,
             )
-            # TD 导数及 scaleRate 也在同一 FUR 基中叠加，避免先转世界系再缩放破坏三维轴义。
-            # 缩放只作用 x/z，因此 y 通道仅保留 TD 自身导数，不叠加 scaleRate。
-            transition_velocity_fur = (
-                scale * vfx + scale_rate * sx,
-                vfy,
-                scale * vfz + scale_rate * sz,
-            )
+            # TD 导数也在同一 FUR 基中叠加，避免先转世界系破坏三维轴义。
+            transition_velocity_fur = (vfx, vfy, vfz)
             relative_velocity_fur = (
                 yaw_velocity_fur[0] + transition_velocity_fur[0],
                 yaw_velocity_fur[1] + transition_velocity_fur[1],
@@ -157,12 +204,8 @@ class SlotGeometry(PosCalcBase):
             y.selfCmd.v.vNorth = frame.v.vNorth + rel_n
             y.selfCmd.v.vUp = frame.v.vUp + rel_u
         else:
-            # 兜底帧无旋转语义，仅保留队形重构和缩放速度前馈。
-            transition_velocity_fur = (
-                scale * vfx + scale_rate * sx,
-                vfy,
-                scale * vfz + scale_rate * sz,
-            )
+            # 兜底帧无旋转语义，仅保留队形重构速度前馈。
+            transition_velocity_fur = (vfx, vfy, vfz)
             rel_e, rel_n, rel_u = fur_to_enu(transition_velocity_fur, transform_basis)
             y.selfCmd.v.vEast = frame.v.vEast + rel_e
             y.selfCmd.v.vNorth = frame.v.vNorth + rel_n
@@ -176,7 +219,16 @@ class SlotGeometry(PosCalcBase):
             else 0.0
         )
         y.selfCmd.v.vTheta = math.atan2(y.selfCmd.v.vUp, y.selfCmd.v.vd)
+        self._write_common_output(y)
         return None
+
+    def _write_common_output(self, y: SlotGeometryOutputS) -> None:
+        """完整填写本策略公共输出。"""
+        if y.status is not None:
+            # 槽位策略只拥有活动策略字段，不清除已完成的集结诊断。
+            y.status.active_strategy = PosCalcStrategyE.SLOT_GEOMETRY
+        if y.posTrackCommand is not None:
+            y.posTrackCommand.mode = PosTrackCommandE.POSITION_TRACK
 
     def reset(self) -> None:
         """复位 SlotGeometry 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -188,7 +240,10 @@ class SlotGeometry(PosCalcBase):
         return None
 
     def _smooth_slot(
-        self, slot: FormPosS, basis: FurBasis | None, u: SlotGeometryInputS
+        self,
+        slot: FormPosS,
+        basis: FurBasis | None,
+        u: SlotGeometryInputS,
     ) -> tuple[float, float, float, float, float, float]:
         """对相对槽位 (x前向, y上, z右) 三路做 Han TD 软化，返回 (sx, sy, sz, vfx, vfy, vfz)。
 
@@ -209,7 +264,11 @@ class SlotGeometry(PosCalcBase):
             return sx, sy, sz, 0.0, 0.0, 0.0  # 仅位置软化；速度前馈默认关(见 slotVelFf 说明)
         return sx, sy, sz, vfx * 0.2, vfy * 0.2, vfz * 0.2
 
-    def _seed_from_current(self, basis: FurBasis, u: SlotGeometryInputS) -> None:
+    def _seed_from_current(
+        self,
+        basis: FurBasis,
+        u: SlotGeometryInputS,
+    ) -> None:
         """把本机当前位置换算成长机三维 FUR 相对偏移，作为三路 TD 初值，避免起步大阶跃。"""
         assert u.selfState is not None and u.leaderState is not None
         rel_e = u.selfState.pos.east - u.leaderState.pos.east
@@ -217,10 +276,6 @@ class SlotGeometry(PosCalcBase):
         rel_u = u.selfState.pos.h - u.leaderState.pos.h
         # 播种反投影必须复用本拍相同的三维基，否则爬升时前向距离会被误记为纯水平距离。
         seed_fwd, seed_up, seed_right = enu_to_fur((rel_e, rel_n, rel_u), basis)
-        # TD 工作在缩放前的原始槽位空间；当前相对位置是缩放后的物理量，水平需 /scale 对齐(高度不缩放)。
-        if u.slotScale is not None and u.slotScale.scale > 0.0:
-            seed_fwd /= u.slotScale.scale
-            seed_right /= u.slotScale.scale
         self._td_x.seed(seed_fwd, 0.0)
         self._td_y.seed(seed_up, 0.0)
         self._td_z.seed(seed_right, 0.0)

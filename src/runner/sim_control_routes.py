@@ -16,10 +16,10 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     WayPointS,
 )
-from src.algorithm.entity.leader_follower_rally import (
+from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     rally_loose_target,
-    route_heading_rad,
     resolve_formation_slot,
+    route_heading_rad,
 )
 from src.algorithm.entity.types import VelCmdLimitS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
@@ -330,7 +330,7 @@ def _same_xy(a: PosInEarthS, b: PosInEarthS) -> bool:
 def _wpi_from_waypoints(
     raw_waypoints: object, route_defaults: dict[str, object], *, insert_arcs: bool = True
 ) -> list[WayPointInputS]:
-    """把航点序列转换为 WayPointInputS 列表。注意：insert_arcs=True 时内部拐点设 r=R，由 leader.init() 插圆弧。"""
+    """把航点序列转换为 WayPointInputS 列表。注意：insert_arcs=True 时由轨迹规划流程插入圆弧。"""
     if not isinstance(raw_waypoints, list) or len(raw_waypoints) < 2:
         raise ValueError("route.waypoints must contain at least two points")
     speed = float(route_defaults.get("speed_mps", route_defaults.get("vdCmd", 8.0)))
@@ -516,7 +516,6 @@ def _build_rally_task_init(
         looseScale=float(rally_cfg_raw.get("loose_scale", 3.0)),
         convergenceRadius_m=float(rally_cfg_raw.get("convergence_radius_m", 5.0)),
         stableHold_s=float(rally_cfg_raw.get("stable_hold_s", 5.0)),
-        compressTime_s=float(rally_cfg_raw.get("compress_time_s", 30.0)),
         tightRadius_m=float(rally_cfg_raw.get("tight_radius_m", 2.0)),
         expectedFollowerIds=expected_ids,
         staleTimeout_s=float(rally_cfg_raw.get("stale_timeout_s", 2.0)),

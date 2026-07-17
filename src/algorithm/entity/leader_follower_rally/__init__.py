@@ -1,95 +1,138 @@
-"""领航跟随集结实体包。注意：长机与僚机实体保持独立导出，避免影响既有保持实体。"""
+"""统一领航跟随实体包。注意：长机与僚机均支持集结后进入队形保持。"""
 
-import math
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
-    FormCommInitS,
-    FormPosS,
-    PosInEarthS,
+    FormStageE,
     PosTrackDiagS,
-    WayPointInputS,
+    RallyPhaseE,
     copy_motion,
     copy_pos_track_diag,
 )
-from src.algorithm.entity.types import EntityOutputS, VelCmdLimitS
-from src.algorithm.units.algo.formation_math import horizontal_track_vector_to_enu
+from src.algorithm.entity.types import (
+    EntityOutputS,
+    EntityProfileE,
+    EntityProfileS,
+    EntityRouteChangeS,
+    EntityStrategiesS,
+)
+from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
+from src.algorithm.units.algo.pos_track import PosTrackStrategyE
+from src.algorithm.units.process.tra_plan import TraPlanStrategyE
+
+if TYPE_CHECKING:
+    from src.algorithm.entity.base import EntityBase
 
 
-_MIN_FIRST_SEGMENT_HORIZ_M = 1e-6  # 第一航段水平长度下限；小于此值视为退化（水平重合，仅高度不同也算）
-_DEFAULT_LOITER_SPEED_MIN_MPS = 14.0  # velCmdLimit 未给出有效下限时的兜底盘旋最小速度
-_DEFAULT_LOITER_SPEED_MAX_MPS = 25.0  # velCmdLimit 未给出有效上限时的兜底盘旋最大速度
+# 状态序列是三个 Manager 共用的路由时间轴，顺序必须与 Rally 状态机一致。
+# NONE 和 STANDBY 只使用 JOINING 占位，避免为停控阶段引入无业务意义的子阶段。
+# RALLY/JOINING 对应切入集结圆，CATCHUP 和 LOOSE 共用任务飞行产品。
+# 渐进压缩能力删除后，LOOSE 稳定收敛便直接进入 HOLD，不再登记中间阶段。
+# HOLD 重新使用 JOINING 占位，使完成后的策略继承保持单一且可预测。
+# 入站协议也复用这份集合校验组合，不能只改任务状态机而遗漏此处。
+RALLY_STATE_SEQUENCE = (
+    (FormStageE.NONE, RallyPhaseE.JOINING),
+    (FormStageE.STANDBY, RallyPhaseE.JOINING),
+    (FormStageE.RALLY, RallyPhaseE.JOINING),
+    (FormStageE.RALLY, RallyPhaseE.CATCHUP),
+    (FormStageE.RALLY, RallyPhaseE.LOOSE),
+    (FormStageE.HOLD, RallyPhaseE.JOINING),
+)
+"""集结 Entity 的合法状态及变化点继承顺序。"""
+RALLY_STATE_SET = frozenset(RALLY_STATE_SEQUENCE)
+"""集结 Entity 合法状态集合。注意：供入站消息提交前校验。"""
 
 
-def loiter_speed_bounds(vel_cmd_limit: VelCmdLimitS) -> tuple[float, float]:
-    """从 velCmdLimit.forwardMin/forwardMax 推导 RallyJoinPos 的盘旋速度上下限。
-
-    注意：`RallyFollowerEntity.init`/`RallyLeaderEntity.init`/`_ConfigLoader.validate` 三处都要用
-    同一套推导（未配置或非正值时退回固定翼速度下限 14/25 m/s），抽出来避免三份逻辑各自漂移。
-
-    下限/上限各自独立回退：只显式配置其中一个时，另一个会退到默认值，可能与显式配置的值反了序
-    （如只配 `forwardMax=10` → (14, 10)，只配 `forwardMin=30` → (30, 25)）。在这里统一校验顺序，
-    让调用方（含 `_ConfigLoader.validate()`）都能在早期拿到同一个结论，不必各自补一遍序校验。
-    """
-    fwd_min = vel_cmd_limit.forwardMin
-    fwd_max = vel_cmd_limit.forwardMax
-    loiter_min = fwd_min if (math.isfinite(fwd_min) and fwd_min > 0) else _DEFAULT_LOITER_SPEED_MIN_MPS
-    loiter_max = fwd_max if (math.isfinite(fwd_max) and fwd_max > 0) else _DEFAULT_LOITER_SPEED_MAX_MPS
-    if loiter_max <= loiter_min:
-        raise ValueError(
-            f"loiter_speed_bounds: 推导出的盘旋速度上下限非法（min={loiter_min}, max={loiter_max}）："
-            "velCmdLimit.forwardMin/forwardMax 只显式配置一侧、另一侧退回默认值（14/25 m/s）时，"
-            "两者可能反序；请同时显式配置一对自洽的 forwardMin/forwardMax，或都不配置以使用默认值"
-        )
-    return loiter_min, loiter_max
-
-
-def route_heading_rad(route: list[WayPointInputS]) -> float:
-    """按统一航线第一航段（A→A1）计算集结航向。注意：调用方需保证 route 至少含两个航点。"""
-    a = route[0].pos
-    a1 = route[1].pos
-    d_e = a1.east - a.east
-    d_n = a1.north - a.north
-    # 集结盘旋圆是 ENU 水平几何，因此这里只定义首航段的水平任务航向，不计算航迹倾角。
-    if math.hypot(d_e, d_n) < _MIN_FIRST_SEGMENT_HORIZ_M:
-        # atan2(0, 0) 静默返回 0（正东），会悄悄算出错误的 M_i/盘旋圆而不报错——必须显式拒绝。
-        raise ValueError(
-            "route 第一航段水平长度退化为零（A/A1 水平坐标重合，仅高度不同也算）："
-            "无法据此推导集结航向，请检查 route 前两个航点"
-        )
-    return math.atan2(d_n, d_e)
-
-
-def rally_loose_target(route_start: PosInEarthS, heading_rad: float, scale: float, slot: FormPosS) -> PosInEarthS:
-    """在 ENU 水平集结平面计算本机松散目标点 M_i。
-
-    注意：这里的 ``heading_rad`` 是任务水平航向，M_i 后续用于构造水平盘旋圆，因此将 FUR 槽位
-    实例化在与任务航向对齐、倾角为零的合成平飞 FUR 中：``slot.x/z`` 投影到 ENU 水平面，
-    ``slot.y`` 成为固定天向高度差。即使首航段爬升，也不能把该静态几何误作随当前航迹倾角旋转的
-    三维 FUR 实时槽位；后者由 ``SlotGeometry`` 负责。
-    """
-    # 这里等价于在 theta=0 的合成平飞 FUR 中实例化槽位，而不是改写 FormPosS 的三维轴义。
-    east_off, north_off = horizontal_track_vector_to_enu(
-        (slot.x, slot.z), (math.cos(heading_rad), math.sin(heading_rad))
-    )
-    # looseScale 只扩大水平疏散间距；高度分层仍由 slot.y 的固定天向差表达。
-    return PosInEarthS(
-        east=route_start.east + scale * east_off,
-        north=route_start.north + scale * north_off,
-        h=route_start.h + slot.y,  # 高度固定差，不随 looseScale 扩展
-    )
+RALLY_LEADER_PROFILE = EntityProfileS(
+    identity=EntityProfileE.RALLY_LEADER,
+    state_sequence=RALLY_STATE_SEQUENCE,
+    route_changes=(
+        # 冷启动停控：三个可切换流程全部选择空产品。
+        EntityRouteChangeS(
+            state=(FormStageE.NONE, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.NOOP,
+                pos_track=PosTrackStrategyE.NOOP,
+            ),
+        ),
+        # 本地待命与集结切入：位置解算切到有状态的 RallyJoinPos。
+        # TraPlan 仍停控，避免待命期间提前推进任务航段。
+        EntityRouteChangeS(
+            state=(FormStageE.STANDBY, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.RALLY_JOIN,
+                pos_track=PosTrackStrategyE.PID_SPEED,
+            ),
+        ),
+        # 切出完成后沿任务航线飞行；LOOSE/HOLD 沿时间轴继承这组产品。
+        # 长机使用速度控制，位置目标由任务航线插值得到。
+        EntityRouteChangeS(
+            state=(FormStageE.RALLY, RallyPhaseE.CATCHUP),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.LEADER_ROUTE,
+                pos_calc=PosCalcStrategyE.ROUTE_INTERP,
+                pos_track=PosTrackStrategyE.PID_SPEED,
+            ),
+        ),
+    ),
+)
+"""集结长机身份证。注意：所有长机实例共享此不可变策略配置。"""
 
 
-def resolve_formation_slot(comm_init: FormCommInitS, target_pattern: int, node_id: str) -> FormPosS | None:
-    """按目标队形索引在 formPos 中定位本机槽位。注意：`target_pattern` 是纯整型队形索引（formPos 行号，
-    与 `FormSnapshotS.pattern` 同一语义），不再是需要在 `formPat`（仅供显示的队形名列表）中查找的枚举值。
-    索引越界或本机槽位缺失时返回 None，由调用方决定报错方式——RallyFollowerEntity.init 需要按具体原因抛
-    不同的 ValueError 文案，GUI 侧的静态几何预计算（sim_control_routes._build_rally_join_geometry）只需要
-    "找不到就跳过"。
-    """
-    if not (0 <= target_pattern < len(comm_init.formPos)):
-        return None
-    return next((slot for slot in comm_init.formPos[target_pattern] if slot.id == node_id), None)
+RALLY_FOLLOWER_PROFILE = EntityProfileS(
+    identity=EntityProfileE.RALLY_FOLLOWER,
+    state_sequence=RALLY_STATE_SEQUENCE,
+    route_changes=(
+        # 僚机冷启动同样停控，等待本地待命或长机广播建立有效命令。
+        EntityRouteChangeS(
+            state=(FormStageE.NONE, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.NOOP,
+                pos_track=PosTrackStrategyE.NOOP,
+            ),
+        ),
+        # 待命和 JOINING 与长机平等使用 RallyJoinPos，不提前进入槽位跟随。
+        # 速度型控制负责执行切线、盘旋和切出轨迹。
+        EntityRouteChangeS(
+            state=(FormStageE.STANDBY, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.RALLY_JOIN,
+                pos_track=PosTrackStrategyE.PID_SPEED,
+            ),
+        ),
+        # CATCHUP 起切到最终槽位几何，LOOSE/HOLD 继续继承且不做渐进缩放。
+        # 僚机没有任务航线规划，位置跟踪使用槽位位置闭环。
+        EntityRouteChangeS(
+            state=(FormStageE.RALLY, RallyPhaseE.CATCHUP),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.SLOT_GEOMETRY,
+                pos_track=PosTrackStrategyE.PID_POSITION,
+            ),
+        ),
+    ),
+)
+"""集结僚机身份证。注意：所有僚机实例共享此不可变策略配置。"""
+
+
+def create_rally_entity(identity: EntityProfileE) -> EntityBase:
+    """按实体身份创建独立实例。注意：Profile 可共享，Entity 运行状态不可共享。"""
+    if identity == EntityProfileE.RALLY_LEADER:
+        from src.algorithm.entity.leader_follower_rally.leader import RallyLeaderEntity
+
+        return RallyLeaderEntity()
+    if identity == EntityProfileE.RALLY_FOLLOWER:
+        from src.algorithm.entity.leader_follower_rally.follower import RallyFollowerEntity
+
+        return RallyFollowerEntity()
+    raise ValueError(f"不支持的集结实体身份: {identity!r}")
 
 
 def fill_output(cxt: FormContextS, diag: PosTrackDiagS, outbox: list, y: EntityOutputS) -> None:

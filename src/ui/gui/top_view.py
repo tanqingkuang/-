@@ -686,7 +686,7 @@ class TopView(QGraphicsView):
             return
         node_by_id = {node.node_id: node for node in snapshot.nodes}
         # HOLD 后不再显示集结辅助几何，避免遮挡正常任务航线和队形目标。
-        visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
+        visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE"}
 
         for geometry in snapshot.rally_geometry:
             # 本地圆只在半径有效时绘制，兼容不含待命阶段的旧快照。
@@ -891,7 +891,7 @@ class TopView(QGraphicsView):
         """绘制各机目标槽位标记（菱形 + 连线）。注意：只做渲染，不修改仿真状态；长机/僚机都画，
         长机在 JOINING 阶段目标是盘旋圆切入点/圆上投影点，跟僚机的槽位目标是同一套 cmd_pos 机制。
         """
-        visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"}
+        visible_phases = {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE"}
         for node in snapshot.nodes:
             # 仅集结场景绘制目标槽位（HOLD 等其他阶段不需要此标记）
             if node.rally_phase not in visible_phases:

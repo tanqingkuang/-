@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from src.algorithm.context.leaf_types import MotionProfS, WayLineS
+from src.algorithm.context.context import FormContextS
+from src.algorithm.context.leaf_types import (
+    MotionProfS,
+    PosCalcStatusS,
+    PosCalcStrategyE,
+    PosTrackCommandE,
+    PosTrackCommandS,
+    WayLineS,
+)
 from src.algorithm.units.algo import arc_path
-from src.algorithm.units.algo.pos_calc.base import PosCalcBase, PosCalcInitS, PosCalcInputS, PosCalcOutputS
+from src.algorithm.units.algo.pos_calc.base import (
+    PosCalcBase,
+    PosCalcInitS,
+)
 
 
 @dataclass
@@ -19,11 +30,21 @@ class RouteInterpInitS(PosCalcInitS):
 
 
 @dataclass
-class RouteInterpInputS(PosCalcInputS):
-    """航线插值输入端口。注意：wayLine 为当前航段，nextWayLine 供曲率前馈跨段前瞻。"""
+class RouteInterpInputS:
+    """航线插值私有输入端口。注意：只绑定本策略实际读取的数据。"""
 
-    wayLine: WayLineS | None = None
-    nextWayLine: WayLineS | None = None
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+    wayLine: WayLineS = field(default_factory=WayLineS)
+    nextWayLine: WayLineS = field(default_factory=WayLineS)
+
+
+@dataclass
+class RouteInterpOutputS:
+    """航线插值私有输出端口。注意：bind 后直接指向黑板输出对象。"""
+
+    selfCmd: MotionProfS = field(default_factory=MotionProfS)
+    status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
+    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
 
 
 class RouteInterp(PosCalcBase):
@@ -33,6 +54,23 @@ class RouteInterp(PosCalcBase):
         """初始化 RouteInterp 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._look_ahead_distance = 0.0
         self._lead_time_s = 0.0
+        self._u = RouteInterpInputS()
+        self._y = RouteInterpOutputS()
+        self._bound = False
+
+    def bind(self, cxt: FormContextS) -> None:
+        """绑定专属输入输出端口。注意：后续 step 不再访问完整黑板。"""
+        self._u = RouteInterpInputS(
+            selfState=cxt.selfState,
+            wayLine=cxt.wayLine,
+            nextWayLine=cxt.nextWayLine,
+        )
+        self._y = RouteInterpOutputS(
+            selfCmd=cxt.selfCmd,
+            status=cxt.posCalcStatus,
+            posTrackCommand=cxt.posTrackCommand,
+        )
+        self._bound = True
 
     def init(self, cfg: PosCalcInitS) -> None:
         """按配置初始化 RouteInterp。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -43,10 +81,21 @@ class RouteInterp(PosCalcBase):
         if self._lead_time_s < 0.0:
             raise ValueError("leadTimeS must be >= 0")
 
-    def step(self, u: RouteInterpInputS, y: PosCalcOutputS) -> None:
-        """推进 RouteInterp 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
+    def step(self) -> None:
+        """推进航线插值。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("RouteInterp 尚未绑定端口")
+        self._calculate(self._u, self._y)
+
+    def _calculate(
+        self,
+        u: RouteInterpInputS,
+        y: RouteInterpOutputS,
+    ) -> None:
+        """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
         if u.selfState is None or u.wayLine is None or y.selfCmd is None:
             raise ValueError("RouteInterp ports must be bound")
+        # 从这里开始只使用策略私有端口，不读取共享黑板。
         line = u.wayLine
         if line.start.turnSign != 0.0:
             self._interp_arc(line, u.selfState, y.selfCmd)
@@ -54,6 +103,15 @@ class RouteInterp(PosCalcBase):
             self._interp_straight(line, u.selfState, y.selfCmd)
         # 曲率前馈(直线/圆弧通用)：dVPsi = vd·κ_ff，κ_ff 为 σ 前瞻窗内的平均曲率(航向差/窗长)。
         y.selfCmd.v.dVPsi = self._curvature_ff(u)
+        self._write_common_output(y)
+
+    def _write_common_output(self, y: RouteInterpOutputS) -> None:
+        """完整填写本策略公共输出。"""
+        if y.status is not None:
+            # 航线策略不拥有集结诊断，只更新公共活动策略字段。
+            y.status.active_strategy = PosCalcStrategyE.ROUTE_INTERP
+        if y.posTrackCommand is not None:
+            y.posTrackCommand.mode = PosTrackCommandE.SPEED_TRACK
 
     def _interp_straight(self, line: WayLineS, self_state: MotionProfS, self_cmd: MotionProfS) -> None:
         """直线航段：把本体投影到航段并按 L1 延拓，给出目标位置与沿航段速度。注意：行为与历史一致。"""

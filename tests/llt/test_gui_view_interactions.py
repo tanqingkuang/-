@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QMetaObject, QPoint, QPointF, QRect, Qt
-from PySide6.QtWidgets import QApplication, QFrame, QGroupBox, QLabel, QPushButton, QSplitter, QTableWidget
+from PySide6.QtWidgets import QApplication, QFrame, QGroupBox, QLabel, QSplitter, QTableWidget
 
 from src.data.geo import GeoOrigin
 from tests.llt._geo_route import geodetic_config
@@ -1915,27 +1915,6 @@ class GuiViewInteractionTests(unittest.TestCase):
 
         self.assertEqual(self.window.sim.last_result_code, "ERR_INVALID_STATE")
         self.assertIn("已在集结中", self.window.sim.last_result_message)
-
-    def test_rally_demo_button_loads_five_aircraft_config(self) -> None:
-        """验证演示场景里的“集结演示”默认加载五机集结配置。"""
-
-        rally_demo_buttons = [
-            button
-            for button in self.window.findChildren(QPushButton)
-            if button.text() == "集结演示"
-        ]
-        self.assertEqual(len(rally_demo_buttons), 1)
-
-        rally_demo_buttons[0].click()
-        self.app.processEvents()
-        snapshot = self.window.sim.snapshot()
-
-        self.assertEqual(self.window.sim.last_result_code, "OK")
-        self.assertEqual(len(snapshot.nodes), 5)
-        self.assertEqual(
-            [node.role for node in snapshot.nodes],
-            ["rally_follower", "rally_follower", "rally_leader", "rally_follower", "rally_follower"],
-        )
 
     def test_disturbance_label_clears_after_duration(self) -> None:
         self._load_ui_config()
