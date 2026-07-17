@@ -336,16 +336,6 @@ class FollowerStateS:
     reachedSlotOnce: bool = False  # 是否已至少一次路过松散点 M_i，保留为汇合过程诊断量
 
 
-@dataclass
-class FormationAnalysisS:
-    """集结完成后的一次性编队质量分析。注意：仅作边界诊断量输出，不进 Context。"""
-
-    posErrMax_m: float = 0.0  # 期望僚机中的最大位置偏差，米（仅统计 expectedFollowerIds 里有效节点）
-    posErrRms_m: float = 0.0  # 期望僚机位置误差 RMSE，米
-    inPositionCount: int = 0  # 期望僚机中满足精度要求的机数
-    totalCount: int = 0  # 期望参与集结的总机数（= len(expectedFollowerIds)，不受断链影响）
-
-
 def dist3d(a: "PosInEarthS", b: "PosInEarthS") -> float:
     """两点 3D 欧氏距离，单位米。"""
     de = a.east - b.east
@@ -366,11 +356,3 @@ def copy_follower_state(src: FollowerStateS, dst: FollowerStateS) -> None:
     dst.plannedPathLength_m = src.plannedPathLength_m
     dst.rally_state = src.rally_state
     dst.reachedSlotOnce = src.reachedSlotOnce
-
-
-def copy_formation_analysis(src: FormationAnalysisS, dst: FormationAnalysisS) -> None:
-    """复制编队分析快照，供仿真层安全持有诊断结果。注意：新增字段时同步补齐。"""
-    dst.posErrMax_m = src.posErrMax_m
-    dst.posErrRms_m = src.posErrRms_m
-    dst.inPositionCount = src.inPositionCount
-    dst.totalCount = src.totalCount

@@ -10,7 +10,7 @@
 
 领航跟随保持与集结统一由 `entity/leader_follower/` 承载。`LeaderEntity`、`FollowerEntity` 都执行 `EntityBase` 定义的固定六步链，身份 Profile 决定 Manager 产品；`EntityInitS.rally_enabled` 只控制是否启用集结能力，不在运行期更换实体或流程对象。
 
-**关于实体代码复用**：项目不再保留独立 Hold 实体。普通 `leader/wingman` 与集结 `rally_leader/rally_follower` 都映射到上述通用实体；保持配置使用 `RallyTaskInitS(enabled=False)` 直接输出 HOLD，并且不创建、校验 `RallyJoinPos`。长机固定主动任务模式，僚机固定被动任务模式，调用方无需额外设置 `passive`。
+**关于实体代码复用**：项目不再保留独立 Hold 实体。普通 `leader/wingman` 与集结 `rally_leader/rally_follower` 都映射到上述通用实体；保持配置使用 `EntityInitS.rally_enabled=False` 直接输出 HOLD，并且不创建、校验 `RallyJoinPos`。长机固定主动任务模式，僚机固定被动任务模式，调用方无需在任务参数中设置角色。
 
 ---
 
@@ -238,7 +238,7 @@ Rally 任务检查：所有期望僚机同时满足 **`posErr_m < catchup_radius
 | 子阶段 | cmd.step | 说明 |
 | --- | --- | --- |
 | LOOSE | 2 | 最终槽位跟随；粗门限稳定后继续等待全部僚机满足紧门限 |
-| HOLD | — | 维持最终槽位，并输出一次 FormationAnalysisS |
+| HOLD | — | 维持最终槽位 |
 
 ---
 
@@ -292,19 +292,7 @@ class FollowerStateS:
     reachedSlotOnce: bool = False  # 是否已至少一次路过 M_i，汇合过程诊断量
 ```
 
-### 3.2 `FormationAnalysisS` — 编队分析快照
-
-```python
-@dataclass
-class FormationAnalysisS:
-    """集结完成后的一次性编队质量分析。注意：仅作边界诊断量输出，不进 Context。"""
-    posErrMax_m: float = 0.0    # 期望僚机中的最大位置偏差，米（仅统计 expectedFollowerIds 里有效节点）
-    posErrRms_m: float = 0.0    # 期望僚机位置误差 RMSE，米
-    inPositionCount: int = 0    # 期望僚机中满足精度要求的机数
-    totalCount: int = 0         # 期望参与集结的总机数（= len(expectedFollowerIds)，不受断链影响）
-```
-
-同时在 `leaf_types.py` 补充对应的 `copy_*` 函数：`copy_follower_state`、`copy_formation_analysis`。
+同时在 `leaf_types.py` 提供 `copy_follower_state`，用于原地更新已绑定的僚机状态对象。
 
 实体代码中出现的三个辅助函数均来自现有 `context.py` / `leaf_types.py`（如不存在则在 `context.py` 补充）：
 
@@ -354,7 +342,7 @@ class FormContextS:
 
 #### 5.1.1 抽象类扩展
 
-`FormationTaskInitS` 与 `FormationTaskInputS`/`FormationTaskOutputS` 基类不变；`Rally` 子类扩展输入/输出端口结构体：
+`RallyTaskInitS` 只保存场景任务参数；`Rally.init()` 接收实体生成的 `EntityManagerInitS(entity, profile)`，从中派生长机 ID、主动/被动身份、启用状态和速度权限。输入/输出端口结构体如下：
 
 ```python
 @dataclass
@@ -362,7 +350,7 @@ class RallyTaskInitS(FormationTaskInitS):
     looseScale: float = 3.0               # 集结圆目标点的水平槽位偏置倍数
     convergenceRadius_m: float = 5.0      # LOOSE 粗收敛连续稳定阈值，米
     stableHold_s: float = 5.0             # 粗收敛需连续稳定的时间
-    tightRadius_m: float = 2.0            # 最终切入 HOLD 与完成分析的紧门限，米
+    tightRadius_m: float = 2.0            # 最终切入 HOLD 的紧门限，米
     expectedFollowerIds: list[str] = field(default_factory=list)
     # 期望参与集结的僚机 ID 列表；空列表→各门控立即通过（测试用）
     staleTimeout_s: float = 2.0           # 超过此时长未收到某机报文则视为数据失效
@@ -387,7 +375,7 @@ class RallyTaskInputS(FormationTaskInputS):
 @dataclass
 class RallyTaskOutputS(FormationTaskOutputS):
     # 继承 cmd: FormSnapshotS
-    rallyCompleted: bool = False            # LOOSE→HOLD 正常完成时置 True，仅该拍有效；实体据此输出 FormationAnalysisS
+    rallyCompleted: bool = False            # LOOSE→HOLD 正常完成时置 True，仅该拍有效
     t_ref: float = 0.0                      # 全队整数圈可达区间的最早公共时刻
     t_ref_valid: bool = False               # 是否已收齐长机与全部期望僚机的有效基础航程
     loopCounts: dict[str, int] = field(default_factory=dict)  # 每机额外完整圈数
@@ -395,9 +383,7 @@ class RallyTaskOutputS(FormationTaskOutputS):
 
 #### 5.1.2 Rally 子类实现逻辑
 
-**`init`**：存储配置参数，初始化内部计时器 `_catchup_stable_timer`、`_stable_timer`、
-单向生命周期锁存 `_rally_started` 及固定计划锁存 `_t_ref/_loop_counts/_plan_ready`。参数合法性断言（违反则抛 `ValueError`）：`looseScale >= 1.0`、
-`staleTimeout_s > 0`、`dt_s > 0`、`loiter_radius_m > 0`、`0 < loiter_speed_min_mps < loiter_speed_max_mps`。
+**`init`**：先从 `EntityManagerInitS.profile.identity` 固定主动/被动身份，从 `EntityInitS` 读取 `selfId/rally_leader_id/rally_enabled/velCmdLimit`，再存储纯任务参数并初始化计时器与计划锁存。参数合法性断言（违反则抛 `ValueError`）：`looseScale >= 1.0`、`staleTimeout_s > 0`、`dt_s > 0`、`loiter_radius_m > 0`；协调速度窗统一由 `loiter_speed_bounds(EntityInitS.velCmdLimit)` 推导并校验。
 
 **`step`** 顶层逻辑（先处理 remote，再按 `cmd.step` 路由）：
 
@@ -786,7 +772,7 @@ FormationInbound → Rally → TraPlanManager → PosCalcManager → PosTrackMan
 - PosCalcManager 为 RallyJoinPos 生成 `RallyJoinPosInitS(loose_slot=A, ...)`；LeaderRoute 持有统一 `cfg.route`。
 - `RallyTaskInitS.dt_s` 与 `cfg.control_period_s` 保持一致，init 时传入
 - 每拍实体边界只更新 `runtime.inbox/context.clock/remote/selfState`，业务推进全部由固定链完成。
-- `rallyCompleted` 是 Rally 私有输出的一拍事件；实体在 `_finish_output` 中生成一次 FormationAnalysisS。
+- `rallyCompleted` 是 Rally 私有输出的一拍事件；`EntityBase._finish_output` 将其透传为实体边界完成事件。
 
 **当前有效航线关键点**：
 
@@ -816,7 +802,7 @@ mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 | 单元 | 子类 |
 | --- | --- |
 | 收消息 Inbound | FormationInbound（统一解析长机广播） |
-| 任务编排 FormationTask | Rally（实体内部固定 `passive=True`） |
+| 任务编排 FormationTask | Rally（根据 Follower Profile 固定为被动身份） |
 | 轨迹规划 TraPlanManager | Profile 路由 Noop 产品 |
 | 位置解算 PosCalcManager | Profile 路由 Noop / RallyJoinPos / SlotGeometry 缓存产品 |
 | 跟踪 PosTrackManager | Profile 路由 Noop / 速度控制 / 位置控制产品 |
@@ -958,7 +944,7 @@ class EntityInitS:
 src/algorithm/
 ├── context/
 │   ├── context.py              ← 扩展：followerStates 与固定协调计划字段
-│   └── leaf_types.py           ← 扩展：FollowerStateS、FormationAnalysisS
+│   └── leaf_types.py           ← 扩展：FollowerStateS
 ├── entity/
 │   ├── base.py                 # 固定六步流程链
 │   ├── types.py                # 边界结构体、Profile 与运行时表
@@ -987,31 +973,15 @@ src/algorithm/
 
 ---
 
-## 十、编队分析输出
+## 十、集结完成事件
 
-仅当 LOOSE 收敛后自然进入 HOLD（内部 `_rally_completed` 标志置位）的第一拍，`LeaderEntity` 计算并输出 `FormationAnalysisS`。`remote==HOLD` 外部强制中断和 `remote==NONE` 复位均不触发分析输出。
-
-`_rally_completed` 由 Rally 单元在 LOOSE→HOLD 转换时写入输出（`y.rallyCompleted = True`），实体读取后置位本地标志；`remote==NONE` 时实体可清除该显示锁存，但任务仍拒绝重启，只有显式 `reset()` 才开始新的集结生命周期。
-
-**触发条件**：`_rally_completed==True` 且本拍为首次（只输出一拍，后续帧 `formationAnalysis=None`）。实体侧一次性；仿真层把这一拍的值持久锁存到 `SimulationController._formation_completed_analysis`，并通过 `SimulationSnapshot.rally_analysis` 对外提供（详见 11.4 节）。当前 GUI 适配层不透传或展示该分析结果。
-
-集结完成后，`LeaderEntity` 计算并输出 `FormationAnalysisS`：
-
-- 只统计 `expectedFollowerIds` 中存在、且 `valid==True`、且 `(now_s - lastUpdate_s) <= staleTimeout_s` 的条目（排除断链旧状态和非预期节点）
-- `validStates = [s for s in followerStates if s.id in expectedFollowerIds and is_valid(s)]`
-- 若 `validStates` 为空：`posErrMax_m = NaN`、`posErrRms_m = NaN`、`inPositionCount = 0`（空列表无法取 max/sqrt-mean，统一置 NaN/0 避免 ValueError）
-- 否则：`posErrMax_m = max(s.posErr_m for s in validStates)`；`posErrRms_m = sqrt(mean(s.posErr_m² for s in validStates))`；`inPositionCount = count(s.posErr_m < tightRadius_m for s in validStates)`
-- `totalCount = len(expectedFollowerIds)`（期望总数，不受在线状态影响）
-
-`FormationAnalysisS` 通过 `EntityOutputS` 携带出，不进 `Context`（仅诊断/日志用）。
-
-`EntityOutputS` 扩展：
+`Rally` 在每拍开始先把 `y.rallyCompleted` 置为 `False`，只在 LOOSE→HOLD 自然转换拍置为 `True`。`EntityBase._finish_output` 把该事件透传到实体边界；外部强制 HOLD 不产生完成事件。项目不再计算或传递编队质量分析快照。
 
 ```python
 @dataclass
 class EntityOutputS:
     # ... 已有字段 ...
-    formationAnalysis: FormationAnalysisS = None  # 仅集结完成首帧非 None；仿真层须另行锁存
+    rallyCompleted: bool = False  # 自然完成转换的单拍事件
 ```
 
 ---
@@ -1031,7 +1001,7 @@ self._entity = create_leader_follower_entity(profile)
 self._is_rally_role = role in {"rally_leader", "rally_follower"}
 ```
 
-实体身份固定任务方向：`LeaderEntity` 强制 `passive=False`，`FollowerEntity` 强制 `passive=True`。Runner 只传公共 `RallyTaskInitS`，不再负责修补角色专属标志。
+实体统一把 `EntityManagerInitS(cfg, profile)` 交给 Rally；Rally 根据 Leader/Follower Profile 固定主动/被动身份。Runner 只传公共 `RallyTaskInitS` 和实体配置，不再修补角色专属标志。
 
 #### 11.1.1 保持场景冷启动预置
 
@@ -1046,7 +1016,7 @@ if role not in {"leader", "rally_leader", "rally_follower"} and initial_leader_s
 所有角色都构造同一种 `EntityInitS` 边界；主要字段如下：
 
 - `cfg.route`：从 JSON 顶层统一航线解析；集结启用时前两点用于推导集结中心和方向，完整航线用于后续任务飞行。
-- `cfg.rally_cfg`：公共 `RallyTaskInitS`。实体内部根据身份覆盖 `leaderId/passive/enabled`。
+- `cfg.rally_cfg`：只含场景任务参数的公共 `RallyTaskInitS`；`leaderId/passive/enabled/velCmdLimit` 不再复制进任务配置，由 Rally 从 `EntityInitS + Profile` 直接派生。
 - `cfg.rally_enabled`：仅 `rally_leader/rally_follower` 为 `True`；普通 `leader/wingman` 为 `False`，此时任务直接保持，PosCalc Manager 不创建 `RallyJoinPos`，盘旋速度范围也不参与初始化校验。
 - `cfg.rally_leader_id`：僚机长机 ID；由 `FollowerEntity` 注入统一出站/入站配置。
 - `cfg.rally_approach_speed_mps`、`cfg.rally_layer_altitude_m`：仅集结位置解算使用。
@@ -1089,74 +1059,13 @@ self._entity.step(
 )
 ```
 
-普通保持角色从 HOLD 启动。集结角色从本地 STANDBY 启动，`start_rally()` 将节点运行模式切为 ACTIVE 并设置 `remote=RALLY`；检测到集结完成分析后自动切为 HOLD。`reset()` 恢复各角色初始运行模式与远控阶段。
+普通保持角色从 HOLD 启动。集结角色从本地 STANDBY 启动，`start_rally()` 将节点运行模式切为 ACTIVE 并设置 `remote=RALLY`；检测到 `rallyCompleted` 单拍事件后自动切为 HOLD。`reset()` 恢复各角色初始运行模式与远控阶段。
 
 **首拍集结预热**：`run_until_complete()` 会在首个 tick 前自动开始集结，GUI/API 也可能在 `start()` 后立即调用 `start_rally()`；此时 `RallyJoinPos` 尚未执行 STANDBY，待命圆仍为空。控制器在 `tick_index == 0` 且集结节点仍为 `LOCAL_LOITER` 运行模式时，先调用一次 `_run_formation_algorithms_unlocked()` 建立各机待命圆，再切换 `ACTIVE/RALLY`。该预热不推进通信时钟、模型或仿真时间；已经运行过 tick 或重复调用开始集结时不再执行。
 
-### 11.4 sim_control — formationAnalysis 传递链路
+### 11.4 sim_control — 完成事件接入
 
-`entity_output.formationAnalysis` 从实体层到仿真快照需经过两步传递：
-
-**第一步：`_NodeAlgorithm.step` → `_NodeAlgorithmOutput`**
-
-`_NodeAlgorithmOutput`（或等价结构体）新增字段：
-
-```python
-formation_analysis: FormationAnalysisS | None = None
-```
-
-`_NodeAlgorithm.step` 在 `return` 时一并构造（不用临时赋值，与现有 `_NodeAlgorithmOutput` 构造风格一致）：
-
-```python
-return _NodeAlgorithmOutput(
-    control=...,
-    control_diag=...,
-    outbox=...,
-    status=...,
-    formation_analysis=entity_output.formationAnalysis,  # 非首帧为 None
-)
-```
-
-**第二步：`SimulationController` 聚合 → `SimulationSnapshot`**
-
-`_run_formation_algorithms_unlocked` 里的 `output` 是局部变量，`_make_snapshot_unlocked` 无法访问 `node_outputs`。在 `SimulationController` 上新增**持久**字段，使实体侧的一次性结果能够保留在后续控制器快照中：
-
-```python
-self._formation_completed_analysis: FormationAnalysisS | None = None
-```
-
-**清空时机**（以下两种情况需清空，防止旧结果污染新一轮集结）：
-
-- `load_config()`：重新加载配置时清空
-- `reset()`：复位仿真时清空（`_remote_stage` 由控制器自动管理，不存在"设回 NONE"路径，NONE 语义仅在实体/单元层可见）
-
-在算法循环末尾更新（仅在收到首帧时锁存，已锁存则不覆盖）：
-
-```python
-for node_id, state in states.items():
-    output = self._node_algorithms[node_id].step(...)
-    ...
-    if output.formation_analysis is not None and self._formation_completed_analysis is None:
-        self._formation_completed_analysis = output.formation_analysis  # 仅锁存首帧
-        self._remote_stage = FormStageE.HOLD                            # 完成后自动切 HOLD（见 11.3 节）
-```
-
-`SimulationSnapshot` 新增字段（构造时传入，`frozen=True` 不可事后赋值）：
-
-```python
-rally_analysis: FormationAnalysisS | None = None
-```
-
-`_make_snapshot_unlocked` 构造时传入锁存值：
-
-```python
-return SimulationSnapshot(
-    ...,
-    rally_analysis=self._formation_completed_analysis,
-)
-```
-
-分析结果的传递链路止于 `SimulationSnapshot.rally_analysis`。当前 `ControllerSimulationAdapter` 和 GUI `Snapshot` 不包含该字段，界面也不展示编队分析结果；后续若增加界面展示，应另行设计并补充对应实现与测试。
+`_NodeAlgorithm.step` 直接读取 `entity_output.rallyCompleted`。首次收到该事件时，将本地 `_rally_completed` 锁存为 `True` 并把 `_remote_stage` 切为 `HOLD`；该锁存只用于运行状态控制，`reset()` 时清除。完成事件和锁存均不进入 `SimulationSnapshot`。
 
 ### 11.5 GUI — 演示场景切换按钮
 

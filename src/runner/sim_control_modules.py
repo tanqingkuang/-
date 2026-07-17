@@ -280,10 +280,8 @@ class _NodeAlgorithm:
         # 长机（包含集结长机）一旦跑过即标记，使 current_route() 从上下文取实时值。
         if self._role in {"leader", "rally_leader"} and remote_stage != FormStageE.STANDBY:
             self._has_route_step = True
-        # 集结完成时自动切换为 HOLD，防止重复触发完成流程。
-        # 用专用标志位锁存，与诊断载荷解耦（诊断仅一帧有效，标志持久到 reset）。
-        formation_analysis = entity_output.formationAnalysis
-        if not self._rally_completed and formation_analysis is not None:
+        # 集结完成单拍事件触发自动 HOLD，专用标志持续到 reset，防止重复处理。
+        if not self._rally_completed and entity_output.rallyCompleted:
             self._rally_completed = True
             self._remote_stage = FormStageE.HOLD
         # 优先用输出加速度，缺省回退到实体上下文中的加速度。
@@ -302,7 +300,7 @@ class _NodeAlgorithm:
         # 节点非健康时上报"重构"，否则"组队"，供控制回报聚合。
         status = "reconfiguring" if health != "normal" else "forming"
         control_diag = entity_output.controlDiag or PosTrackDiagS()
-        return _NodeAlgorithmOutput(control, outbox, status, control_diag, formation_analysis)
+        return _NodeAlgorithmOutput(control, outbox, status, control_diag)
 
     def reset(self) -> None:
         """复位 _NodeAlgorithm 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

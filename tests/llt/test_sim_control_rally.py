@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.algorithm.context.leaf_types import FormStageE, FormationAnalysisS, PosInEarthS, WayPointInputS
+from src.algorithm.context.leaf_types import FormStageE, PosInEarthS, WayPointInputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
 from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
 from src.common.envelope import MessageEnvelope
@@ -615,20 +615,19 @@ class SimControlRallyTests(unittest.TestCase):
                 for node in joining_snapshot.nodes
             ))
 
-    def test_snapshot_exposes_latched_rally_analysis(self) -> None:
-        """验证控制器快照透传集结完成后锁存的编队分析。"""
+    def test_snapshot_excludes_removed_rally_analysis(self) -> None:
+        """编队分析功能删除后，控制器和快照不得继续暴露旧接口。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             controller = SimulationController()
             self.addCleanup(controller.close)
             controller.load_config(str(_write_json(Path(tmp), _rally_config())))
-            analysis = FormationAnalysisS(posErrMax_m=1.2, posErrRms_m=0.8, inPositionCount=2, totalCount=2)
 
             with controller._lock:
-                controller._formation_completed_analysis = analysis
                 snapshot = controller._make_snapshot_unlocked()
 
-            self.assertIs(snapshot.rally_analysis, analysis)
+            self.assertFalse(hasattr(controller, "_formation_completed_analysis"))
+            self.assertFalse(hasattr(snapshot, "rally_analysis"))
 
     def test_build_rally_task_init_ignores_removed_last_arrival_threshold_s(self) -> None:
         """last_arrival_threshold_s 已移除，配置中出现该键应被忽略，不影响加载，且结果中不携带该字段。"""

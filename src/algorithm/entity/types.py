@@ -11,7 +11,6 @@ from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
     FormCommInitS,
-    FormationAnalysisS,
     FormSelfInitS,
     MotionProfS,
     PosTrackDiagS,
@@ -177,7 +176,7 @@ class EntityInitS:
     route: list[WayPointInputS] = field(default_factory=list)  # 任务航线；集结实体同时读取前两点计算集结几何
     control_period_s: float = DEFAULT_CONTROL_PERIOD_S  # 控制算法处理周期，单位 s
     velCmdLimit: VelCmdLimitS = field(default_factory=VelCmdLimitS)  # 前向/垂向速度指令限幅
-    rally_cfg: object | None = None  # RallyTaskInitS；长机使用完整参数，僚机只取 convergenceRadius_m
+    rally_cfg: object | None = None  # RallyTaskInitS；只保存任务参数，角色装配由 Entity Profile 决定
     rally_approach_speed_mps: float = 20.0  # 僚机飞向 M_i 的速度
     rally_leader_id: str = ""  # 僚机回报消息的发送目标（来自节点配置 leader_id）
     rally_layer_altitude_m: float | None = None  # 待命/JOINING/CATCHUP 分层目标高度；None 表示沿用集结槽位高度
@@ -186,7 +185,7 @@ class EntityInitS:
 
 @dataclass(frozen=True)
 class EntityManagerInitS:
-    """流程 Manager 内部初始化参数。注意：由 Entity 根据自身 Profile 生成。"""
+    """实体流程内部初始化参数。注意：由 Entity 根据自身 Profile 生成。"""
 
     entity: EntityInitS  # 每架飞机不同的运行初始化参数
     profile: EntityProfileS  # 三个可切换 Manager 共用的完整策略表
@@ -205,11 +204,11 @@ class EntityRuntimeS:
 
 @dataclass
 class EntityInputS:
-    """实体每帧输入。注意：各字段可为空，缺省时沿用上一帧状态。"""
+    """实体每帧输入。注意：字段可为空；remote 的缺省语义由实体边界策略决定。"""
 
     selfState: MotionProfS | None = None  # 本机最新运动状态反馈
     inbox: list[MessageEnvelope] = field(default_factory=list)  # 本帧收到的消息
-    remote: RemoteCmdS | None = None  # 外部遥控指令
+    remote: RemoteCmdS | None = None  # 外部遥控指令；僚机缺省时释放本地覆盖，长机沿用上一拍
     now_s: float = 0.0  # 当前仿真时间戳（秒）；由仿真框架每帧注入，用于僚机报文超时检测
 
 
@@ -221,4 +220,4 @@ class EntityOutputS:
     selfCmd: MotionProfS | None = None  # 本机位置/速度指令快照
     controlDiag: PosTrackDiagS | None = None  # 位置跟踪诊断快照
     outbox: list[MessageEnvelope] = field(default_factory=list)  # 本帧待发送的消息
-    formationAnalysis: FormationAnalysisS | None = None  # 仅集结完成首帧非 None；仿真层须另行锁存
+    rallyCompleted: bool = False  # Rally 自然完成的单拍事件；外部强制 HOLD 不置位

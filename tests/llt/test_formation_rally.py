@@ -19,7 +19,6 @@ from src.algorithm.context.leaf_types import (
     FormSelfInitS,
     FormSnapshotS,
     FormStageE,
-    FormationAnalysisS,
     MotionProfS,
     NetWorkS,
     PosInEarthS,
@@ -31,14 +30,14 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     WayPointS,
     copy_follower_state,
-    copy_formation_analysis,
 )
 from src.algorithm.entity.leader_follower.follower import FollowerEntity
 from src.algorithm.entity.leader_follower.leader import LeaderEntity
-from src.algorithm.entity.leader_follower import create_leader_follower_entity
+from src.algorithm.entity.leader_follower import LEADER_PROFILE, create_leader_follower_entity
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
+    EntityManagerInitS,
     EntityOutputS,
     EntityProfileE,
     VelCmdLimitS,
@@ -278,24 +277,46 @@ def _rally_task(
 
     task = Rally()
     task.init(
-        RallyTaskInitS(
-            leaderId=leader_id,
-            looseScale=3.0,
-            convergenceRadius_m=convergence_radius_m,
-            stableHold_s=stable_hold_s,
-            tightRadius_m=tight_radius_m,
-            expectedFollowerIds=list(expected),
-            staleTimeout_s=0.5,
-            targetPattern=0,
-            dt_s=dt_s,
-            catchup_radius_m=catchup_radius_m,
-            catchup_stable_s=catchup_stable_s,
-            loiter_radius_m=loiter_radius_m,
-            loiter_speed_min_mps=loiter_speed_min_mps,
-            loiter_speed_max_mps=loiter_speed_max_mps,
+        _rally_process_init(
+            RallyTaskInitS(
+                looseScale=3.0,
+                convergenceRadius_m=convergence_radius_m,
+                stableHold_s=stable_hold_s,
+                tightRadius_m=tight_radius_m,
+                expectedFollowerIds=list(expected),
+                staleTimeout_s=0.5,
+                targetPattern=0,
+                dt_s=dt_s,
+                catchup_radius_m=catchup_radius_m,
+                catchup_stable_s=catchup_stable_s,
+                loiter_radius_m=loiter_radius_m,
+            ),
+            leader_id=leader_id,
+            vel_cmd_limit=VelCmdLimitS(
+                forwardMin=loiter_speed_min_mps,
+                forwardMax=loiter_speed_max_mps,
+            ),
         )
     )
     return task
+
+
+def _rally_process_init(
+    task_cfg: RallyTaskInitS,
+    *,
+    leader_id: str = "R01",
+    vel_cmd_limit: VelCmdLimitS | None = None,
+    enabled: bool = True,
+) -> EntityManagerInitS:
+    """把纯任务参数包装为长机实体流程初始化配置。"""
+
+    entity_cfg = EntityInitS(
+        selfInit=FormSelfInitS(leader_id),
+        rally_cfg=task_cfg,
+        rally_enabled=enabled,
+        velCmdLimit=vel_cmd_limit or VelCmdLimitS(),
+    )
+    return EntityManagerInitS(entity_cfg, LEADER_PROFILE)
 
 
 def _task_step(
@@ -480,8 +501,6 @@ class FollowerStateTests(unittest.TestCase):
 
         self.assertEqual(FormStageE.STANDBY, 4)
         self.assertFalse(FollowerStateS().valid)
-        self.assertEqual(FormationAnalysisS(), FormationAnalysisS())
-
         follower_src = FollowerStateS(
             id="R02",
             pos=PosInEarthS(1.0, 2.0, 3.0),
@@ -494,11 +513,6 @@ class FollowerStateTests(unittest.TestCase):
         copy_follower_state(follower_src, follower_dst)
         self.assertEqual(follower_dst, follower_src)
         self.assertIsNot(follower_dst.pos, follower_src.pos)
-
-        analysis_src = FormationAnalysisS(posErrMax_m=3.0, posErrRms_m=2.0, inPositionCount=1, totalCount=2)
-        analysis_dst = FormationAnalysisS()
-        copy_formation_analysis(analysis_src, analysis_dst)
-        self.assertEqual(analysis_dst, analysis_src)
 
     def test_context_contains_rally_fields_and_reset_clears_them(self) -> None:
         """验证 Context 拥有独立的集结状态列表，reset 原地清理集结字段。"""
@@ -529,7 +543,8 @@ class EntityBoundaryTypesTests(unittest.TestCase):
         self.assertEqual(init.rally_approach_speed_mps, 20.0)
         self.assertEqual(init.rally_leader_id, "")
         self.assertEqual(EntityInputS().now_s, 0.0)
-        self.assertIsNone(EntityOutputS().formationAnalysis)
+        self.assertFalse(EntityOutputS().rallyCompleted)
+        self.assertFalse(hasattr(EntityOutputS(), "formationAnalysis"))
 
 
 class RallyPhaseEnumTests(unittest.TestCase):
@@ -559,6 +574,33 @@ class RallyPhaseEnumTests(unittest.TestCase):
 class RallyTaskTests(unittest.TestCase):
     """验证集结任务状态机和遥控语义。"""
 
+    def test_task_config_excludes_entity_assembly_fields(self) -> None:
+        """任务参数不得重复持有实体身份、启用状态和速度权限。"""
+
+        for field_name in (
+            "leaderId",
+            "passive",
+            "enabled",
+            "velCmdLimit",
+            "loiter_speed_min_mps",
+            "loiter_speed_max_mps",
+        ):
+            self.assertNotIn(field_name, RallyTaskInitS.__dataclass_fields__)
+
+    def test_init_derives_loiter_speed_bounds_from_velocity_limit(self) -> None:
+        """验证任务初始化直接根据实体速度权限推导协调速度窗。"""
+
+        task = Rally()
+        task.init(
+            _rally_process_init(
+                RallyTaskInitS(),
+                vel_cmd_limit=VelCmdLimitS(forwardMin=18.0, forwardMax=22.0),
+            )
+        )
+
+        self.assertEqual(task._speed_min, 18.0)
+        self.assertEqual(task._speed_max, 22.0)
+
     def test_init_rejects_invalid_parameters(self) -> None:
         """验证 Rally 初始化拒绝无效任务参数和盘旋时间区间参数。"""
 
@@ -567,13 +609,18 @@ class RallyTaskTests(unittest.TestCase):
             RallyTaskInitS(staleTimeout_s=0.0),
             RallyTaskInitS(dt_s=0.0),
             RallyTaskInitS(loiter_radius_m=0.0),
-            RallyTaskInitS(loiter_speed_min_mps=0.0),
-            RallyTaskInitS(loiter_speed_min_mps=20.0, loiter_speed_max_mps=20.0),
         ]
         for cfg in invalid_cases:
             with self.subTest(cfg=cfg):
                 with self.assertRaises(ValueError):
-                    Rally().init(cfg)
+                    Rally().init(_rally_process_init(cfg))
+        with self.assertRaises(ValueError):
+            Rally().init(
+                _rally_process_init(
+                    RallyTaskInitS(),
+                    vel_cmd_limit=VelCmdLimitS(forwardMin=20.0, forwardMax=20.0),
+                )
+            )
 
     def test_remote_none_and_hold_write_expected_command(self) -> None:
         """验证 NONE/HOLD 遥控只更新阶段和目标队形。"""
@@ -3573,7 +3620,7 @@ class RallyEntityTests(unittest.TestCase):
         common = {
             "commInit": _comm_init(),
             "route": route,
-            "rally_cfg": RallyTaskInitS(leaderId=""),
+            "rally_cfg": RallyTaskInitS(),
             "velCmdLimit": VelCmdLimitS(forwardMin=30.0),
             "rally_enabled": False,
         }
@@ -3595,7 +3642,6 @@ class RallyEntityTests(unittest.TestCase):
 
         route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
         rally_cfg = _rally_cfg(expected=("R02",))
-        rally_cfg.passive = True  # 实体身份必须覆盖调用方给出的相反模式
         leader = LeaderEntity()
         leader.init(EntityInitS(
             selfInit=FormSelfInitS("R01"),
@@ -3614,6 +3660,15 @@ class RallyEntityTests(unittest.TestCase):
 
         self.assertNotIn("step", LeaderEntity.__dict__)
         self.assertNotIn("step", FollowerEntity.__dict__)
+        self.assertNotIn("_prepare_input", LeaderEntity.__dict__)
+        self.assertNotIn("_prepare_input", FollowerEntity.__dict__)
+        self.assertNotIn("_finish_output", LeaderEntity.__dict__)
+        self.assertNotIn("_finish_output", FollowerEntity.__dict__)
+        self.assertNotIn("reset", LeaderEntity.__dict__)
+        self.assertNotIn("reset", FollowerEntity.__dict__)
+        self.assertNotIn("close", LeaderEntity.__dict__)
+        self.assertNotIn("close", FollowerEntity.__dict__)
+        self.assertFalse(hasattr(leader, "_rally_completed"))
         expected_types = [
             FormationInbound,
             Rally,
@@ -3633,6 +3688,7 @@ class RallyEntityTests(unittest.TestCase):
         # 六个流程均在 bind 阶段绑定字段级端口，运行期不再保存完整黑板或搬运端口快照。
         self.assertIs(leader._inbound._u.inbox, leader._inbox)
         self.assertIs(leader._inbound._u.clock, leader.cxt.clock)
+
         self.assertIs(leader._inbound._y.followerStates, leader.cxt.followerStates)
         self.assertIs(leader._task._u.cmd, leader.cxt.cmd)
         self.assertIs(leader._task._y.rallyPlan, leader.cxt.rallyPlan)
@@ -4194,8 +4250,8 @@ class RallyEntityTests(unittest.TestCase):
         self.assertEqual(output.selfCmd.v, VdInEarthS())
         self.assertEqual(output.outbox[0].payload["arrived"], 0)
 
-    def test_rally_leader_completes_and_outputs_formation_analysis_once(self) -> None:
-        """验证集结长机完成转换首帧输出编队分析，后续帧不重复输出。"""
+    def test_rally_leader_outputs_completion_event_once(self) -> None:
+        """验证集结长机仅在自然完成转换首帧输出完成事件。"""
 
         leader = LeaderEntity()
         leader.init(
@@ -4206,7 +4262,7 @@ class RallyEntityTests(unittest.TestCase):
                 rally_cfg=_rally_cfg(expected=("R02",), dt_s=0.1),
             )
         )
-        # 本用例只验证完成分析输出，直接把汇合子状态置为已切出，避免固定位置夹具无法模拟完整盘旋轨迹。
+        # 本用例只验证完成事件，直接把汇合子状态置为已切出，避免固定位置夹具无法模拟完整盘旋轨迹。
         _entity_rally_join(leader)._state = RALLY_STATE_EXITED
         status = _follower_status_msg("R02", pos_err_m=1.0, arrived=1)
 
@@ -4224,16 +4280,10 @@ class RallyEntityTests(unittest.TestCase):
             )
             outputs.append(output)
 
-        analysis_frames = [item.formationAnalysis for item in outputs if item.formationAnalysis is not None]
-        self.assertEqual(len(analysis_frames), 1)
-        analysis = analysis_frames[0]
-        self.assertAlmostEqual(analysis.posErrMax_m, 1.0)
-        self.assertAlmostEqual(analysis.posErrRms_m, 1.0)
-        self.assertEqual(analysis.inPositionCount, 1)
-        self.assertEqual(analysis.totalCount, 1)
+        self.assertEqual(sum(output.rallyCompleted for output in outputs), 1)
 
-    def test_rally_leader_none_clears_join_and_completion_latches(self) -> None:
-        """验证长机进入兼容 NONE 停控时清理位置与完成显示锁存。"""
+    def test_rally_leader_none_resets_join_state(self) -> None:
+        """验证长机进入兼容 NONE 停控时复位集结位置状态。"""
         leader = LeaderEntity()
         leader.init(
             EntityInitS(
@@ -4245,7 +4295,6 @@ class RallyEntityTests(unittest.TestCase):
         )
         leader.cxt.cmd.stage = FormStageE.HOLD
         _entity_rally_join(leader)._state = RALLY_STATE_EXITED
-        leader._rally_completed = True
 
         leader.step(
             EntityInputS(
@@ -4257,7 +4306,6 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         self.assertEqual(leader.cxt.posCalcStatus.rally_state, RALLY_STATE_FLYING)
-        self.assertFalse(leader._rally_completed)
 
     def test_rally_leader_standby_parses_follower_status_and_broadcasts(self) -> None:
         """验证长机待命阶段正常解析僚机回报，并继续广播 STANDBY 阶段。"""
@@ -4305,7 +4353,6 @@ class RallyEntityTests(unittest.TestCase):
         )
         leader.cxt.cmd.stage = FormStageE.RALLY
         leader.cxt.followerStates.append(_follower_state("R03", pos_err_m=3.0))
-        leader._rally_completed = True
 
         leader.step(
             EntityInputS(
@@ -4318,7 +4365,6 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         self.assertEqual([state.id for state in leader.cxt.followerStates], ["R03", "R02"])
-        self.assertTrue(leader._rally_completed)
 
     def test_rally_leader_standby_keeps_subject_flow_slots(self) -> None:
         """验证长机待命不在实体主体流程早退，仍经过任务编排槽位后再进入位置解算。"""

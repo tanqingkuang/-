@@ -2,18 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
-
-from src.algorithm.context.context import reset_context
-from src.algorithm.context.leaf_types import (
-    FormStageE,
-    PosTrackDiagS,
-    RemoteCmdS,
-    copy_motion,
-    copy_pos_track_diag,
-)
+from src.algorithm.context.leaf_types import FormStageE
 from src.algorithm.entity.base import EntityBase
-from src.algorithm.entity.types import EntityInitS, EntityInputS, EntityManagerInitS, EntityOutputS
+from src.algorithm.entity.types import EntityInitS, EntityManagerInitS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.algorithm.units.process.inbound import FormationInboundInitS
 from src.algorithm.units.process.outbound import (
@@ -22,7 +13,6 @@ from src.algorithm.units.process.outbound import (
 )
 from src.algorithm.entity.leader_follower import (
     FOLLOWER_PROFILE,
-    fill_output,
 )
 
 
@@ -30,6 +20,7 @@ class FollowerEntity(EntityBase):
     """通用僚机实体：按配置直接保持或参与集结，最终维持编队槽位。"""
 
     PROFILE = FOLLOWER_PROFILE
+    MISSING_REMOTE_STAGE = FormStageE.NONE
 
     def init(self, cfg: EntityInitS) -> None:
         """按配置初始化 FollowerEntity。"""
@@ -45,12 +36,7 @@ class FollowerEntity(EntityBase):
         self._initialize_process_chain(
             {
                 "inbound": FormationInboundInitS(cfg.selfInit.id),
-                "formation_task": replace(
-                    cfg.rally_cfg,
-                    leaderId=cfg.rally_leader_id,
-                    passive=True,
-                    enabled=cfg.rally_enabled,
-                ),
+                "formation_task": EntityManagerInitS(cfg, self.profile),
                 "tra_plan": EntityManagerInitS(cfg, self.profile),
                 "pos_calc": EntityManagerInitS(
                     entity=cfg,
@@ -70,30 +56,3 @@ class FollowerEntity(EntityBase):
                 ),
             },
         )
-
-    def _prepare_input(self, u: EntityInputS) -> None:
-        """写入僚机边界输入。注意：业务流程由 EntityBase.step 统一推进。"""
-        if u.selfState is not None:
-            copy_motion(u.selfState, self.cxt.selfState)
-        self.cxt.clock.now_s = u.now_s
-        self._remote.stage = u.remote.stage if u.remote is not None else FormStageE.NONE
-        self._inbox.clear()
-        self._inbox.extend(u.inbox)
-
-    def _finish_output(self, u: EntityInputS, y: EntityOutputS) -> None:
-        """回填僚机边界输出。注意：不得在此重复推进流程。"""
-        del u
-        fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
-
-    def reset(self) -> None:
-        """复位 FollowerEntity 的动态状态。"""
-        reset_context(self.cxt)
-        self._remote.stage = RemoteCmdS().stage
-        self._reset_processes()
-        copy_pos_track_diag(PosTrackDiagS(), self._pos_track_diag)
-        self._inbox.clear()
-        self._outbox.clear()
-
-    def close(self) -> None:
-        """释放 FollowerEntity 持有的资源。"""
-        return None
