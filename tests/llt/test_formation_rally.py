@@ -266,6 +266,8 @@ def _rally_task(
     leader_id: str = "R01",
     dt_s: float = 0.1,
     stable_hold_s: float = 0.2,
+    convergence_radius_m: float = 5.0,
+    tight_radius_m: float = 2.0,
     catchup_radius_m: float = 200.0,
     catchup_stable_s: float = 0.0,
     loiter_radius_m: float = 200.0,
@@ -279,9 +281,9 @@ def _rally_task(
         RallyTaskInitS(
             leaderId=leader_id,
             looseScale=3.0,
-            convergenceRadius_m=5.0,
+            convergenceRadius_m=convergence_radius_m,
             stableHold_s=stable_hold_s,
-            tightRadius_m=2.0,
+            tightRadius_m=tight_radius_m,
             expectedFollowerIds=list(expected),
             staleTimeout_s=0.5,
             targetPattern=0,
@@ -1052,6 +1054,51 @@ class RallyTaskTests(unittest.TestCase):
         next_frame = _task_step(task, ctx, remote=FormStageE.RALLY, states=ok, now_s=0.0)
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
         self.assertFalse(next_frame.rallyCompleted)
+
+    def test_loose_completion_requires_all_followers_inside_tight_radius(self) -> None:
+        """粗收敛稳定后仍须全部期望僚机满足最终入位门限才能宣布完成。"""
+
+        task = _rally_task(
+            expected=("R02", "R03"),
+            dt_s=0.1,
+            stable_hold_s=0.1,
+            convergence_radius_m=30.0,
+            tight_radius_m=5.0,
+        )
+        ctx = FormContextS()
+        ctx.cmd.stage = FormStageE.RALLY
+        ctx.cmd.step = RallyPhaseE.LOOSE
+        coarse_only = [
+            _follower_state("R02", pos_err_m=4.0, valid=True, last_update_s=0.0),
+            _follower_state("R03", pos_err_m=14.0, valid=True, last_update_s=0.0),
+        ]
+
+        waiting = _task_step(
+            task,
+            ctx,
+            remote=FormStageE.RALLY,
+            states=coarse_only,
+            now_s=0.0,
+        )
+
+        self.assertEqual(ctx.cmd.stage, FormStageE.RALLY)
+        self.assertEqual(ctx.cmd.step, RallyPhaseE.LOOSE)
+        self.assertFalse(waiting.rallyCompleted)
+
+        all_tight = [
+            _follower_state("R02", pos_err_m=4.0, valid=True, last_update_s=0.1),
+            _follower_state("R03", pos_err_m=4.5, valid=True, last_update_s=0.1),
+        ]
+        completed = _task_step(
+            task,
+            ctx,
+            remote=FormStageE.RALLY,
+            states=all_tight,
+            now_s=0.1,
+        )
+
+        self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
+        self.assertTrue(completed.rallyCompleted)
 
     def test_none_then_rally_is_rejected_after_completed_hold_until_reset(self) -> None:
         """完成 HOLD 后进入 NONE，未经显式 reset 的 RALLY/STANDBY 都不得重启任务。"""

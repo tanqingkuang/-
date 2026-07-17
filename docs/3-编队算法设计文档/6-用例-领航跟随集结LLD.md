@@ -20,7 +20,7 @@
 
 **集结期间三机平等**：JOINING 阶段（cmd.step=0）不区分长机/僚机，所有飞机用同一套 `RallyJoinPos` 算法飞向各自的预设松散目标点 M_i。只有当全部飞机完成集结（均进入 EXITED 状态）后，才切换到 CATCHUP 阶段，此时 R01 开始作为编队参考源生成槽位目标，R02/R03 进入跟随模式。
 
-**CATCHUP 阶段过渡**：全员切出时各机在沿航迹方向的位置是分散的——最晚到达 M_i 的飞机直接切出后已向前飞出一段距离，而早到的飞机（包括掌机）刚刚从盘旋圆切出，位置可能落后。CATCHUP 阶段与 LOOSE 使用**完全相同**的位置解算（`SlotGeometry`，直接给出真实槽位位置与槽位自身速度前馈），沿航迹的加减速收敛交给下层控制律（`PidCompose` 前向 PPI 外环按真实位置误差生成速度修正）完成；CATCHUP 只是 Rally 任务状态机里独立的一个阶段门控（`_all_catchup_ok`，位置+航向双阈值），用于确认三机间距已收敛到松散队形要求后再进入 LOOSE。
+**CATCHUP 阶段过渡**：全员切出时各机在沿航迹方向的位置是分散的——最晚到达 M_i 的飞机直接切出后已向前飞出一段距离，而早到的飞机（包括掌机）刚刚从盘旋圆切出，位置可能落后。CATCHUP 阶段与 LOOSE 使用**完全相同**的位置解算（`SlotGeometry`，直接给出最终 1× 槽位位置与槽位自身速度前馈），沿航迹的加减速收敛交给下层控制律完成；CATCHUP 只负责位置+航向粗门控，不引入松散槽位或运行期缩放。
 
 **长机角色切换时机**：CATCHUP 开始后掌机沿统一 `route` 飞行，僚机以掌机当前位置为参考动态计算各自最终槽位目标。LOOSE/HOLD 阶段行为与领航跟随保持场景完全相同。
 
@@ -205,14 +205,14 @@ T_ref = plan_start_s + earliest_common(I_1(n_1), ..., I_N(n_N))
 
 **触发条件**：全员 EXITED，Rally 任务从 step=0 切换到 step=1。
 
-**目标**：各机与掌机之间的相对间距（含沿航迹方向的散布）收敛到松散队形要求。
+**目标**：各机与掌机之间的相对间距（含沿航迹方向的散布）向最终队形槽位收敛。
 
 ##### 位置解算：与 LOOSE 完全相同
 
 CATCHUP 不再有专属的位置解算算法，直接复用 `SlotGeometry`（与 LOOSE/HOLD 同一套）：
 
 ```text
-slot = 掌机当前位置 + scale × rotate(编队偏置, 掌机航迹)   # scale = looseScale
+slot = 掌机当前位置 + rotate(最终编队偏置, 掌机航迹)       # 固定 1× 槽位
 selfCmd.pos = slot
 selfCmd.v   = 槽位自身速度前馈（随掌机运动 + 队形刚体旋转前馈）
 ```
@@ -224,7 +224,7 @@ selfCmd.v   = 槽位自身速度前馈（随掌机运动 + 队形刚体旋转前
 ##### CATCHUP → LOOSE 门控
 
 ```text
-posErr_m = dist3d(selfState, selfCmd)   # 与 LOOSE 阶段同一套 FollowerBroadcast 广播口径
+posErr_m = dist3d(selfState, selfCmd)   # 与 LOOSE 阶段同一套 FOLLOWER_STATUS 上报口径
 ```
 
 Rally 任务检查：所有期望僚机同时满足 **`posErr_m < catchup_radius_m`（默认 200 m）** 和 **航向误差 `< 0.17 rad`**，并连续保持 3 秒后切换到 LOOSE。航向阈值和连续保持时间是当前实现的内部固定值，不从场景配置读取。
@@ -237,7 +237,7 @@ Rally 任务检查：所有期望僚机同时满足 **`posErr_m < catchup_radius
 
 | 子阶段 | cmd.step | 说明 |
 | --- | --- | --- |
-| LOOSE | 2 | 最终槽位跟随，误差持续小于阈值后直接完成 |
+| LOOSE | 2 | 最终槽位跟随；粗门限稳定后继续等待全部僚机满足紧门限 |
 | HOLD | — | 维持最终槽位，并输出一次 FormationAnalysisS |
 
 ---
@@ -249,7 +249,7 @@ Rally 任务检查：所有期望僚机同时满足 **`posErr_m < catchup_radius
 | `cmd.step` | 子阶段   | 含义                                           |
 | ---------- | -------- | ---------------------------------------------- |
 | 0          | JOINING  | 三机平等飞向 M_i，盘旋协调，等待全部 EXITED    |
-| 1          | CATCHUP  | 沿任务航向直飞，速度调制收敛到松散队形相对间距 |
+| 1          | CATCHUP  | 沿任务航向直飞，速度调制收敛到最终队形相对间距 |
 | 2          | LOOSE    | 最终槽位三维跟随，等待稳定收敛                 |
 
 ### 2.4 关键参数
@@ -261,6 +261,9 @@ Rally 任务检查：所有期望僚机同时满足 **`posErr_m < catchup_radius
 | `mission_heading_rad` | — | 切出后飞行方向，由 A→A1（集结航线第一航段方向）自动推导，不在配置中写死 |
 | `loiter_speed_min/max` | 14/25 m/s | 盘旋速度上下限（固定翼约束） |
 | `catchup_radius_m` | 200 m | CATCHUP→LOOSE 门控阈值（三维槽位距离，米） |
+| `convergence_radius_m` | 30 m | LOOSE 粗收敛连续稳定门限 |
+| `stable_hold_s` | 5 s | 全部期望僚机持续满足粗门限的时间 |
+| `tight_radius_m` | 5 m | 最终 HOLD/完成事件门限；全部期望僚机必须同时满足 |
 | `loop_counts[node_id]` | 计划生成时确定 | 本机首次到达 `M_i` 后需要追加的完整圈数 |
 
 切出不使用剩余时间阈值或独立的到达时间参数。固定计划生效后，飞机每次真实跨越 `M_i` 时仅检查本机 `remaining_loops`：大于零则精确减一并保持 `LOITERING`，等于零则在该次跨越进入 `EXITED`。`T_ref` 仅用于全航程协调速度计算，不参与切出门控。
@@ -279,7 +282,7 @@ class FollowerStateS:
     """单架僚机向长机回报的集结状态。注意：id 与节点 ID 对应；posErr 为该机到当前目标的合距离。"""
     id: str = ""
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 实际位置
-    posErr_m: float = 0.0        # 到当前目标（M_i 或松散槽位）的合距离，米
+    posErr_m: float = 0.0        # 到当前目标（汇合轨迹点或最终槽位）的合距离，米
     headingErr_rad: float = 0.0  # 当前航向与目标航向之差的绝对值，弧度
     arrived: int = 0             # 兼容旧协议；新协议以 rally_state == EXITED 为准
     valid: bool = False          # 本帧数据是否有效（收到最新报文则置 True）
@@ -328,7 +331,7 @@ class FormContextS:
     rally_t_ref: float = 0.0
     rally_t_ref_valid: bool = False
     rally_loop_counts: dict[str, int] = field(default_factory=dict)
-    # 被 RallyLeaderFollower(写) 与 RallyJoinPos(读)；同一固定计划整体更新
+    # 被 FormationInbound(写) 与 RallyJoinPos(读)；同一固定计划整体更新
 ```
 
 `reset_context` 同步清空 `followerStates` 与固定计划字段。
@@ -347,7 +350,7 @@ class FormContextS:
 
 > 当前不包含槽位缩放协议或独立压缩阶段。`CATCHUP/LOOSE/HOLD`
 > 始终使用最终槽位。JOINING 的到达判定由 `RallyJoinPos.state`/`reached_slot_once` 完成，
-> CATCHUP 按位置与航向门控，LOOSE 按位置误差的连续稳定时间直接切入 HOLD。
+> CATCHUP 按位置与航向门控；LOOSE 先满足粗收敛门限的连续稳定时间，再以紧门限确认最终入位后切入 HOLD。
 
 #### 5.1.1 抽象类扩展
 
@@ -357,9 +360,9 @@ class FormContextS:
 @dataclass
 class RallyTaskInitS(FormationTaskInitS):
     looseScale: float = 3.0               # 集结圆目标点的水平槽位偏置倍数
-    convergenceRadius_m: float = 5.0      # LOOSE→HOLD 槽位误差阈值，米
-    stableHold_s: float = 5.0             # LOOSE→HOLD 需稳定的时间
-    tightRadius_m: float = 2.0            # 完成分析中的入位判定阈值，米
+    convergenceRadius_m: float = 5.0      # LOOSE 粗收敛连续稳定阈值，米
+    stableHold_s: float = 5.0             # 粗收敛需连续稳定的时间
+    tightRadius_m: float = 2.0            # 最终切入 HOLD 与完成分析的紧门限，米
     expectedFollowerIds: list[str] = field(default_factory=list)
     # 期望参与集结的僚机 ID 列表；空列表→各门控立即通过（测试用）
     staleTimeout_s: float = 2.0           # 超过此时长未收到某机报文则视为数据失效
@@ -482,10 +485,12 @@ sub=CATCHUP:
 
 sub=LOOSE:
   检查 all_followers_ok(convergenceRadius_m)（posErr_m 为到最终槽位的误差）
-    是 → _stable_timer += dt_s；若达到 stableHold_s → next_stage=HOLD，
-         next_step=JOINING(0)，y.rallyCompleted=True，_stable_timer=0
+    是 → _stable_timer += dt_s；达到 stableHold_s 后继续检查 all_followers_ok(tightRadius_m)
+         紧门限也全部满足 → next_stage=HOLD，next_step=JOINING(0)，
+         y.rallyCompleted=True，_stable_timer=0
+         尚有僚机未满足紧门限 → 保持 LOOSE，稳定计时锁存并继续等待
     否 → _stable_timer = 0；next_step=LOOSE
-  未满足稳定时间时输出 cmd.stage=RALLY, cmd.step=LOOSE；满足后直接输出 HOLD
+  未同时满足粗稳定和最终紧门限时输出 RALLY/LOOSE；全部满足后直接输出 HOLD
 ```
 
 **`reset`**：清零阶段计时器和 `_rally_started`，并原子清除
@@ -502,35 +507,23 @@ sub=LOOSE:
   已 EXITED 的机不因随后断链被撤销
 - CATCHUP：位置或航向任一超阈值 → `_catchup_stable_timer` 清零；两者同时达标并连续满足
   `catchup_stable_s` → 进 LOOSE
-- LOOSE 阶段某机 posErr 不满足 → `_stable_timer` 重置
-- LOOSE 连续满足最终槽位误差阈值后直接完成并置 HOLD
+- LOOSE 阶段某机不满足 `convergenceRadius_m` → `_stable_timer` 重置
+- 全部期望僚机连续满足粗门限后仍保持 LOOSE；只有同拍全部满足 `tightRadius_m` 才完成并置 HOLD
 
 ---
 
-### 5.2 Outbound/FollowerBroadcast — 僚机广播位置
+### 5.2 FormationOutbound/FOLLOWER_STATUS — 僚机状态回报
 
-**文件**：`units/process/outbound/follower_broadcast.py`
+**运行时文件**：`units/process/outbound/formation.py`；协议载荷辅助保留在 `follower_broadcast.py`。
 
-作用：僚机将本机当前位置、到目标槽位的误差、是否到达 M_i 打包广播，供长机做收敛判定。
+集结僚机初始化 `FormationOutboundInitS(messageType=FOLLOWER_STATUS, leaderId=...)`。`bind(runtime)` 把私有输入绑定到 `Context.selfState/selfCmd/posCalcStatus`，输出绑定 `runtime.outbox`；每拍直接从这些黑板字段生成状态回报，不再由实体维护 `selfArrived/rally_state` 等中转端口。
 
 ```python
-@dataclass
-class FollowerBroadcastInitS(OutboundInitS):
-    # 继承 selfId: str, netWork: list[NetWorkS]
-    leaderId: str = ""  # 长机节点 ID，明确指定发送目标，不依赖 netWork 推断角色
-
-@dataclass
-class FollowerBroadcastInputS(OutboundInputS):
-    # 继承 cmd: FormSnapshotS, selfState: MotionProfS
-    selfCmd: MotionProfS = None       # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
-    selfArrived: int = 0              # 兼容旧协议；新协议以 rally_state 为准，由 _update_outbound() 从 RallyJoinPos.state==EXITED 派生
-    rally_state: str = "FLYING"       # 集结汇合状态：FLYING / LOITERING / EXITED（来自 RallyJoinPos.state）
-    planned_path_length_m: float = -1.0  # 本机锁存的基础水平航程 L_i，来自 RallyJoinPos
-    reached_slot_once: bool = False   # 是否已至少一次路过 M_i，来自 RallyJoinPos.reached_slot_once
-
-@dataclass
-class FollowerBroadcastOutputS(OutboundOutputS):
-    pass  # 复用 outbox
+FormationOutboundInitS(
+    selfId=cfg.selfInit.id,
+    leaderId=cfg.rally_leader_id,
+    messageType=OutboundMessageE.FOLLOWER_STATUS,
+)
 ```
 
 **Topic**：`formation.follower_status`（区别于长机广播 `formation.leader`，供 FollowerStatus 按 topic 过滤）
@@ -550,36 +543,21 @@ class FollowerBroadcastOutputS(OutboundOutputS):
 | `planned_path_length_m` | float | 开始 JOINING 后锁存的基础水平航程 L_i，米 |
 | `reached_slot_once` | bool | 是否已至少一次路过 M_i，汇合过程诊断量 |
 
-实现：`posErr_m = \|selfState.pos - selfCmd.pos\|`；`arrived = u.selfArrived`；按上表打包为 envelope，topic=`formation.follower_status`，target 为 `cfg.leaderId`（init 时由配置显式传入，不依赖 netWork 推断角色）。`planned_path_length_m` 只有有限且非负时才参与长机计划。
+实现：`posErr_m = \|selfState.pos - selfCmd.pos\|`；`arrived = int(posCalcStatus.join_exited)`；其余汇合诊断直接读取 `PosCalcStatus`。topic=`formation.follower_status`，target 为显式 `leaderId`。
 
-**`init()` 校验**：`cfg.leaderId == ""` 时抛 `ValueError("FollowerBroadcast: leaderId must not be empty")`，防止消息无目标节默认广播。
+**`init()` 校验**：FOLLOWER_STATUS 产品缺少 `leaderId` 时立即失败，防止消息无目标广播。
 
-测试：selfArrived=0 时广播 arrived=0；selfArrived 置 1 后即使 posErr 变大仍广播 arrived=1；posErr 计算正确。
+测试：`join_exited=False/True` 分别广播 `arrived=0/1`；位置误差和诊断字段正确。
 
 ---
 
-### 5.3 Inbound/FollowerStatus — 长机解析僚机回报
+### 5.3 FormationInbound/formation.follower_status — 长机解析僚机回报
 
-**文件**：`units/process/inbound/follower_status.py`
+**运行时文件**：`units/process/inbound/formation.py`；单条消息解析辅助保留在 `follower_status.py`。
 
 作用：长机从 inbox 解析各僚机广播，写入 `Context.followerStates`。
 
-```python
-@dataclass
-class FollowerStatusInitS(InboundInitS):
-    pass
-
-@dataclass
-class FollowerStatusInputS(InboundInputS):
-    # 继承 inbox: list[MessageEnvelope]
-    now_s: float = 0.0   # 当前仿真时间，写入 FollowerStateS.lastUpdate_s；由实体从边界注入
-
-@dataclass
-class FollowerStatusOutputS(InboundOutputS):
-    followerStates: list[FollowerStateS] = None  # 端口 → Context.followerStates
-```
-
-实现：遍历 inbox，按 `topic == "formation.follower_status"` 过滤（排除长机自身的 `formation.leader` 等其他报文）；**以 `envelope.source` 作为节点 ID 做列表查找和写入**，不使用 payload 中的 `id` 字段（payload id 不可信，伪造后会污染状态表）；原地更新对应 `FollowerStateS` 的其余字段（pos/posErr_m/arrived/valid=True/lastUpdate_s=now_s，`entry.id = envelope.source`）；不在列表中的 source 追加新条目；断链帧不操作已有条目（保留 posErr_m 但不更新 lastUpdate_s，valid 保留上一帧，长机侧由超时检测处理）。
+FormationInbound 的私有输入绑定 `runtime.inbox/context.clock`，输出绑定 `Context.followerStates`。它遍历 inbox，按 topic 调用 `_parse_follower_status()`，以 `envelope.source` 作为可信节点 ID，并按 ID 原地更新列表；断链帧保留上一份状态和时间戳，由 Rally 超时门控判定有效性。
 
 测试：
 
@@ -589,9 +567,9 @@ class FollowerStatusOutputS(InboundOutputS):
 
 ---
 
-### 5.4 Outbound/RallyLeaderBroadcast — 集结长机广播
+### 5.4 FormationOutbound/LEADER_BROADCAST — 长机广播
 
-**文件**：`units/process/outbound/rally_leader_broadcast.py`
+**运行时文件**：`units/process/outbound/formation.py`；载荷构造辅助位于统一协议模块。
 
 作用：唯一的长机广播实现，普通保持与集结共用。它把长机实际状态、有效指令、`cmd.stage/pattern/step` 与固定计划打入同一条 `formation.leader` envelope。
 
@@ -612,35 +590,17 @@ payload = {
 }
 ```
 
-InitS/OutputS 直接复用通用基类，无需新建：`RallyLeaderBroadcastInitS = OutboundInitS`；`RallyLeaderBroadcastOutputS = OutboundOutputS`（含 `outbox`）。
-
-```python
-@dataclass
-class RallyLeaderBroadcastInputS(OutboundInputS):
-    # 继承 cmd: FormSnapshotS, selfState: MotionProfS
-    leaderCmd: MotionProfS = None      # 可选端口 → 长机有效运动指令；缺省回退 selfState
-    t_ref: float = 0.0
-    t_ref_valid: bool = False
-    loop_counts: dict[str, int] = field(default_factory=dict)
-```
+长机初始化 `FormationOutboundInitS(messageType=LEADER_BROADCAST)`；私有输入直接绑定 `cmd/selfState/selfCmd/effectiveCmd/rallyPlan`，输出绑定 `runtime.outbox`。STANDBY 广播 `selfCmd`，其余阶段广播位置跟踪写出的 `effectiveCmd`。
 
 ---
 
-### 5.5 Inbound/RallyLeaderFollower — 集结僚机解析长机广播
+### 5.5 FormationInbound/formation.leader — 僚机解析长机广播
 
-**文件**：`units/process/inbound/rally_leader_follower.py`
+**运行时文件**：`units/process/inbound/formation.py`；完整报文解析辅助保留在 `rally_leader_follower.py`。
 
 作用：唯一的长机广播入站解析实现，普通保持与集结共用。它在同一条 `formation.leader` 消息中解析长机状态、有效指令、编队命令和固定计划，原地写入共享黑板；计划字段不完整或非法时整条消息不提交。
 
-```python
-@dataclass
-class RallyLeaderFollowerOutputS(InboundOutputS):
-    # 继承 leaderState: MotionProfS, cmd: FormSnapshotS
-    leaderCmd: MotionProfS = None      # 可选端口 → 对象组边界持有，供 SlotGeometry 建系
-    t_ref: float = 0.0
-    t_ref_valid: bool = False
-    loopCounts: dict[str, int] = field(default_factory=dict)
-```
+FormationInbound 的私有输出直接绑定 `Context.leaderState/leaderCmd/cmd/rallyPlan`，不存在对象组边界持有的 `leaderCmd` 或独立标量计划端口。
 
 **多消息胜出规则**：同帧 inbox 中可能有多条 `formation.leader` 消息（重发或乱序）。遍历 inbox 时按序处理，每条完整有效消息均覆盖长机状态、指令、命令和公共计划，故最后一条有效消息最终胜出。
 
@@ -662,14 +622,13 @@ for envelope in inbox:
     copy_snapshot(parsed.cmd, y.cmd)
     if y.leaderCmd is not None:
         copy_motion(parsed.leader_cmd, y.leaderCmd)
-    y.t_ref = parsed.t_ref
-    y.t_ref_valid = parsed.t_ref_valid
-    y.loopCounts.clear(); y.loopCounts.update(parsed.loop_counts)
+    y.rallyPlan.t_ref = parsed.t_ref
+    y.rallyPlan.valid = parsed.t_ref_valid and self_id in parsed.loop_counts
+    y.rallyPlan.loop_counts.clear()
+    y.rallyPlan.loop_counts.update(parsed.loop_counts)
 ```
 
-运动、命令或计划任一字段非法时，整条消息不提交。`reset()` 把最近绑定的
-`leaderState/leaderCmd/cmd/t_ref/t_ref_valid/loopCounts` 全部恢复默认值，保证实体复位后的空 inbox
-不能把旧计划重新写回 Context。
+运动、命令或计划任一字段非法时整条消息不提交。运行期空 inbox 保留上一份有效快照；实体显式 reset 时由 `reset_context()` 原地清理黑板，FormationInbound 本身不替换任何绑定对象。
 
 ---
 
@@ -752,11 +711,11 @@ class SlotGeometryInputS(PosCalcInputS):
 # 输出复用 PosCalcOutputS（selfCmd → Context.selfCmd），无需新增 OutputS 类
 ```
 
-**实现方式**：槽位查找、三维 FUR 变换和转弯速度前馈都在 `SlotGeometry.step()` 内完成。位置原点固定取 `leaderState.pos`；FUR 基优先由 `leaderCmd` 的三维地速生成，无有效水平航迹时回退 `leaderState`，两者都退化时明确采用东向平飞 FUR 兜底。运行期始终使用配置中的最终槽位，不提供缩放端口。
+**实现方式**：槽位查找、三维 FUR 变换和转弯速度前馈都在 `SlotGeometry._calculate()` 内完成，由无参 `step()` 使用绑定后的私有端口调用。位置原点固定取 `leaderState.pos`；FUR 基优先由 `leaderCmd` 的三维地速生成，无有效水平航迹时回退 `leaderState`，两者都退化时明确采用东向平飞 FUR 兜底。运行期始终使用配置中的最终槽位，不提供缩放端口。
 
 ```python
 class SlotGeometry(PosCalcBase):
-    def step(self, u: SlotGeometryInputS, y: PosCalcOutputS) -> None:
+    def _calculate(self, u: SlotGeometryInputS, y: SlotGeometryOutputS) -> None:
         frame, basis = select_frame_and_fur_basis(u.leaderCmd, u.leaderState)
         sx, sy, sz, vfx, vfy, vfz = smooth_slot_in_fur(...)
 
@@ -785,7 +744,7 @@ class SlotGeometry(PosCalcBase):
 
 CATCHUP（step=1）不再有专属的 PosCalc 单元。曾经存在的 `CatchupAlign`（`units/algo/pos_calc/catchup_align.py`）已删除——它当年把飞机投影到过 M_i 点、平行任务航向的"杆"上，人为将前向位置误差钉为 0，再单独用速度调制追赶，理由是当时的 `PidCompose` 按本机自身航迹系投影位置误差，目标落在机尾方向时可能形成横侧向正反馈。`PidCompose` 后来改为按目标（`selfCmd`）自身航迹系投影位置误差（见 6.4 之前 `PidCompose` 一节及 [pid_compose.py:110-121](../../src/algorithm/units/algo/pos_track/pid_compose.py#L110-L121)），横侧向切入由下层控制律统一处理；前向通道仍按位置误差修正速度，正值 `forwardMin` 负责禁止负速度指令。`CatchupAlign` 的投影/锁航向/速度调制因此变成与下层控制律重复的多余逻辑，故删除。
 
-CATCHUP 现在直接复用 **6.2 节的 `SlotGeometry`**：给出真实槽位位置 + 槽位自身速度前馈，交给 `PidCompose` 的前向 PPI 外环闭环（落后加速、超前减速、到达后跟随槽位速度，`forwardMin/forwardMax` 限幅避免倒飞）。`posErr_m` 因此和 LOOSE 阶段一样，由 `FollowerBroadcast` 统一算 `dist3d(selfState, selfCmd)`，不再需要 `pos_err_m_override` 这类特判接口。
+CATCHUP 现在直接复用 **6.2 节的 `SlotGeometry`**：给出真实槽位位置 + 槽位自身速度前馈，交给 `PidCompose` 的前向 PPI 外环闭环（落后加速、超前减速、到达后跟随槽位速度，`forwardMin/forwardMax` 限幅避免倒飞）。`posErr_m` 因此和 LOOSE 阶段一样，由 `FormationOutbound` 统一算 `dist3d(selfState, selfCmd)` 并通过 `FOLLOWER_STATUS` 上报，不再需要 `pos_err_m_override` 这类特判接口。
 
 ---
 
@@ -804,60 +763,30 @@ CATCHUP 现在直接复用 **6.2 节的 `SlotGeometry`**：给出真实槽位位
 
 | 单元 | 子类 |
 | --- | --- |
-| 收消息 Inbound | FollowerStatus（解析僚机回报） |
-| 任务编排 FormationTask | Rally（集结状态机） |
-| 汇合位置解算（STANDBY / JOINING，step=0） | RallyJoinPos（待命盘旋→公切线转移→集结圆盘旋→切出，见第二步） |
-| 轨迹规划 TraPlan（仅 CATCHUP 及之后，step>=1 / HOLD） | LeaderRoute（统一 `cfg.route`） |
-| 位置解算 PosCalc（仅 CATCHUP 及之后） | RouteInterp（复用现有） |
-| 跟踪 PosTrack | PidCompose（复用现有） |
-| 发消息 Outbound | RallyLeaderBroadcast（统一长机广播，含固定协调计划） |
+| 收消息 Inbound | FormationInbound（按 topic 解析僚机回报） |
+| 任务编排 FormationTask | Rally（实体内部固定主动模式） |
+| 轨迹规划 TraPlanManager | Profile 路由 Noop / LeaderRoute 缓存产品 |
+| 位置解算 PosCalcManager | Profile 路由 Noop / RallyJoinPos / RouteInterp 缓存产品 |
+| 跟踪 PosTrackManager | Profile 路由 Noop / 速度控制产品 |
+| 发消息 Outbound | FormationOutbound（固定 LEADER_BROADCAST 产品） |
 
 #### 7.1.2 调用顺序（一拍 step）
 
 ```text
-收消息(FollowerStatus)                    ← 解析僚机回报 → Context.followerStates
-→ 任务编排(Rally)                         ← 读 followerStates/remote → 写 cmd + 固定协调计划
-→ 按 cmd.step 分流：
-    STANDBY / JOINING（step=0）：汇合位置解算(RallyJoinPos) ← 待命盘旋/公切线转移/集结圆盘旋/切出，不经 TraPlan/RouteInterp
-    CATCHUP 及之后（step>=1）/HOLD：轨迹规划(LeaderRoute) → 位置解算(RouteInterp)  ← 沿统一 route 飞行
-→ 跟踪(PidCompose)                        ← 复用，两条分支共用
-→ 发消息(RallyLeaderBroadcast)            ← 广播 selfState + cmd + t_ref/t_ref_valid/loop_counts
+FormationInbound → Rally → TraPlanManager → PosCalcManager → PosTrackManager → FormationOutbound
 ```
 
-`step()` 中的分流逻辑（L1 职责，摘自 `leader.py::step`）：
-
-```python
-stage = self.cxt.cmd.stage
-step = self.cxt.cmd.step
-
-if stage == FormStageE.NONE:  # 跳过位置解算 / PidCompose，直接输出当前位置零速
-    copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)
-    zero_velocity(self.cxt.selfCmd.v)
-    zero_acceleration(self.cxt.selfAccCmd)
-    self._outbound.step(self._outbound_u, self._outbound_y)
-    fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
-    return
-
-if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
-    # JOINING 阶段：长机平等参与，也飞向自己的松散点（队形中心 A）
-    self._rally_join.step(self._rally_join_u, self._pos_calc_y)
-    self._pos_track.step(self._pos_track_u, self._pos_track_y)
-else:
-    # RALLY step>=1（CATCHUP/LOOSE）或 HOLD：长机沿统一航线飞行
-    self._tra_plan_mission.step(self._tra_plan_u, self._tra_plan_y)
-    self._pos_calc.step(self._pos_calc_u, self._pos_calc_y)
-    self._pos_track.step(self._pos_track_u, self._pos_track_y)
-```
+`EntityBase.step()` 无条件执行以上六步。三个 Manager 分别用 `profile.require_strategies(cmd.stage, cmd.step)` 严格查完整路由表：NONE 选择 Noop；STANDBY/JOINING 的 PosCalc 选择 RallyJoinPos；CATCHUP/LOOSE/HOLD 选择 LeaderRoute + RouteInterp + 速度控制。实体不再按阶段直接调用具体产品。
 
 #### 7.1.3 初始化（init）关键点
 
-- 实例化一个 `LeaderRoute`：`_tra_plan_mission(cfg.route)`，只服务 CATCHUP 及之后；JOINING 阶段的
-  `RallyJoinPos` 不需要 TraPlan/RouteInterp，直接用 `RallyJoinPosInitS(loose_slot=A, ...)` 初始化
-- `FollowerStatus` 单元的 **`inbox` 端口绑定到 `EntityInputS.inbox`**（每帧由边界层注入，不可遗漏，否则长机永远收不到僚机消息）
-- `followerStates` 端口绑定到 `Context.followerStates`
+- `EntityBase` 建立独占 `EntityRuntimeS`，六个流程依次 `bind(runtime)` 后初始化。
+- `FormationInbound` 私有端口绑定 `runtime.inbox/context.clock/context.followerStates`。
+- 三个 Manager 从不可变 Profile 完整路由表创建所需产品，每种有状态产品仅创建一次。
+- PosCalcManager 为 RallyJoinPos 生成 `RallyJoinPosInitS(loose_slot=A, ...)`；LeaderRoute 持有统一 `cfg.route`。
 - `RallyTaskInitS.dt_s` 与 `cfg.control_period_s` 保持一致，init 时传入
-- 每拍 `step()` 中需将边界输入的仿真时间注入两个单元：`follower_status_u.now_s = now` 和 `rally_u.now_s = now`
-- `rallyCompleted` 不进 Context，实体直接读 `_task_y.rallyCompleted`（OutputS 每拍重写，无需 Context 中继）；`expectedFollowerIds` 在实体侧持有一份副本（从 `cfg.rally_cfg.expectedFollowerIds` 复制），供 `FormationAnalysisS` 计算时使用，不从 Rally 单元内部读取
+- 每拍实体边界只更新 `runtime.inbox/context.clock/remote/selfState`，业务推进全部由固定链完成。
+- `rallyCompleted` 是 Rally 私有输出的一拍事件；实体在 `_finish_output` 中生成一次 FormationAnalysisS。
 
 **当前有效航线关键点**：
 
@@ -886,91 +815,27 @@ mission_heading_rad = math.atan2(A1.north - A.north, A1.east - A.east)
 
 | 单元 | 子类 |
 | --- | --- |
-| 收消息 Inbound | RallyLeaderFollower（统一长机广播解析，含固定协调计划） |
-| 任务编排 FormationTask | 不使用（模态来自长机广播） |
-| 轨迹规划 TraPlan | Noop（复用） |
-| 位置解算 PosCalc | RallyJoinPos（STANDBY/JOINING）/ SlotGeometry（CATCHUP/LOOSE/HOLD，同一算法） |
-| 跟踪 PosTrack | PidCompose（复用） |
-| 发消息 Outbound | FollowerBroadcast（回报位置与状态） |
+| 收消息 Inbound | FormationInbound（统一解析长机广播） |
+| 任务编排 FormationTask | Rally（实体内部固定 `passive=True`） |
+| 轨迹规划 TraPlanManager | Profile 路由 Noop 产品 |
+| 位置解算 PosCalcManager | Profile 路由 Noop / RallyJoinPos / SlotGeometry 缓存产品 |
+| 跟踪 PosTrackManager | Profile 路由 Noop / 速度控制 / 位置控制产品 |
+| 发消息 Outbound | FormationOutbound（固定 FOLLOWER_STATUS 产品） |
 
 #### 7.2.2 调用顺序（一拍 step）
 
 ```text
-收消息(RallyLeaderFollower)               ← 解析长机广播 → leaderState/leaderCmd + cmd + t_ref/t_ref_valid/loop_counts
-→ [轨迹规划(Noop) 空策略]
-→ 位置解算（按 cmd.stage + cmd.step 路由）
-    cmd.stage==NONE:                        跳过 PosCalc，直接输出零速保持当前位置（不触发跟踪）
-    cmd.stage==STANDBY:                     RallyJoinPos       ← 本地待命圆盘旋
-    cmd.stage==RALLY, cmd.step==0:          RallyJoinPos       ← JOINING：公切线转移 / 集结圆盘旋 / 切出
-    cmd.stage==RALLY, cmd.step>=1 / HOLD:   SlotGeometry ← CATCHUP/LOOSE/HOLD：三维槽位跟随
-→ 跟踪(PidCompose)（NONE 时跳过）
-→ 发消息(FollowerBroadcast)               ← 回报位置 + posErr + arrived
+FormationInbound → Rally → TraPlanManager → PosCalcManager → PosTrackManager → FormationOutbound
 ```
 
-PosCalc 切换逻辑（L1 职责，摘自 `follower.py::step`；替换本节曾描述的"RallyApproach 直飞 M_i + `_self_arrived`
-锁存到达"旧流程——那是 `RallyJoinPos` 出现之前的设计，已和当前实现不符）：
+六步均由 `EntityBase.step()` 调用：FormationInbound 先把长机广播原子写入黑板；被动 Rally 保留该命令；三个 Manager 严格查询 Follower Profile；FormationOutbound 最后直接读取 `PosCalcStatus` 生成状态回报。实体不保存 `_rally_join_u/_slot_u`，也不直接调用具体产品。
 
-```python
-if u.selfState is not None:
-    copy_motion(u.selfState, self.cxt.selfState)
-previous_stage = self.cxt.cmd.stage
-self._inbox.clear(); self._inbox.extend(u.inbox)
-
-self._inbound.step(self._inbound_u, self._inbound_y)          # 原子解析状态、命令和固定计划
-self.cxt.rally_t_ref = self._inbound_y.t_ref                   # T_ref 仅供 RallyJoinPos 全航程调速
-self.cxt.rally_t_ref_valid = self._inbound_y.t_ref_valid
-self.cxt.rally_loop_counts = dict(self._inbound_y.loopCounts)
-self._tra_plan.step(self._tra_plan_u, self._tra_plan_y)        # Noop 空策略
-
-stage = self.cxt.cmd.stage
-
-if stage == FormStageE.NONE:
-    # 低层兼容停控分支会清理 RallyJoinPos 状态，但不构成受支持的中断或二次集结协议；
-    # 新生命周期必须由控制器先对全部实体执行显式 reset()
-    if previous_stage in (FormStageE.RALLY, FormStageE.HOLD):
-        self._rally_join.reset()
-    copy_position(self.cxt.selfState.pos, self.cxt.selfCmd.pos)  # 逐字段复制，避免别名
-    zero_velocity(self.cxt.selfCmd.v)
-    zero_acceleration(self.cxt.selfAccCmd)
-    self._update_outbound()   # rally_state/planned_path_length_m/reached_slot_once/selfArrived 一并写入出站端口
-    self._outbound.step(self._outbound_u, self._outbound_y)
-    fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
-    return
-
-if stage == FormStageE.STANDBY or (
-    stage == FormStageE.RALLY and self.cxt.cmd.step == RallyPhaseE.JOINING
-):
-    # STANDBY/JOINING：RallyJoinPos 内部待命盘旋→公切线转移→集结圆盘旋→切出
-    self._rally_join_u.standby = stage == FormStageE.STANDBY
-    self._rally_join_u.t_ref = self.cxt.rally_t_ref
-    self._rally_join_u.t_ref_valid = self.cxt.rally_t_ref_valid
-    self._rally_join_u.t_now = u.now_s
-    self._rally_join_u.assigned_loops = self.cxt.rally_loop_counts.get(self._self_id, 0)
-    self._rally_join.step(self._rally_join_u, self._pos_calc_y)
-    self._pos_track.step(self._pos_track_u, self._pos_track_y)
-else:
-    # RALLY step>=1（CATCHUP/LOOSE）或 HOLD：三维槽位跟随
-    # CATCHUP 与 LOOSE 用同一套算法，二者区别只在 Rally 任务的阶段门控上
-    self._pos_calc_slot.step(self._slot_u, self._pos_calc_y)
-    self._pos_track.step(self._pos_track_u, self._pos_track_y)
-self._update_outbound()
-self._outbound.step(self._outbound_u, self._outbound_y)
-fill_output(self.cxt, self._pos_track_diag, self._outbox, y)
-```
-
-`_update_outbound()`（每拍把 `RallyJoinPos` 状态同步到出站端口，供长机收集基础航程和到达判定）：
-
-```python
-self._outbound_u.rally_state = self._rally_join.state
-self._outbound_u.planned_path_length_m = self._rally_join.planned_path_length_m
-self._outbound_u.reached_slot_once = self._rally_join.reached_slot_once
-self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED else 0
-```
+Profile 路由为：NONE 选择 Noop；STANDBY/JOINING 选择 RallyJoinPos + 速度控制；CATCHUP/LOOSE/HOLD 选择 SlotGeometry + 位置控制。TraPlan 全程使用 Noop，但流程调用本身不会被跳过。
 
 > **说明**：`cmd.step` 是长机广播的系统级状态（`RallyPhaseE.JOINING/CATCHUP/LOOSE`），驱动本机
-> PosCalc 单元切换，本机是否"到达"改由 `RallyJoinPos.state == RALLY_STATE_EXITED`（切出）和
+> PosCalcManager 查表切换，本机是否"到达"改由 `PosCalcStatus.join_exited`（切出）和
 > `reached_slot_once`（是否已路过 M_i 一次）两个信号表达，不再有独立的 `_self_arrived` 锁存字段——
-> `selfArrived` 直接从 `_rally_join.state` 派生；`reached_slot_once` 保留为汇合过程诊断量。长机仅用
+> FormationOutbound 直接从 PosCalcStatus 生成 `arrived`；`reached_slot_once` 保留为汇合过程诊断量。长机仅用
 > `planned_path_length_m` 生成一次固定计划，之后由 `T_ref` 调速、由 `loop_counts` 决定切出次数。
 
 #### 7.2.3 初始化（init）关键点
@@ -987,12 +852,11 @@ self._outbound_u.selfArrived = 1 if self._rally_join.state == RALLY_STATE_EXITED
 - `RallyJoinPosInitS.control_period_s`：传入 `cfg.control_period_s`，用于校验切入圆弧触发半径的离散步进安全余量
 - `RallyJoinPos` 在 `stage` 变为 `NONE` 时为兼容停控清除内部相位状态（`FLYING/
   LOITERING/EXITED`、`reached_slot_once` 等）；任务生命周期仍保持锁存，未经全部实体显式 `reset()` 不接受新 RALLY
-- **端口绑定（不可遗漏）**：
-  - `RallyLeaderFollower` Inbound 的 `leaderCmd` 输出供 `SlotGeometryInputS.leaderCmd` 使用；固定计划写入共享黑板
-  - `RallyJoinPos` 的 `selfState` 端口在 init 时绑定到 `Context.selfState`；`t_ref`/`t_ref_valid`/`t_now` 不是一次性端口绑定，
-    而是每拍在 `step()` 里从 `Context.rally_t_ref`/`rally_t_ref_valid`/`rally_loop_counts`/`u.now_s` 赋值；已锁存的计划不会被后续广播改变
-  - `SlotGeometry` 的 `leaderState`/`leaderCmd`/`cmd` 端口绑定共享黑板（CATCHUP 与 LOOSE/HOLD 共用）
-  - `FollowerBroadcast` 的 `rally_state`/`planned_path_length_m`/`reached_slot_once`/`selfArrived` 端口由 `_update_outbound()` 每拍写入
+- **端口绑定（由各流程自行完成）**：
+  - FormationInbound 绑定 `runtime.inbox/context.clock`，输出绑定 `leaderState/leaderCmd/cmd/rallyPlan/followerStates`
+  - RallyJoinPos、SlotGeometry 等产品由 Manager 创建后绑定同一个 Context 的专属字段
+  - FormationOutbound 绑定 `selfState/selfCmd/posCalcStatus/outbox`，不需要实体每拍同步中间端口
+  - 所有绑定发生在 `EntityBase._create_processes()` 的 `bind(runtime) → init(cfg)` 阶段，运行期只调用无参 `step()`
 
 ---
 
@@ -1007,7 +871,7 @@ class EntityInputS:
     now_s: float = 0.0   # 当前仿真时间戳（秒）；由仿真框架每帧注入，用于僚机报文超时检测
 ```
 
-实体在 `step()` 中将 `now_s` 注入到需要时钟的单元（`FollowerStatusInputS.now_s`、`RallyTaskInputS.now_s`）。
+实体在 `_prepare_input()` 中把 `now_s` 写入 `Context.clock.now_s`；FormationInbound、Rally 和位置解算产品均读取这一个预绑定时钟对象。
 
 ### 8.2 EntityInitS 扩展
 

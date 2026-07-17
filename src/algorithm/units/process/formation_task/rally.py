@@ -133,6 +133,7 @@ class Rally(FormationTaskBase):
             raise ValueError("loiter speed bounds must satisfy 0 < min < max")
         self._conv_radius_m = cfg.convergenceRadius_m
         self._stable_hold_s = cfg.stableHold_s
+        self._tight_radius_m = cfg.tightRadius_m
         self._catchup_radius_m = cfg.catchup_radius_m
         self._catchup_heading_thresh_rad = cfg.catchup_heading_thresh_rad
         self._catchup_stable_s = cfg.catchup_stable_s
@@ -287,7 +288,11 @@ class Rally(FormationTaskBase):
         elif step == RallyPhaseE.LOOSE:
             if self._all_followers_ok(state_map, now_s, self._conv_radius_m):
                 self._stable_timer += self._dt_s
-                if self._stable_timer >= self._stable_hold_s:
+                # 粗收敛稳定只表示可以检查最终入位，完成事件仍要求全部僚机满足紧门限。
+                if (
+                    self._stable_timer >= self._stable_hold_s
+                    and self._all_followers_ok(state_map, now_s, self._tight_radius_m)
+                ):
                     y.cmd.stage = FormStageE.HOLD
                     y.cmd.step = RallyPhaseE.JOINING
                     y.rallyCompleted = True
