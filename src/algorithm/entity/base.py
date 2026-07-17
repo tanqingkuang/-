@@ -116,7 +116,7 @@ class EntityBase:
         # 每个流程实例只创建和初始化一次，Manager 内部有状态策略不得在阶段切换时重建。
         # init_configs 只携带静态装配数据，不能保存每拍变化的运动状态。
         # runtime 由 Entity 独占，禁止在不同飞机实例之间共享。
-        # 流程自行建立专属快照，Entity 不再为算法字段变化维护公共端口。
+        # 流程自行建立专属端口，Entity 不再为算法字段变化维护公共端口。
         # 创建失败应直接终止初始化，避免留下只装配了一半的可运行实例。
         for field_name, process_class in _PROCESS_TYPES:
             process = process_class()

@@ -49,12 +49,14 @@ class PosCalcManager:
         self._routes: tuple[PosCalcStrategyE, ...] = ()  # 该实体额外启用的阶段能力
         self._registry: dict[PosCalcStrategyE, PosCalcBase] = {}  # 已初始化产品缓存
         self._active_strategy: PosCalcStrategyE | None = None  # 上一拍执行产品，用于边沿复位
-        self._cxt: FormContextS | None = None
+        self._cmd = None
+        self._binding_cxt: FormContextS | None = None
 
     def bind(self, runtime: EntityRuntimeS) -> None:
         """绑定实体运行环境。注意：Manager只转交黑板，不创建统一输入输出端口。"""
-        # Manager只保存选择策略所需的黑板引用，具体字段访问留给子策略。
-        self._cxt = runtime.context
+        # 完整黑板仅用于随后给产品绑定端口；运行期只保留策略选择所需的 cmd。
+        self._cmd = runtime.context.cmd
+        self._binding_cxt = runtime.context
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证建造并缓存策略。注意：运行期不得再次调用。"""
@@ -87,19 +89,20 @@ class PosCalcManager:
         self._registry = {
             strategy: self._create_strategy(strategy, entity_cfg) for strategy in required
         }
-        if self._cxt is not None:
-            # 每个产品自行建立专属输入输出快照，Manager不参与端口构造。
+        if self._binding_cxt is not None:
+            # 每个产品自行绑定专属输入输出端口，Manager不参与端口构造。
             for strategy in self._registry.values():
-                strategy.bind(self._cxt)
+                strategy.bind(self._binding_cxt)
+            self._binding_cxt = None
         self._active_strategy = None
 
     def step(self) -> None:
         """选择并调用缓存策略。注意：所有黑板读写均由具体子类完成。"""
-        if self._cxt is None:
-            raise ValueError("PosCalcManager 尚未绑定黑板")
-        cmd = self._cxt.cmd
+        if self._cmd is None:
+            raise ValueError("PosCalcManager 尚未绑定命令端口")
+        cmd = self._cmd
         # cmd 是唯一运行期路由依据，Entity 不参与具体产品判断。
-        # 选择过程只返回枚举，算法输入由产品随后从黑板自行冻结。
+        # 选择过程只返回枚举，算法输入由产品初始化期绑定的专属端口提供。
         # registry 缺项属于初始化配置错误，不允许静默退回默认策略。
         strategy_type = self._select_strategy(cmd.stage, cmd.step)
         # 进入停控阶段时只复位一次集结产品，避免每拍清空刚生成的停控输出。
@@ -108,7 +111,7 @@ class PosCalcManager:
             if rally_join is not None:
                 rally_join.reset()
         strategy = self._registry[strategy_type]
-        # 子策略完成快照读取、内部计算和黑板提交的完整事务。
+        # 子策略通过初始化期绑定的专属端口直接读写黑板字段。
         strategy.step()
         self._active_strategy = strategy_type
 

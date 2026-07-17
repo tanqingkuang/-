@@ -12,14 +12,12 @@ from src.algorithm.context.leaf_types import (
     WayLineS,
     WayPointInputS,
     WayPointS,
-    copy_motion,
     copy_wayline,
 )
 from src.algorithm.units.algo import arc_path
 from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.context.context import FormContextS
     from src.algorithm.entity.types import EntityRuntimeS
 
 _GRAVITY_MPS2 = 9.80665  # 重力加速度，用于由速度和滚转角估算转弯半径
@@ -36,14 +34,14 @@ class LeaderRouteInitS(TraPlanInitS):
 
 @dataclass
 class LeaderRouteInputS:
-    """长机航线策略输入快照。注意：只包含航段推进所需的本机状态。"""
+    """长机航线策略私有输入端口。"""
 
     selfState: MotionProfS = field(default_factory=MotionProfS)
 
 
 @dataclass
 class LeaderRouteOutputS:
-    """长机航线策略输出快照。注意：计算成功后统一提交黑板。"""
+    """长机航线策略私有输出端口。"""
 
     wayLine: WayLineS = field(default_factory=WayLineS)
     nextWayLine: WayLineS = field(default_factory=WayLineS)
@@ -56,13 +54,16 @@ class LeaderRoute(TraPlanBase):
         """初始化 LeaderRoute 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._route = _default_route()
         self._current_index = 0  # 当前正在跟踪的航段下标
-        self._cxt: FormContextS | None = None
         self._u = LeaderRouteInputS()
         self._y = LeaderRouteOutputS()
+        self._bound = False
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体黑板。注意：运行期通过内部快照隔离计算和提交。"""
-        self._cxt = runtime.context
+        """绑定航段选择所需输入输出字段。"""
+        cxt = runtime.context
+        self._u = LeaderRouteInputS(selfState=cxt.selfState)
+        self._y = LeaderRouteOutputS(wayLine=cxt.wayLine, nextWayLine=cxt.nextWayLine)
+        self._bound = True
 
     def init(self, cfg: TraPlanInitS | None) -> None:
         """按配置初始化 LeaderRoute。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -74,17 +75,14 @@ class LeaderRoute(TraPlanBase):
         self._current_index = 0
 
     def step(self) -> None:
-        """推进航段选择并提交黑板。注意：异常时不写入半成品航段。"""
-        if self._cxt is None:
-            raise ValueError("LeaderRoute 尚未绑定黑板")
-        copy_motion(self._cxt.selfState, self._u.selfState)
+        """推进航段选择并直接写入绑定航段输出。"""
+        if not self._bound:
+            raise ValueError("LeaderRoute 尚未绑定端口")
         index = self._select_current_index(self._u.selfState)  # 据本机位置选定当前航段下标
         lines = self._route
         copy_wayline(lines[index], self._y.wayLine)  # 拷出，避免下游改写内部航线数据
         # 同时给出下一航段(末段时退化为当前段)，供曲率前馈跨段前瞻采样。
         copy_wayline(lines[min(index + 1, len(lines) - 1)], self._y.nextWayLine)
-        copy_wayline(self._y.wayLine, self._cxt.wayLine)
-        copy_wayline(self._y.nextWayLine, self._cxt.nextWayLine)
 
     def get_route(self) -> list[WayLineS]:
         """返回内部航线副本，供外部初始显示使用。注意：只读，不应由外部修改。"""

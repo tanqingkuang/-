@@ -96,19 +96,19 @@ class Rally(FormationTaskBase):
     def bind(self, runtime: EntityRuntimeS) -> None:
         """绑定实体运行环境。注意：任务流程自行维护黑板端口。"""
         cxt = runtime.context
-        self._bound_input = RallyTaskInputS(
+        self._u = RallyTaskInputS(
             remote=runtime.remote,
             cmd=cxt.cmd,
             followerStates=cxt.followerStates,
             clock=cxt.clock,
             posCalcStatus=cxt.posCalcStatus,
         )
-        self._bound_output = RallyTaskOutputS(cmd=cxt.cmd, rallyPlan=cxt.rallyPlan)
+        self._y = RallyTaskOutputS(cmd=cxt.cmd, rallyPlan=cxt.rallyPlan)
 
     @property
     def rally_completed(self) -> bool:
         """返回本拍正常完成事件。注意：仅在 COMPRESS 切入 HOLD 的一拍有效。"""
-        return self._bound_output.rallyCompleted
+        return self._y.rallyCompleted
 
     def init(self, cfg: RallyTaskInitS) -> None:
         """按配置初始化 Rally。注意：校验参数合法性，违反则抛 ValueError。"""
@@ -164,17 +164,12 @@ class Rally(FormationTaskBase):
         """运行时切换目标队形索引。注意：集结完成进入 HOLD 后，下一拍广播生效。"""
         self._target_pattern = int(index)
 
-    def step(
-        self,
-        u: RallyTaskInputS | None = None,
-        y: RallyTaskOutputS | None = None,
-    ) -> None:
+    def step(self) -> None:
         """推进 Rally 一个处理周期。注意：每拍先置 rallyCompleted=False，再按 remote/step 路由。"""
-        if u is None and y is None:
-            u = self._bound_input
-            y = self._bound_output
-        elif u is None or y is None:
-            raise ValueError("Rally 输入输出端口必须同时提供")
+        self._advance(self._u, self._y)
+
+    def _advance(self, u: RallyTaskInputS, y: RallyTaskOutputS) -> None:
+        """按已绑定端口推进任务状态机。"""
         if y.cmd is None or u.clock is None:
             raise ValueError("Rally ports must be bound")
         y.rallyCompleted = False

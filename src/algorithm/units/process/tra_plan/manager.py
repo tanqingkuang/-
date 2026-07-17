@@ -28,10 +28,13 @@ class TraPlanManager:
         """初始化空管理器。注意：必须先调用 init 才能执行 step。"""
         self._default_strategy: TraPlanStrategyE | None = None
         self._registry: dict[TraPlanStrategyE, TraPlanBase] = {}
+        self._cmd = None
+        self._binding_runtime: EntityRuntimeS | None = None
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体运行环境。注意：Manager 只读取路由指令并转交运行环境。"""
-        self._runtime = runtime
+        """绑定路由命令及产品运行环境。"""
+        self._cmd = runtime.context.cmd
+        self._binding_runtime = runtime
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证创建全部已声明产品。注意：不得隐式补充策略。"""
@@ -63,8 +66,11 @@ class TraPlanManager:
         self._registry = {
             strategy: self._create_strategy(strategy, cfg.entity) for strategy in strategies
         }
+        if self._binding_runtime is None:
+            raise ValueError("TraPlanManager 尚未绑定运行环境")
         for strategy in self._registry.values():
-            strategy.bind(self._runtime)
+            strategy.bind(self._binding_runtime)
+        self._binding_runtime = None
 
     def step(self) -> None:
         """按任务指令选择缓存产品并推进一拍。注意：本方法不创建产品。"""
@@ -72,8 +78,7 @@ class TraPlanManager:
         # 查表失败说明配置能力与运行期指令不一致，应立即暴露而非降级。
         # Manager 只选择缓存对象，具体规划器自行读取本机状态和航线黑板。
         # 切换引用不会清除 LeaderRoute 已积累的航段推进状态。
-        cmd = self._runtime.context.cmd
-        strategy_type = self._select_strategy(cmd.stage, cmd.step)
+        strategy_type = self._select_strategy(self._cmd.stage, self._cmd.step)
         strategy = self._registry.get(strategy_type)
         if strategy is None:
             raise ValueError(f"轨迹规划策略未配置: {strategy_type.name}")

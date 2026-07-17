@@ -16,8 +16,6 @@ from src.algorithm.context.leaf_types import (
     PosTrackCommandE,
     PosTrackCommandS,
     RallyPhaseE,
-    copy_motion,
-    copy_snapshot,
     copy_velocity,
 )
 from src.algorithm.units.algo.pos_calc.base import (
@@ -65,7 +63,7 @@ class SlotGeometryInitS(PosCalcInitS):
 
 @dataclass
 class SlotGeometryInputS:
-    """槽位解算内部输入快照。注意：只包含本策略实际读取的数据。"""
+    """槽位解算私有输入端口。注意：只绑定本策略实际读取的数据。"""
 
     selfState: MotionProfS = field(default_factory=MotionProfS)
     leaderState: MotionProfS = field(default_factory=MotionProfS)
@@ -75,7 +73,7 @@ class SlotGeometryInputS:
 
 @dataclass
 class SlotGeometryOutputS:
-    """槽位解算内部输出快照。注意：计算成功后统一提交到黑板。"""
+    """槽位解算私有输出端口。注意：bind 后直接指向黑板输出对象。"""
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
@@ -98,15 +96,24 @@ class SlotGeometry(PosCalcBase):
         self._td_z = TdHan()
         self._seeded = False
         self._catchup_altitude_m: float | None = None
-        self._cxt: FormContextS | None = None
         self._u = SlotGeometryInputS()
         self._y = SlotGeometryOutputS()
-        self._empty_cmd = MotionProfS()
+        self._bound = False
 
     def bind(self, cxt: FormContextS) -> None:
-        """绑定黑板。注意：运行时只通过读取和提交函数访问黑板。"""
-        # 算法主体只感知专属_u/_y，完整黑板仅供边界同步使用。
-        self._cxt = cxt
+        """绑定专属输入输出端口。注意：后续 step 不再访问完整黑板。"""
+        self._u = SlotGeometryInputS(
+            selfState=cxt.selfState,
+            leaderState=cxt.leaderState,
+            leaderCmd=cxt.leaderCmd,
+            cmd=cxt.cmd,
+        )
+        self._y = SlotGeometryOutputS(
+            selfCmd=cxt.selfCmd,
+            status=cxt.posCalcStatus,
+            posTrackCommand=cxt.posTrackCommand,
+        )
+        self._bound = True
 
     def init(self, cfg: SlotGeometryInitS) -> None:
         """按配置初始化 SlotGeometry。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -123,24 +130,11 @@ class SlotGeometry(PosCalcBase):
             self._td_z.init(TdHanInitS(r=cfg.rLateral, h=h, vMax=cfg.vMaxLateral))
         self._seeded = False
 
-    def step(
-        self,
-        u: SlotGeometryInputS | None = None,
-        y: SlotGeometryOutputS | None = None,
-    ) -> None:
-        """推进槽位解算。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
-        if u is None and y is None:
-            # 新架构每拍先冻结输入，再运行有状态TD，最后统一提交。
-            self._read_context()
-            # 输出运动剖面复用同一对象，首拍前清零避免遗留字段参与控制。
-            copy_motion(self._empty_cmd, self._y.selfCmd)
-            self._calculate(self._u, self._y)
-            self._write_context()
-            return
-        if u is None or y is None:
-            # 旧显式入口不允许只传一侧端口。
-            raise ValueError("SlotGeometry 输入输出端口必须同时提供")
-        self._calculate(u, y)
+    def step(self) -> None:
+        """推进槽位解算。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("SlotGeometry 尚未绑定端口")
+        self._calculate(self._u, self._y)
 
     def _calculate(
         self,
@@ -228,16 +222,6 @@ class SlotGeometry(PosCalcBase):
         self._write_common_output(y)
         return None
 
-    def _read_context(self) -> None:
-        """从黑板生成本拍输入快照。"""
-        if self._cxt is None:
-            raise ValueError("SlotGeometry 尚未绑定黑板")
-        # 本机、长机和任务指令必须来自同一处理拍，避免混用跨拍引用。
-        copy_motion(self._cxt.selfState, self._u.selfState)
-        copy_motion(self._cxt.leaderState, self._u.leaderState)
-        copy_motion(self._cxt.leaderCmd, self._u.leaderCmd)
-        copy_snapshot(self._cxt.cmd, self._u.cmd)
-
     def _write_common_output(self, y: SlotGeometryOutputS) -> None:
         """完整填写本策略公共输出。"""
         if y.status is not None:
@@ -245,15 +229,6 @@ class SlotGeometry(PosCalcBase):
             y.status.active_strategy = PosCalcStrategyE.SLOT_GEOMETRY
         if y.posTrackCommand is not None:
             y.posTrackCommand.mode = PosTrackCommandE.POSITION_TRACK
-
-    def _write_context(self) -> None:
-        """把完整计算结果原地提交到黑板。"""
-        assert self._cxt is not None
-        # 计算成功后一次性提交目标运动剖面和控制语义。
-        copy_motion(self._y.selfCmd, self._cxt.selfCmd)
-        # 黑板对象原地更新，保证PosTrack持有的引用持续有效。
-        self._cxt.posCalcStatus.active_strategy = self._y.status.active_strategy
-        self._cxt.posTrackCommand.mode = self._y.posTrackCommand.mode
 
     def reset(self) -> None:
         """复位 SlotGeometry 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

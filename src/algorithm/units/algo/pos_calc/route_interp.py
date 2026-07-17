@@ -13,8 +13,6 @@ from src.algorithm.context.leaf_types import (
     PosTrackCommandE,
     PosTrackCommandS,
     WayLineS,
-    copy_motion,
-    copy_wayline,
 )
 from src.algorithm.units.algo import arc_path
 from src.algorithm.units.algo.pos_calc.base import (
@@ -33,7 +31,7 @@ class RouteInterpInitS(PosCalcInitS):
 
 @dataclass
 class RouteInterpInputS:
-    """航线插值内部输入快照。注意：只包含本策略实际读取的数据。"""
+    """航线插值私有输入端口。注意：只绑定本策略实际读取的数据。"""
 
     selfState: MotionProfS = field(default_factory=MotionProfS)
     wayLine: WayLineS = field(default_factory=WayLineS)
@@ -42,7 +40,7 @@ class RouteInterpInputS:
 
 @dataclass
 class RouteInterpOutputS:
-    """航线插值内部输出快照。注意：计算成功后统一提交到黑板。"""
+    """航线插值私有输出端口。注意：bind 后直接指向黑板输出对象。"""
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
@@ -56,15 +54,23 @@ class RouteInterp(PosCalcBase):
         """初始化 RouteInterp 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._look_ahead_distance = 0.0
         self._lead_time_s = 0.0
-        self._cxt: FormContextS | None = None
         self._u = RouteInterpInputS()
         self._y = RouteInterpOutputS()
-        self._empty_cmd = MotionProfS()
+        self._bound = False
 
     def bind(self, cxt: FormContextS) -> None:
-        """绑定黑板。注意：运行时只通过读取和提交函数访问黑板。"""
-        # 仅保存容器引用，算法核心不会直接访问该对象。
-        self._cxt = cxt
+        """绑定专属输入输出端口。注意：后续 step 不再访问完整黑板。"""
+        self._u = RouteInterpInputS(
+            selfState=cxt.selfState,
+            wayLine=cxt.wayLine,
+            nextWayLine=cxt.nextWayLine,
+        )
+        self._y = RouteInterpOutputS(
+            selfCmd=cxt.selfCmd,
+            status=cxt.posCalcStatus,
+            posTrackCommand=cxt.posTrackCommand,
+        )
+        self._bound = True
 
     def init(self, cfg: PosCalcInitS) -> None:
         """按配置初始化 RouteInterp。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -75,24 +81,11 @@ class RouteInterp(PosCalcBase):
         if self._lead_time_s < 0.0:
             raise ValueError("leadTimeS must be >= 0")
 
-    def step(
-        self,
-        u: RouteInterpInputS | None = None,
-        y: RouteInterpOutputS | None = None,
-    ) -> None:
-        """推进航线插值。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
-        if u is None and y is None:
-            # 新架构固定执行读取、计算、提交三段式流程。
-            self._read_context()
-            # 内部输出跨帧复用，计算前清零可阻断分支遗漏造成的旧值泄漏。
-            copy_motion(self._empty_cmd, self._y.selfCmd)
-            self._calculate(self._u, self._y)
-            self._write_context()
-            return
-        if u is None or y is None:
-            # 兼容入口仍要求输入输出成对出现。
-            raise ValueError("RouteInterp 输入输出端口必须同时提供")
-        self._calculate(u, y)
+    def step(self) -> None:
+        """推进航线插值。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("RouteInterp 尚未绑定端口")
+        self._calculate(self._u, self._y)
 
     def _calculate(
         self,
@@ -112,15 +105,6 @@ class RouteInterp(PosCalcBase):
         y.selfCmd.v.dVPsi = self._curvature_ff(u)
         self._write_common_output(y)
 
-    def _read_context(self) -> None:
-        """从黑板生成本拍输入快照。"""
-        if self._cxt is None:
-            raise ValueError("RouteInterp 尚未绑定黑板")
-        # 三个输入对象都做原地复制，保持每拍快照的一致边界。
-        copy_motion(self._cxt.selfState, self._u.selfState)
-        copy_wayline(self._cxt.wayLine, self._u.wayLine)
-        copy_wayline(self._cxt.nextWayLine, self._u.nextWayLine)
-
     def _write_common_output(self, y: RouteInterpOutputS) -> None:
         """完整填写本策略公共输出。"""
         if y.status is not None:
@@ -128,15 +112,6 @@ class RouteInterp(PosCalcBase):
             y.status.active_strategy = PosCalcStrategyE.ROUTE_INTERP
         if y.posTrackCommand is not None:
             y.posTrackCommand.mode = PosTrackCommandE.SPEED_TRACK
-
-    def _write_context(self) -> None:
-        """把完整计算结果原地提交到黑板。"""
-        assert self._cxt is not None
-        # 所有算法计算已成功后才开始提交，异常不会留下半成品。
-        copy_motion(self._y.selfCmd, self._cxt.selfCmd)
-        # 专有集结字段由RallyJoinPos维护，切入航线后继续保留其最终诊断。
-        self._cxt.posCalcStatus.active_strategy = self._y.status.active_strategy
-        self._cxt.posTrackCommand.mode = self._y.posTrackCommand.mode
 
     def _interp_straight(self, line: WayLineS, self_state: MotionProfS, self_cmd: MotionProfS) -> None:
         """直线航段：把本体投影到航段并按 L1 延拓，给出目标位置与沿航段速度。注意：行为与历史一致。"""

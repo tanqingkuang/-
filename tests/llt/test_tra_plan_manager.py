@@ -10,6 +10,7 @@ from src.algorithm.context.leaf_types import (
     RallyPhaseE,
     WayLineS,
     WayPointInputS,
+    copy_wayline,
 )
 from src.algorithm.entity.types import (
     EntityInitS,
@@ -121,7 +122,7 @@ class TraPlanManagerTests(unittest.TestCase):
         cxt.cmd.stage = FormStageE.STANDBY
         cxt.cmd.step = RallyPhaseE.JOINING
         cxt.selfState.pos = PosInEarthS(120.0, 0.0, 1000.0)
-        cxt.wayLine = WayLineS(idx=9)
+        copy_wayline(WayLineS(idx=9), cxt.wayLine)
 
         manager.step()
         self.assertEqual(cxt.wayLine.idx, 9)

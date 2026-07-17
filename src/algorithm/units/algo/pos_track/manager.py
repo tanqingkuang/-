@@ -42,8 +42,11 @@ class _NoopPosTrack(PosTrackBase):
     """空位置跟踪产品。注意：保持旧 NONE 分支只清零加速度的语义。"""
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体运行环境。注意：空产品直接原地更新停控字段。"""
-        self._runtime = runtime
+        """绑定停控产品所需输入输出字段。"""
+        cxt = runtime.context
+        self._self_cmd = cxt.selfCmd
+        self._effective_cmd = cxt.effectiveCmd
+        self._acc_cmd = cxt.selfAccCmd
 
     def init(self, cfg: PosTrackInitS) -> None:
         """初始化空产品。注意：无控制参数和动态状态。"""
@@ -53,9 +56,8 @@ class _NoopPosTrack(PosTrackBase):
         """输出停控结果。注意：有效指令保持为 PosCalc 生成的 selfCmd。"""
         # NOOP 只关闭加速度控制，不清除位置解算生成的诊断目标。
         # effectiveCmd 仍需同步，保证长机广播与本拍 selfCmd 一致。
-        cxt = self._runtime.context
-        zero_acceleration(cxt.selfAccCmd)
-        copy_motion(cxt.selfCmd, cxt.effectiveCmd)
+        zero_acceleration(self._acc_cmd)
+        copy_motion(self._self_cmd, self._effective_cmd)
 
     def reset(self) -> None:
         """复位空产品。注意：无运行期状态。"""
@@ -161,10 +163,13 @@ class PosTrackManager:
     def __init__(self) -> None:
         """初始化空管理器。注意：必须先调用 init。"""
         self._registry: dict[PosTrackStrategyE, PosTrackBase] = {}
+        self._command = None
+        self._binding_runtime: EntityRuntimeS | None = None
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体运行环境。注意：Manager 只读取控制命令并向产品转交环境。"""
-        self._runtime = runtime
+        """绑定控制命令及产品运行环境。"""
+        self._command = runtime.context.posTrackCommand
+        self._binding_runtime = runtime
 
     def init(self, cfg: EntityManagerInitS) -> None:
         """按实体身份证创建全部控制产品。注意：不得隐式补充策略。"""
@@ -183,8 +188,11 @@ class PosTrackManager:
         self._registry = {strategy: _BUILDERS[strategy](cfg.entity) for strategy in strategies}
         # 建造函数只负责静态增益初始化，黑板绑定统一在产品全部创建后完成。
         # 各产品共享 runtime，但只能读写自身控制契约内的字段。
+        if self._binding_runtime is None:
+            raise ValueError("PosTrackManager 尚未绑定运行环境")
         for strategy in self._registry.values():
-            strategy.bind(self._runtime)
+            strategy.bind(self._binding_runtime)
+        self._binding_runtime = None
 
     def step(self) -> None:
         """按控制命令执行缓存产品。注意：命令与策略固定一一对应。"""
@@ -192,7 +200,7 @@ class PosTrackManager:
         # 未配置产品属于装配错误，不能临时回退到另一控制器。
         # 命令由 PosCalc 在同一拍发布，位置跟踪不得反向读取任务阶段重新判断。
         # 一一映射保证同一控制语义在所有实体上选择相同类型的控制产品。
-        command = self._runtime.context.posTrackCommand
+        command = self._command
         if not isinstance(command.mode, PosTrackCommandE):
             raise ValueError("位置跟踪命令必须是 PosTrackCommandE")
         strategy_type = _COMMAND_TO_STRATEGY.get(command.mode)

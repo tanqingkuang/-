@@ -129,7 +129,7 @@ class SlotGeometryTdTests(unittest.TestCase):
 
     def _step(self) -> MotionProfS:
         u = SlotGeometryInputS(leaderState=self.leader, cmd=self.cmd, selfState=self.self_state)
-        self.geo.step(u, self.out)
+        self.geo._calculate(u, self.out)
         return self.out.selfCmd
 
     def test_disabled_matches_raw_and_jumps_instantly(self) -> None:

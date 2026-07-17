@@ -45,15 +45,12 @@ from src.algorithm.context.leaf_types import (
     PosTrackCommandS,
     RallyPlanS,
     WayPointInputS,
-    copy_motion,
-    copy_snapshot,
 )
 from src.algorithm.units.algo.arc_path import common_tangent
 from src.algorithm.units.algo.formation_math import clamp, horizontal_track_vector_to_enu
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
     PosCalcInitS,
-    copy_pos_calc_status,
     reset_pos_calc_status,
 )
 
@@ -216,7 +213,7 @@ class RallyJoinPosInitS(PosCalcInitS):
 
 @dataclass
 class RallyJoinPosInputS:
-    """集结位置解算内部输入快照。注意：只包含本策略实际读取的数据。"""
+    """集结位置解算私有输入端口。注意：只绑定本策略实际读取的数据。"""
 
     selfState: MotionProfS = field(default_factory=MotionProfS)
     cmd: FormSnapshotS = field(default_factory=FormSnapshotS)
@@ -226,7 +223,7 @@ class RallyJoinPosInputS:
 
 @dataclass
 class RallyJoinPosOutputS:
-    """集结位置解算内部输出快照。注意：计算成功后统一提交到黑板。"""
+    """集结位置解算私有输出端口。注意：bind 后直接指向黑板输出对象。"""
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
@@ -237,18 +234,25 @@ class RallyJoinPos(PosCalcBase):
     """集结汇合位置解算器，提供锁存的基础航程及其当前剩余值。"""
 
     def __init__(self) -> None:
-        """建立内部快照。注意：具体算法配置仍由 init 完成。"""
-        # 黑板引用只允许在读取和提交边界使用。
-        self._cxt: FormContextS | None = None
-        # 输入输出对象跨帧复用，运行期不产生端口临时对象。
+        """建立私有端口。注意：具体算法配置仍由 init 完成。"""
         self._u = RallyJoinPosInputS()
         self._y = RallyJoinPosOutputS()
-        self._empty_cmd = MotionProfS()
+        self._bound = False
 
     def bind(self, cxt: FormContextS) -> None:
-        """绑定黑板。注意：运行时只通过读取和提交函数访问黑板。"""
-        # Manager只负责转交引用，不了解本策略读取哪些字段。
-        self._cxt = cxt
+        """绑定专属输入输出端口。注意：后续 step 不再访问完整黑板。"""
+        self._u = RallyJoinPosInputS(
+            selfState=cxt.selfState,
+            cmd=cxt.cmd,
+            clock=cxt.clock,
+            rallyPlan=cxt.rallyPlan,
+        )
+        self._y = RallyJoinPosOutputS(
+            selfCmd=cxt.selfCmd,
+            status=cxt.posCalcStatus,
+            posTrackCommand=cxt.posTrackCommand,
+        )
+        self._bound = True
 
     def init(self, cfg: RallyJoinPosInitS) -> None:
         """按配置初始化 RallyJoinPos。"""
@@ -345,25 +349,12 @@ class RallyJoinPos(PosCalcBase):
         """返回是否已至少一次路过松散点 M_i，供汇合过程诊断。"""
         return self._reached_slot_once
 
-    def step(
-        self,
-        u: RallyJoinPosInputS | None = None,
-        y: RallyJoinPosOutputS | None = None,
-    ) -> None:
-        """推进集结解算。注意：无参模式使用内部快照，显式端口仅兼容既有低层调用。"""
-        if u is None and y is None:
-            # 新实体使用事务式读取、计算、提交路径。
-            self._read_context()
-            # 输出先恢复默认值，避免复杂状态分支漏写时沿用上一拍。
-            self._reset_output()
-            self._calculate(self._u, self._y)
-            self._write_context()
-            return
-        if u is None or y is None:
-            # 显式兼容调用同样必须保持输入输出成对。
-            raise ValueError("RallyJoinPos 输入输出端口必须同时提供")
-        self._calculate(u, y)
-        self._fill_common_output(y)
+    def step(self) -> None:
+        """推进集结解算。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("RallyJoinPos 尚未绑定端口")
+        self._calculate(self._u, self._y)
+        self._fill_common_output(self._y)
 
     def _calculate(self, u: RallyJoinPosInputS, y: RallyJoinPosOutputS) -> None:
         """使用内部端口完成算法计算。注意：本方法不访问黑板。"""
@@ -407,26 +398,6 @@ class RallyJoinPos(PosCalcBase):
         if self._planned_path_length_m >= 0.0:
             self._remaining_path_length_m = self._remaining_base_path_m(u.selfState.pos)
 
-    def _read_context(self) -> None:
-        """从黑板生成本拍输入快照。"""
-        if self._cxt is None:
-            raise ValueError("RallyJoinPos 尚未绑定黑板")
-        # 运动状态和任务指令按值复制，算法无法反向修改黑板输入。
-        copy_motion(self._cxt.selfState, self._u.selfState)
-        copy_snapshot(self._cxt.cmd, self._u.cmd)
-        self._u.clock.now_s = self._cxt.clock.now_s
-        self._u.rallyPlan.t_ref = self._cxt.rallyPlan.t_ref
-        self._u.rallyPlan.valid = self._cxt.rallyPlan.valid
-        # 圈数映射是可变对象，必须清空后复制而不是共享字典引用。
-        self._u.rallyPlan.loop_counts.clear()
-        self._u.rallyPlan.loop_counts.update(self._cxt.rallyPlan.loop_counts)
-
-    def _reset_output(self) -> None:
-        """清理内部输出，避免未覆盖字段沿用上一拍。"""
-        # 默认运动剖面在构造期建立，避免每拍重新分配MotionProfS。
-        copy_motion(self._empty_cmd, self._y.selfCmd)
-        self._fill_common_output(self._y)
-
     def _fill_common_output(self, y: RallyJoinPosOutputS) -> None:
         """完整填写集结策略公共及专有状态。"""
         if y.status is not None:
@@ -435,16 +406,6 @@ class RallyJoinPos(PosCalcBase):
             self._write_rally_status(y.status)
         if y.posTrackCommand is not None:
             y.posTrackCommand.mode = PosTrackCommandE.SPEED_TRACK
-
-    def _write_context(self) -> None:
-        """把完整计算结果原地提交到黑板。"""
-        assert self._cxt is not None
-        # 仅当本拍所有几何和时序计算成功后才提交结果。
-        self._fill_common_output(self._y)
-        # 写回采用原地复制，不能替换PosTrack和Outbound已绑定的对象。
-        copy_motion(self._y.selfCmd, self._cxt.selfCmd)
-        copy_pos_calc_status(self._y.status, self._cxt.posCalcStatus)
-        self._cxt.posTrackCommand.mode = self._y.posTrackCommand.mode
 
     def reset(self) -> None:
         """复位 RallyJoinPos 的动态状态。注意：盘旋圆几何（圆心/切出点）由 init 时的任务航向定死，reset 不清除。"""
@@ -471,9 +432,9 @@ class RallyJoinPos(PosCalcBase):
         self._entry_point = None
         self._theta_entry = 0.0
         self._reached_slot_once = False
-        if self._cxt is not None:
+        if self._bound:
             # NONE边沿由Manager触发reset，专有诊断同步回到初始FLYING语义。
-            self._write_rally_status(self._cxt.posCalcStatus)
+            self._write_rally_status(self._y.status)
 
     def _write_rally_status(self, status: PosCalcStatusS) -> None:
         """写入集结专有诊断。注意：不修改当前活动策略。"""

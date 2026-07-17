@@ -261,6 +261,17 @@ def _rally_join_input(
     )
 
 
+def _step_rally_join(
+    join: RallyJoinPos,
+    u: RallyJoinPosInputS,
+    y: RallyJoinPosOutputS,
+) -> None:
+    """直接驱动集结算法核心。注意：正式 step 只允许使用 bind 阶段绑定的端口。"""
+
+    join._calculate(u, y)
+    join._fill_common_output(y)
+
+
 def _rally_task(
     expected: tuple[str, ...] = ("R02", "R03"),
     *,
@@ -315,7 +326,7 @@ def _task_step(
     ctx.posCalcStatus.planned_path_length_m = leader_path_length_m
     ctx.clock.now_s = now_s
     output = RallyTaskOutputS(cmd=ctx.cmd)
-    task.step(
+    task._advance(
         RallyTaskInputS(
             remote=RemoteCmdS(remote),
             cmd=ctx.cmd,
@@ -326,6 +337,31 @@ def _task_step(
         output,
     )
     return output
+
+
+def _formation_inbound_output(cxt: FormContextS) -> FormationInboundOutputS:
+    """把统一入站测试端口绑定到指定黑板字段。"""
+
+    return FormationInboundOutputS(
+        leaderState=cxt.leaderState,
+        leaderCmd=cxt.leaderCmd,
+        cmd=cxt.cmd,
+        rallyPlan=cxt.rallyPlan,
+        followerStates=cxt.followerStates,
+    )
+
+
+def _formation_outbound_input(cxt: FormContextS) -> FormationOutboundInputS:
+    """把统一出站测试端口绑定到指定黑板字段。"""
+
+    return FormationOutboundInputS(
+        cmd=cxt.cmd,
+        selfState=cxt.selfState,
+        selfCmd=cxt.selfCmd,
+        effectiveCmd=cxt.effectiveCmd,
+        rallyPlan=cxt.rallyPlan,
+        posCalcStatus=cxt.posCalcStatus,
+    )
 
 
 def _step_with_paths(
@@ -1120,7 +1156,10 @@ class FormationInboundTests(unittest.TestCase):
             _leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R02": 2}),
         ]
 
-        inbound.step(FormationInboundInputS(inbox=messages), FormationInboundOutputS(context=cxt))
+        inbound._process(
+            FormationInboundInputS(inbox=messages, clock=cxt.clock),
+            _formation_inbound_output(cxt),
+        )
 
         self.assertEqual(cxt.cmd.stage, FormStageE.RALLY)
         self.assertAlmostEqual(cxt.leaderState.pos.east, 100.0)
@@ -1131,7 +1170,10 @@ class FormationInboundTests(unittest.TestCase):
         self.assertAlmostEqual(cxt.followerStates[0].lastUpdate_s, 12.0)
         snapshot = deepcopy(cxt)
 
-        inbound.step(FormationInboundInputS(), FormationInboundOutputS(context=cxt))
+        inbound._process(
+            FormationInboundInputS(clock=cxt.clock),
+            _formation_inbound_output(cxt),
+        )
 
         self.assertEqual(cxt, snapshot)
 
@@ -1142,9 +1184,12 @@ class FormationInboundTests(unittest.TestCase):
         inbound = FormationInbound()
         inbound.init(FormationInboundInitS("R02"))
 
-        inbound.step(
-            FormationInboundInputS(inbox=[_leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R03": 1})]),
-            FormationInboundOutputS(context=cxt),
+        inbound._process(
+            FormationInboundInputS(
+                inbox=[_leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R03": 1})],
+                clock=cxt.clock,
+            ),
+            _formation_inbound_output(cxt),
         )
 
         self.assertFalse(cxt.rallyPlan.valid)
@@ -1175,7 +1220,7 @@ class FormationOutboundTests(unittest.TestCase):
             outbox=[MessageEnvelope("stale", "R02", "R01", 0.0, {})]
         )
 
-        outbound.step(FormationOutboundInputS(context=cxt), output)
+        outbound._process(_formation_outbound_input(cxt), output)
 
         self.assertEqual(output.outbox, [])
 
@@ -1198,7 +1243,7 @@ class FormationOutboundTests(unittest.TestCase):
         ))
         output = FormationOutboundOutputS()
 
-        outbound.step(FormationOutboundInputS(context=cxt), output)
+        outbound._process(_formation_outbound_input(cxt), output)
 
         self.assertEqual(len(output.outbox), 1)
         message = output.outbox[0]
@@ -1222,7 +1267,7 @@ class FormationOutboundTests(unittest.TestCase):
         ))
         output = FormationOutboundOutputS()
 
-        outbound.step(FormationOutboundInputS(context=cxt), output)
+        outbound._process(_formation_outbound_input(cxt), output)
 
         self.assertEqual(output.outbox[0].payload["cmd"]["leader"]["pos"]["east"], 7.0)
 
@@ -1244,7 +1289,7 @@ class FormationOutboundTests(unittest.TestCase):
         ))
         output = FormationOutboundOutputS()
 
-        outbound.step(FormationOutboundInputS(context=cxt), output)
+        outbound._process(_formation_outbound_input(cxt), output)
 
         message = output.outbox[0]
         self.assertEqual((message.topic, message.source, message.target), (FOLLOWER_STATUS_TOPIC, "R02", "R01"))
@@ -1981,7 +2026,7 @@ def _make_standby_join_for_transit() -> tuple[RallyJoinPos, MotionProfS, RallyJo
         vd=20.0,
         v_psi=0.0,
     )
-    join.step(_rally_join_input(selfState=enter_state, standby=True), output)
+    _step_rally_join(join, _rally_join_input(selfState=enter_state, standby=True), output)
     transit_state = _motion(
         east=0.0,
         north=400.0,
@@ -1997,7 +2042,7 @@ def _started_join_with_two_circles() -> tuple[RallyJoinPos, MotionProfS, RallyJo
     """启动分离两圆的公切线汇合路径。"""
 
     join, state, output = _make_standby_join_for_transit()
-    join.step(_rally_join_input(selfState=state, standby=False, t_now=10.0), output)
+    _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.0), output)
     return join, state, output
 
 
@@ -2009,7 +2054,7 @@ def _started_join_with_point_fallback() -> tuple[RallyJoinPos, float]:
         "src.algorithm.units.algo.pos_calc.rally_join_pos.common_tangent",
         return_value=None,
     ):
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.0), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.0), output)
     assert join._entry_point is not None
     line_length = math.hypot(
         join._entry_point.east - state.pos.east,
@@ -2036,7 +2081,7 @@ def _started_join_with_coincident_circles() -> tuple[RallyJoinPos, float]:
         standby_altitude_m=560.0,
     ))
     output = RallyJoinPosOutputS(selfCmd=MotionProfS())
-    join.step(
+    _step_rally_join(join,
         _rally_join_input(
             selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
             standby=True,
@@ -2046,7 +2091,7 @@ def _started_join_with_coincident_circles() -> tuple[RallyJoinPos, float]:
     state = _motion(east=0.0, north=400.0, h=560.0, v_east=-20.0, vd=20.0, v_psi=math.pi)
     theta = math.atan2(state.pos.north - join._loiter_center_n, state.pos.east - join._loiter_center_e)
     expected_arc = join._loiter_radius * ((join._theta_slot - theta) % (2.0 * math.pi))
-    join.step(_rally_join_input(selfState=state, standby=False, t_now=5.0), output)
+    _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=5.0), output)
     return join, expected_arc
 
 
@@ -2066,7 +2111,7 @@ def _join_at_transit_phase(phase: str) -> tuple[RallyJoinPos, MotionProfS, Rally
     state.pos.east = join._local_exit_point.east
     state.pos.north = join._local_exit_point.north
     state.v.vPsi = join._theta_local_exit + math.pi / 2.0
-    join.step(_rally_join_input(selfState=state, t_now=10.1), output)
+    _step_rally_join(join, _rally_join_input(selfState=state, t_now=10.1), output)
     if phase == "LINE_TO_RALLY_ENTRY":
         state.pos.east = (join._local_exit_point.east + join._entry_point.east) / 2.0
         state.pos.north = (join._local_exit_point.north + join._entry_point.north) / 2.0
@@ -2076,7 +2121,7 @@ def _join_at_transit_phase(phase: str) -> tuple[RallyJoinPos, MotionProfS, Rally
         state.pos.east = join._entry_point.east
         state.pos.north = join._entry_point.north
         state.pos.h = join._entry_point.h
-        join.step(_rally_join_input(selfState=state, t_now=10.2), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, t_now=10.2), output)
         theta = join._theta_slot - math.pi
         state.pos.east = join._loiter_center_e + join._loiter_radius * math.cos(theta)
         state.pos.north = join._loiter_center_n + join._loiter_radius * math.sin(theta)
@@ -2102,7 +2147,7 @@ def _join_loitering_with_plan(assigned_loops: int) -> tuple[RallyJoinPos, RallyJ
         vd=20.0,
         v_psi=theta + math.pi / 2.0,
     )
-    join.step(
+    _step_rally_join(join,
         _rally_join_input(
             selfState=state,
             t_ref=200.0,
@@ -2147,7 +2192,7 @@ def _cross_rally_slot(
         vd=20.0,
         v_psi=far_theta + math.pi / 2.0,
     )
-    join.step(
+    _step_rally_join(join,
         _rally_join_input(
             selfState=far_state,
             t_ref=t_ref,
@@ -2158,7 +2203,7 @@ def _cross_rally_slot(
         output,
     )
     near_state = _rally_circle_state(join, 0.1)
-    join.step(
+    _step_rally_join(join,
         _rally_join_input(
             selfState=near_state,
             t_ref=t_ref,
@@ -2169,7 +2214,7 @@ def _cross_rally_slot(
         output,
     )
     crossed_state = _rally_circle_state(join, -0.1)
-    join.step(
+    _step_rally_join(join,
         _rally_join_input(
             selfState=crossed_state,
             t_ref=t_ref,
@@ -2225,7 +2270,7 @@ class RallyJoinPosTests(unittest.TestCase):
         self.assertEqual(join.planned_path_length_m, -1.0)
         self.assertEqual(join.remaining_path_length_m, -1.0)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
                 standby=True,
@@ -2252,7 +2297,7 @@ class RallyJoinPosTests(unittest.TestCase):
                 circumference = 2.0 * math.pi * join._loiter_radius
                 expected = max(14.0, min(25.0, (base_remaining + circumference) / 100.0))
 
-                join.step(
+                _step_rally_join(join,
                     _rally_join_input(
                         selfState=state,
                         t_ref=200.0,
@@ -2270,7 +2315,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         arc_join, arc_state, arc_output = _join_at_transit_phase("ARC_TO_TANGENT")
         arc_join._standby_speed = 22.0
-        arc_join.step(_rally_join_input(selfState=arc_state, t_ref_valid=False), arc_output)
+        _step_rally_join(arc_join, _rally_join_input(selfState=arc_state, t_ref_valid=False), arc_output)
         self.assertAlmostEqual(arc_output.selfCmd.v.vd, 22.0)
 
         line_join, line_state, line_output = _join_at_transit_phase("LINE_TO_RALLY_ENTRY")
@@ -2280,12 +2325,12 @@ class RallyJoinPosTests(unittest.TestCase):
         line_length = math.hypot(line_e, line_n)
         line_state.pos.east = line_join._entry_point.east - 50.0 * line_e / line_length
         line_state.pos.north = line_join._entry_point.north - 50.0 * line_n / line_length
-        line_join.step(_rally_join_input(selfState=line_state, t_ref_valid=False), line_output)
+        _step_rally_join(line_join, _rally_join_input(selfState=line_state, t_ref_valid=False), line_output)
         self.assertAlmostEqual(line_output.selfCmd.v.vd, 14.0)
 
         loiter_join, loiter_state, loiter_output = _join_at_transit_phase("LOITERING")
         loiter_join._loiter_speed = 18.0
-        loiter_join.step(_rally_join_input(selfState=loiter_state, t_ref_valid=False), loiter_output)
+        _step_rally_join(loiter_join, _rally_join_input(selfState=loiter_state, t_ref_valid=False), loiter_output)
         self.assertAlmostEqual(loiter_output.selfCmd.v.vd, 18.0)
 
     def test_slot_crossing_keeps_total_remaining_path_and_speed_continuous(self) -> None:
@@ -2297,7 +2342,7 @@ class RallyJoinPosTests(unittest.TestCase):
         for index, remaining_angle in enumerate((0.4, 0.2, -0.1)):
             state = _rally_circle_state(join, remaining_angle)
             t_now = 100.0 + index * 0.1
-            join.step(
+            _step_rally_join(join,
                 _rally_join_input(
                     selfState=state,
                     t_ref=160.0,
@@ -2322,7 +2367,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         join, output = _join_loitering_with_plan(assigned_loops=2)
         for index, remaining_angle in enumerate((0.3, 0.2, 0.1)):
-            join.step(
+            _step_rally_join(join,
                 _rally_join_input(
                     selfState=_rally_circle_state(join, remaining_angle),
                     t_ref=200.0,
@@ -2334,7 +2379,7 @@ class RallyJoinPosTests(unittest.TestCase):
             )
             self.assertEqual(join.remaining_loops, 2)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, -0.05),
                 t_ref=200.0,
@@ -2346,7 +2391,7 @@ class RallyJoinPosTests(unittest.TestCase):
         )
         self.assertEqual(join.remaining_loops, 1)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, -0.1),
                 t_ref=200.0,
@@ -2362,7 +2407,7 @@ class RallyJoinPosTests(unittest.TestCase):
         """零圈计划从 0.4rad 单拍推进到 -0.1rad 时，应识别真实跨零并立即切出。"""
 
         join, output = _join_loitering_with_plan(assigned_loops=0)
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, 0.4),
                 t_ref=200.0,
@@ -2374,7 +2419,7 @@ class RallyJoinPosTests(unittest.TestCase):
         )
         self.assertEqual(join.state, RALLY_STATE_LOITERING)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, -0.1),
                 t_ref=200.0,
@@ -2393,7 +2438,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         join, output = _join_loitering_with_plan(assigned_loops=2)
         for index, remaining_angle in enumerate((0.4, -0.1, -0.15)):
-            join.step(
+            _step_rally_join(join,
                 _rally_join_input(
                     selfState=_rally_circle_state(join, remaining_angle),
                     t_ref=200.0,
@@ -2415,7 +2460,7 @@ class RallyJoinPosTests(unittest.TestCase):
         after_slot._enter_arc()
         output = RallyJoinPosOutputS(selfCmd=MotionProfS())
         for index, remaining_angle in enumerate((-0.1, -0.04, -0.08)):
-            after_slot.step(
+            after_slot._calculate(
                 _rally_join_input(
                     selfState=_rally_circle_state(after_slot, remaining_angle),
                     t_ref=200.0,
@@ -2430,7 +2475,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         noise, noise_output = _join_loitering_with_plan(assigned_loops=1)
         for index, remaining_angle in enumerate((0.001, -0.001, 0.001)):
-            noise.step(
+            _step_rally_join(noise,
                 _rally_join_input(
                     selfState=_rally_circle_state(noise, remaining_angle),
                     t_ref=200.0,
@@ -2445,7 +2490,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         reverse, reverse_output = _join_loitering_with_plan(assigned_loops=2)
         for index, remaining_angle in enumerate((0.4, -0.1, 0.1)):
-            reverse.step(
+            _step_rally_join(reverse,
                 _rally_join_input(
                     selfState=_rally_circle_state(reverse, remaining_angle),
                     t_ref=200.0,
@@ -2470,7 +2515,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         # 仍停留在近角窗的重复拍不构成第二次真实经过，也不能被重复计划重置。
         slot_state = _motion(east=join._slot.east, north=join._slot.north, h=join._slot.h)
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=slot_state,
                 t_ref=200.0,
@@ -2499,7 +2544,7 @@ class RallyJoinPosTests(unittest.TestCase):
             north=join._loiter_center_n + join._loiter_radius * math.sin(far_theta),
             h=join._slot.h,
         )
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=far_state,
                 t_ref=200.0,
@@ -2530,12 +2575,12 @@ class RallyJoinPosTests(unittest.TestCase):
         """计划生效前经过 M_i 不得提前消费之后下发的固定圈数。"""
 
         join, state, output = _join_at_transit_phase("LOITERING")
-        join.step(_rally_join_input(selfState=state, t_ref_valid=False), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, t_ref_valid=False), output)
         _cross_rally_slot(join, output, assigned_loops=0, t_ref_valid=False)
 
         self.assertEqual(join.state, RALLY_STATE_LOITERING)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, math.pi),
                 t_ref=200.0,
@@ -2566,7 +2611,7 @@ class RallyJoinPosTests(unittest.TestCase):
             with self.subTest(t_ref=t_ref, t_now=t_now):
                 join, state, output = _join_at_transit_phase("ARC_TO_TANGENT")
                 with self.assertRaises(ValueError):
-                    join.step(
+                    _step_rally_join(join,
                         _rally_join_input(
                             selfState=state,
                             t_ref=t_ref,
@@ -2593,7 +2638,7 @@ class RallyJoinPosTests(unittest.TestCase):
             with self.subTest(t_ref=t_ref, t_now=t_now):
                 join, output = _join_loitering_with_plan(assigned_loops=2)
                 with self.assertRaises(ValueError):
-                    join.step(
+                    _step_rally_join(join,
                         _rally_join_input(
                             selfState=_rally_circle_state(join, math.pi),
                             t_ref=t_ref,
@@ -2612,7 +2657,7 @@ class RallyJoinPosTests(unittest.TestCase):
             with self.subTest(assigned_loops=invalid_loops):
                 join, state, output = _join_at_transit_phase("ARC_TO_TANGENT")
                 with self.assertRaises(ValueError):
-                    join.step(
+                    _step_rally_join(join,
                         _rally_join_input(
                             selfState=state,
                             t_ref=200.0,
@@ -2635,7 +2680,7 @@ class RallyJoinPosTests(unittest.TestCase):
         state.pos.east = join._standby_center_e + join._loiter_radius * math.cos(arc_theta)
         state.pos.north = join._standby_center_n + join._loiter_radius * math.sin(arc_theta)
         state.v.vPsi = arc_theta + math.pi / 2.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.1), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.1), output)
         arc_progress = join.remaining_path_length_m
 
         assert join._local_exit_point is not None
@@ -2643,31 +2688,31 @@ class RallyJoinPosTests(unittest.TestCase):
         state.pos.east = join._local_exit_point.east
         state.pos.north = join._local_exit_point.north
         state.v.vPsi = join._theta_local_exit + math.pi / 2.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.2), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.2), output)
         self.assertEqual(join._transit_phase, "LINE_TO_RALLY_ENTRY")
         line_start = join.remaining_path_length_m
 
         state.pos.east = (join._local_exit_point.east + join._entry_point.east) / 2.0
         state.pos.north = (join._local_exit_point.north + join._entry_point.north) / 2.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.3), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.3), output)
         line_progress = join.remaining_path_length_m
 
         state.pos.east = join._entry_point.east
         state.pos.north = join._entry_point.north
         state.pos.h = join._entry_point.h
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.4), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.4), output)
         self.assertEqual(join.state, RALLY_STATE_LOITERING)
 
         loiter_far_theta = join._theta_slot - math.pi
         state.pos.east = join._loiter_center_e + join._loiter_radius * math.cos(loiter_far_theta)
         state.pos.north = join._loiter_center_n + join._loiter_radius * math.sin(loiter_far_theta)
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.5), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.5), output)
         loiter_far = join.remaining_path_length_m
 
         loiter_near_theta = join._theta_slot - math.pi / 2.0
         state.pos.east = join._loiter_center_e + join._loiter_radius * math.cos(loiter_near_theta)
         state.pos.north = join._loiter_center_n + join._loiter_radius * math.sin(loiter_near_theta)
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.6), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.6), output)
         loiter_near = join.remaining_path_length_m
 
         for remaining in (arc_start, arc_progress, line_start, line_progress, loiter_far, loiter_near):
@@ -2686,7 +2731,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         join, state, output = self._make_standby_join_for_transit()
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(selfState=state, standby=False, t_now=10.0),
             output,
         )
@@ -2732,7 +2777,7 @@ class RallyJoinPosTests(unittest.TestCase):
             standby_altitude_m=560.0,
         ))
         output = RallyJoinPosOutputS(selfCmd=MotionProfS())
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_motion(east=0.0, north=0.0, h=560.0, v_east=20.0, vd=20.0),
                 standby=True,
@@ -2748,7 +2793,7 @@ class RallyJoinPosTests(unittest.TestCase):
             v_psi=math.pi,
         )
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(selfState=same_circle_state, standby=False, t_now=5.0),
             output,
         )
@@ -2764,7 +2809,7 @@ class RallyJoinPosTests(unittest.TestCase):
         """验证两圆切点同时相切，且规划后不会随实时位置重新计算。"""
 
         join, state, output = self._make_standby_join_for_transit()
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.0), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.0), output)
 
         assert join._local_exit_point is not None
         assert join._entry_point is not None
@@ -2783,7 +2828,7 @@ class RallyJoinPosTests(unittest.TestCase):
         locked = (local_exit.east, local_exit.north, rally_entry.east, rally_entry.north)
 
         state.pos.east += 50.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.1), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.1), output)
 
         assert join._local_exit_point is not None
         assert join._entry_point is not None
@@ -2798,13 +2843,13 @@ class RallyJoinPosTests(unittest.TestCase):
         """验证进入待命圆切出点 10° 窗口后，同一拍切换到锁存公切线。"""
 
         join, state, output = self._make_standby_join_for_transit()
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.0), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.0), output)
         theta = math.radians(-95.0)
         state.pos.east = join._standby_center_e + 200.0 * math.cos(theta)
         state.pos.north = join._standby_center_n + 200.0 * math.sin(theta)
         state.v.vPsi = theta + math.pi / 2.0
 
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.1), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.1), output)
 
         assert output.selfCmd is not None
         assert join._entry_point is not None
@@ -2821,20 +2866,20 @@ class RallyJoinPosTests(unittest.TestCase):
         """验证离散步进跨过切出点时仍立即转直线，不因漏过角度窗口多绕一圈。"""
 
         join, state, output = self._make_standby_join_for_transit()
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.0), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.0), output)
 
         before_exit = math.radians(-105.0)
         state.pos.east = join._standby_center_e + 200.0 * math.cos(before_exit)
         state.pos.north = join._standby_center_n + 200.0 * math.sin(before_exit)
         state.v.vPsi = before_exit + math.pi / 2.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.1), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.1), output)
         self.assertEqual(join._transit_phase, "ARC_TO_TANGENT")
 
         after_exit = math.radians(-75.0)
         state.pos.east = join._standby_center_e + 200.0 * math.cos(after_exit)
         state.pos.north = join._standby_center_n + 200.0 * math.sin(after_exit)
         state.v.vPsi = after_exit + math.pi / 2.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.2), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.2), output)
 
         assert output.selfCmd is not None
         assert join._entry_point is not None
@@ -2850,14 +2895,14 @@ class RallyJoinPosTests(unittest.TestCase):
             "src.algorithm.units.algo.pos_calc.rally_join_pos.common_tangent",
             return_value=None,
         ):
-            join.step(_rally_join_input(selfState=state, standby=False, t_now=10.0), output)
+            _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.0), output)
         assert join._entry_point is not None
         entry = (join._entry_point.east, join._entry_point.north)
         self.assertEqual(join._transit_phase, "LINE_TO_RALLY_ENTRY")
         self.assertIsNone(join._local_exit_point)
 
         state.pos.east += 100.0
-        join.step(_rally_join_input(selfState=state, standby=False, t_now=10.1), output)
+        _step_rally_join(join, _rally_join_input(selfState=state, standby=False, t_now=10.1), output)
 
         assert join._entry_point is not None
         self.assertEqual(entry, (join._entry_point.east, join._entry_point.north))
@@ -2866,7 +2911,7 @@ class RallyJoinPosTests(unittest.TestCase):
         """验证 reset 清除公切线和圈数计划，下一轮开始集结时能够重新规划。"""
 
         join, state, output = self._make_standby_join_for_transit()
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=state,
                 standby=False,
@@ -2890,7 +2935,7 @@ class RallyJoinPosTests(unittest.TestCase):
         self.assertIsNone(join._last_local_remaining_angle)
         self.assertEqual(join.remaining_loops, 0)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=state,
                 t_ref=300.0,
@@ -2920,7 +2965,7 @@ class RallyJoinPosTests(unittest.TestCase):
         ))
         output = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_motion(east=-50.0, north=20.0, h=500.0, v_east=20.0, v_psi=0.0),
                 standby=True,
@@ -2939,7 +2984,7 @@ class RallyJoinPosTests(unittest.TestCase):
         self.assertAlmostEqual(output.selfCmd.v.dVPsi, 0.1)
         self.assertAlmostEqual(output.selfCmd.v.vUp, 3.0)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_motion(east=-50.0, north=20.0, h=500.0, v_east=20.0, v_psi=0.0),
                 standby=False,
@@ -2968,7 +3013,7 @@ class RallyJoinPosTests(unittest.TestCase):
                 ))
                 output = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
-                join.step(
+                _step_rally_join(join,
                     _rally_join_input(
                         selfState=_motion(
                             east=-50.0,
@@ -2998,7 +3043,7 @@ class RallyJoinPosTests(unittest.TestCase):
         slot = SlotGeometry()
         slot.init(SlotGeometryInitS("R02", comm_init.formPat, comm_init.formPos))
 
-        slot.step(
+        slot._calculate(
             SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
@@ -3038,7 +3083,7 @@ class RallyJoinPosTests(unittest.TestCase):
         slot = SlotGeometry()
         slot.init(SlotGeometryInitS("R02", comm_init_alt.formPat, comm_init_alt.formPos))
 
-        slot.step(
+        slot._calculate(
             SlotGeometryInputS(
                 selfState=ctx.selfState,
                 leaderState=ctx.leaderState,
@@ -3058,7 +3103,7 @@ class RallyJoinPosTests(unittest.TestCase):
         slot = SlotGeometry()
         out = SlotGeometryOutputS(selfCmd=MotionProfS())
         slot.init(SlotGeometryInitS("R02", comm_init.formPat, comm_init.formPos))
-        slot.step(
+        slot._calculate(
             SlotGeometryInputS(
                 selfState=_motion(),
                 leaderState=_motion(east=100.0, north=200.0, h=500.0, v_east=20.0),
@@ -3085,7 +3130,7 @@ class RallyJoinPosTests(unittest.TestCase):
             mission_heading_rad=0.0,
         ))
         out = RallyJoinPosOutputS(selfCmd=MotionProfS())
-        join.step(_rally_join_input(selfState=_motion(east=2000.0, north=300.0, h=500.0), t_ref_valid=False), out)
+        _step_rally_join(join, _rally_join_input(selfState=_motion(east=2000.0, north=300.0, h=500.0), t_ref_valid=False), out)
 
         entry = join._entry_point  # 白盒检查：切入点应已算出并固定
         self.assertIsNotNone(entry)
@@ -3114,7 +3159,7 @@ class RallyJoinPosTests(unittest.TestCase):
         dt = 0.05
         prev_heading = None
         for _ in range(80000):
-            join.step(_rally_join_input(selfState=state, t_ref=1e9, t_ref_valid=False, t_now=t_now), out)
+            _step_rally_join(join, _rally_join_input(selfState=state, t_ref=1e9, t_ref_valid=False, t_now=t_now), out)
             heading = math.atan2(out.selfCmd.v.vNorth, out.selfCmd.v.vEast)
             if join.state == RALLY_STATE_LOITERING:
                 return abs(math.degrees(math.atan2(math.sin(heading - prev_heading), math.cos(heading - prev_heading))))
@@ -3224,7 +3269,7 @@ class RallyJoinPosTests(unittest.TestCase):
         t_now = 0.0
         dt = 0.1
         for _ in range(20000):
-            join.step(_rally_join_input(selfState=state, t_ref=0.0, t_ref_valid=True, t_now=t_now), out)
+            _step_rally_join(join, _rally_join_input(selfState=state, t_ref=0.0, t_ref_valid=True, t_now=t_now), out)
             if join.state == RALLY_STATE_EXITED:
                 break
             # 简化运动学：假设速度指令被完美跟踪，只推进位置，不引入动力学误差。
@@ -3267,7 +3312,7 @@ class RallyJoinPosTests(unittest.TestCase):
         t_now = 0.0
         dt = 0.1
         for _ in range(20000):
-            join.step(_rally_join_input(selfState=state, t_ref=0.0, t_ref_valid=True, t_now=t_now), out)
+            _step_rally_join(join, _rally_join_input(selfState=state, t_ref=0.0, t_ref_valid=True, t_now=t_now), out)
             if join.state == RALLY_STATE_EXITED:
                 break
             state = _motion(
@@ -3307,7 +3352,7 @@ class RallyJoinPosTests(unittest.TestCase):
         t_now = 0.0
         dt = 0.1
         for _ in range(20000):
-            join.step(_rally_join_input(selfState=state, t_ref_valid=False, t_now=t_now), out)
+            _step_rally_join(join, _rally_join_input(selfState=state, t_ref_valid=False, t_now=t_now), out)
             if join.state == RALLY_STATE_LOITERING:
                 self.assertFalse(join.reached_slot_once,
                     msg="entering LOITERING via a tangent point far from M_i (in true arc-length terms) "
@@ -3344,7 +3389,7 @@ class RallyJoinPosTests(unittest.TestCase):
 
         # 让飞机"实际半径"明显偏离期望值（150m，不是 200m），验证指令仍然对齐期望半径而不是跟着实际半径走。
         # 直接从 FLYING 步进到接近切入点，再手动摆一个偏离期望半径的位置进入 LOITERING 的第一拍。
-        join.step(_rally_join_input(selfState=_motion(east=-2000.0, north=0.0, h=500.0), t_ref_valid=False), out)
+        _step_rally_join(join, _rally_join_input(selfState=_motion(east=-2000.0, north=0.0, h=500.0), t_ref_valid=False), out)
         # 强制切到 LOITERING，模拟飞机当前实际半径为 150m（偏离期望的 200m）而非精确在切入点上。
         join._state = RALLY_STATE_LOITERING
         join._away_from_slot = True
@@ -3352,7 +3397,7 @@ class RallyJoinPosTests(unittest.TestCase):
         actual_radius = 150.0
         pos_e = join._loiter_center_e + actual_radius * math.cos(theta)
         pos_n = join._loiter_center_n + actual_radius * math.sin(theta)
-        join.step(_rally_join_input(selfState=_motion(east=pos_e, north=pos_n, h=500.0), t_ref_valid=False), out)
+        _step_rally_join(join, _rally_join_input(selfState=_motion(east=pos_e, north=pos_n, h=500.0), t_ref_valid=False), out)
 
         cmd_dist_to_center = math.hypot(
             out.selfCmd.pos.east - join._loiter_center_e,
@@ -3378,7 +3423,7 @@ class RallyJoinPosTests(unittest.TestCase):
         ))
         out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         # 起点就是 loose_slot 本身（必然落在盘旋圆上/圆内），验证不抛异常且退化为直飞该点。
-        join.step(_rally_join_input(selfState=_motion(east=10.0, north=20.0, h=500.0), t_ref_valid=False), out)
+        _step_rally_join(join, _rally_join_input(selfState=_motion(east=10.0, north=20.0, h=500.0), t_ref_valid=False), out)
 
         self.assertEqual(join._entry_point.east, 10.0)
         self.assertEqual(join._entry_point.north, 20.0)
@@ -3397,7 +3442,7 @@ class RallyJoinPosTests(unittest.TestCase):
             mission_heading_rad=0.0,
         ))
         output = RallyJoinPosOutputS(selfCmd=MotionProfS())
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_motion(east=10.0, north=20.0, h=500.0, v_east=20.0),
                 t_ref=100.0,
@@ -3413,7 +3458,7 @@ class RallyJoinPosTests(unittest.TestCase):
         self.assertEqual(join.state, RALLY_STATE_LOITERING)
         self.assertFalse(join.reached_slot_once)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, -0.1),
                 t_ref=100.0,
@@ -3436,7 +3481,7 @@ class RallyJoinPosTests(unittest.TestCase):
         output = RallyJoinPosOutputS(selfCmd=MotionProfS())
 
         for index, remaining_angle in enumerate((0.5, 0.2)):
-            join.step(
+            _step_rally_join(join,
                 _rally_join_input(
                     selfState=_rally_circle_state(join, remaining_angle),
                     t_ref=100.0,
@@ -3449,7 +3494,7 @@ class RallyJoinPosTests(unittest.TestCase):
             self.assertEqual(join.state, RALLY_STATE_LOITERING)
             self.assertFalse(join.reached_slot_once)
 
-        join.step(
+        _step_rally_join(join,
             _rally_join_input(
                 selfState=_rally_circle_state(join, -0.05),
                 t_ref=100.0,
@@ -3521,6 +3566,26 @@ class RallyEntityTests(unittest.TestCase):
                 self.assertFalse(hasattr(entity, f"_{process_name}_y"))
         self.assertFalse(leader._task._passive)
         self.assertTrue(follower._task._passive)
+        # 六个流程均在 bind 阶段绑定字段级端口，运行期不再保存完整黑板或搬运端口快照。
+        self.assertIs(leader._inbound._u.inbox, leader._inbox)
+        self.assertIs(leader._inbound._u.clock, leader.cxt.clock)
+        self.assertIs(leader._inbound._y.followerStates, leader.cxt.followerStates)
+        self.assertIs(leader._task._u.cmd, leader.cxt.cmd)
+        self.assertIs(leader._task._y.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._tra_plan._cmd, leader.cxt.cmd)
+        leader_route_plan = next(
+            product for product in leader._tra_plan._registry.values() if hasattr(product, "_u")
+        )
+        self.assertIs(leader_route_plan._u.selfState, leader.cxt.selfState)
+        self.assertIs(leader_route_plan._y.wayLine, leader.cxt.wayLine)
+        self.assertIs(leader._pos_track._command, leader.cxt.posTrackCommand)
+        for tracker in leader._pos_track._registry.values():
+            if hasattr(tracker, "_u"):
+                self.assertIs(tracker._u.selfCmd, leader.cxt.selfCmd)
+                self.assertIs(tracker._y.accCmd, leader.cxt.selfAccCmd)
+        self.assertIs(leader._outbound._u.selfState, leader.cxt.selfState)
+        self.assertIs(leader._outbound._u.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._outbound._y.outbox, leader._outbox)
         leader_route = leader._pos_calc._registry[PosCalcStrategyE.ROUTE_INTERP]
         leader_rally = leader._pos_calc._registry[PosCalcStrategyE.RALLY_JOIN]
         follower_slot = follower._pos_calc._registry[PosCalcStrategyE.SLOT_GEOMETRY]
@@ -3529,9 +3594,17 @@ class RallyEntityTests(unittest.TestCase):
         self.assertIsInstance(leader_rally._u, RallyJoinPosInputS)
         self.assertIsInstance(follower_slot._u, SlotGeometryInputS)
         self.assertIsInstance(follower_rally._u, RallyJoinPosInputS)
-        self.assertIsNot(leader_route._u.selfState, leader.cxt.selfState)
-        self.assertIsNot(leader_rally._u.selfState, leader.cxt.selfState)
-        self.assertIsNot(follower_slot._u.selfState, follower.cxt.selfState)
+        # 位置解算产品在 bind 时只绑定自身需要的字段，不保存完整黑板，也不在 step 中搬运快照。
+        self.assertIs(leader_route._u.selfState, leader.cxt.selfState)
+        self.assertIs(leader_rally._u.selfState, leader.cxt.selfState)
+        self.assertIs(follower_slot._u.selfState, follower.cxt.selfState)
+        self.assertIs(leader_route._y.selfCmd, leader.cxt.selfCmd)
+        self.assertIs(leader_rally._y.status, leader.cxt.posCalcStatus)
+        self.assertIs(follower_slot._y.posTrackCommand, follower.cxt.posTrackCommand)
+        self.assertFalse(hasattr(leader_route, "_cxt"))
+        self.assertFalse(hasattr(leader_rally, "_cxt"))
+        self.assertFalse(hasattr(follower_slot, "_cxt"))
+        self.assertFalse(hasattr(follower_rally, "_cxt"))
 
     def test_follower_reset_does_not_restore_plan_from_empty_inbox(self) -> None:
         """有效计划后复位僚机实体，下一拍空 inbox 不得回灌旧 T_ref 和圈数。"""
@@ -3622,9 +3695,10 @@ class RallyEntityTests(unittest.TestCase):
         plan_payload = plan_message[0].payload
         self.assertTrue(plan_payload["t_ref_valid"])
         self.assertEqual(plan_payload["loop_counts"], {"A01": 3, "A02": 1, "A03": 0, "A04": 0, "A05": 0})
-        self.assertIs(leader._task._bound_output.rallyPlan, leader.cxt.rallyPlan)
-        self.assertIs(leader._outbound._bound_input.context, leader.cxt)
-        self.assertIs(leader._task._bound_input.clock, leader.cxt.clock)
+        self.assertIs(leader._task._y.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._outbound._u.selfState, leader.cxt.selfState)
+        self.assertIs(leader._outbound._u.rallyPlan, leader.cxt.rallyPlan)
+        self.assertIs(leader._task._u.clock, leader.cxt.clock)
         locked_t_ref = plan_payload["t_ref"]
         locked_loop_counts = dict(plan_payload["loop_counts"])
 

@@ -14,7 +14,6 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosTrackDiagS,
     copy_motion,
-    copy_pos_track_diag,
 )
 from src.algorithm.units.algo.formation_math import enu_to_track, track_to_enu
 from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS
@@ -75,7 +74,7 @@ class PidComposeInitS(PosTrackInitS):
 
 @dataclass
 class PidComposeInputS:
-    """组合控制器输入快照。注意：只包含目标和本机运动状态。"""
+    """组合控制器私有输入端口。"""
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     selfState: MotionProfS = field(default_factory=MotionProfS)
@@ -83,7 +82,7 @@ class PidComposeInputS:
 
 @dataclass
 class PidComposeOutputS:
-    """组合控制器输出快照。注意：计算成功后统一提交运行环境。"""
+    """组合控制器私有输出端口。"""
 
     accCmd: AccInEarthS = field(default_factory=AccInEarthS)
     diag: PosTrackDiagS = field(default_factory=PosTrackDiagS)
@@ -102,13 +101,20 @@ class PidCompose(PosTrackBase):
         self._vertical: CtrlBase = Pid()
         self._diag_pos_enabled = (False, False, False)
         self._diag_vel_enabled = (False, False, False)
-        self._runtime: EntityRuntimeS | None = None
         self._u = PidComposeInputS()
         self._y = PidComposeOutputS()
+        self._bound = False
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定实体运行环境。注意：控制计算通过独立快照隔离黑板。"""
-        self._runtime = runtime
+        """绑定控制器所需输入输出字段。"""
+        cxt = runtime.context
+        self._u = PidComposeInputS(selfCmd=cxt.selfCmd, selfState=cxt.selfState)
+        self._y = PidComposeOutputS(
+            accCmd=cxt.selfAccCmd,
+            diag=runtime.posTrackDiag,
+            effectiveCmd=cxt.effectiveCmd,
+        )
+        self._bound = True
 
     def init(self, cfg: PidComposeInitS) -> None:
         """按配置初始化 PidCompose。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -135,20 +141,11 @@ class PidCompose(PosTrackBase):
             _uses_velocity_error(cfg.gainLateral),
         )
 
-    def step(
-        self,
-        u: PidComposeInputS | None = None,
-        y: PidComposeOutputS | None = None,
-    ) -> None:
-        """推进组合控制器。注意：无参模式执行黑板读取、计算和提交事务。"""
-        if u is None and y is None:
-            self._read_context()
-            self._calculate(self._u, self._y)
-            self._write_context()
-            return
-        if u is None or y is None:
-            raise ValueError("PidCompose 输入输出快照必须同时提供")
-        self._calculate(u, y)
+    def step(self) -> None:
+        """推进组合控制器。注意：只使用 bind 阶段绑定的专属端口。"""
+        if not self._bound:
+            raise ValueError("PidCompose 尚未绑定端口")
+        self._calculate(self._u, self._y)
 
     def _calculate(self, u: PidComposeInputS, y: PidComposeOutputS) -> None:
         """根据输入快照计算加速度和诊断。注意：本方法不访问黑板。"""
@@ -239,25 +236,6 @@ class PidCompose(PosTrackBase):
         y.accCmd.accEast = acc_enu[0]
         y.accCmd.accNorth = acc_enu[1]
         y.accCmd.accUp = acc_enu[2]
-
-    def _read_context(self) -> None:
-        """从运行环境生成本拍控制输入和输出基线。"""
-        if self._runtime is None:
-            raise ValueError("PidCompose 尚未绑定运行环境")
-        cxt = self._runtime.context
-        copy_motion(cxt.selfCmd, self._u.selfCmd)
-        copy_motion(cxt.selfState, self._u.selfState)
-        copy_pos_track_diag(self._runtime.posTrackDiag, self._y.diag)
-
-    def _write_context(self) -> None:
-        """把完整控制结果原地提交到实体运行环境。"""
-        assert self._runtime is not None
-        cxt = self._runtime.context
-        cxt.selfAccCmd.accEast = self._y.accCmd.accEast
-        cxt.selfAccCmd.accNorth = self._y.accCmd.accNorth
-        cxt.selfAccCmd.accUp = self._y.accCmd.accUp
-        copy_pos_track_diag(self._y.diag, self._runtime.posTrackDiag)
-        copy_motion(self._y.effectiveCmd, cxt.effectiveCmd)
 
     def reset(self) -> None:
         """复位 PidCompose 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

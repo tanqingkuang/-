@@ -247,6 +247,66 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.step()
         self.assertEqual(cxt.posCalcStatus.remaining_loops, 2)
 
+    def test_all_products_bind_private_ports_without_holding_context(self) -> None:
+        """所有位置解算产品应在 bind 时绑定所需字段，不得在 step 中持有完整黑板。"""
+
+        runtime = _runtime()
+        cxt = runtime.context
+        manager = PosCalcManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                PosCalcStrategyE.ROUTE_INTERP,
+                (PosCalcStrategyE.RALLY_JOIN,),
+                selfInit=FormSelfInitS("A01"),
+                commInit=FormCommInitS(
+                    formPat=["wedge"],
+                    formPos=[[FormPosS("A01", 0.0, 0.0, 0.0)]],
+                ),
+                route=_route(),
+                rally_cfg=RallyTaskInitS(expectedFollowerIds=[]),
+            )
+        )
+
+        noop = manager._registry[PosCalcStrategyE.NOOP]
+        route = manager._registry[PosCalcStrategyE.ROUTE_INTERP]
+        rally = manager._registry[PosCalcStrategyE.RALLY_JOIN]
+        for product in manager._registry.values():
+            self.assertFalse(hasattr(product, "_cxt"))
+            self.assertIs(product._y.selfCmd, cxt.selfCmd)  # type: ignore[attr-defined]
+            self.assertIs(product._y.status, cxt.posCalcStatus)  # type: ignore[attr-defined]
+            self.assertIs(product._y.posTrackCommand, cxt.posTrackCommand)  # type: ignore[attr-defined]
+        self.assertIs(noop._u.selfState, cxt.selfState)  # type: ignore[attr-defined]
+        self.assertIs(route._u.selfState, cxt.selfState)  # type: ignore[attr-defined]
+        self.assertIs(route._u.wayLine, cxt.wayLine)  # type: ignore[attr-defined]
+        self.assertIs(route._u.nextWayLine, cxt.nextWayLine)  # type: ignore[attr-defined]
+        self.assertIs(rally._u.selfState, cxt.selfState)  # type: ignore[attr-defined]
+        self.assertIs(rally._u.cmd, cxt.cmd)  # type: ignore[attr-defined]
+        self.assertIs(rally._u.clock, cxt.clock)  # type: ignore[attr-defined]
+        self.assertIs(rally._u.rallyPlan, cxt.rallyPlan)  # type: ignore[attr-defined]
+
+        follower_runtime = _runtime()
+        follower_cxt = follower_runtime.context
+        follower_manager = PosCalcManager()
+        follower_manager.bind(follower_runtime)
+        follower_manager.init(
+            _entity_cfg(
+                PosCalcStrategyE.SLOT_GEOMETRY,
+                selfInit=FormSelfInitS("A02"),
+                commInit=FormCommInitS(
+                    formPat=["wedge"],
+                    formPos=[[FormPosS("A02", -50.0, 0.0, 50.0)]],
+                ),
+            )
+        )
+        slot = follower_manager._registry[PosCalcStrategyE.SLOT_GEOMETRY]
+        self.assertFalse(hasattr(slot, "_cxt"))
+        self.assertIs(slot._u.selfState, follower_cxt.selfState)  # type: ignore[attr-defined]
+        self.assertIs(slot._u.leaderState, follower_cxt.leaderState)  # type: ignore[attr-defined]
+        self.assertIs(slot._u.leaderCmd, follower_cxt.leaderCmd)  # type: ignore[attr-defined]
+        self.assertIs(slot._u.cmd, follower_cxt.cmd)  # type: ignore[attr-defined]
+        self.assertIs(slot._y.selfCmd, follower_cxt.selfCmd)  # type: ignore[attr-defined]
+
 
 if __name__ == "__main__":
     unittest.main()

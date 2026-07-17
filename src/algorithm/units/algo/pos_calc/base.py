@@ -1,4 +1,4 @@
-"""目标位置计算基础接口。注意：具体策略自行维护输入输出快照。"""
+"""目标位置计算基础接口。注意：具体策略自行维护与黑板字段直接绑定的专属端口。"""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ class PosCalcBase:
     """目标位置计算算法基类。注意：子类只负责生成目标运动剖面，不直接输出加速度。"""
 
     def bind(self, cxt: FormContextS) -> None:
-        """绑定算法黑板。注意：具体策略自行创建专属输入输出快照。"""
+        """绑定算法黑板。注意：具体策略只保存所需字段的输入输出引用。"""
         raise NotImplementedError
 
     def init(self, cfg: PosCalcInitS) -> None:
