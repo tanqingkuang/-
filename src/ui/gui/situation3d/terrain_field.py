@@ -7,7 +7,6 @@ from functools import lru_cache
 import json
 import logging
 import math
-import os
 from pathlib import Path
 import threading
 import time
@@ -990,18 +989,4 @@ def _normalized_resolution(value: int) -> int:
         resolution = int(value)
     except (TypeError, ValueError):
         resolution = DEFAULT_TERRAIN_RESOLUTION
-    resolution = max(_MIN_RESOLUTION, min(_MAX_RESOLUTION, resolution))
-    return min(resolution, _resolution_cap())
-
-
-def _resolution_cap() -> int:
-    """读取环境变量分辨率上限。注意：生成成本随分辨率平方增长(641 约 5s、257 约 0.6s)，
-    测试环境用 SIM3D_TERRAIN_RESOLUTION_CAP 压低上限提速；生产不设该变量则不受影响。"""
-
-    raw = os.environ.get("SIM3D_TERRAIN_RESOLUTION_CAP")
-    if not raw:
-        return _MAX_RESOLUTION
-    try:
-        return max(_MIN_RESOLUTION, int(raw))
-    except ValueError:
-        return _MAX_RESOLUTION
+    return max(_MIN_RESOLUTION, min(_MAX_RESOLUTION, resolution))

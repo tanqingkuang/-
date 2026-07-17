@@ -6,7 +6,6 @@ from collections import deque
 from pathlib import Path
 import json
 import math
-import os
 import struct
 import time
 from types import SimpleNamespace
@@ -44,6 +43,10 @@ from src.ui.gui.view_models import (
 QML_VIEW_PATH = Path(__file__).resolve().parents[2] / "src" / "ui" / "gui" / "situation3d" / "qml" / "Situation3DView.qml"
 TERRAIN_LOADING_GUIDE_PATH = QML_VIEW_PATH.parent / "assets" / "terrain_loading_guide.png"
 TERRAIN_LAYOUT_PATH = Path(__file__).resolve().parents[2] / "configs" / "element" / "terrain_mountain_demo.json"
+# LLT 专用小容量布局:山形语义与 demo 一致,仅 grid_resolution 压到 129。
+# 流程/逻辑用例一律用它注入小容量隔离生成耗时;真实容量语义只由航线净空
+# 专项用例按 641 直接使用 demo 布局验证(数据语义类用例仍读 demo,但显式传小分辨率)。
+LLT_TERRAIN_LAYOUT_PATH = Path(__file__).resolve().parent / "fixtures" / "terrain_mountain_llt.json"
 MOUNTAIN_CONFIG_PATH = Path(__file__).resolve().parents[2] / "configs" / "mountain_demo.json"
 
 
@@ -280,16 +283,16 @@ class Situation3DSceneDataTests(unittest.TestCase):
         zones = scene_data._risk_zones_from_obstacles([enabled, disabled], None)
         self.assertEqual([zone.zone_id for zone in zones], ["启用圆"])
 
-        fallback = scene_data._layout_terrain_payload(str(TERRAIN_LAYOUT_PATH), [])
+        fallback = scene_data._layout_terrain_payload(str(LLT_TERRAIN_LAYOUT_PATH), [])
         assert fallback is not None
         self.assertEqual([zone["id"] for zone in fallback["riskZones"]], ["hazard_peak_west", "hazard_peak_east"])
 
-        all_disabled = scene_data._layout_terrain_payload(str(TERRAIN_LAYOUT_PATH), [disabled])
+        all_disabled = scene_data._layout_terrain_payload(str(LLT_TERRAIN_LAYOUT_PATH), [disabled])
         assert all_disabled is not None
         self.assertEqual(all_disabled["riskZones"], [])
 
         snapshot = self._snapshot()
-        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        snapshot.terrain_display_file = str(LLT_TERRAIN_LAYOUT_PATH)
         obstacle_payload = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
         self.assertEqual(len(obstacle_payload["riskZoneLines"]), 1)
         self.assertEqual(obstacle_payload["riskZoneBuffers"], [])
@@ -306,7 +309,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         enabled = ObstacleView("启用圆", "circle", center_x=100.0, center_y=200.0, radius=80.0)
         snapshot = self._snapshot()
-        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        snapshot.terrain_display_file = str(LLT_TERRAIN_LAYOUT_PATH)
         payload = build_scene_payload(snapshot, [enabled], clearance_m=20.0)
 
         fills = payload["riskZoneFills"]
@@ -441,22 +444,23 @@ class Situation3DSceneDataTests(unittest.TestCase):
         )
 
     def test_payload_uses_layout_terrain_and_risk_zone_models(self) -> None:
-        """验证 terrain_display_file 会进入布局模式，并导出风险区渲染数据(覆盖正式 768 网格)。"""
+        """验证 terrain_display_file 会进入布局模式，并导出风险区渲染数据。
+        容量由布局数据注入:llt 用小容量 fixture,只验证流程逻辑与"分辨率跟随数据"。"""
 
         snapshot = self._snapshot()
-        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
-        # 阻塞预热正式分辨率高度场,使 payload 走确定性的就绪路径。
-        layout_detail_pre = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
-        terrain_field_module.get_terrain_field(TERRAIN_LAYOUT_PATH, resolution=layout_detail_pre["grid_resolution"])
+        snapshot.terrain_display_file = str(LLT_TERRAIN_LAYOUT_PATH)
+        # 阻塞预热布局声明分辨率的高度场,使 payload 走确定性的就绪路径。
+        layout_detail_pre = json.loads(LLT_TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
+        terrain_field_module.get_terrain_field(LLT_TERRAIN_LAYOUT_PATH, resolution=layout_detail_pre["grid_resolution"])
 
         payload = build_scene_payload(snapshot)
         self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
 
         surface = payload["terrain"]["surface"]
         self.assertEqual(surface["mode"], "layout")
-        self.assertEqual(surface["layoutFile"], str(TERRAIN_LAYOUT_PATH.resolve()))
+        self.assertEqual(surface["layoutFile"], str(LLT_TERRAIN_LAYOUT_PATH.resolve()))
         # 分辨率应跟随布局文件 detail.grid_resolution,而不是模块默认值。
-        layout_detail = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
+        layout_detail = json.loads(LLT_TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
         self.assertEqual(surface["resolution"], layout_detail["grid_resolution"])
         self.assertEqual(payload["counts"]["riskZones"], 2)
         self.assertEqual(len(payload["riskZones"]), 2)
@@ -572,10 +576,8 @@ class Situation3DSceneDataTests(unittest.TestCase):
         clearance = float(layout["flight"]["clearance_m"])
         route = layout["flight"]["original_route_uv"]
         corridor = [point for point in route if point[0] <= 14.2] + [[14.2, 0.0]]
-        # 航线净空是安全语义的末端防线:摘除 conftest 的分辨率上限,按真实 641 生成。
-        with patch.dict(os.environ):
-            os.environ.pop("SIM3D_TERRAIN_RESOLUTION_CAP", None)
-            field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=641)
+        # 航线净空是安全语义的末端防线:唯一保留真实容量(641)+真实布局数据的用例。
+        field = generate_terrain_field_from_file(TERRAIN_LAYOUT_PATH, resolution=641)
         worst = 0.0
         for (u1, v1), (u2, v2) in zip(corridor, corridor[1:]):
             for step in range(300):
@@ -586,13 +588,14 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertLessEqual(worst, cruise - clearance)
 
     def test_terrain_field_cache_is_shared_and_generates_once(self) -> None:
-        """验证正式 build_scene_payload 链路与 TerrainGeometry 共享缓存,768 场只生成一次。"""
+        """验证正式 build_scene_payload 链路与 TerrainGeometry 共享缓存,同一场只生成一次。
+        容量由小容量 fixture 注入,缓存共享逻辑与分辨率数值无关。"""
 
         self._reset_terrain_caches()
-        layout_detail = json.loads(TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
+        layout_detail = json.loads(LLT_TERRAIN_LAYOUT_PATH.read_text(encoding="utf-8"))["detail"]
         resolution = int(layout_detail["grid_resolution"])
         snapshot = self._snapshot()
-        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        snapshot.terrain_display_file = str(LLT_TERRAIN_LAYOUT_PATH)
         with patch.object(
             terrain_field_module,
             "generate_terrain_field_from_file",
@@ -607,7 +610,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
             self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
             geometry = TerrainGeometry()
             geometry.resolutionValue = resolution
-            geometry.layoutFile = str(TERRAIN_LAYOUT_PATH)
+            geometry.layoutFile = str(LLT_TERRAIN_LAYOUT_PATH)
             self.assertGreater(geometry.boundsMax().y(), 2000.0)
         self.assertEqual(spy.call_count, 1)
 
@@ -752,7 +755,7 @@ class Situation3DSceneDataTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         self._reset_terrain_caches()
         snapshot = self._snapshot()
-        snapshot.terrain_display_file = str(TERRAIN_LAYOUT_PATH)
+        snapshot.terrain_display_file = str(LLT_TERRAIN_LAYOUT_PATH)
         window = Situation3DWindow()
         # 关键:只调用一次 set_snapshot,模拟 READY 态没有 100ms tick 的场景。
         window.set_snapshot(snapshot)
