@@ -1783,6 +1783,25 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertEqual(geometry.resolutionValue, 768)
         self.assertEqual(geometry.layoutRevision, "revision:0")
 
+    def test_terrain_geometry_configures_placeholder_with_one_rebuild(self) -> None:
+        """占位地形的布局清除与尺寸三元组必须原子提交,避免 QML 逐属性触发四次重建。"""
+
+        geometry = TerrainGeometry()
+        geometry.configureLayout("terrain.json", 768, "revision:0")
+        with patch.object(geometry, "_rebuild") as rebuild:
+            geometry.configurePlaceholder(5200.0, 4100.0, 320.0)
+
+        self.assertEqual(rebuild.call_count, 1)
+        self.assertEqual(geometry.layoutFile, "")
+        self.assertEqual(geometry.widthValue, 5200.0)
+        self.assertEqual(geometry.depthValue, 4100.0)
+        self.assertEqual(geometry.amplitudeValue, 320.0)
+
+        # 同参数重复提交必须整体短路,RUNNING 态每帧重推同一 payload 不得反复重建。
+        with patch.object(geometry, "_rebuild") as rebuild_again:
+            geometry.configurePlaceholder(5200.0, 4100.0, 320.0)
+        rebuild_again.assert_not_called()
+
     def test_layout_geometry_uses_display_relief_and_complete_tangent_basis(self) -> None:
         """正式地形网格应消费显示高度，并提供法线贴图所需的正交切线基。"""
 

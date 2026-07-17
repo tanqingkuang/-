@@ -237,6 +237,37 @@ class _TerrainGeometryBase(QQuick3DGeometry):
         if revision_changed:
             self.layoutRevisionChanged.emit()
 
+    @Slot(float, float, float)
+    def configurePlaceholder(self, width: float, depth: float, amplitude: float) -> None:
+        """原子切换到占位地形并更新尺寸参数。注意：与 configureLayout 同一模式,
+        QML 逐属性赋值会触发最多 4 次全量重建,这里全部落位后只重建一次。"""
+
+        # 规范化规则与三个属性 setter 完全一致,保证新旧入口行为等价。
+        normalized_width = self._positive(width, self._width_value, 400.0)
+        normalized_depth = self._positive(depth, self._depth_value, 300.0)
+        normalized_amplitude = self._positive(amplitude, self._amplitude_value, 30.0)
+        file_changed = self._layout_file_value != ""
+        width_changed = not math.isclose(normalized_width, self._width_value, rel_tol=1e-6)
+        depth_changed = not math.isclose(normalized_depth, self._depth_value, rel_tol=1e-6)
+        amplitude_changed = not math.isclose(normalized_amplitude, self._amplitude_value, rel_tol=1e-6)
+        if not (file_changed or width_changed or depth_changed or amplitude_changed):
+            return
+
+        # 占位地形由"无布局 + 尺寸三元组"唯一决定;全部落位后再重建,禁止中间态浪费生成。
+        self._layout_file_value = ""
+        self._width_value = normalized_width
+        self._depth_value = normalized_depth
+        self._amplitude_value = normalized_amplitude
+        self._rebuild()
+        if file_changed:
+            self.layoutFileChanged.emit()
+        if width_changed:
+            self.widthValueChanged.emit()
+        if depth_changed:
+            self.depthValueChanged.emit()
+        if amplitude_changed:
+            self.amplitudeValueChanged.emit()
+
     @Property(float, notify=generationTimeMsChanged)
     def generationTimeMs(self) -> float:
         """返回最近一次布局高度场生成耗时，单位毫秒。"""
