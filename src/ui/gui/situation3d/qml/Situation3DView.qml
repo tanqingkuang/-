@@ -619,10 +619,8 @@ Item {
             } else {
                 cancelTerrainLoading()
                 terrainSurfaceModel.visible = true
-                terrainGeometry.layoutFile = ""
-                terrainGeometry.widthValue = surface.width
-                terrainGeometry.depthValue = surface.depth
-                terrainGeometry.amplitudeValue = surface.height
+                // 原子提交占位地形参数:逐属性赋值会触发最多 4 次全量重建。
+                terrainGeometry.configurePlaceholder(surface.width, surface.depth, surface.height)
             }
             if (staticChanged) {
                 // 障碍只改变地形顶点色，不再创建遮挡飞机和尾迹的红色柱体或方盒。
