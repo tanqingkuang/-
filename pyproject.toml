@@ -112,6 +112,8 @@ ignore_errors = true
 
 [tool.coverage.run]
 # 覆盖率只统计 LLT（白盒）；ST 是黑盒验收，刻意不计入，避免稀释 LLT 的覆盖信号。
+# Python 3.12+ 使用 sys.monitoring 内核，显著降低本地与 CI 的行覆盖率插桩开销。
+core = "sysmon"
 source = ["src"]
 omit = ["src/main.py"]
 

@@ -70,6 +70,7 @@ class ProjectMetadataTests(unittest.TestCase):
         self.assertEqual(self.config["build-system"]["build-backend"], "setuptools.build_meta")
         self.assertEqual(self.config["tool"]["setuptools"]["packages"]["find"]["include"], ["src*"])
         self.assertEqual(self.config["tool"]["pytest"]["ini_options"]["testpaths"], ["tests/llt"])
+        self.assertEqual(self.config["tool"]["coverage"]["run"]["core"], "sysmon")
 
     def test_automation_installs_named_dependency_groups(self) -> None:
         """CI、开发入口和发布入口应直接使用 pyproject 中的依赖分组。"""
