@@ -75,6 +75,8 @@ class EntityProfileS:
 
     def __post_init__(self) -> None:
         """校验变化点并展开完整不可变路由表。"""
+        # state_sequence 是路由表的唯一合法键空间，先建立索引才能校验变化点顺序。
+        # 使用显式顺序而非枚举数值排序，是因为阶段和子阶段并非笛卡尔积。
         state_sequence = self.state_sequence
         if not state_sequence:
             raise ValueError("EntityProfile.state_sequence 不得为空")
@@ -89,6 +91,9 @@ class EntityProfileS:
         if self.route_changes[0].state != state_sequence[0]:
             raise ValueError("EntityProfile 第一个合法状态必须配置策略变化点")
 
+        # 变化点只描述策略发生变化的位置，未变化状态由前项继承。
+        # 严格递增保证展开结果与作者阅读配置时的先后认知一致。
+        # 连续写入相同策略没有信息量，通常意味着遗漏了真正的变化状态。
         changes: dict[EntityStateT, EntityStrategiesS] = {}
         previous_index = -1
         previous_strategies: EntityStrategiesS | None = None
@@ -106,6 +111,9 @@ class EntityProfileS:
             previous_index = current_index
             previous_strategies = change.strategies
 
+        # 单次线性扫描把稀疏变化点展开为完整表，运行期即可只做严格字典查询。
+        # 展开后使用 MappingProxyType 冻结，避免一个实体修改所有实例共享的 Profile。
+        # 第一个状态已强制提供变化点，因此 active_strategies 在首轮后必定有效。
         routes: dict[EntityStateT, EntityStrategiesS] = {}
         active_strategies: EntityStrategiesS | None = None
         for state in state_sequence:
@@ -118,6 +126,10 @@ class EntityProfileS:
 
     def require_strategies(self, stage: FormStageE, step: int) -> EntityStrategiesS:
         """严格查询当前状态策略。注意：表外状态不得回退到默认策略。"""
+        # 边界先拒绝普通整数 stage，避免 IntEnum 的相等规则掩盖协议类型错误。
+        # step 接口允许传输层使用整数，但必须能还原为当前仍受支持的 RallyPhaseE。
+        # 状态组合合法性最终由展开表判定，不能仅凭两个枚举分别合法就接受。
+        # 查询失败显式报错，使状态机与 Profile 漂移在首拍暴露而非静默选错产品。
         if not isinstance(stage, FormStageE):
             raise ValueError(f"EntityProfile stage 非法: {stage!r}")
         if not isinstance(step, int) or isinstance(step, bool):

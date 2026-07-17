@@ -75,6 +75,11 @@ class PosCalcManager:
         }
         if not entity_cfg.rally_enabled:
             # 直接 HOLD 不会进入 Profile 中的集结状态，不创建或校验集结专用产品。
+            # Profile 描述身份的完整能力上限，实例开关描述本次任务实际启用的子集。
+            # 保留同一 Profile 可让普通 leader/wingman 与集结角色共享实体工厂。
+            # Rally 任务在禁用时只会输出 NONE/HOLD，因此运行期不会请求被移除的产品。
+            # 在建造前剔除尤为重要，否则未使用产品仍会校验盘旋半径和速度范围。
+            # 其他产品仍严格来自完整表，不能在这里补充任何隐式默认策略。
             required.discard(PosCalcStrategyE.RALLY_JOIN)
         self._registry = {
             strategy: self._create_strategy(strategy, entity_cfg, profile.identity)
