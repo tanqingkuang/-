@@ -6,16 +6,18 @@ from typing import TYPE_CHECKING
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
+    FormStageE,
     PosTrackDiagS,
+    RallyPhaseE,
     copy_motion,
     copy_pos_track_diag,
 )
 from src.algorithm.entity.types import (
     EntityOutputS,
-    EntityProcessSpecS,
-    EntityProcessTableS,
     EntityProfileE,
     EntityProfileS,
+    EntityRouteChangeS,
+    EntityStrategiesS,
 )
 from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
 from src.algorithm.units.algo.pos_track import PosTrackStrategyE
@@ -25,19 +27,47 @@ if TYPE_CHECKING:
     from src.algorithm.entity.base import EntityBase
 
 
+RALLY_STATE_SEQUENCE = (
+    (FormStageE.NONE, RallyPhaseE.JOINING),
+    (FormStageE.STANDBY, RallyPhaseE.JOINING),
+    (FormStageE.RALLY, RallyPhaseE.JOINING),
+    (FormStageE.RALLY, RallyPhaseE.CATCHUP),
+    (FormStageE.RALLY, RallyPhaseE.LOOSE),
+    (FormStageE.RALLY, RallyPhaseE.COMPRESS),
+    (FormStageE.HOLD, RallyPhaseE.JOINING),
+)
+"""集结 Entity 的合法状态及变化点继承顺序。"""
+RALLY_STATE_SET = frozenset(RALLY_STATE_SEQUENCE)
+"""集结 Entity 合法状态集合。注意：供入站消息提交前校验。"""
+
+
 RALLY_LEADER_PROFILE = EntityProfileS(
     identity=EntityProfileE.RALLY_LEADER,
-    processes=EntityProcessTableS(
-        tra_plan=EntityProcessSpecS(
-            default_strategy=TraPlanStrategyE.LEADER_ROUTE,
-            strategies=(TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE),
+    state_sequence=RALLY_STATE_SEQUENCE,
+    route_changes=(
+        EntityRouteChangeS(
+            state=(FormStageE.NONE, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.NOOP,
+                pos_track=PosTrackStrategyE.NOOP,
+            ),
         ),
-        pos_calc=EntityProcessSpecS(
-            default_strategy=PosCalcStrategyE.ROUTE_INTERP,
-            strategies=(PosCalcStrategyE.RALLY_JOIN,),
+        EntityRouteChangeS(
+            state=(FormStageE.STANDBY, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.RALLY_JOIN,
+                pos_track=PosTrackStrategyE.PID_SPEED,
+            ),
         ),
-        pos_track=EntityProcessSpecS(
-            strategies=(PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED),
+        EntityRouteChangeS(
+            state=(FormStageE.RALLY, RallyPhaseE.CATCHUP),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.LEADER_ROUTE,
+                pos_calc=PosCalcStrategyE.ROUTE_INTERP,
+                pos_track=PosTrackStrategyE.PID_SPEED,
+            ),
         ),
     ),
 )
@@ -46,20 +76,30 @@ RALLY_LEADER_PROFILE = EntityProfileS(
 
 RALLY_FOLLOWER_PROFILE = EntityProfileS(
     identity=EntityProfileE.RALLY_FOLLOWER,
-    processes=EntityProcessTableS(
-        tra_plan=EntityProcessSpecS(
-            default_strategy=TraPlanStrategyE.NOOP,
-            strategies=(TraPlanStrategyE.NOOP,),
+    state_sequence=RALLY_STATE_SEQUENCE,
+    route_changes=(
+        EntityRouteChangeS(
+            state=(FormStageE.NONE, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.NOOP,
+                pos_track=PosTrackStrategyE.NOOP,
+            ),
         ),
-        pos_calc=EntityProcessSpecS(
-            default_strategy=PosCalcStrategyE.SLOT_GEOMETRY,
-            strategies=(PosCalcStrategyE.RALLY_JOIN,),
+        EntityRouteChangeS(
+            state=(FormStageE.STANDBY, RallyPhaseE.JOINING),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.RALLY_JOIN,
+                pos_track=PosTrackStrategyE.PID_SPEED,
+            ),
         ),
-        pos_track=EntityProcessSpecS(
-            strategies=(
-                PosTrackStrategyE.NOOP,
-                PosTrackStrategyE.PID_SPEED,
-                PosTrackStrategyE.PID_POSITION,
+        EntityRouteChangeS(
+            state=(FormStageE.RALLY, RallyPhaseE.CATCHUP),
+            strategies=EntityStrategiesS(
+                tra_plan=TraPlanStrategyE.NOOP,
+                pos_calc=PosCalcStrategyE.SLOT_GEOMETRY,
+                pos_track=PosTrackStrategyE.PID_POSITION,
             ),
         ),
     ),

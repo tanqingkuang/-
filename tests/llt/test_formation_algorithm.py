@@ -1312,7 +1312,7 @@ class ProcessUnitTests(unittest.TestCase):
         """验证长机广播按拓扑生成多播目标，僚机收消息解析长机状态和编队指令。"""
 
         ctx = FormContextS()
-        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0, step=2)
+        ctx.cmd = FormSnapshotS(stage=FormStageE.HOLD, pattern=0, step=0)
         ctx.selfState = _motion(east=1.0, north=2.0, h=3.0, v_east=4.0, v_north=5.0)
         outbound = RallyLeaderBroadcast()
         outbound.init(

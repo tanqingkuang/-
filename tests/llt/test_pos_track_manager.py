@@ -6,16 +6,22 @@ import unittest
 
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
+    FormStageE,
     MotionProfS,
     PosInEarthS,
     PosTrackCommandE,
+    RallyPhaseE,
     VdInEarthS,
 )
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityManagerInitS,
-    EntityProcessSpecS,
+    EntityProfileS,
     EntityRuntimeS,
+)
+from src.algorithm.entity.leader_follower_rally import (
+    RALLY_FOLLOWER_PROFILE,
+    RALLY_LEADER_PROFILE,
 )
 from src.algorithm.units.algo.pos_track import (
     PosTrackManager,
@@ -39,88 +45,75 @@ def _runtime(command: PosTrackCommandE) -> EntityRuntimeS:
     return runtime
 
 
-def _entity_cfg(strategies: tuple[object, ...]) -> EntityManagerInitS:
-    """构造仅配置位置跟踪流程的实体初始化参数。"""
+def _entity_cfg(profile: EntityProfileS = RALLY_LEADER_PROFILE) -> EntityManagerInitS:
+    """构造由完整 Profile 驱动的位置跟踪初始化参数。"""
 
     return EntityManagerInitS(
         entity=EntityInitS(),
-        process=EntityProcessSpecS(strategies=strategies),
+        profile=profile,
     )
 
 
 class PosTrackManagerTests(unittest.TestCase):
     """验证显式配置、固定映射和缓存产品。"""
 
-    def test_init_rejects_incomplete_strategy_table(self) -> None:
-        """空表、重复策略和缺少 NOOP 均应在初始化期失败。"""
+    def test_init_creates_only_products_used_by_profile_table(self) -> None:
+        """长机与僚机产品集合应分别从完整表的 pos_track 列去重得到。"""
 
-        cases = (
-            (_entity_cfg(()), "不得为空"),
-            (
-                _entity_cfg((PosTrackStrategyE.NOOP, PosTrackStrategyE.NOOP)),
-                "不得包含重复策略",
-            ),
-            (
-                _entity_cfg((PosTrackStrategyE.PID_SPEED,)),
-                "必须显式包含 NOOP",
-            ),
+        leader = PosTrackManager()
+        follower = PosTrackManager()
+        leader.bind(_runtime(PosTrackCommandE.NOOP))
+        follower.bind(_runtime(PosTrackCommandE.NOOP))
+        leader.init(_entity_cfg())
+        follower.init(_entity_cfg(RALLY_FOLLOWER_PROFILE))
+
+        self.assertEqual(
+            set(leader._registry),
+            {PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED},
         )
-        for cfg, message in cases:
-            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
-                PosTrackManager().init(cfg)
+        self.assertEqual(
+            set(follower._registry),
+            {
+                PosTrackStrategyE.NOOP,
+                PosTrackStrategyE.PID_SPEED,
+                PosTrackStrategyE.PID_POSITION,
+            },
+        )
 
-    def test_command_selects_cached_one_to_one_product(self) -> None:
-        """运行期命令应选择固定策略，且切换前后不重建有状态产品。"""
+    def test_stage_step_selects_cached_product_instead_of_pos_calc_command(self) -> None:
+        """运行期应查完整表，不能继续按 PosCalc 控制命令选择产品。"""
 
         manager = PosTrackManager()
-        runtime = _runtime(PosTrackCommandE.SPEED_TRACK)
+        runtime = _runtime(PosTrackCommandE.POSITION_TRACK)
+        runtime.context.cmd.stage = FormStageE.STANDBY
+        runtime.context.cmd.step = RallyPhaseE.JOINING
         manager.bind(runtime)
-        manager.init(
-            _entity_cfg(
-                (
-                    PosTrackStrategyE.NOOP,
-                    PosTrackStrategyE.PID_SPEED,
-                    PosTrackStrategyE.PID_POSITION,
-                ),
-            )
-        )
+        manager.init(_entity_cfg())
         product_ids = {key: id(value) for key, value in manager._registry.items()}
 
         manager.step()
         speed_acc_east = runtime.context.selfAccCmd.accEast
-        runtime.context.posTrackCommand.mode = PosTrackCommandE.POSITION_TRACK
+        runtime.context.cmd.stage = FormStageE.NONE
         manager.step()
 
         self.assertAlmostEqual(speed_acc_east, 0.0)
-        self.assertGreater(runtime.context.selfAccCmd.accEast, 0.0)
+        self.assertEqual(runtime.context.selfAccCmd, AccInEarthS())
         self.assertEqual(
             {key: id(value) for key, value in manager._registry.items()},
             product_ids,
         )
 
-    def test_rejects_command_whose_product_was_not_configured(self) -> None:
-        """命令对应产品未装配时应明确失败，不允许隐式创建。"""
+    def test_unconfigured_stage_step_fails_without_command_fallback(self) -> None:
+        """运行期遇到表外状态必须失败，不能退回 PosCalc 控制命令。"""
 
         manager = PosTrackManager()
-        runtime = _runtime(PosTrackCommandE.POSITION_TRACK)
+        runtime = _runtime(PosTrackCommandE.SPEED_TRACK)
+        runtime.context.cmd.stage = FormStageE.RECONFIG
+        runtime.context.cmd.step = RallyPhaseE.JOINING
         manager.bind(runtime)
-        manager.init(
-            _entity_cfg((PosTrackStrategyE.NOOP, PosTrackStrategyE.PID_SPEED))
-        )
+        manager.init(_entity_cfg())
 
-        with self.assertRaisesRegex(ValueError, "PID_POSITION"):
-            manager.step()
-
-    def test_rejects_plain_integer_command(self) -> None:
-        """运行期命令必须使用语义枚举，普通整数不得绕过接口契约。"""
-
-        manager = PosTrackManager()
-        runtime = _runtime(PosTrackCommandE.NOOP)
-        manager.bind(runtime)
-        manager.init(_entity_cfg((PosTrackStrategyE.NOOP,)))
-        runtime.context.posTrackCommand.mode = 0  # type: ignore[assignment]
-
-        with self.assertRaisesRegex(ValueError, "PosTrackCommandE"):
+        with self.assertRaisesRegex(ValueError, "未配置"):
             manager.step()
 
     def test_noop_clears_control_output(self) -> None:
@@ -128,8 +121,9 @@ class PosTrackManagerTests(unittest.TestCase):
 
         manager = PosTrackManager()
         runtime = _runtime(PosTrackCommandE.NOOP)
+        runtime.context.cmd.stage = FormStageE.NONE
         manager.bind(runtime)
-        manager.init(_entity_cfg((PosTrackStrategyE.NOOP,)))
+        manager.init(_entity_cfg())
         runtime.context.selfAccCmd.accEast = 3.0
         runtime.posTrackDiag.cmd_pos_east_m = 8.0
 

@@ -61,9 +61,12 @@ class RallyLeaderEntity(EntityBase):
                     loiter_speed_min_mps=loiter_min,
                     loiter_speed_max_mps=loiter_max,
                 ),
-                "tra_plan": EntityManagerInitS(cfg, self.profile.processes.tra_plan),
-                "pos_calc": EntityManagerInitS(cfg, self.profile.processes.pos_calc),
-                "pos_track": EntityManagerInitS(cfg, self.profile.processes.pos_track),
+                "tra_plan": EntityManagerInitS(cfg, self.profile),
+                "pos_calc": EntityManagerInitS(
+                    entity=cfg,
+                    profile=self.profile,
+                ),
+                "pos_track": EntityManagerInitS(cfg, self.profile),
                 "outbound": FormationOutboundInitS(
                     selfId=cfg.selfInit.id,
                     netWork=cfg.commInit.netWork,

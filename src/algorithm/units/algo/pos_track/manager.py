@@ -1,4 +1,4 @@
-"""位置跟踪策略管理器。注意：产品只在初始化时创建，运行期由命令选择缓存对象。"""
+"""位置跟踪策略管理器。注意：产品只在初始化时创建，运行期严格查询完整策略表。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import math
 from typing import TYPE_CHECKING, Callable
 
 from src.algorithm.context.leaf_types import (
-    PosTrackCommandE,
     PosTrackStrategyE,
     copy_motion,
     zero_acceleration,
@@ -20,7 +19,13 @@ from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackA
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityRuntimeS, VelCmdLimitS
+    from src.algorithm.entity.types import (
+        EntityInitS,
+        EntityManagerInitS,
+        EntityProfileS,
+        EntityRuntimeS,
+        VelCmdLimitS,
+    )
 
 
 _LATERAL_ROLL_MAX_RAD = math.radians(40.0)  # 执行层滚转角限幅
@@ -28,15 +33,6 @@ _LATERAL_GAMMA_MAX_RAD = math.radians(25.0)  # 大侧偏转弯半径尺度
 _LATERAL_FLOOR_RAD = math.radians(7.0)  # 中心线附近最小拦截角
 _LATERAL_PSI_CMD_MAX_RAD = math.radians(80.0)  # 指令航迹角上限
 _LATERAL_R_MARGIN = 1.1  # 转弯半径裕度
-
-_COMMAND_TO_STRATEGY = {
-    # PosCalc 发布控制语义，PosTrack 只做稳定的一一映射。
-    # 映射表禁止按任务阶段分支，避免控制层反向感知业务状态机。
-    PosTrackCommandE.NOOP: PosTrackStrategyE.NOOP,
-    PosTrackCommandE.SPEED_TRACK: PosTrackStrategyE.PID_SPEED,
-    PosTrackCommandE.POSITION_TRACK: PosTrackStrategyE.PID_POSITION,
-}
-
 
 class _NoopPosTrack(PosTrackBase):
     """空位置跟踪产品。注意：保持旧 NONE 分支只清零加速度的语义。"""
@@ -158,32 +154,27 @@ _BUILDERS: dict[PosTrackStrategyE, _StrategyBuilder] = {
 
 
 class PosTrackManager:
-    """创建、缓存并执行位置跟踪产品。注意：不感知任务阶段和实体角色。"""
+    """创建、缓存并路由位置跟踪产品。注意：实体角色差异只来自 Profile。"""
 
     def __init__(self) -> None:
         """初始化空管理器。注意：必须先调用 init。"""
         self._registry: dict[PosTrackStrategyE, PosTrackBase] = {}
-        self._command = None
+        self._profile: EntityProfileS | None = None
+        self._cmd = None
         self._binding_runtime: EntityRuntimeS | None = None
 
     def bind(self, runtime: EntityRuntimeS) -> None:
-        """绑定控制命令及产品运行环境。"""
-        self._command = runtime.context.posTrackCommand
+        """绑定任务命令及产品运行环境。"""
+        self._cmd = runtime.context.cmd
         self._binding_runtime = runtime
 
     def init(self, cfg: EntityManagerInitS) -> None:
-        """按实体身份证创建全部控制产品。注意：不得隐式补充策略。"""
-        # 实体配置明确声明能力集合，Manager 不按角色猜测缺失产品。
-        # NOOP 是异常/停控路径的系统能力，也必须在配置中显式出现。
-        # 控制产品能力完全来自 Profile，Manager 不根据实体角色补充 PID。
-        # 显式能力表使缺失控制器在初始化期暴露，而不是飞行中途才失败。
-        strategies = tuple(_require_strategy(item) for item in cfg.process.strategies)
-        if not strategies:
-            raise ValueError("processes.pos_track.strategies 不得为空")
-        if len(strategies) != len(set(strategies)):
-            raise ValueError("processes.pos_track.strategies 不得包含重复策略")
-        if PosTrackStrategyE.NOOP not in strategies:
-            raise ValueError("processes.pos_track.strategies 必须显式包含 NOOP")
+        """按完整路由表创建全部位置跟踪产品。"""
+        profile = cfg.profile
+        strategies = {
+            _require_strategy(item.pos_track, "route_table.pos_track")
+            for item in profile.route_table.values()
+        }
         # 每个 PID 产品只构造一次，积分器状态随产品对象跨帧保留。
         self._registry = {strategy: _BUILDERS[strategy](cfg.entity) for strategy in strategies}
         # 建造函数只负责静态增益初始化，黑板绑定统一在产品全部创建后完成。
@@ -193,19 +184,19 @@ class PosTrackManager:
         for strategy in self._registry.values():
             strategy.bind(self._binding_runtime)
         self._binding_runtime = None
+        self._profile = profile
 
     def step(self) -> None:
-        """按控制命令执行缓存产品。注意：命令与策略固定一一对应。"""
-        # command 来自 PosCalc 的统一输出，不允许 Entity 二次改写。
-        # 未配置产品属于装配错误，不能临时回退到另一控制器。
-        # 命令由 PosCalc 在同一拍发布，位置跟踪不得反向读取任务阶段重新判断。
-        # 一一映射保证同一控制语义在所有实体上选择相同类型的控制产品。
-        command = self._command
-        if not isinstance(command.mode, PosTrackCommandE):
-            raise ValueError("位置跟踪命令必须是 PosTrackCommandE")
-        strategy_type = _COMMAND_TO_STRATEGY.get(command.mode)
-        if strategy_type is None:
-            raise ValueError(f"不支持的位置跟踪命令: {command.mode!r}")
+        """严格查询完整表并执行缓存产品。"""
+        if self._cmd is None:
+            raise ValueError("PosTrackManager 尚未绑定命令端口")
+        profile = self._profile
+        if profile is None:
+            raise ValueError("PosTrackManager 尚未初始化")
+        strategy_type = _require_strategy(
+            profile.require_strategies(self._cmd.stage, self._cmd.step).pos_track,
+            "route_table.pos_track",
+        )
         strategy = self._registry.get(strategy_type)
         if strategy is None:
             raise ValueError(f"位置跟踪策略未配置: {strategy_type.name}")
@@ -219,10 +210,10 @@ class PosTrackManager:
             strategy.reset()
 
 
-def _require_strategy(value: object) -> PosTrackStrategyE:
+def _require_strategy(value: object, field_name: str) -> PosTrackStrategyE:
     """校验控制产品策略枚举。注意：禁止普通整数绕过配置语义。"""
     if not isinstance(value, PosTrackStrategyE):
-        raise ValueError("processes.pos_track.strategies 必须是 PosTrackStrategyE")
+        raise ValueError(f"{field_name} 必须是 PosTrackStrategyE")
     if value not in _BUILDERS:
         raise ValueError(f"不支持的位置跟踪策略: {value!r}")
     return value

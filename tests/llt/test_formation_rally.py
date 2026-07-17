@@ -1569,6 +1569,27 @@ class FollowerStatusTests(unittest.TestCase):
 class RallyCommunicationTests(unittest.TestCase):
     """验证集结长机广播扩展和僚机解析。"""
 
+    def test_leader_inbound_rejects_illegal_stage_step_atomically(self) -> None:
+        """长机广播的阶段与子阶段组合非法时应整条丢弃并保留旧快照。"""
+
+        ctx = FormContextS()
+        inbound = RallyLeaderFollower()
+        parsed = RallyLeaderFollowerOutputS(leaderState=ctx.leaderState, cmd=ctx.cmd)
+        baseline = _leader_msg(stage=FormStageE.HOLD, pattern=1, step=RallyPhaseE.JOINING)
+        inbound.step(RallyLeaderFollowerInputS(inbox=[baseline]), parsed)
+        expected = deepcopy((ctx.leaderState, ctx.cmd))
+
+        invalid_states = (
+            (FormStageE.HOLD, RallyPhaseE.COMPRESS),
+            (FormStageE.RALLY, 9),
+            (FormStageE.RECONFIG, RallyPhaseE.JOINING),
+        )
+        for stage, step in invalid_states:
+            with self.subTest(stage=stage, step=step):
+                message = _leader_msg(stage=stage, pattern=2, step=step)
+                inbound.step(RallyLeaderFollowerInputS(inbox=[message]), parsed)
+                self.assertEqual((ctx.leaderState, ctx.cmd), expected)
+
     def test_leader_inbound_rejects_invalid_motion_atomically(self) -> None:
         """有效报文后若新报文的中途运动字段非法，应静默拒绝且保留完整旧快照。"""
 
@@ -1583,7 +1604,7 @@ class RallyCommunicationTests(unittest.TestCase):
         valid = _leader_msg(
             stage=FormStageE.HOLD,
             pattern=1,
-            step=3,
+            step=RallyPhaseE.JOINING,
             leader_state=_motion(east=1.0, north=2.0, h=3.0, v_east=4.0, v_north=5.0),
             t_ref=12.0,
             loop_counts={"R02": 1},
@@ -1622,7 +1643,7 @@ class RallyCommunicationTests(unittest.TestCase):
         valid = _leader_msg(
             stage=FormStageE.HOLD,
             pattern=1,
-            step=3,
+            step=RallyPhaseE.JOINING,
             leader_state=_motion(east=1.0, north=2.0, h=3.0, v_east=4.0),
             t_ref=12.0,
             loop_counts={"R02": 1},
@@ -3528,7 +3549,7 @@ class RallyEntityTests(unittest.TestCase):
         self.assertNotIn("processes", _EntityInitS.__dataclass_fields__)
 
     def test_entities_inherit_fixed_step_and_bind_configured_process_order(self) -> None:
-        """Rally 实体不得覆盖 step，六个流程应按外部配置表锁定到基类执行链。"""
+        """Rally 实体不得覆盖 step，六个流程应按基类固定顺序执行。"""
 
         route = _route((0.0, 0.0, 500.0), (200.0, 0.0, 500.0))
         rally_cfg = _rally_cfg(expected=("R02",))
@@ -3578,7 +3599,7 @@ class RallyEntityTests(unittest.TestCase):
         )
         self.assertIs(leader_route_plan._u.selfState, leader.cxt.selfState)
         self.assertIs(leader_route_plan._y.wayLine, leader.cxt.wayLine)
-        self.assertIs(leader._pos_track._command, leader.cxt.posTrackCommand)
+        self.assertIs(leader._pos_track._cmd, leader.cxt.cmd)
         for tracker in leader._pos_track._registry.values():
             if hasattr(tracker, "_u"):
                 self.assertIs(tracker._u.selfCmd, leader.cxt.selfCmd)

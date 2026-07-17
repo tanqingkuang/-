@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from src.algorithm.context.leaf_types import FormStageE, RallyPhaseE, WayLineS
+from src.algorithm.context.leaf_types import WayLineS
 from src.algorithm.units.process.tra_plan.base import (
     TraPlanBase,
     TraPlanInitS,
@@ -18,7 +18,12 @@ from src.algorithm.units.process.tra_plan.leader_route import (
 from src.algorithm.units.process.tra_plan.noop import Noop
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityRuntimeS
+    from src.algorithm.entity.types import (
+        EntityInitS,
+        EntityManagerInitS,
+        EntityProfileS,
+        EntityRuntimeS,
+    )
 
 
 class TraPlanManager:
@@ -26,8 +31,8 @@ class TraPlanManager:
 
     def __init__(self) -> None:
         """初始化空管理器。注意：必须先调用 init 才能执行 step。"""
-        self._default_strategy: TraPlanStrategyE | None = None
         self._registry: dict[TraPlanStrategyE, TraPlanBase] = {}
+        self._profile: EntityProfileS | None = None
         self._cmd = None
         self._binding_runtime: EntityRuntimeS | None = None
 
@@ -37,29 +42,12 @@ class TraPlanManager:
         self._binding_runtime = runtime
 
     def init(self, cfg: EntityManagerInitS) -> None:
-        """按实体身份证创建全部已声明产品。注意：不得隐式补充策略。"""
-        # 配置表是实例能力的唯一来源，Manager 不根据角色补默认产品。
-        # 枚举必须严格校验，普通整数会掩盖配置生成阶段的类型错误。
-        # 规划产品可能持有航段索引和上一拍投影结果，必须在初始化时一次性创建。
-        # default_strategy 表示常规任务航线能力，strategies 表示本实例全部可用产品。
-        # NOOP 与真实规划器使用同一无参流程接口，主链不需要为其分支。
-        process_spec = cfg.process
-        default_strategy = _require_strategy(process_spec.default_strategy, "tra_plan.default_strategy")
-        strategies = tuple(
-            _require_strategy(strategy, "tra_plan.strategies") for strategy in process_spec.strategies
-        )
-        if not strategies:
-            raise ValueError("processes.tra_plan.strategies 不得为空")
-        if len(strategies) != len(set(strategies)):
-            raise ValueError("processes.tra_plan.strategies 不得包含重复策略")
-        if default_strategy not in strategies:
-            raise ValueError(
-                "processes.tra_plan.default_strategy 必须包含在 processes.tra_plan.strategies 中"
-            )
-        if TraPlanStrategyE.NOOP not in strategies:
-            raise ValueError("processes.tra_plan.strategies 必须显式包含 NOOP")
-
-        self._default_strategy = default_strategy
+        """按完整路由表创建全部轨迹规划产品。"""
+        profile = cfg.profile
+        strategies = {
+            _require_strategy(item.tra_plan, "route_table.tra_plan")
+            for item in profile.route_table.values()
+        }
         # 产品只在初始化阶段创建一次，运行期路由只查表切换引用。
         # LeaderRoute 保存跨帧航段索引，因此绝不能在阶段切换时重新构造。
         # registry 保存产品对象而非类，切换策略不会丢失各自内部状态。
@@ -71,14 +59,19 @@ class TraPlanManager:
         for strategy in self._registry.values():
             strategy.bind(self._binding_runtime)
         self._binding_runtime = None
+        self._profile = profile
 
     def step(self) -> None:
-        """按任务指令选择缓存产品并推进一拍。注意：本方法不创建产品。"""
-        # cmd 是任务单元发布的统一路由指令，Entity 不参与产品选择。
-        # 查表失败说明配置能力与运行期指令不一致，应立即暴露而非降级。
-        # Manager 只选择缓存对象，具体规划器自行读取本机状态和航线黑板。
-        # 切换引用不会清除 LeaderRoute 已积累的航段推进状态。
-        strategy_type = self._select_strategy(self._cmd.stage, self._cmd.step)
+        """严格查询完整表并推进缓存产品。注意：本方法不创建产品。"""
+        if self._cmd is None:
+            raise ValueError("TraPlanManager 尚未绑定命令端口")
+        profile = self._profile
+        if profile is None:
+            raise ValueError("TraPlanManager 尚未初始化")
+        strategy_type = _require_strategy(
+            profile.require_strategies(self._cmd.stage, self._cmd.step).tra_plan,
+            "route_table.tra_plan",
+        )
         strategy = self._registry.get(strategy_type)
         if strategy is None:
             raise ValueError(f"轨迹规划策略未配置: {strategy_type.name}")
@@ -95,18 +88,6 @@ class TraPlanManager:
         # 这是显示适配接口，不参与 step 的策略路由。
         strategy = self._registry.get(TraPlanStrategyE.LEADER_ROUTE)
         return strategy.get_route() if isinstance(strategy, LeaderRoute) else []
-
-    def _select_strategy(self, stage: FormStageE, step: int) -> TraPlanStrategyE:
-        """由任务指令选择策略。注意：任务阶段映射属于 TraPlan 内部语义。"""
-        # NONE/STANDBY/JOINING 都没有任务航段推进语义，统一走 NOOP。
-        # 集结完成后的 CATCHUP/LOOSE/COMPRESS/HOLD 回到配置默认产品。
-        if stage in (FormStageE.NONE, FormStageE.STANDBY):
-            return TraPlanStrategyE.NOOP
-        if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
-            return TraPlanStrategyE.NOOP
-        if self._default_strategy is None:
-            raise ValueError("TraPlanManager 尚未初始化")
-        return self._default_strategy
 
     @staticmethod
     def _create_strategy(strategy_type: TraPlanStrategyE, cfg: EntityInitS) -> TraPlanBase:

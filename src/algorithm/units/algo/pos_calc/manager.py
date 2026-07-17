@@ -7,10 +7,9 @@ from typing import TYPE_CHECKING
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
-    FormStageE,
     PosInEarthS,
-    RallyPhaseE,
 )
+from src.algorithm.entity.types import EntityProfileE
 from src.algorithm.units.algo.pos_calc.base import (
     PosCalcBase,
     PosCalcInitS,
@@ -30,7 +29,13 @@ from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGe
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 
 if TYPE_CHECKING:
-    from src.algorithm.entity.types import EntityInitS, EntityManagerInitS, EntityRuntimeS, VelCmdLimitS
+    from src.algorithm.entity.types import (
+        EntityInitS,
+        EntityManagerInitS,
+        EntityProfileS,
+        EntityRuntimeS,
+        VelCmdLimitS,
+    )
 
 
 _LEADER_L1_DISTANCE_M = 0.0  # 长机航线目标不使用额外 L1 前视距离
@@ -45,10 +50,9 @@ class PosCalcManager:
 
     def __init__(self) -> None:
         """初始化空管理器。注意：产品只在 init 时创建，运行期不重建。"""
-        self._default_strategy = PosCalcStrategyE.NOOP  # 非特殊阶段使用的角色默认产品
-        self._routes: tuple[PosCalcStrategyE, ...] = ()  # 该实体额外启用的阶段能力
         self._registry: dict[PosCalcStrategyE, PosCalcBase] = {}  # 已初始化产品缓存
         self._active_strategy: PosCalcStrategyE | None = None  # 上一拍执行产品，用于边沿复位
+        self._profile: EntityProfileS | None = None  # 完整状态路由表
         self._cmd = None
         self._binding_cxt: FormContextS | None = None
 
@@ -59,41 +63,26 @@ class PosCalcManager:
         self._binding_cxt = runtime.context
 
     def init(self, cfg: EntityManagerInitS) -> None:
-        """按实体身份证建造并缓存策略。注意：运行期不得再次调用。"""
-        # 配置边界只接受枚举，防止普通整数绕过策略语义。
+        """按完整路由表建造并缓存策略。注意：不读取旧流程策略规格。"""
         entity_cfg = cfg.entity
-        process_spec = cfg.process
-        default_strategy = _require_strategy(process_spec.default_strategy, "pos_calc.default_strategy")
-        routes = tuple(_require_strategy(item, "pos_calc.strategies") for item in process_spec.strategies)
-        # 同一能力重复登记通常意味着配置表拼接错误，应在初始化期暴露。
-        if len(routes) != len(set(routes)):
-            raise ValueError("processes.pos_calc.strategies 不得包含重复策略")
-        # 当前阶段路由只定义了 RALLY_JOIN，其他产品只能作为角色默认策略。
-        unsupported_routes = set(routes) - {PosCalcStrategyE.RALLY_JOIN}
-        if unsupported_routes:
-            names = ", ".join(sorted(item.name for item in unsupported_routes))
-            raise ValueError(f"processes.pos_calc.strategies 包含不支持的附加能力: {names}")
-        # NOOP 是系统保底，RALLY_JOIN 是附加阶段能力，均不能充当常规飞行策略。
-        if default_strategy in (PosCalcStrategyE.NOOP, PosCalcStrategyE.RALLY_JOIN):
-            raise ValueError(
-                "processes.pos_calc.default_strategy 只允许 ROUTE_INTERP 或 SLOT_GEOMETRY"
-            )
-
-        self._default_strategy = default_strategy
-        self._routes = routes
-        # 产品只在此处创建一次，运行期路由只切换缓存引用。
-        # NOOP 始终作为系统停控能力创建，不要求 Profile 重复声明。
-        # required 使用集合去重，默认策略与附加能力重合时也只创建一个实例。
-        # 有状态产品的生命周期与 Entity 相同，不能在 step 中临时构造。
-        required = {PosCalcStrategyE.NOOP, default_strategy, *routes}
+        profile = cfg.profile
+        if profile is None:
+            raise ValueError("PosCalcManager 初始化必须提供 EntityProfile")
+        # 实例集合直接从完整表的 pos_calc 列去重，表中未出现的产品不会创建。
+        required = {
+            _require_strategy(strategies.pos_calc, "route_table.pos_calc")
+            for strategies in profile.route_table.values()
+        }
         self._registry = {
-            strategy: self._create_strategy(strategy, entity_cfg) for strategy in required
+            strategy: self._create_strategy(strategy, entity_cfg, profile.identity)
+            for strategy in required
         }
         if self._binding_cxt is not None:
             # 每个产品自行绑定专属输入输出端口，Manager不参与端口构造。
             for strategy in self._registry.values():
                 strategy.bind(self._binding_cxt)
             self._binding_cxt = None
+        self._profile = profile
         self._active_strategy = None
 
     def step(self) -> None:
@@ -101,16 +90,22 @@ class PosCalcManager:
         if self._cmd is None:
             raise ValueError("PosCalcManager 尚未绑定命令端口")
         cmd = self._cmd
-        # cmd 是唯一运行期路由依据，Entity 不参与具体产品判断。
-        # 选择过程只返回枚举，算法输入由产品初始化期绑定的专属端口提供。
-        # registry 缺项属于初始化配置错误，不允许静默退回默认策略。
-        strategy_type = self._select_strategy(cmd.stage, cmd.step)
+        profile = self._profile
+        if profile is None:
+            raise ValueError("PosCalcManager 尚未初始化")
+        # 运行期只做严格表查询，不再判断阶段、不设默认策略或兜底策略。
+        strategy_type = _require_strategy(
+            profile.require_strategies(cmd.stage, cmd.step).pos_calc,
+            "route_table.pos_calc",
+        )
         # 进入停控阶段时只复位一次集结产品，避免每拍清空刚生成的停控输出。
         if strategy_type == PosCalcStrategyE.NOOP and self._active_strategy != PosCalcStrategyE.NOOP:
             rally_join = self._registry.get(PosCalcStrategyE.RALLY_JOIN)
             if rally_join is not None:
                 rally_join.reset()
-        strategy = self._registry[strategy_type]
+        strategy = self._registry.get(strategy_type)
+        if strategy is None:
+            raise ValueError(f"位置解算策略未初始化: {strategy_type.name}")
         # 子策略通过初始化期绑定的专属端口直接读写黑板字段。
         strategy.step()
         self._active_strategy = strategy_type
@@ -122,19 +117,12 @@ class PosCalcManager:
             strategy.reset()
         self._active_strategy = None
 
-    def _select_strategy(self, stage: FormStageE, step: int) -> PosCalcStrategyE:
-        """由任务指令选择策略枚举。注意：集结子状态路由不向 Entity 配置层暴露。"""
-        if stage == FormStageE.NONE:  # NONE 对所有角色强制选择停控产品
-            return PosCalcStrategyE.NOOP
-        if PosCalcStrategyE.RALLY_JOIN in self._routes:
-            # 待命和正式 JOINING 共用同一个有状态集结产品，保证圆几何连续。
-            if stage == FormStageE.STANDBY:
-                return PosCalcStrategyE.RALLY_JOIN
-            if stage == FormStageE.RALLY and step == RallyPhaseE.JOINING:
-                return PosCalcStrategyE.RALLY_JOIN
-        return self._default_strategy
-
-    def _create_strategy(self, strategy_type: PosCalcStrategyE, cfg: EntityInitS) -> PosCalcBase:
+    def _create_strategy(
+        self,
+        strategy_type: PosCalcStrategyE,
+        cfg: EntityInitS,
+        identity: EntityProfileE,
+    ) -> PosCalcBase:
         """创建并初始化单个产品。注意：只允许由 init 调用一次。"""
         if strategy_type == PosCalcStrategyE.NOOP:  # 系统停控产品无需业务配置
             strategy = NoopPosCalc()
@@ -177,7 +165,7 @@ class PosCalcManager:
             return strategy
         if strategy_type == PosCalcStrategyE.RALLY_JOIN:  # 待命到切出的有状态集结产品
             strategy = RallyJoinPos()
-            strategy.init(_rally_join_init(cfg, self._default_strategy))
+            strategy.init(_rally_join_init(cfg, identity))
             return strategy
         raise ValueError(f"不支持的位置解算策略: {strategy_type!r}")
 
@@ -189,8 +177,8 @@ def _require_strategy(value: object, field_name: str) -> PosCalcStrategyE:
     return value
 
 
-def _rally_join_init(cfg: EntityInitS, default_strategy: PosCalcStrategyE) -> RallyJoinPosInitS:
-    """由实体公共配置生成集结位置解算初始化参数。注意：角色差异由默认策略推导。"""
+def _rally_join_init(cfg: EntityInitS, identity: EntityProfileE) -> RallyJoinPosInitS:
+    """由实体公共配置生成集结位置解算参数。注意：角色由静态实体身份决定。"""
     if len(cfg.route) < 2:
         raise ValueError("RALLY_JOIN: route 至少需要两个航点")
     rally_cfg = cfg.rally_cfg
@@ -199,10 +187,10 @@ def _rally_join_init(cfg: EntityInitS, default_strategy: PosCalcStrategyE) -> Ra
 
     route_start = cfg.route[0].pos  # 统一航线起点同时作为长机松散点基准
     heading = route_heading_rad(cfg.route)
-    if default_strategy == PosCalcStrategyE.ROUTE_INTERP:
+    if identity == EntityProfileE.RALLY_LEADER:
         # 长机槽位位于航线起点，只按分层配置覆盖高度。
         loose_slot = PosInEarthS(route_start.east, route_start.north, route_start.h)
-    elif default_strategy == PosCalcStrategyE.SLOT_GEOMETRY:
+    elif identity == EntityProfileE.RALLY_FOLLOWER:
         # 僚机先按目标队形找槽位，再按松散比例旋转到任务航迹系。
         slot = resolve_formation_slot(cfg.commInit, rally_cfg.targetPattern, cfg.selfInit.id)
         if slot is None:
@@ -212,7 +200,7 @@ def _rally_join_init(cfg: EntityInitS, default_strategy: PosCalcStrategyE) -> Ra
             )
         loose_slot = rally_loose_target(route_start, heading, rally_cfg.looseScale, slot)
     else:
-        raise ValueError("RALLY_JOIN 需要 ROUTE_INTERP 或 SLOT_GEOMETRY 作为默认策略")
+        raise ValueError(f"RALLY_JOIN 不支持的实体身份: {identity!r}")
     if cfg.rally_layer_altitude_m is not None:  # JOINING 阶段使用防碰撞分层高度
         loose_slot.h = cfg.rally_layer_altitude_m
 

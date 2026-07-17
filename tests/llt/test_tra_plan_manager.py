@@ -15,8 +15,12 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityManagerInitS,
-    EntityProcessSpecS,
+    EntityProfileS,
     EntityRuntimeS,
+)
+from src.algorithm.entity.leader_follower_rally import (
+    RALLY_FOLLOWER_PROFILE,
+    RALLY_LEADER_PROFILE,
 )
 from src.algorithm.units.process.tra_plan import (
     TraPlanManager,
@@ -34,61 +38,35 @@ def _route() -> list[WayPointInputS]:
 
 
 def _entity_cfg(
-    default_strategy: object,
-    strategies: tuple[object, ...],
+    profile: EntityProfileS = RALLY_LEADER_PROFILE,
     **kwargs: object,
 ) -> EntityManagerInitS:
-    """构造仅配置轨迹规划流程的实体初始化参数。"""
+    """构造由完整 Profile 驱动的轨迹规划初始化参数。"""
 
     return EntityManagerInitS(
         entity=EntityInitS(**kwargs),
-        process=EntityProcessSpecS(
-            default_strategy=default_strategy,
-            strategies=strategies,
-        ),
+        profile=profile,
     )
 
 
 class TraPlanManagerTests(unittest.TestCase):
     """验证显式配置、阶段路由和有状态产品缓存。"""
 
-    def test_init_rejects_incomplete_strategy_table(self) -> None:
-        """验证缺省、重复和默认产品未登记的配置均在初始化期失败。"""
-        cases = (
-            (_entity_cfg(None, ()), "tra_plan.default_strategy 必须是 TraPlanStrategyE"),
-            (
-                _entity_cfg(
-                    TraPlanStrategyE.NOOP,
-                    (TraPlanStrategyE.NOOP, TraPlanStrategyE.NOOP),
-                ),
-                "不得包含重复策略",
-            ),
-            (
-                _entity_cfg(
-                    TraPlanStrategyE.LEADER_ROUTE,
-                    (TraPlanStrategyE.NOOP,),
-                    route=_route(),
-                ),
-                "必须包含在 processes.tra_plan.strategies",
-            ),
+    def test_init_creates_only_products_used_by_profile_table(self) -> None:
+        """长机与僚机产品集合应分别从完整表的 tra_plan 列去重得到。"""
+
+        leader = TraPlanManager()
+        follower = TraPlanManager()
+        leader.bind(EntityRuntimeS())
+        follower.bind(EntityRuntimeS())
+        leader.init(_entity_cfg(route=_route()))
+        follower.init(_entity_cfg(RALLY_FOLLOWER_PROFILE))
+
+        self.assertEqual(
+            set(leader._registry),
+            {TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE},
         )
-
-        for cfg, message in cases:
-            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
-                TraPlanManager().init(cfg)
-
-    def test_init_requires_explicit_noop_product(self) -> None:
-        """验证长机配置不能依赖 Manager 隐式补充 NOOP。"""
-        manager = TraPlanManager()
-
-        with self.assertRaisesRegex(ValueError, "显式包含 NOOP"):
-            manager.init(
-                _entity_cfg(
-                    TraPlanStrategyE.LEADER_ROUTE,
-                    (TraPlanStrategyE.LEADER_ROUTE,),
-                    route=_route(),
-                )
-            )
+        self.assertEqual(set(follower._registry), {TraPlanStrategyE.NOOP})
 
     def test_noop_only_configuration_supports_follower(self) -> None:
         """验证僚机显式只配置 NOOP 时可在任意正常阶段执行。"""
@@ -97,9 +75,7 @@ class TraPlanManagerTests(unittest.TestCase):
         runtime.context.wayLine.idx = 9
         manager = TraPlanManager()
         manager.bind(runtime)
-        manager.init(
-            _entity_cfg(TraPlanStrategyE.NOOP, (TraPlanStrategyE.NOOP,))
-        )
+        manager.init(_entity_cfg(RALLY_FOLLOWER_PROFILE))
 
         manager.step()
 
@@ -112,8 +88,6 @@ class TraPlanManagerTests(unittest.TestCase):
         manager.bind(runtime)
         manager.init(
             _entity_cfg(
-                TraPlanStrategyE.LEADER_ROUTE,
-                (TraPlanStrategyE.NOOP, TraPlanStrategyE.LEADER_ROUTE),
                 route=_route(),
             )
         )
@@ -133,6 +107,7 @@ class TraPlanManagerTests(unittest.TestCase):
         self.assertEqual(cxt.wayLine.idx, 1)
 
         cxt.cmd.stage = FormStageE.STANDBY
+        cxt.cmd.step = RallyPhaseE.JOINING
         manager.step()
         cxt.cmd.stage = FormStageE.HOLD
         cxt.selfState.pos.east = 10.0

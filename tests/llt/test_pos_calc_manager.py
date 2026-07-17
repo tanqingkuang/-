@@ -13,6 +13,7 @@ from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosInEarthS,
     PosTrackCommandE,
+    PosTrackStrategyE,
     RallyPhaseE,
     VdInEarthS,
     WayLineS,
@@ -22,14 +23,23 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityManagerInitS,
-    EntityProcessSpecS,
+    EntityProfileE,
+    EntityProfileS,
+    EntityRouteChangeS,
     EntityRuntimeS,
+    EntityStrategiesS,
+)
+from src.algorithm.entity.leader_follower_rally import (
+    RALLY_FOLLOWER_PROFILE,
+    RALLY_LEADER_PROFILE,
+    RALLY_STATE_SEQUENCE,
 )
 from src.algorithm.units.algo.pos_calc import (
     PosCalcManager,
     PosCalcStrategyE,
 )
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
+from src.algorithm.units.process.tra_plan import TraPlanStrategyE
 
 
 def _motion(east: float = 0.0, north: float = 0.0, h: float = 500.0) -> MotionProfS:
@@ -64,44 +74,150 @@ def _runtime() -> EntityRuntimeS:
 
 
 def _entity_cfg(
-    default_strategy: object,
-    strategies: tuple[object, ...] = (),
+    profile: EntityProfileS = RALLY_LEADER_PROFILE,
     **kwargs: object,
 ) -> EntityManagerInitS:
-    """构造仅配置位置解算流程的实体初始化参数。"""
+    """构造由完整 Profile 驱动的位置解算初始化参数。"""
 
+    kwargs.setdefault("route", _route())
+    kwargs.setdefault("rally_cfg", RallyTaskInitS(expectedFollowerIds=[]))
     return EntityManagerInitS(
         entity=EntityInitS(**kwargs),
-        process=EntityProcessSpecS(
-            default_strategy=default_strategy,
-            strategies=strategies,
-        ),
+        profile=profile,
     )
 
 
 class PosCalcManagerTests(unittest.TestCase):
     """验证 Manager 的配置校验、缓存路由和统一输出。"""
 
-    def test_rejects_duplicate_routes(self) -> None:
-        """相同附加能力重复登记时应明确失败。"""
+    def test_profile_expands_change_points_into_complete_pos_calc_routes(self) -> None:
+        """长机只填写三个变化点，初始化后应覆盖全部七个合法状态。"""
+
+        expected = {
+            (FormStageE.NONE, RallyPhaseE.JOINING): PosCalcStrategyE.NOOP,
+            (FormStageE.STANDBY, RallyPhaseE.JOINING): PosCalcStrategyE.RALLY_JOIN,
+            (FormStageE.RALLY, RallyPhaseE.JOINING): PosCalcStrategyE.RALLY_JOIN,
+            (FormStageE.RALLY, RallyPhaseE.CATCHUP): PosCalcStrategyE.ROUTE_INTERP,
+            (FormStageE.RALLY, RallyPhaseE.LOOSE): PosCalcStrategyE.ROUTE_INTERP,
+            (FormStageE.RALLY, RallyPhaseE.COMPRESS): PosCalcStrategyE.ROUTE_INTERP,
+            (FormStageE.HOLD, RallyPhaseE.JOINING): PosCalcStrategyE.ROUTE_INTERP,
+        }
+
+        self.assertEqual(
+            {
+                state: strategies.pos_calc
+                for state, strategies in RALLY_LEADER_PROFILE.route_table.items()
+            },
+            expected,
+        )
+
+    def test_manager_creates_only_pos_calc_products_used_by_profile_table(self) -> None:
+        """实例集合应从完整路由表按列去重，不能再读取旧策略能力表。"""
 
         manager = PosCalcManager()
-
-        with self.assertRaises(ValueError):
-            manager.init(
-                _entity_cfg(
-                    PosCalcStrategyE.ROUTE_INTERP,
-                    (PosCalcStrategyE.RALLY_JOIN, PosCalcStrategyE.RALLY_JOIN),
-                )
+        manager.init(
+            _entity_cfg(
+                selfInit=FormSelfInitS("A01"),
+                commInit=FormCommInitS(
+                    formPat=["wedge"],
+                    formPos=[[FormPosS("A01", 0.0, 0.0, 0.0)]],
+                ),
             )
+        )
 
-    def test_rejects_noop_as_entity_default(self) -> None:
-        """NOOP 是系统停控策略，不允许配置成实体常规飞行策略。"""
+        self.assertEqual(
+            set(manager._registry),
+            {
+                PosCalcStrategyE.NOOP,
+                PosCalcStrategyE.RALLY_JOIN,
+                PosCalcStrategyE.ROUTE_INTERP,
+            },
+        )
 
+    def test_rally_join_allows_multiple_later_pos_calc_products(self) -> None:
+        """集结产品的角色初始化不应限制完整表只能出现一种普通位置策略。"""
+
+        profile = EntityProfileS(
+            identity=EntityProfileE.RALLY_LEADER,
+            state_sequence=RALLY_STATE_SEQUENCE,
+            route_changes=(
+                EntityRouteChangeS(
+                    (FormStageE.NONE, RallyPhaseE.JOINING),
+                    EntityStrategiesS(
+                        TraPlanStrategyE.NOOP,
+                        PosCalcStrategyE.NOOP,
+                        PosTrackStrategyE.NOOP,
+                    ),
+                ),
+                EntityRouteChangeS(
+                    (FormStageE.STANDBY, RallyPhaseE.JOINING),
+                    EntityStrategiesS(
+                        TraPlanStrategyE.NOOP,
+                        PosCalcStrategyE.RALLY_JOIN,
+                        PosTrackStrategyE.PID_SPEED,
+                    ),
+                ),
+                EntityRouteChangeS(
+                    (FormStageE.RALLY, RallyPhaseE.CATCHUP),
+                    EntityStrategiesS(
+                        TraPlanStrategyE.LEADER_ROUTE,
+                        PosCalcStrategyE.ROUTE_INTERP,
+                        PosTrackStrategyE.PID_SPEED,
+                    ),
+                ),
+                EntityRouteChangeS(
+                    (FormStageE.RALLY, RallyPhaseE.LOOSE),
+                    EntityStrategiesS(
+                        TraPlanStrategyE.NOOP,
+                        PosCalcStrategyE.SLOT_GEOMETRY,
+                        PosTrackStrategyE.PID_POSITION,
+                    ),
+                ),
+            ),
+        )
         manager = PosCalcManager()
 
-        with self.assertRaises(ValueError):
-            manager.init(_entity_cfg(PosCalcStrategyE.NOOP))
+        manager.init(
+            _entity_cfg(
+                profile,
+                selfInit=FormSelfInitS("A01"),
+                commInit=FormCommInitS(
+                    formPat=["wedge"],
+                    formPos=[[FormPosS("A01", 0.0, 0.0, 0.0)]],
+                ),
+            )
+        )
+
+        self.assertEqual(
+            set(manager._registry),
+            {
+                PosCalcStrategyE.NOOP,
+                PosCalcStrategyE.RALLY_JOIN,
+                PosCalcStrategyE.ROUTE_INTERP,
+                PosCalcStrategyE.SLOT_GEOMETRY,
+            },
+        )
+
+    def test_unconfigured_stage_step_fails_without_default_strategy(self) -> None:
+        """运行期遇到表外状态必须直接报错，不能退回角色默认策略。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.RECONFIG
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        manager = PosCalcManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                selfInit=FormSelfInitS("A01"),
+                commInit=FormCommInitS(
+                    formPat=["wedge"],
+                    formPos=[[FormPosS("A01", 0.0, 0.0, 0.0)]],
+                ),
+            )
+        )
+
+        with self.assertRaisesRegex(ValueError, "未配置"):
+            manager.step()
 
     def test_noop_writes_current_position_and_zero_velocity(self) -> None:
         """NONE 阶段应选择系统空策略并完整输出停控目标。"""
@@ -112,7 +228,7 @@ class PosCalcManagerTests(unittest.TestCase):
         cxt.selfState.pos = PosInEarthS(12.0, 34.0, 560.0)
         manager = PosCalcManager()
         manager.bind(runtime)
-        manager.init(_entity_cfg(PosCalcStrategyE.ROUTE_INTERP))
+        manager.init(_entity_cfg())
 
         manager.step()
 
@@ -122,13 +238,11 @@ class PosCalcManagerTests(unittest.TestCase):
         self.assertEqual(cxt.selfCmd.v, VdInEarthS())
 
     def test_rally_route_switches_cached_products_without_rebuilding(self) -> None:
-        """STANDBY/JOINING 应选集结策略，HOLD 应返回同一个默认策略实例。"""
+        """STANDBY/JOINING 应选集结策略，HOLD 应切回同一个航线策略实例。"""
 
         runtime = _runtime()
         cxt = runtime.context
         cfg = _entity_cfg(
-            PosCalcStrategyE.ROUTE_INTERP,
-            (PosCalcStrategyE.RALLY_JOIN,),
             selfInit=FormSelfInitS("A01"),
             commInit=FormCommInitS(
                 formPat=["wedge"],
@@ -165,8 +279,7 @@ class PosCalcManagerTests(unittest.TestCase):
 
         runtime = _runtime()
         cfg = _entity_cfg(
-            PosCalcStrategyE.SLOT_GEOMETRY,
-            (PosCalcStrategyE.RALLY_JOIN,),
+            RALLY_FOLLOWER_PROFILE,
             selfInit=FormSelfInitS("A02"),
             commInit=FormCommInitS(
                 formPat=["wedge"],
@@ -193,8 +306,6 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.bind(runtime)
         manager.init(
             _entity_cfg(
-                PosCalcStrategyE.ROUTE_INTERP,
-                (PosCalcStrategyE.RALLY_JOIN,),
                 selfInit=FormSelfInitS("A01"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],
@@ -226,8 +337,6 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.bind(runtime)
         manager.init(
             _entity_cfg(
-                PosCalcStrategyE.ROUTE_INTERP,
-                (PosCalcStrategyE.RALLY_JOIN,),
                 selfInit=FormSelfInitS("A01"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],
@@ -256,8 +365,6 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.bind(runtime)
         manager.init(
             _entity_cfg(
-                PosCalcStrategyE.ROUTE_INTERP,
-                (PosCalcStrategyE.RALLY_JOIN,),
                 selfInit=FormSelfInitS("A01"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],
@@ -291,7 +398,7 @@ class PosCalcManagerTests(unittest.TestCase):
         follower_manager.bind(follower_runtime)
         follower_manager.init(
             _entity_cfg(
-                PosCalcStrategyE.SLOT_GEOMETRY,
+                RALLY_FOLLOWER_PROFILE,
                 selfInit=FormSelfInitS("A02"),
                 commInit=FormCommInitS(
                     formPat=["wedge"],

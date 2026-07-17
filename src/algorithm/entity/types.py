@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import IntEnum
+from types import MappingProxyType
 
 from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
@@ -13,9 +15,14 @@ from src.algorithm.context.leaf_types import (
     FormSelfInitS,
     MotionProfS,
     PosTrackDiagS,
+    PosCalcStrategyE,
+    PosTrackStrategyE,
+    RallyPhaseE,
     RemoteCmdS,
+    FormStageE,
     WayPointInputS,
 )
+from src.algorithm.units.process.tra_plan.base import TraPlanStrategyE
 from src.common.envelope import MessageEnvelope
 DEFAULT_CONTROL_PERIOD_S = 0.05
 
@@ -30,26 +37,6 @@ class VelCmdLimitS:
     verticalMax: float = float("inf")  # 垂向速度指令上限(爬升速度上限)
 
 
-@dataclass(frozen=True)
-class EntityProcessSpecS:
-    """单个流程策略规格。注意：空规格表示固定流程没有可配置策略。"""
-
-    default_strategy: object | None = None  # 常规阶段默认策略；无策略流程保持 None
-    strategies: tuple[object, ...] = ()  # 本实例允许创建和选择的全部/附加策略
-
-
-@dataclass(frozen=True)
-class EntityProcessTableS:
-    """实体固定流程装配表。注意：字段顺序就是 EntityBase 的标准执行顺序。"""
-
-    inbound: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 收消息流程
-    formation_task: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 任务编排流程
-    tra_plan: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 轨迹规划流程
-    pos_calc: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 位置解算流程
-    pos_track: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 位置跟踪流程
-    outbound: EntityProcessSpecS = field(default_factory=EntityProcessSpecS)  # 发消息流程
-
-
 class EntityProfileE(IntEnum):
     """实体身份枚举。注意：外部只选择身份，不拼装流程策略。"""
 
@@ -57,12 +44,116 @@ class EntityProfileE(IntEnum):
     RALLY_FOLLOWER = 2  # 集结僚机：集结/槽位位置解算和速度/位置控制
 
 
+EntityStateT = tuple[FormStageE, RallyPhaseE]
+
+
+@dataclass(frozen=True)
+class EntityStrategiesS:
+    """单个任务状态下三个可切换流程的完整策略组合。"""
+
+    tra_plan: TraPlanStrategyE  # 轨迹规划产品
+    pos_calc: PosCalcStrategyE  # 位置解算产品
+    pos_track: PosTrackStrategyE  # 位置跟踪产品
+
+
+@dataclass(frozen=True)
+class EntityRouteChangeS:
+    """从指定状态开始生效的策略变化点。注意：后续状态沿用到下一变化点。"""
+
+    state: EntityStateT  # 当前变化点对应的合法状态
+    strategies: EntityStrategiesS  # 从当前状态开始使用的完整策略组合
+
+
 @dataclass(frozen=True)
 class EntityProfileS:
     """实体不可变身份证。注意：同一身份的实例共享配置，不共享运行状态。"""
 
     identity: EntityProfileE  # 工厂选择键
-    processes: EntityProcessTableS  # 本身份固定启用的流程策略
+    state_sequence: tuple[EntityStateT, ...]  # Entity 定义的合法状态顺序
+    route_changes: tuple[EntityRouteChangeS, ...]  # 用户只填写策略变化点
+    route_table: Mapping[EntityStateT, EntityStrategiesS] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        """校验变化点并展开完整不可变路由表。"""
+        state_sequence = self.state_sequence
+        if not state_sequence:
+            raise ValueError("EntityProfile.state_sequence 不得为空")
+        state_indexes: dict[EntityStateT, int] = {}
+        for index, state in enumerate(state_sequence):
+            _validate_entity_state(state, "state_sequence")
+            if state in state_indexes:
+                raise ValueError(f"EntityProfile.state_sequence 状态重复: {state!r}")
+            state_indexes[state] = index
+        if not self.route_changes:
+            raise ValueError("EntityProfile.route_changes 不得为空")
+        if self.route_changes[0].state != state_sequence[0]:
+            raise ValueError("EntityProfile 第一个合法状态必须配置策略变化点")
+
+        changes: dict[EntityStateT, EntityStrategiesS] = {}
+        previous_index = -1
+        previous_strategies: EntityStrategiesS | None = None
+        for change in self.route_changes:
+            _validate_entity_state(change.state, "route_changes")
+            _validate_entity_strategies(change.strategies)
+            if change.state not in state_indexes:
+                raise ValueError(f"EntityProfile 变化点不是合法状态: {change.state!r}")
+            current_index = state_indexes[change.state]
+            if current_index <= previous_index:
+                raise ValueError("EntityProfile.route_changes 必须按合法状态顺序填写且不得重复")
+            if change.strategies == previous_strategies:
+                raise ValueError(f"EntityProfile 存在未改变策略的冗余变化点: {change.state!r}")
+            changes[change.state] = change.strategies
+            previous_index = current_index
+            previous_strategies = change.strategies
+
+        routes: dict[EntityStateT, EntityStrategiesS] = {}
+        active_strategies: EntityStrategiesS | None = None
+        for state in state_sequence:
+            if state in changes:
+                active_strategies = changes[state]
+            if active_strategies is None:
+                raise ValueError(f"EntityProfile 状态缺少可继承策略: {state!r}")
+            routes[state] = active_strategies
+        object.__setattr__(self, "route_table", MappingProxyType(routes))
+
+    def require_strategies(self, stage: FormStageE, step: int) -> EntityStrategiesS:
+        """严格查询当前状态策略。注意：表外状态不得回退到默认策略。"""
+        if not isinstance(stage, FormStageE):
+            raise ValueError(f"EntityProfile stage 非法: {stage!r}")
+        if not isinstance(step, int) or isinstance(step, bool):
+            raise ValueError(f"EntityProfile step 非法: {step!r}")
+        try:
+            phase = RallyPhaseE(step)
+        except ValueError as exc:
+            raise ValueError(f"EntityProfile step 非法: {step!r}") from exc
+        state = (stage, phase)
+        try:
+            return self.route_table[state]
+        except KeyError as exc:
+            raise ValueError(f"EntityProfile 未配置任务状态: {state!r}") from exc
+
+
+def _validate_entity_state(state: object, field_name: str) -> None:
+    """校验状态键必须由两个现有任务枚举组成。"""
+    if (
+        not isinstance(state, tuple)
+        or len(state) != 2
+        or not isinstance(state[0], FormStageE)
+        or not isinstance(state[1], RallyPhaseE)
+    ):
+        raise ValueError(f"EntityProfile.{field_name} 必须使用 (FormStageE, RallyPhaseE)")
+
+
+def _validate_entity_strategies(strategies: EntityStrategiesS) -> None:
+    """校验变化点包含三个模块的完整策略枚举。"""
+    if not isinstance(strategies, EntityStrategiesS):
+        raise ValueError("EntityProfile.strategies 必须是 EntityStrategiesS")
+    if not isinstance(strategies.tra_plan, TraPlanStrategyE):
+        raise ValueError("EntityProfile.tra_plan 必须是 TraPlanStrategyE")
+    if not isinstance(strategies.pos_calc, PosCalcStrategyE):
+        raise ValueError("EntityProfile.pos_calc 必须是 PosCalcStrategyE")
+    if not isinstance(strategies.pos_track, PosTrackStrategyE):
+        raise ValueError("EntityProfile.pos_track 必须是 PosTrackStrategyE")
 
 
 @dataclass
@@ -86,7 +177,7 @@ class EntityManagerInitS:
     """流程 Manager 内部初始化参数。注意：由 Entity 根据自身 Profile 生成。"""
 
     entity: EntityInitS  # 每架飞机不同的运行初始化参数
-    process: EntityProcessSpecS  # 当前流程所属实体身份的固定策略规格
+    profile: EntityProfileS  # 三个可切换 Manager 共用的完整策略表
 
 
 @dataclass

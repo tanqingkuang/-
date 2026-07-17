@@ -9,9 +9,11 @@ from src.algorithm.context.leaf_types import (
     FormSnapshotS,
     FormStageE,
     MotionProfS,
+    RallyPhaseE,
     copy_motion,
     copy_snapshot,
 )
+from src.algorithm.entity.leader_follower_rally import RALLY_STATE_SET
 from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC
 from src.algorithm.units.process.inbound.base import InboundInitS
 from src.common.envelope import MessageEnvelope
@@ -77,7 +79,14 @@ def _parse_cmd_payload(payload: object) -> FormSnapshotS:
     step = payload.get("step", 0)
     if any(not isinstance(value, int) or isinstance(value, bool) for value in (stage, pattern, step)):
         raise ValueError("命令字段必须为非布尔整数")
-    return FormSnapshotS(stage=FormStageE(stage), pattern=pattern, step=step)
+    parsed_stage = FormStageE(stage)
+    try:
+        parsed_step = RallyPhaseE(step)
+    except ValueError as exc:
+        raise ValueError(f"集结子阶段非法: {step!r}") from exc
+    if (parsed_stage, parsed_step) not in RALLY_STATE_SET:
+        raise ValueError(f"集结任务状态组合非法: {(parsed_stage, parsed_step)!r}")
+    return FormSnapshotS(stage=parsed_stage, pattern=pattern, step=parsed_step)
 
 
 def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcast:

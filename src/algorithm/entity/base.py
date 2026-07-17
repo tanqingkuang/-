@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from typing import Any
 
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
     EntityOutputS,
-    EntityProcessTableS,
     EntityProfileS,
     EntityRuntimeS,
 )
@@ -22,8 +21,7 @@ from src.algorithm.units.process.tra_plan import TraPlanManager
 
 
 # 流程类型是 Entity 架构契约，不属于外部 Profile；Profile 只决定各 Manager 的策略产品。
-# 元组顺序必须与 EntityProcessTableS 保持一致，基类据此生成唯一执行链。
-# 这里登记的是流程容器类，而不是某一架飞机最终执行的算法产品。
+# 元组顺序是固定流程链的唯一来源；这里登记流程容器类而不是算法产品。
 # Manager 在 init 中依据 Profile 创建产品，运行期不得替换流程容器。
 # 固定表使 Entity.step 不需要了解长机、僚机、集结或保持等业务身份。
 # 新增算法策略时应修改对应 Manager 和 Profile，不应扩展这条主链。
@@ -102,11 +100,7 @@ class EntityBase:
         init_configs: dict[str, Any],
     ) -> None:
         """遍历固定流程类型创建并初始化实例。注意：具体策略仍由 EntityInitS 配置。"""
-        # 配置表字段是流程槽位的规范来源，顺序漂移必须在初始化期立即失败。
-        expected_names = tuple(table_field.name for table_field in fields(EntityProcessTableS))
-        actual_names = tuple(field_name for field_name, _ in _PROCESS_TYPES)
-        if actual_names != expected_names:
-            raise ValueError(f"固定流程顺序无效: expected={expected_names!r}, actual={actual_names!r}")
+        expected_names = tuple(field_name for field_name, _ in _PROCESS_TYPES)
         if set(init_configs) != set(expected_names):
             missing = ", ".join(sorted(set(expected_names) - set(init_configs)))
             extra = ", ".join(sorted(set(init_configs) - set(expected_names)))
