@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import math
 import json
-import struct
 
 from PySide6.QtCore import QByteArray, Property, Signal, Slot
 from PySide6.QtGui import QVector3D
@@ -367,40 +366,56 @@ class TerrainGeometry(_TerrainGeometryBase):
         # 高度先整表采样（含一圈影子点），法线直接用相邻格点差分，
         # 避免每个顶点重复调用 4 次高度函数拖慢重建。
         heights = self._sample_height_grid(step_x, step_z)
-        min_height = min(min(row[1:-1]) for row in heights[1:-1])
-        max_height = max(max(row[1:-1]) for row in heights[1:-1])
+        core_heights = heights[1:-1, 1:-1]
+        min_height = float(core_heights.min())
+        max_height = float(core_heights.max())
         local_x = np.linspace(-width / 2.0, width / 2.0, _SURFACE_COLUMNS, dtype=np.float32)
         local_z = np.linspace(-depth / 2.0, depth / 2.0, _SURFACE_ROWS, dtype=np.float32)
         x_grid, z_grid = np.meshgrid(local_x, local_z)
         # 占位地形也使用真实障碍范围，保证没有布局文件的普通 3D 场景不退回红色柱体。
         risk_weights = _risk_weight_grid(x_grid, z_grid, self._risk_areas, max(step_x, step_z) * 1.35)
 
-        vertices = bytearray()
-        for row in range(_SURFACE_ROWS):
-            z = -depth / 2.0 + step_z * row
-            v_coord = row / (_SURFACE_ROWS - 1)
-            for column in range(_SURFACE_COLUMNS):
-                x = -width / 2.0 + step_x * column
-                u_coord = column / (_SURFACE_COLUMNS - 1)
-                self._append_vertex(
-                    vertices,
-                    heights,
-                    row,
-                    column,
-                    x,
-                    z,
-                    step_x,
-                    step_z,
-                    u_coord,
-                    v_coord,
-                    float(risk_weights[row, column]),
-                )
+        # 中央差分梯度和顶点高度共用同一张采样表(影子圈占一格),保证光照与几何一致;
+        # 各分量公式与历史逐顶点实现逐项相同,只是从标量循环换成整表运算。
+        gradient_x = (heights[1:-1, 2:] - heights[1:-1, :-2]) / (2.0 * step_x)
+        gradient_z = (heights[2:, 1:-1] - heights[:-2, 1:-1]) / (2.0 * step_z)
+        # 高度场 y=f(x,z) 的上法线是 (-df/dx, 1, -df/dz)。
+        normal_length = np.sqrt(gradient_x * gradient_x + 1.0 + gradient_z * gradient_z)
+        normal_x = -gradient_x / normal_length
+        normal_y = 1.0 / normal_length
+        normal_z = -gradient_z / normal_length
+        tangent_length = np.sqrt(1.0 + gradient_x * gradient_x)
+        tangent_x = 1.0 / tangent_length
+        tangent_y = gradient_x / tangent_length
+        # 占位地形的 v 沿 +z，T×N 形成与纹理坐标一致的副切线。
+        binormal_x = tangent_y * normal_z
+        binormal_y = -tangent_x * normal_z
+        binormal_z = tangent_x * normal_y - tangent_y * normal_x
 
-        core_vertices = np.frombuffer(bytes(vertices), dtype="<f4").reshape(
-            _SURFACE_ROWS,
-            _SURFACE_COLUMNS,
-            _SURFACE_COMPONENTS,
-        )
+        # 顶点平面坐标沿用历史"步长累乘"公式,不换成 linspace,保持与旧网格逐位可比。
+        x_coords = -width / 2.0 + step_x * np.arange(_SURFACE_COLUMNS, dtype=np.float64)
+        z_coords = -depth / 2.0 + step_z * np.arange(_SURFACE_ROWS, dtype=np.float64)
+        u_coords = np.arange(_SURFACE_COLUMNS, dtype=np.float64) / (_SURFACE_COLUMNS - 1)
+        v_coords = np.arange(_SURFACE_ROWS, dtype=np.float64) / (_SURFACE_ROWS - 1)
+        colors = _tint_risk_colors(_height_colors(core_heights, self._amplitude_value), risk_weights)
+
+        core_vertices = np.empty((_SURFACE_ROWS, _SURFACE_COLUMNS, _SURFACE_COMPONENTS), dtype=np.float32)
+        core_vertices[:, :, 0] = x_coords[None, :]
+        core_vertices[:, :, 1] = core_heights
+        core_vertices[:, :, 2] = z_coords[:, None]
+        core_vertices[:, :, 3] = normal_x
+        core_vertices[:, :, 4] = normal_y
+        core_vertices[:, :, 5] = normal_z
+        core_vertices[:, :, 6] = u_coords[None, :]
+        core_vertices[:, :, 7] = v_coords[:, None]
+        core_vertices[:, :, 8] = tangent_x
+        core_vertices[:, :, 9] = tangent_y
+        core_vertices[:, :, 10] = 0.0
+        core_vertices[:, :, 11] = binormal_x
+        core_vertices[:, :, 12] = binormal_y
+        core_vertices[:, :, 13] = binormal_z
+        core_vertices[:, :, 14:17] = colors
+        core_vertices[:, :, 17] = 1.0
         surface_vertices = _extend_surface_grid(core_vertices)
         indices = _surface_grid_indices(surface_vertices)
 
@@ -561,77 +576,16 @@ class TerrainGeometry(_TerrainGeometryBase):
         self.generationTimeMsChanged.emit()
         self.update()
 
-    def _sample_height_grid(self, step_x: float, step_z: float) -> list[list[float]]:
+    def _sample_height_grid(self, step_x: float, step_z: float) -> np.ndarray:
         """整表采样高度场。注意：四周多采一圈影子点供边缘法线差分。"""
 
         width = self._width_value
         depth = self._depth_value
-        heights: list[list[float]] = []
-        for row in range(-1, _SURFACE_ROWS + 1):
-            z = -depth / 2.0 + step_z * row
-            line = [self._height_at(-width / 2.0 + step_x * column, z) for column in range(-1, _SURFACE_COLUMNS + 1)]
-            heights.append(line)
-        return heights
-
-    def _append_vertex(
-        self,
-        vertices: bytearray,
-        heights: list[list[float]],
-        row: int,
-        column: int,
-        x: float,
-        z: float,
-        step_x: float,
-        step_z: float,
-        u_coord: float,
-        v_coord: float,
-        risk_weight: float,
-    ) -> None:
-        """追加单个地表顶点。注意：法线和颜色都来自同一张高度表。"""
-
-        # 影子圈占一格，网格下标整体偏移 1。
-        grid_row = row + 1
-        grid_column = column + 1
-        y = heights[grid_row][grid_column]
-        # 中央差分梯度和顶点高度共用采样表，保证光照与几何一致。
-        gradient_x = (heights[grid_row][grid_column + 1] - heights[grid_row][grid_column - 1]) / (2.0 * step_x)
-        gradient_z = (heights[grid_row + 1][grid_column] - heights[grid_row - 1][grid_column]) / (2.0 * step_z)
-        # 高度场 y=f(x,z) 的上法线是 (-df/dx, 1, -df/dz)。
-        length = math.sqrt(gradient_x * gradient_x + 1.0 + gradient_z * gradient_z)
-        normal_x = -gradient_x / length
-        normal_y = 1.0 / length
-        normal_z = -gradient_z / length
-        tangent_length = math.sqrt(1.0 + gradient_x * gradient_x)
-        tangent_x = 1.0 / tangent_length
-        tangent_y = gradient_x / tangent_length
-        # 占位地形的 v 沿 +z，T×N 形成与纹理坐标一致的副切线。
-        binormal_x = tangent_y * normal_z
-        binormal_y = -tangent_x * normal_z
-        binormal_z = tangent_x * normal_y - tangent_y * normal_x
-        red, green, blue = _tint_risk_color(_height_color(y, self._amplitude_value), risk_weight)
-        vertices.extend(
-            struct.pack(
-                "<ffffffffffffffffff",
-                x,
-                y,
-                z,
-                normal_x,
-                normal_y,
-                normal_z,
-                u_coord,
-                v_coord,
-                tangent_x,
-                tangent_y,
-                0.0,
-                binormal_x,
-                binormal_y,
-                binormal_z,
-                red,
-                green,
-                blue,
-                1.0,
-            )
-        )
+        # 采样点坐标沿用历史"步长累乘"公式,含影子圈时行列下标从 -1 起。
+        x_coords = -width / 2.0 + step_x * np.arange(-1, _SURFACE_COLUMNS + 1, dtype=np.float64)
+        z_coords = -depth / 2.0 + step_z * np.arange(-1, _SURFACE_ROWS + 1, dtype=np.float64)
+        x_grid, z_grid = np.meshgrid(x_coords, z_coords)
+        return _height_value(x_grid, z_grid, width, depth, self._amplitude_value)
 
     def _apply_bounds(self, min_height: float, max_height: float) -> None:
         """按实测高度设置包围盒。注意：包围盒影响 Qt Quick 3D 视锥裁剪。"""
@@ -932,35 +886,51 @@ def _tint_risk_colors(colors: np.ndarray, weights: np.ndarray) -> np.ndarray:
     return (colors * (1.0 - blend) + target * blend).astype(np.float32)
 
 
-def _tint_risk_color(color: tuple[float, float, float], weight: float) -> tuple[float, float, float]:
-    """为单个占位地形顶点叠加风险色。注意：与布局地形使用相同参数。"""
+def _height_colors(heights: np.ndarray, amplitude: float) -> np.ndarray:
+    """按海拔整表计算顶点色。注意：单调渐变不含噪声，避免历史上的碎斑问题。"""
 
-    # 标量路径只服务旧 procedural 网格，参数必须与 numpy 批量路径完全一致。
-    blend = max(0.0, min(1.0, weight * _RISK_TINT_STRENGTH))
-    target = tuple(srgb_to_linear(component) for component in _RISK_TINT_SRGB)
-    return tuple(base * (1.0 - blend) + risk * blend for base, risk in zip(color, target))
+    normalized = np.clip(heights / max(amplitude, 1.0), 0.0, 1.0)
+    below_split = normalized < _COLOR_SPLIT
+    low_mix = normalized / _COLOR_SPLIT
+    high_mix = np.minimum(1.0, (normalized - _COLOR_SPLIT) / (1.0 - _COLOR_SPLIT))
+    channels = []
+    for low, mid, high in zip(_COLOR_LOW, _COLOR_MID, _COLOR_HIGH):
+        # 分段线性插值与历史标量 _lerp_color 同式:低段 LOW→MID,高段 MID→HIGH。
+        mixed = np.where(below_split, low + (mid - low) * low_mix, mid + (high - mid) * high_mix)
+        # Quick3D 光照在线性空间进行,sRGB 调色板必须先转线性,否则整体被洗白。
+        channels.append(srgb_to_linear(mixed))
+    return np.stack(channels, axis=-1).astype(np.float32)
 
 
-def _height_value(x: float, z: float, width: float, depth: float, amplitude: float) -> float:
-    """计算连续地形高度。注意：高斯山脉 + 中频起伏，中心航迹区保持平坦。"""
+def _height_value(
+    x: float | np.ndarray,
+    z: float | np.ndarray,
+    width: float,
+    depth: float,
+    amplitude: float,
+) -> float | np.ndarray:
+    """计算连续地形高度。注意：高斯山脉 + 中频起伏，中心航迹区保持平坦。
+    标量与整表网格共用同一实现,标量输入仍返回 Python float,避免 np 标量混进 payload。"""
 
-    nx = x / width
-    nz = z / depth
+    x_array = np.asarray(x, dtype=np.float64)
+    z_array = np.asarray(z, dtype=np.float64)
+    nx = x_array / width
+    nz = z_array / depth
     # 中频起伏填满山体之间的空地，幅度约占 amplitude 的两成。
     rolling = (
-        0.07 * math.sin(nx * math.tau * 2.6 + 0.4)
-        + 0.07 * math.cos(nz * math.tau * 2.2 - 0.7)
-        + 0.05 * math.sin((nx + nz) * math.tau * 3.4 + 1.3)
-        + 0.03 * math.sin(nx * math.tau * 6.8) * math.cos(nz * math.tau * 5.9)
+        0.07 * np.sin(nx * math.tau * 2.6 + 0.4)
+        + 0.07 * np.cos(nz * math.tau * 2.2 - 0.7)
+        + 0.05 * np.sin((nx + nz) * math.tau * 3.4 + 1.3)
+        + 0.03 * np.sin(nx * math.tau * 6.8) * np.cos(nz * math.tau * 5.9)
     )
     # 山体布局跟随地图尺寸整体缩放，保持基准构图不变。
     scale_x = width / _HILL_LAYOUT_SPAN_M
     scale_z = depth / _HILL_LAYOUT_SPAN_M
-    hill_sum = 0.0
+    hill_sum = np.zeros_like(nx)
     for center_x, center_z, radius_x, radius_z, angle_deg, weight in _HILL_PROFILES:
-        hill_sum += weight * _elliptic_hill(
-            x,
-            z,
+        hill_sum = hill_sum + weight * _elliptic_hill(
+            x_array,
+            z_array,
             center_x * scale_x,
             center_z * scale_z,
             radius_x * scale_x,
@@ -968,23 +938,25 @@ def _height_value(x: float, z: float, width: float, depth: float, amplitude: flo
             angle_deg,
         )
     # 高频细节按山体质量调制：平原保持干净，山坡出现沟脊棱线。
-    ridge = math.sin(nx * math.tau * 11.0 + 2.0) * math.cos(nz * math.tau * 9.0 - 1.0)
-    height_mix = rolling + hill_sum * (1.0 + 0.15 * ridge)
+    ridge = np.sin(nx * math.tau * 11.0 + 2.0) * np.cos(nz * math.tau * 9.0 - 1.0)
     # 谷地允许低于基准面形成沟壑，但限制深度避免出现深坑。
-    height_mix = max(height_mix, -0.06)
+    height_mix = np.maximum(rolling + hill_sum * (1.0 + 0.15 * ridge), -0.06)
     # 这里只输出几何高度，颜色由顶点色按高度渐变承担。
-    return 4.0 + amplitude * _edge_falloff(nx, nz) * _center_clearance(x, z, width, depth) * height_mix
+    height = 4.0 + amplitude * _edge_falloff(nx, nz) * _center_clearance(x_array, z_array, width, depth) * height_mix
+    if height.ndim == 0:
+        return float(height)
+    return height
 
 
 def _elliptic_hill(
-    x: float,
-    z: float,
+    x: np.ndarray,
+    z: np.ndarray,
     center_x: float,
     center_z: float,
     radius_x: float,
     radius_z: float,
     angle_deg: float,
-) -> float:
+) -> np.ndarray:
     """返回米制旋转椭圆高斯山体权重。注意：高斯裙边互相叠加形成连续山脉。"""
 
     angle_rad = math.radians(angle_deg)
@@ -997,58 +969,29 @@ def _elliptic_hill(
     local_z = (-dx * sin_a + dz * cos_a) / radius_z
     distance_sq = local_x * local_x + local_z * local_z
     # 高斯核在半轴处衰减到约四分之一，山脚自然融入起伏。
-    return math.exp(-1.4 * distance_sq)
+    return np.exp(-1.4 * distance_sq)
 
 
-def _center_clearance(x: float, z: float, width: float, depth: float) -> float:
+def _center_clearance(x: np.ndarray, z: np.ndarray, width: float, depth: float) -> np.ndarray:
     """返回中心保护区系数。注意：航迹集中在场景中心，山体必须让出净空。"""
 
     span = min(width, depth)
     clear_radius = span * _CLEAR_RADIUS_RATIO
     blend_radius = span * _CLEAR_BLEND_RATIO
-    distance = math.hypot(x, z)
-    if distance <= clear_radius:
-        return 0.0
-    if distance >= blend_radius:
-        return 1.0
-    ratio = (distance - clear_radius) / (blend_radius - clear_radius)
+    distance = np.hypot(x, z)
+    # clip 后的 smoothstep 与历史分段实现等价:保护区内恒 0,过渡带外恒 1。
+    ratio = np.clip((distance - clear_radius) / max(blend_radius - clear_radius, 1e-9), 0.0, 1.0)
     # smoothstep 让保护区边缘的坡度连续，不出现环形折痕。
     return ratio * ratio * (3.0 - 2.0 * ratio)
 
 
-def _edge_falloff(nx: float, nz: float) -> float:
+def _edge_falloff(nx: np.ndarray, nz: np.ndarray) -> np.ndarray:
     """返回地形边缘衰减系数。注意：避免山体在边界突然截断。"""
 
     # 0.16 的归一化边距约等于地形短边三分之一的缓冲带。
     margin = 0.16
-    edge_x = max(0.0, min(1.0, (0.5 - abs(nx)) / margin))
-    edge_z = max(0.0, min(1.0, (0.5 - abs(nz)) / margin))
-    edge = min(edge_x, edge_z)
+    edge_x = np.clip((0.5 - np.abs(nx)) / margin, 0.0, 1.0)
+    edge_z = np.clip((0.5 - np.abs(nz)) / margin, 0.0, 1.0)
+    edge = np.minimum(edge_x, edge_z)
     # smoothstep 保证边缘高度和一阶变化都更平滑。
     return edge * edge * (3.0 - 2.0 * edge)
-
-
-def _height_color(height: float, amplitude: float) -> tuple[float, float, float]:
-    """按海拔返回顶点色。注意：单调渐变不含噪声，避免历史上的碎斑问题。"""
-
-    normalized = max(0.0, min(1.0, height / max(amplitude, 1.0)))
-    if normalized < _COLOR_SPLIT:
-        mixed = _lerp_color(_COLOR_LOW, _COLOR_MID, normalized / _COLOR_SPLIT)
-    else:
-        mixed = _lerp_color(_COLOR_MID, _COLOR_HIGH, min(1.0, (normalized - _COLOR_SPLIT) / (1.0 - _COLOR_SPLIT)))
-    # Quick3D 光照在线性空间进行,sRGB 调色板必须先转线性,否则整体被洗白。
-    return (srgb_to_linear(mixed[0]), srgb_to_linear(mixed[1]), srgb_to_linear(mixed[2]))
-
-
-def _lerp_color(
-    start: tuple[float, float, float],
-    end: tuple[float, float, float],
-    mix: float,
-) -> tuple[float, float, float]:
-    """线性插值颜色。注意：输入输出都是 0 到 1 的 RGB 分量。"""
-
-    return (
-        start[0] + (end[0] - start[0]) * mix,
-        start[1] + (end[1] - start[1]) * mix,
-        start[2] + (end[2] - start[2]) * mix,
-    )

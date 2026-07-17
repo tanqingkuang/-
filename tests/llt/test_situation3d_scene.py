@@ -1650,6 +1650,25 @@ class Situation3DSceneDataTests(unittest.TestCase):
         self.assertGreater(geometry.boundsMax().y(), 760.0)
         self.assertGreater(max(y_values) - min(y_values), 450.0)
 
+    def test_placeholder_height_value_scalar_matches_grid(self) -> None:
+        """占位高度函数标量与整表网格必须同源等值,且标量出参保持 Python float。
+        scene_data 以标量方式采样同一函数进 JSON payload,np 标量会破坏序列化。"""
+
+        width, depth, amplitude = 5200.0, 4100.0, 320.0
+        x_coords = np.linspace(-width / 2.0, width / 2.0, 9, dtype=np.float64)
+        z_coords = np.linspace(-depth / 2.0, depth / 2.0, 7, dtype=np.float64)
+        x_grid, z_grid = np.meshgrid(x_coords, z_coords)
+        grid = terrain_geometry_module._height_value(x_grid, z_grid, width, depth, amplitude)
+
+        self.assertEqual(grid.shape, x_grid.shape)
+        for row in range(x_grid.shape[0]):
+            for column in range(x_grid.shape[1]):
+                scalar = terrain_geometry_module._height_value(
+                    float(x_grid[row, column]), float(z_grid[row, column]), width, depth, amplitude
+                )
+                self.assertIsInstance(scalar, float)
+                self.assertAlmostEqual(scalar, float(grid[row, column]), places=9)
+
     def test_procedural_terrain_tangent_basis_follows_uv_directions(self) -> None:
         """占位地形的切线与副切线应分别跟随纹理坐标 u/v 的正方向。"""
 
