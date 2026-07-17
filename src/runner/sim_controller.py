@@ -644,8 +644,10 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             self._control_report = self._derive_control_report_unlocked()
             while self._run_state == RunState.RUNNING:
                 try:
-                    # force_snapshot 确保每帧都落日志/快照（批处理需完整轨迹）。
-                    self._tick_unlocked(force_snapshot=True)
+                    # 不强制产帧:日志按采样周期落盘与 force 无关(见 _tick_unlocked 的
+                    # should_log_snapshot 分支),终态快照由 FINISHED 分支保底刷新;
+                    # 全程持锁无人读中间快照,逐 tick 强制构建纯属浪费(约占批处理 1/3 耗时)。
+                    self._tick_unlocked()
                 except Exception as exc:  # noqa: BLE001
                     self._append_event_unlocked("ERROR", "SimControl", f"tick failed: {exc}")
                     return CommandResult("ERR_TICK_FAILED", str(exc))
