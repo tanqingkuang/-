@@ -15,6 +15,7 @@ from unittest.mock import patch
 from src.algorithm.context.leaf_types import FormCommInitS, FormStageE, WayPointInputS
 from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import arc_radius
+from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
 from src.algorithm.units.algo.pos_track import PosTrackStrategyE
 from src.environment.model import AircraftState
 from src.runner.sim_control import (
@@ -119,6 +120,28 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(snapshot.links[0].loss_rate, 0.04)
             self.assertTrue(controller.get_recent_events())
             controller.close()
+
+    def test_load_hold_config_skips_unused_rally_product_validation(self) -> None:
+        """普通保持允许单侧前向限幅，不创建或校验未启用的集结位置解算产品。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_config(Path(tmp))
+            config = json.loads(path.read_text(encoding="utf-8"))
+            config["control"] = {
+                "velocity_command_limits": {"forward_min_mps": 30.0}
+            }
+            path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(path))
+
+            self.assertEqual(result.code, "OK")
+            for algorithm in controller._node_algorithms.values():
+                self.assertNotIn(
+                    PosCalcStrategyE.RALLY_JOIN,
+                    algorithm._entity._pos_calc._registry,
+                )
 
     def test_motion_boundary_uses_ground_velocity_and_ground_track_rate(self) -> None:
         """横风下算法运动状态必须使用地速，不能把空速航向伪装成地面航迹。"""
