@@ -131,4 +131,4 @@ def rally_button_enabled(run_state: str, nodes: Iterable[NodeState]) -> bool:
     if "HOLD" in phases:
         return False
     # LOCAL_LOITER 触发真正开始；ACTIVE 阶段保留可点状态，让控制器返回“已在集结中”。
-    return bool(phases & {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE", "COMPRESS"})
+    return bool(phases & {"LOCAL_LOITER", "RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE"})

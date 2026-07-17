@@ -30,7 +30,67 @@ class RallyPhaseE(IntEnum):
     JOINING = 0
     CATCHUP = 1
     LOOSE = 2
-    COMPRESS = 3
+
+
+class PosCalcStrategyE(IntEnum):
+    """位置解算策略枚举。注意：只表达算法能力，不表达实体角色或集结子阶段。"""
+
+    NOOP = 0  # 停控：保持当前位置并输出零速度
+    ROUTE_INTERP = 1  # 长机：沿当前任务航段生成目标
+    SLOT_GEOMETRY = 2  # 僚机：按长机状态解算编队槽位
+    RALLY_JOIN = 3  # 集结：待命、转场、盘旋和切出
+
+
+class PosTrackCommandE(IntEnum):
+    """位置跟踪命令枚举。注意：由 PosCalc 发布，与控制产品策略固定一一对应。"""
+
+    NOOP = 0  # 输出零加速度
+    SPEED_TRACK = 1  # 前向只使用速度闭环
+    POSITION_TRACK = 2  # 前向使用位置和速度串级闭环
+
+
+class PosTrackStrategyE(IntEnum):
+    """位置跟踪产品策略枚举。注意：只表达具体控制产品，不表达任务阶段。"""
+
+    NOOP = 0  # 空控制产品
+    PID_SPEED = 1  # 前向速度 PID 组合产品
+    PID_POSITION = 2  # 前向位置和速度 PID 组合产品
+
+
+@dataclass
+class PosTrackCommandS:
+    """位置跟踪命令载体。注意：PosCalc 和 PosTrack 端口绑定同一可变对象。"""
+
+    mode: PosTrackCommandE = PosTrackCommandE.NOOP  # 本拍期望执行的控制语义
+
+
+@dataclass
+class PosCalcStatusS:
+    """位置解算运行状态。注意：位置解算原地写入，其他流程读取上一拍反馈。"""
+
+    active_strategy: PosCalcStrategyE | None = None  # 本拍实际执行的策略
+    rally_state: str = ""  # 集结位置解算内部状态；未装配时为空
+    planned_path_length_m: float = -1.0  # 不含额外整圈的锁存基础航程
+    remaining_path_length_m: float = -1.0  # 当前到下一次切出点的基础剩余航程
+    remaining_loops: int = 0  # 固定协调计划尚未消费的整圈数
+    reached_slot_once: bool = False  # 是否真实越过过松散点
+    join_exited: bool = False  # 是否已经从集结圆切出
+
+
+@dataclass
+class AlgorithmClockS:
+    """算法黑板时钟。注意：实体边界每拍原地更新时间，流程端口长期持有引用。"""
+
+    now_s: float = 0.0  # 当前仿真时刻，单位秒
+
+
+@dataclass
+class RallyPlanS:
+    """集结公共计划。注意：长机任务生成，僚机入站接收，位置解算只读。"""
+
+    t_ref: float = 0.0  # 全队公共切出参考时刻，单位秒
+    valid: bool = False  # 航程收齐且圈数分配完成后有效
+    loop_counts: dict[str, int] = field(default_factory=dict)  # 节点 ID 到额外整圈数
 
 
 @dataclass
@@ -261,14 +321,6 @@ def zero_acceleration(a: AccInEarthS) -> None:
 
 
 @dataclass
-class RallySlotScaleS:
-    """集结阶段的槽位偏置缩放因子。注意：需跨拍保留，进 Context；scaleRate 供 SlotGeometry 计算压缩速度前馈。"""
-
-    scale: float = 1.0  # 槽位偏置放大倍数；1.0 为最终队形，>1.0 为松散放大
-    scaleRate: float = 0.0  # scale 对时间的导数（1/s）；LOOSE 为 0，COMPRESS 为负值
-
-
-@dataclass
 class FollowerStateS:
     """单架僚机向长机回报的集结状态快照。注意：id 与节点 ID 对应；posErr 为到当前目标的合距离。"""
 
@@ -292,12 +344,6 @@ class FormationAnalysisS:
     posErrRms_m: float = 0.0  # 期望僚机位置误差 RMSE，米
     inPositionCount: int = 0  # 期望僚机中满足精度要求的机数
     totalCount: int = 0  # 期望参与集结的总机数（= len(expectedFollowerIds)，不受断链影响）
-
-
-def copy_rally_slot_scale(src: RallySlotScaleS, dst: RallySlotScaleS) -> None:
-    """复制槽位缩放因子，避免 Context 字段被外部别名引用。注意：新增字段时同步补齐。"""
-    dst.scale = src.scale
-    dst.scaleRate = src.scaleRate
 
 
 def dist3d(a: "PosInEarthS", b: "PosInEarthS") -> float:

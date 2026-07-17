@@ -6,10 +6,13 @@ from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
+    AlgorithmClockS,
     FollowerStateS,
     FormSnapshotS,
     MotionProfS,
-    RallySlotScaleS,
+    PosCalcStatusS,
+    PosTrackCommandS,
+    RallyPlanS,
     WayLineS,
     copy_motion,
     copy_snapshot,
@@ -26,14 +29,41 @@ class FormContextS:
     wayLine: WayLineS = field(default_factory=WayLineS)  # 当前跟踪航段(航路规划产出)
     nextWayLine: WayLineS = field(default_factory=WayLineS)  # 下一航段(供曲率前馈前瞻跨段采样)
     leaderState: MotionProfS = field(default_factory=MotionProfS)  # 长机状态(僚机由入站解析得到)
+    leaderCmd: MotionProfS = field(default_factory=MotionProfS)  # 长机目标指令(僚机由入站解析得到)
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
+    effectiveCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机有效运动指令(位置跟踪写/出站读)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
     selfAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 本机加速度指令(位置跟踪产出)
-    slotScale: RallySlotScaleS = field(default_factory=RallySlotScaleS)  # 槽位缩放因子(Rally写/SlotGeometry读)
+    posCalcStatus: PosCalcStatusS = field(default_factory=PosCalcStatusS)  # 位置解算状态(PosCalc写/Task与出站读)
+    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)  # 位置解算写、位置跟踪读
+    clock: AlgorithmClockS = field(default_factory=AlgorithmClockS)  # 当前算法时钟(实体边界写/各流程读)
     followerStates: list[FollowerStateS] = field(default_factory=list)  # 僚机集结状态(FollowerStatus写/Rally读)
-    rally_t_ref: float = 0.0  # 固定公共到达时刻，仅用于 RallyJoinPos 全航程调速（秒）
-    rally_t_ref_valid: bool = False  # 是否已收齐全队基础航程并生成固定协调计划
-    rally_loop_counts: dict[str, int] = field(default_factory=dict)  # 固定计划的节点圈数映射（长机任务写/广播与僚机接线读）
+    rallyPlan: RallyPlanS = field(default_factory=RallyPlanS)  # 固定公共到达时刻与节点圈数映射
+
+    @property
+    def rally_t_ref(self) -> float:
+        """返回固定公共到达时刻。注意：兼容既有黑板字段名。"""
+        return self.rallyPlan.t_ref
+
+    @rally_t_ref.setter
+    def rally_t_ref(self, value: float) -> None:
+        """更新固定公共到达时刻。注意：原地写入公共计划对象。"""
+        self.rallyPlan.t_ref = value
+
+    @property
+    def rally_t_ref_valid(self) -> bool:
+        """返回公共计划有效标记。注意：兼容既有黑板字段名。"""
+        return self.rallyPlan.valid
+
+    @rally_t_ref_valid.setter
+    def rally_t_ref_valid(self, value: bool) -> None:
+        """更新公共计划有效标记。注意：原地写入公共计划对象。"""
+        self.rallyPlan.valid = value
+
+    @property
+    def rally_loop_counts(self) -> dict[str, int]:
+        """返回节点圈数映射。注意：调用方应原地 clear/update，不替换映射引用。"""
+        return self.rallyPlan.loop_counts
 
 
 def reset_context(dst: FormContextS) -> None:
@@ -46,16 +76,25 @@ def reset_context(dst: FormContextS) -> None:
     copy_wayline(fresh.wayLine, dst.wayLine)  # 重置当前航段
     copy_wayline(fresh.nextWayLine, dst.nextWayLine)  # 重置下一航段
     copy_motion(fresh.leaderState, dst.leaderState)  # 重置长机状态
+    copy_motion(fresh.leaderCmd, dst.leaderCmd)  # 重置长机目标指令
     copy_motion(fresh.selfCmd, dst.selfCmd)  # 重置本机目标状态
+    copy_motion(fresh.effectiveCmd, dst.effectiveCmd)  # 重置本机有效运动指令
     copy_motion(fresh.selfState, dst.selfState)  # 重置本机实测状态
     # 加速度指令逐分量清零(无 copy 辅助函数，直接赋值)
     dst.selfAccCmd.accEast = fresh.selfAccCmd.accEast
     dst.selfAccCmd.accNorth = fresh.selfAccCmd.accNorth
     dst.selfAccCmd.accUp = fresh.selfAccCmd.accUp
+    dst.posCalcStatus.active_strategy = fresh.posCalcStatus.active_strategy
+    dst.posCalcStatus.rally_state = fresh.posCalcStatus.rally_state
+    dst.posCalcStatus.planned_path_length_m = fresh.posCalcStatus.planned_path_length_m
+    dst.posCalcStatus.remaining_path_length_m = fresh.posCalcStatus.remaining_path_length_m
+    dst.posCalcStatus.remaining_loops = fresh.posCalcStatus.remaining_loops
+    dst.posCalcStatus.reached_slot_once = fresh.posCalcStatus.reached_slot_once
+    dst.posCalcStatus.join_exited = fresh.posCalcStatus.join_exited
+    dst.posTrackCommand.mode = fresh.posTrackCommand.mode
+    dst.clock.now_s = fresh.clock.now_s
     # 集结扩展字段复位
-    dst.slotScale.scale = fresh.slotScale.scale
-    dst.slotScale.scaleRate = fresh.slotScale.scaleRate
     dst.followerStates.clear()
-    dst.rally_t_ref = 0.0
-    dst.rally_t_ref_valid = False
-    dst.rally_loop_counts.clear()
+    dst.rallyPlan.t_ref = fresh.rallyPlan.t_ref
+    dst.rallyPlan.valid = fresh.rallyPlan.valid
+    dst.rallyPlan.loop_counts.clear()

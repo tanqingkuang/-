@@ -4,7 +4,7 @@
 - simplify_path()：视线可达去冗余，把栅格锯齿拉直成尽量少的拐点（拉直段不得穿障碍）。
 - points_to_route()：只摆点，返回 list[WayPointInputS]，r 一律 0（不决策交接半径）。
 - assign_transition_radius()：可飞性校验后，给两侧均为直线段的内部拐点补 r=turn_radius_m。
-  圆弧几何由 leader.init() 中的 waypoint_inputs_to_waylines() 统一计算。
+  圆弧几何由 tra_plan.leader_route.waypoint_inputs_to_waylines() 统一计算。
 
 圆弧是否真正可飞（腿长 ≥ d_in+d_out+L、圆弧不触障）留待步骤4 可飞性校验。
 """
@@ -215,7 +215,7 @@ def bake_transition_arcs(route: list[WayPointInputS]) -> list[WayPointInputS]:
     """把带交接半径 r 的直线-直线拐点烘焙成相切圆弧段（turnSign!=0），供 allow_arc=True 使用。
 
     使航段本身成为圆弧（可被显示/下游当作曲率航段画弧）；turnSign==0 且 r<=0 的航点原样保留。
-    与 leader.waypoint_inputs_to_waylines 情况2 同源：求相切圆弧，切点须落在两条腿内才烘焙，
+    与 leader_route.waypoint_inputs_to_waylines 情况2 同源：求相切圆弧，切点须落在两条腿内才烘焙，
     半径过大越出腿长时保留尖角。注意：烘焙后该拐点 r 清零（转弯信息已变成航段曲率）。
     """
     n = len(route)

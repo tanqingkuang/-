@@ -9,11 +9,14 @@ from src.algorithm.context.leaf_types import (
     FormSnapshotS,
     MotionProfS,
     PosInEarthS,
-    RallySlotScaleS,
     VdInEarthS,
 )
-from src.algorithm.units.algo.pos_calc.base import PosCalcOutputS
-from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS, SlotGeometryInputS
+from src.algorithm.units.algo.pos_calc.slot_geometry import (
+    SlotGeometry,
+    SlotGeometryInitS,
+    SlotGeometryInputS,
+    SlotGeometryOutputS,
+)
 from src.algorithm.units.algo.td_han import TdHan, TdHanInitS
 
 _DT = 0.05
@@ -122,14 +125,11 @@ class SlotGeometryTdTests(unittest.TestCase):
         self.self_state.pos = PosInEarthS(east=0.0, north=-50.0, h=1000.0)
         self.self_state.v = VdInEarthS(vEast=20.0, vNorth=0.0, vUp=0.0, vd=20.0, vPsi=0.0)
         self.cmd = FormSnapshotS(pattern=0)
-        self.scale = RallySlotScaleS(scale=1.0, scaleRate=0.0)
-        self.out = PosCalcOutputS(selfCmd=MotionProfS())
+        self.out = SlotGeometryOutputS(selfCmd=MotionProfS())
 
     def _step(self) -> MotionProfS:
-        u = SlotGeometryInputS(
-            leaderState=self.leader, cmd=self.cmd, slotScale=self.scale, selfState=self.self_state
-        )
-        self.geo.step(u, self.out)
+        u = SlotGeometryInputS(leaderState=self.leader, cmd=self.cmd, selfState=self.self_state)
+        self.geo._calculate(u, self.out)
         return self.out.selfCmd
 
     def test_disabled_matches_raw_and_jumps_instantly(self) -> None:
@@ -168,8 +168,7 @@ class SlotGeometryTdTests(unittest.TestCase):
         self.self_state.pos = PosInEarthS(east=0.0, north=-50.0, h=1000.0)
         self.self_state.v = VdInEarthS(vEast=20.0, vNorth=0.0, vUp=0.0, vd=20.0, vPsi=0.0)
         self.cmd = FormSnapshotS(pattern=0)
-        self.scale = RallySlotScaleS(scale=1.0, scaleRate=0.0)
-        self.out = PosCalcOutputS(selfCmd=MotionProfS())
+        self.out = SlotGeometryOutputS(selfCmd=MotionProfS())
         for _ in range(5):
             self._step()
         self.cmd.pattern = 1

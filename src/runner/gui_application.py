@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.algorithm.context.leaf_types import WayLineS, WayPointInputS, to_display_inputs
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius_fn, arc_swept_rad
 from src.algorithm.units.process.tra_plan.avoidance.obstacle import ObstacleS, make_circle, make_polygon, make_rect
 from src.algorithm.units.process.tra_plan.avoidance.planner import plan_avoidance_route

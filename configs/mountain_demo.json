@@ -21,7 +21,6 @@
     "loose_scale": 3.0,
     "convergence_radius_m": 30.0,
     "stable_hold_s": 4.0,
-    "compress_time_s": 20.0,
     "tight_radius_m": 5.0,
     "stale_timeout_s": 3.0,
     "loiter_radius_m": 220.0,

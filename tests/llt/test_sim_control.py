@@ -12,9 +12,11 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from unittest.mock import patch
 
-from src.algorithm.context.leaf_types import FormCommInitS, FormStageE, MotionProfS, PosInEarthS, WayPointInputS
-from src.algorithm.entity.leader_follower_hold.leader import waypoint_inputs_to_waylines
+from src.algorithm.context.leaf_types import FormCommInitS, FormStageE, WayPointInputS
+from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 from src.algorithm.units.algo.arc_path import arc_radius
+from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
+from src.algorithm.units.algo.pos_track import PosTrackStrategyE
 from src.environment.model import AircraftState
 from src.runner.sim_control import (
     DisturbanceCommand,
@@ -118,6 +120,28 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(snapshot.links[0].loss_rate, 0.04)
             self.assertTrue(controller.get_recent_events())
             controller.close()
+
+    def test_load_hold_config_skips_unused_rally_product_validation(self) -> None:
+        """普通保持允许单侧前向限幅，不创建或校验未启用的集结位置解算产品。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_config(Path(tmp))
+            config = json.loads(path.read_text(encoding="utf-8"))
+            config["control"] = {
+                "velocity_command_limits": {"forward_min_mps": 30.0}
+            }
+            path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(path))
+
+            self.assertEqual(result.code, "OK")
+            for algorithm in controller._node_algorithms.values():
+                self.assertNotIn(
+                    PosCalcStrategyE.RALLY_JOIN,
+                    algorithm._entity._pos_calc._registry,
+                )
 
     def test_motion_boundary_uses_ground_velocity_and_ground_track_rate(self) -> None:
         """横风下算法运动状态必须使用地速，不能把空速航向伪装成地面航迹。"""
@@ -947,9 +971,11 @@ class SimulationControllerTests(unittest.TestCase):
 
             leader = controller._node_algorithms["A01"]._entity
             follower = controller._node_algorithms["A02"]._entity
+            leader_pid = leader._pos_track._registry[PosTrackStrategyE.PID_SPEED]
+            follower_pid = follower._pos_track._registry[PosTrackStrategyE.PID_POSITION]
 
-            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.2)
-            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.2)
+            self.assertAlmostEqual(leader_pid._lateral_cascade._cfg.dt, 0.2)
+            self.assertAlmostEqual(follower_pid._lateral_cascade._cfg.dt, 0.2)
             controller.close()
 
     def test_default_algorithm_pid_period_matches_design_contract(self) -> None:
@@ -962,11 +988,13 @@ class SimulationControllerTests(unittest.TestCase):
 
             leader = controller._node_algorithms["A01"]._entity
             follower = controller._node_algorithms["A02"]._entity
+            leader_pid = leader._pos_track._registry[PosTrackStrategyE.PID_SPEED]
+            follower_pid = follower._pos_track._registry[PosTrackStrategyE.PID_POSITION]
 
-            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.dt, 0.05)
-            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.dt, 0.05)
-            self.assertAlmostEqual(leader._pos_track._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
-            self.assertAlmostEqual(follower._pos_track._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
+            self.assertAlmostEqual(leader_pid._lateral_cascade._cfg.dt, 0.05)
+            self.assertAlmostEqual(follower_pid._lateral_cascade._cfg.dt, 0.05)
+            self.assertAlmostEqual(leader_pid._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
+            self.assertAlmostEqual(follower_pid._lateral_cascade._cfg.rollMaxRad, math.radians(40.0))
             controller.close()
 
     def test_realtime_logging_uses_sim_time_10_hz(self) -> None:
@@ -1760,7 +1788,7 @@ class SimulationControllerTests(unittest.TestCase):
             controller.close()
 
     def test_leader_formation_broadcast_reaches_follower_after_comm_latency(self) -> None:
-        """LeaderEntity outbox broadcasts must pass through CommunicationChannel and arrive at followers."""
+        """验证直接 HOLD 保持长机单向广播的既有通信语义。"""
         config = {
             "duration_s": 0.1,
             "step_s": 0.005,
@@ -1792,47 +1820,14 @@ class NodeAlgorithmResetTests(unittest.TestCase):
     def _make_comm_init(self) -> FormCommInitS:
         return FormCommInitS()
 
-    def _make_leader_state(self) -> MotionProfS:
-        s = MotionProfS()
-        s.pos.east = 100.0
-        s.pos.north = 200.0
-        s.pos.h = 500.0
-        return s
-
-    def _make_leader_route(self) -> list[WayPointInputS]:
-        return [
-            WayPointInputS(idx=0, pos=PosInEarthS(east=0.0, north=0.0, h=500.0), vdCmd=20.0),
-            WayPointInputS(idx=1, pos=PosInEarthS(east=1000.0, north=0.0, h=500.0), vdCmd=20.0),
-        ]
-
-    def test_reset_preserves_cold_start_preset_for_wingman(self) -> None:
-        """reset() 后僚机 cmd.stage/pattern 和 leaderState 应与构造后一致。"""
-        initial_leader = self._make_leader_state()
-        node = _NodeAlgorithm(
-            node_id="W01",
-            role="wingman",
-            comm_init=self._make_comm_init(),
-            initial_leader_state=initial_leader,
-            leader_route=self._make_leader_route(),
-            control_period_s=0.02,
-        )
-
-        # 构造后预置正确
-        self.assertEqual(node._entity.cxt.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(node._entity.cxt.cmd.pattern, 0)
-        self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
-
-        # reset 后预置应被恢复
-        node.reset()
-
-        self.assertEqual(node._entity.cxt.cmd.stage, FormStageE.HOLD)
-        self.assertEqual(node._entity.cxt.cmd.pattern, 0)
-        self.assertAlmostEqual(node._entity.cxt.leaderState.pos.east, 100.0)
-
     def test_reset_clears_rally_completed_flag(self) -> None:
         """reset() 后 _rally_completed 应归 False，并回到待命而不是直接重进 RALLY。"""
+        from src.algorithm.context.leaf_types import PosInEarthS as P, RallyPhaseE
+        from src.algorithm.units.algo.pos_calc.rally_join_pos import (
+            RALLY_STATE_EXITED,
+            RALLY_STATE_LOITERING,
+        )
         from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
-        from src.algorithm.context.leaf_types import PosInEarthS as P
 
         rally_cfg = RallyTaskInitS(
             expectedFollowerIds=[],
@@ -1865,6 +1860,13 @@ class NodeAlgorithmResetTests(unittest.TestCase):
         self.assertEqual(node.current_rally_phase_str(), "LOCAL_LOITER")
         self.assertTrue(node.start_rally()[0])
         self.assertEqual(node._remote_stage, FormStageE.RALLY)
+
+        node._entity.cxt.cmd.stage = FormStageE.RALLY
+        node._entity.cxt.cmd.step = RallyPhaseE.JOINING
+        node._entity.cxt.posCalcStatus.rally_state = RALLY_STATE_LOITERING
+        self.assertEqual(node.current_rally_phase_str(), "RALLY_LOITER")
+        node._entity.cxt.posCalcStatus.rally_state = RALLY_STATE_EXITED
+        self.assertEqual(node.current_rally_phase_str(), "RALLY_EXITED")
 
 
 class RouteGeodeticEnforcementTests(unittest.TestCase):

@@ -9,14 +9,15 @@ from src.algorithm.context.leaf_types import (
     FormSnapshotS,
     FormStageE,
     MotionProfS,
-    RallySlotScaleS,
+    RallyPhaseE,
     copy_motion,
-    copy_rally_slot_scale,
     copy_snapshot,
 )
-from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
+from src.algorithm.entity.leader_follower_rally import RALLY_STATE_SET
+from src.algorithm.units.process.formation_protocol import LEADER_BROADCAST_TOPIC
+from src.algorithm.units.process.inbound.base import InboundInitS
+from src.common.envelope import MessageEnvelope
 
-LEADER_BROADCAST_TOPIC = "formation.leader"
 
 
 @dataclass
@@ -26,7 +27,6 @@ class _ParsedLeaderBroadcast:
     leader_state: MotionProfS  # 长机实际运动状态
     leader_cmd: MotionProfS  # 长机跟踪指令，旧格式回退为实际状态
     cmd: FormSnapshotS  # 已通过枚举校验的编队命令
-    slot_scale: RallySlotScaleS  # 已通过有限性校验的槽位缩放
     t_ref: float  # 固定公共到达时刻
     t_ref_valid: bool  # 固定计划有效位
     loop_counts: dict[str, int]  # 每个节点的非负完整圈数
@@ -79,7 +79,14 @@ def _parse_cmd_payload(payload: object) -> FormSnapshotS:
     step = payload.get("step", 0)
     if any(not isinstance(value, int) or isinstance(value, bool) for value in (stage, pattern, step)):
         raise ValueError("命令字段必须为非布尔整数")
-    return FormSnapshotS(stage=FormStageE(stage), pattern=pattern, step=step)
+    parsed_stage = FormStageE(stage)
+    try:
+        parsed_step = RallyPhaseE(step)
+    except ValueError as exc:
+        raise ValueError(f"集结子阶段非法: {step!r}") from exc
+    if (parsed_stage, parsed_step) not in RALLY_STATE_SET:
+        raise ValueError(f"集结任务状态组合非法: {(parsed_stage, parsed_step)!r}")
+    return FormSnapshotS(stage=parsed_stage, pattern=pattern, step=parsed_step)
 
 
 def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcast:
@@ -93,14 +100,6 @@ def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcas
     raw_leader_cmd = raw_cmd.get("leader")
     leader_cmd = leader_state if raw_leader_cmd is None else _parse_motion_payload(raw_leader_cmd)
 
-    # 缺少整个 slot_scale 时兼容为单位缩放；显式载荷则必须是有效映射。
-    raw_slot_scale = payload.get("slot_scale", {})
-    if not isinstance(raw_slot_scale, dict):
-        raise ValueError("槽位缩放载荷必须为映射")
-    slot_scale = RallySlotScaleS(
-        scale=_finite_number(raw_slot_scale.get("scale", 1.0)),
-        scaleRate=_finite_number(raw_slot_scale.get("scale_rate", 0.0)),
-    )
     # 时间与有效位共同属于固定计划，不能把非法有效位降级成 False 后部分提交。
     t_ref = _finite_number(payload.get("t_ref", 0.0))
     t_ref_valid = payload.get("t_ref_valid", False)
@@ -121,7 +120,6 @@ def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcas
         leader_state=leader_state,
         leader_cmd=leader_cmd,
         cmd=cmd,
-        slot_scale=slot_scale,
         t_ref=t_ref,
         t_ref_valid=t_ref_valid,
         loop_counts=dict(raw_loop_counts),
@@ -129,19 +127,26 @@ def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcas
 
 
 @dataclass
-class RallyLeaderFollowerOutputS(InboundOutputS):
+class RallyLeaderFollowerInputS:
+    """长机广播解析输入快照。注意：只消费 formation.leader 主题。"""
+
+    inbox: list[MessageEnvelope] = field(default_factory=list)
+
+
+@dataclass
+class RallyLeaderFollowerOutputS:
     """集结僚机入站输出端口。"""
 
-    # 继承 leaderState: MotionProfS, cmd: FormSnapshotS
+    leaderState: MotionProfS | None = None
+    cmd: FormSnapshotS | None = None
     leaderCmd: MotionProfS | None = None  # 长机跟踪指令；None 时接收端可沿用 leaderState。
-    slotScale: RallySlotScaleS | None = None  # 端口 → Context.slotScale
     t_ref: float = 0.0  # 长机广播的集结基准时刻（秒）；由实体每帧复制到 cxt.rally_t_ref
     t_ref_valid: bool = False  # 旧格式或非法 t_ref 默认 False，禁止冷启动误切出
     loopCounts: dict[str, int] = field(default_factory=dict)  # 长机固定计划的节点整数圈数映射
 
 
-class RallyLeaderFollower(InboundBase):
-    """集结僚机入站单元：解析长机广播，同时写入 leaderState/cmd/slotScale。注意：字段来自同一条消息，保证一致性。"""
+class RallyLeaderFollower:
+    """集结僚机入站单元：解析长机广播，同时写入 leaderState/cmd。注意：字段来自同一条消息，保证一致性。"""
 
     def init(self, cfg: InboundInitS) -> None:
         """按配置初始化 RallyLeaderFollower。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -149,15 +154,13 @@ class RallyLeaderFollower(InboundBase):
         # 输出端口由 step 的 y 参数绑定；首次 step 前 reset 明确定义为无输出可清理的 no-op。
         self._latched_output: RallyLeaderFollowerOutputS | None = None
 
-    def step(self, u: InboundInputS, y: RallyLeaderFollowerOutputS) -> None:
+    def step(self, u: RallyLeaderFollowerInputS, y: RallyLeaderFollowerOutputS) -> None:
         """推进 RallyLeaderFollower 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
-        if y.leaderState is None or y.cmd is None or y.slotScale is None:
+        if y.leaderState is None or y.cmd is None:
             raise ValueError("RallyLeaderFollower output ports must be bound")
         # 每拍更新为最近一次绑定端口；reset 只负责清理该对象，不假设端口终身不变。
         self._latched_output = y
-        # leaderState、cmd、slotScale 必须来自同一条 formation.leader 消息，不能跨消息拼接。
-        # 这样僚机不会在“新阶段 + 旧缩放”或“旧阶段 + 新长机位置”的组合状态下解算槽位。
-        # 未携带 slot_scale 的旧格式广播仍可解析，默认 scale=1，保证与普通保持编队兼容。
+        # leaderState、leaderCmd、cmd 必须来自同一条 formation.leader 消息，不能跨消息拼接。
         # 非目标 topic 或非 dict payload 直接跳过，避免其它业务消息污染编队黑板。
         for msg in u.inbox:
             if msg.topic != LEADER_BROADCAST_TOPIC or not isinstance(msg.payload, dict):
@@ -172,7 +175,6 @@ class RallyLeaderFollower(InboundBase):
             copy_snapshot(parsed.cmd, y.cmd)
             if y.leaderCmd is not None:
                 copy_motion(parsed.leader_cmd, y.leaderCmd)
-            copy_rally_slot_scale(parsed.slot_scale, y.slotScale)
             y.t_ref = parsed.t_ref
             y.t_ref_valid = parsed.t_ref_valid
             y.loopCounts.clear()
@@ -190,8 +192,6 @@ class RallyLeaderFollower(InboundBase):
             copy_motion(MotionProfS(), output.leaderCmd)
         if output.cmd is not None:
             copy_snapshot(FormSnapshotS(), output.cmd)
-        if output.slotScale is not None:
-            copy_rally_slot_scale(RallySlotScaleS(), output.slotScale)
         output.t_ref = 0.0
         output.t_ref_valid = False
         output.loopCounts.clear()

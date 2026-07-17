@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from src.algorithm.context.leaf_types import MotionProfS, PosInEarthS, WayLineS, WayPointS, copy_wayline
+from src.algorithm.context.leaf_types import (
+    MotionProfS,
+    PosInEarthS,
+    WayLineS,
+    WayPointInputS,
+    WayPointS,
+    copy_wayline,
+)
 from src.algorithm.units.algo import arc_path
-from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS, TraPlanInputS, TraPlanOutputS
+from src.algorithm.units.process.tra_plan.base import TraPlanBase, TraPlanInitS
+
+if TYPE_CHECKING:
+    from src.algorithm.entity.types import EntityRuntimeS
 
 _GRAVITY_MPS2 = 9.80665  # 重力加速度，用于由速度和滚转角估算转弯半径
 _TURN_BANK_DEG = 20.0  # 标称协调转弯滚转角，越大则转弯半径越小
@@ -21,6 +32,21 @@ class LeaderRouteInitS(TraPlanInitS):
     route: list[WayLineS] | None = None  # 预置航线（已完成圆弧几何计算的航段序列）
 
 
+@dataclass
+class LeaderRouteInputS:
+    """长机航线策略私有输入端口。"""
+
+    selfState: MotionProfS = field(default_factory=MotionProfS)
+
+
+@dataclass
+class LeaderRouteOutputS:
+    """长机航线策略私有输出端口。"""
+
+    wayLine: WayLineS = field(default_factory=WayLineS)
+    nextWayLine: WayLineS = field(default_factory=WayLineS)
+
+
 class LeaderRoute(TraPlanBase):
     """长机航路规划器：维护当前航段索引，按本机位置在多航段间顺序推进。注意：切换不可回退，只单向递增到下一段。"""
 
@@ -28,6 +54,16 @@ class LeaderRoute(TraPlanBase):
         """初始化 LeaderRoute 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
         self._route = _default_route()
         self._current_index = 0  # 当前正在跟踪的航段下标
+        self._u = LeaderRouteInputS()
+        self._y = LeaderRouteOutputS()
+        self._bound = False
+
+    def bind(self, runtime: EntityRuntimeS) -> None:
+        """绑定航段选择所需输入输出字段。"""
+        cxt = runtime.context
+        self._u = LeaderRouteInputS(selfState=cxt.selfState)
+        self._y = LeaderRouteOutputS(wayLine=cxt.wayLine, nextWayLine=cxt.nextWayLine)
+        self._bound = True
 
     def init(self, cfg: TraPlanInitS | None) -> None:
         """按配置初始化 LeaderRoute。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -38,16 +74,15 @@ class LeaderRoute(TraPlanBase):
             self._route = _default_route()
         self._current_index = 0
 
-    def step(self, u: TraPlanInputS, y: TraPlanOutputS) -> None:
-        """推进 LeaderRoute 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
-        if y.wayLine is None:
-            raise ValueError("LeaderRoute output port must be bound")
-        index = self._select_current_index(u.selfState)  # 据本机位置选定当前航段下标
+    def step(self) -> None:
+        """推进航段选择并直接写入绑定航段输出。"""
+        if not self._bound:
+            raise ValueError("LeaderRoute 尚未绑定端口")
+        index = self._select_current_index(self._u.selfState)  # 据本机位置选定当前航段下标
         lines = self._route
-        copy_wayline(lines[index], y.wayLine)  # 拷出，避免下游改写内部航线数据
+        copy_wayline(lines[index], self._y.wayLine)  # 拷出，避免下游改写内部航线数据
         # 同时给出下一航段(末段时退化为当前段)，供曲率前馈跨段前瞻采样。
-        if y.nextWayLine is not None:
-            copy_wayline(lines[min(index + 1, len(lines) - 1)], y.nextWayLine)
+        copy_wayline(lines[min(index + 1, len(lines) - 1)], self._y.nextWayLine)
 
     def get_route(self) -> list[WayLineS]:
         """返回内部航线副本，供外部初始显示使用。注意：只读，不应由外部修改。"""
@@ -72,6 +107,47 @@ class LeaderRoute(TraPlanBase):
         ):
             self._current_index += 1
         return self._current_index
+
+
+def waypoint_inputs_to_waylines(inputs: list[WayPointInputS]) -> list[WayLineS]:
+    """将原始航点转换为内部 WayLineS 序列，并按需展开圆弧几何。
+
+    情况 1：turnSign != 0 表示外部已算好的圆弧，直接映射。
+    情况 2：内部拐点 r > 0 时用 corner_arc() 计算相切圆弧。
+    默认：按普通折线直连。
+    """
+    if len(inputs) < 2:
+        raise ValueError("at least 2 waypoints required")
+    nodes: list[WayPointS] = []
+    for i, wpi in enumerate(inputs):
+        if wpi.turnSign != 0.0:
+            nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd, turnSign=wpi.turnSign, center=wpi.center))
+        elif 0 < i < len(inputs) - 1 and wpi.r > 0.0:
+            arc = arc_path.corner_arc(inputs[i - 1].pos, wpi.pos, inputs[i + 1].pos, wpi.r)
+            if arc is not None:
+                t1, t2, center, turn_sign = arc
+                # 圆弧切点必须仍落在两条原始航腿内，否则保留折线。
+                in_leg = _horizontal_distance(inputs[i - 1].pos, wpi.pos)
+                out_leg = _horizontal_distance(wpi.pos, inputs[i + 1].pos)
+                tangent_in = _horizontal_distance(t1, wpi.pos)
+                tangent_out = _horizontal_distance(t2, wpi.pos)
+                if tangent_in <= in_leg + 1e-9 and tangent_out <= out_leg + 1e-9:
+                    nodes.append(
+                        WayPointS(idx=wpi.idx, pos=t1, vdCmd=inputs[i - 1].vdCmd, turnSign=turn_sign, center=center)
+                    )
+                    nodes.append(WayPointS(idx=wpi.idx, pos=t2, vdCmd=wpi.vdCmd))
+                else:
+                    nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+            else:
+                nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+        else:
+            nodes.append(WayPointS(idx=wpi.idx, pos=wpi.pos, vdCmd=wpi.vdCmd))
+    return [WayLineS(idx=j, start=nodes[j], end=nodes[j + 1]) for j in range(len(nodes) - 1)]
+
+
+def _horizontal_distance(a: PosInEarthS, b: PosInEarthS) -> float:
+    """计算两点水平距离。注意：圆弧切点合法性只看东/北平面。"""
+    return math.hypot(a.east - b.east, a.north - b.north)
 
 
 def _default_route() -> list[WayLineS]:

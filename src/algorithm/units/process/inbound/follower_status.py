@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from src.algorithm.context.leaf_types import FollowerStateS
+from src.algorithm.context.leaf_types import AlgorithmClockS, FollowerStateS, copy_follower_state
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_FLYING
-from src.algorithm.units.process.inbound.base import InboundBase, InboundInitS, InboundInputS, InboundOutputS
-from src.algorithm.units.process.outbound.follower_broadcast import FOLLOWER_STATUS_TOPIC
+from src.algorithm.units.process.formation_protocol import FOLLOWER_STATUS_TOPIC
+from src.algorithm.units.process.inbound.base import InboundInitS
+from src.common.envelope import MessageEnvelope
 
 
 @dataclass
@@ -19,21 +20,79 @@ class FollowerStatusInitS(InboundInitS):
 
 
 @dataclass
-class FollowerStatusInputS(InboundInputS):
-    """长机入站输入端口。注意：now_s 由实体从边界注入，写入 lastUpdate_s。"""
+class FollowerStatusInputS:
+    """长机入站输入端口。注意：时钟绑定到 Context 黑板。"""
 
-    # 继承 inbox: list[MessageEnvelope]
-    now_s: float = 0.0  # 当前仿真时间，写入 FollowerStateS.lastUpdate_s
+    inbox: list[MessageEnvelope] = field(default_factory=list)
+    clock: AlgorithmClockS | None = None  # 端口 → Context.clock，提供状态更新时间
 
 
 @dataclass
-class FollowerStatusOutputS(InboundOutputS):
+class FollowerStatusOutputS:
     """长机入站输出端口。注意：followerStates 绑到 Context.followerStates。"""
 
     followerStates: list[FollowerStateS] | None = None  # 端口 → Context.followerStates
 
 
-class FollowerStatus(InboundBase):
+def update_follower_states(
+    inbox: list[MessageEnvelope],
+    follower_states: list[FollowerStateS],
+    now_s: float,
+) -> None:
+    """解析僚机状态报文并原地更新列表。注意：非法报文不得部分覆盖已有状态。"""
+    state_lookup = {state.id: state for state in follower_states}
+    for msg in inbox:
+        parsed = _parse_follower_status(msg, now_s)
+        if parsed is None:
+            continue
+        entry = state_lookup.get(parsed.id)
+        if entry is None:
+            follower_states.append(parsed)
+            state_lookup[parsed.id] = parsed
+        else:
+            copy_follower_state(parsed, entry)
+
+
+def _parse_follower_status(msg: MessageEnvelope, now_s: float) -> FollowerStateS | None:
+    """把单条僚机报文解析为完整快照。注意：身份以 envelope.source 为准。"""
+    if msg.topic != FOLLOWER_STATUS_TOPIC or not isinstance(msg.payload, dict):
+        return None
+    payload = msg.payload
+    if not all(key in payload for key in ("pos_east", "pos_north", "pos_h", "pos_err_m")):
+        return None
+    try:
+        pos_east = float(payload["pos_east"])
+        pos_north = float(payload["pos_north"])
+        pos_h = float(payload["pos_h"])
+        pos_err_m = float(payload["pos_err_m"])
+        heading_err_rad = float(payload.get("heading_err_rad", 0.0))
+        arrived = int(payload.get("arrived", 0))
+        planned_path_length_m = float(payload.get("planned_path_length_m", -1.0))
+        rally_state = str(payload.get("rally_state", RALLY_STATE_FLYING))
+        reached_slot_once = bool(payload.get("reached_slot_once", False))
+    except (TypeError, ValueError):
+        return None
+    numeric_fields = (pos_east, pos_north, pos_h, pos_err_m, heading_err_rad, planned_path_length_m)
+    if not all(math.isfinite(value) for value in numeric_fields):
+        return None
+    if planned_path_length_m < 0.0 and planned_path_length_m != -1.0:
+        return None
+    parsed = FollowerStateS(id=msg.source)
+    parsed.pos.east = pos_east
+    parsed.pos.north = pos_north
+    parsed.pos.h = pos_h
+    parsed.posErr_m = pos_err_m
+    parsed.headingErr_rad = heading_err_rad
+    parsed.arrived = arrived
+    parsed.valid = True
+    parsed.lastUpdate_s = now_s
+    parsed.plannedPathLength_m = planned_path_length_m
+    parsed.rally_state = rally_state
+    parsed.reachedSlotOnce = reached_slot_once
+    return parsed
+
+
+class FollowerStatus:
     """长机入站单元：从收件箱筛出僚机回报，原地更新 followerStates 列表。注意：断链帧不更新 lastUpdate_s，超时由 Rally 侧处理。"""
 
     def init(self, cfg: FollowerStatusInitS) -> None:
@@ -42,59 +101,9 @@ class FollowerStatus(InboundBase):
 
     def step(self, u: FollowerStatusInputS, y: FollowerStatusOutputS) -> None:
         """推进 FollowerStatus 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
-        if y.followerStates is None:
-            raise ValueError("FollowerStatus output port must be bound")
-        # followerStates 是 Context 中被 Rally 任务单元共享的列表，必须原地更新，不能整体替换。
-        # 空 inbox 表示本帧未收到回报，不清 valid，也不刷新 lastUpdate_s，由 Rally 按超时判失效。
-        # 同一帧多条同源消息按遍历顺序覆盖，保留最后一条，匹配通信层“后到为准”的语义。
-        # payload.id 只用于诊断展示，不用于身份判定，避免伪造载荷污染长机状态表。
-        # 关键字段先做完整性校验，防止缺字段消息创建半初始化的 FollowerStateS。
-        _state_lookup: dict[str, FollowerStateS] = {s.id: s for s in y.followerStates}
-        for msg in u.inbox:
-            if msg.topic != FOLLOWER_STATUS_TOPIC or not isinstance(msg.payload, dict):
-                continue
-            payload = msg.payload
-            # 关键字段缺失则丢弃，避免写入半截状态
-            if not all(k in payload for k in ("pos_east", "pos_north", "pos_h", "pos_err_m")):
-                continue
-            # 先把全部字段转换到局部变量；任何字段非法时不得部分覆盖已有状态。
-            try:
-                pos_east = float(payload["pos_east"])
-                pos_north = float(payload["pos_north"])
-                pos_h = float(payload["pos_h"])
-                pos_err_m = float(payload["pos_err_m"])
-                heading_err_rad = float(payload.get("heading_err_rad", 0.0))
-                arrived = int(payload.get("arrived", 0))
-                planned_path_length_m = float(payload.get("planned_path_length_m", -1.0))
-                rally_state = str(payload.get("rally_state", RALLY_STATE_FLYING))
-                reached_slot_once = bool(payload.get("reached_slot_once", False))
-            except (TypeError, ValueError):
-                continue
-            # 航程与运动字段必须一起通过校验，避免半条异常消息覆盖现有状态。
-            numeric_fields = (pos_east, pos_north, pos_h, pos_err_m, heading_err_rad, planned_path_length_m)
-            if not all(math.isfinite(value) for value in numeric_fields):
-                continue
-            if planned_path_length_m < 0.0 and planned_path_length_m != -1.0:
-                continue
-            # 以 envelope.source 作为节点 ID，不信任 payload 中的 id 字段。
-            node_id = msg.source
-            entry = _state_lookup.get(node_id)
-            if entry is None:
-                entry = FollowerStateS(id=node_id)
-                y.followerStates.append(entry)
-                _state_lookup[node_id] = entry
-            entry.pos.east = pos_east
-            entry.pos.north = pos_north
-            entry.pos.h = pos_h
-            entry.posErr_m = pos_err_m
-            entry.headingErr_rad = heading_err_rad
-            entry.arrived = arrived
-            entry.plannedPathLength_m = planned_path_length_m
-            entry.rally_state = rally_state
-            entry.reachedSlotOnce = reached_slot_once
-            entry.id = node_id
-            entry.valid = True
-            entry.lastUpdate_s = u.now_s
+        if y.followerStates is None or u.clock is None:
+            raise ValueError("FollowerStatus ports must be bound")
+        update_follower_states(u.inbox, y.followerStates, u.clock.now_s)
 
     def reset(self) -> None:
         """复位 FollowerStatus 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
