@@ -41,23 +41,7 @@ class PosCalcBase:
         raise NotImplementedError
 
 
-def reset_pos_calc_status(status: PosCalcStatusS, strategy: PosCalcStrategyE) -> None:
-    """重置并标记公共位置解算状态。注意：具体策略随后写入自身扩展字段。"""
-    status.active_strategy = strategy
+def reset_pos_calc_status(status: PosCalcStatusS) -> None:
+    """重置公共位置解算状态。注意：具体集结策略随后写入自身字段。"""
     status.rally_state = ""
     status.planned_path_length_m = -1.0
-    status.remaining_path_length_m = -1.0
-    status.remaining_loops = 0
-    status.reached_slot_once = False
-    status.join_exited = False
-
-
-def copy_pos_calc_status(src: PosCalcStatusS, dst: PosCalcStatusS) -> None:
-    """原地复制位置解算状态。注意：不得替换黑板持有的状态对象。"""
-    dst.active_strategy = src.active_strategy
-    dst.rally_state = src.rally_state
-    dst.planned_path_length_m = src.planned_path_length_m
-    dst.remaining_path_length_m = src.remaining_path_length_m
-    dst.remaining_loops = src.remaining_loops
-    dst.reached_slot_once = src.reached_slot_once
-    dst.join_exited = src.join_exited

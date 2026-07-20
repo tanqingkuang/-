@@ -39,10 +39,7 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     MotionProfS,
     PosCalcStatusS,
-    PosCalcStrategyE,
     PosInEarthS,
-    PosTrackCommandE,
-    PosTrackCommandS,
     RallyPlanS,
     WayPointInputS,
 )
@@ -227,7 +224,6 @@ class RallyJoinPosOutputS:
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
-    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
 
 
 class RallyJoinPos(PosCalcBase):
@@ -250,7 +246,6 @@ class RallyJoinPos(PosCalcBase):
         self._y = RallyJoinPosOutputS(
             selfCmd=cxt.selfCmd,
             status=cxt.posCalcStatus,
-            posTrackCommand=cxt.posTrackCommand,
         )
         self._bound = True
 
@@ -322,7 +317,6 @@ class RallyJoinPos(PosCalcBase):
         self._slot_near_window_armed: bool = False
         self._entry_point: PosInEarthS | None = None  # 集结圆切入点 T；开始集结时一次性规划并锁存
         self._theta_entry: float = 0.0  # 切入点在盘旋圆上的角度，供基础航程计算
-        self._reached_slot_once: bool = False  # 是否已至少一次路过 M_i，保留为汇合过程诊断量
 
     @property
     def state(self) -> str:
@@ -343,11 +337,6 @@ class RallyJoinPos(PosCalcBase):
     def remaining_loops(self) -> int:
         """返回固定计划尚未消耗的整圈数量。"""
         return self._remaining_loops
-
-    @property
-    def reached_slot_once(self) -> bool:
-        """返回是否已至少一次路过松散点 M_i，供汇合过程诊断。"""
-        return self._reached_slot_once
 
     def step(self) -> None:
         """推进集结解算。注意：只使用 bind 阶段绑定的专属端口。"""
@@ -402,10 +391,8 @@ class RallyJoinPos(PosCalcBase):
         """完整填写集结策略公共及专有状态。"""
         if y.status is not None:
             # Rally拥有全部集结专有字段，因此每拍完整覆盖对应诊断。
-            reset_pos_calc_status(y.status, PosCalcStrategyE.RALLY_JOIN)
+            reset_pos_calc_status(y.status)
             self._write_rally_status(y.status)
-        if y.posTrackCommand is not None:
-            y.posTrackCommand.mode = PosTrackCommandE.SPEED_TRACK
 
     def reset(self) -> None:
         """复位 RallyJoinPos 的动态状态。注意：盘旋圆几何（圆心/切出点）由 init 时的任务航向定死，reset 不清除。"""
@@ -431,20 +418,14 @@ class RallyJoinPos(PosCalcBase):
         self._slot_near_window_armed = False
         self._entry_point = None
         self._theta_entry = 0.0
-        self._reached_slot_once = False
         if self._bound:
             # NONE边沿由Manager触发reset，专有诊断同步回到初始FLYING语义。
             self._write_rally_status(self._y.status)
 
     def _write_rally_status(self, status: PosCalcStatusS) -> None:
-        """写入集结专有诊断。注意：不修改当前活动策略。"""
-        # active_strategy由当前实际运行的子类写入，reset不能抢占该字段。
+        """写入集结任务需要跨流程共享的状态。"""
         status.rally_state = self._state
         status.planned_path_length_m = self._planned_path_length_m
-        status.remaining_path_length_m = self._remaining_path_length_m
-        status.remaining_loops = self._remaining_loops
-        status.reached_slot_once = self._reached_slot_once
-        status.join_exited = self._state == RALLY_STATE_EXITED
 
     # ------------------------------------------------------------------ #
     # 内部阶段实现
@@ -479,7 +460,6 @@ class RallyJoinPos(PosCalcBase):
         self._slot_near_window_armed = False
         self._entry_point = None
         self._theta_entry = 0.0
-        self._reached_slot_once = False
         self._state = RALLY_STATE_STANDBY
 
     def _leave_standby(self, u: RallyJoinPosInputS) -> None:
@@ -495,7 +475,6 @@ class RallyJoinPos(PosCalcBase):
         self._slot_near_window_armed = False
         self._entry_point = None
         self._theta_entry = 0.0
-        self._reached_slot_once = False
         center_distance = math.hypot(
             self._loiter_center_e - self._standby_center_e,
             self._loiter_center_n - self._standby_center_n,
@@ -598,7 +577,6 @@ class RallyJoinPos(PosCalcBase):
         d_h = target_h - u.selfState.pos.h
         y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = speed / self._loiter_radius
-        y.selfCmd.v.vTheta = 0.0
 
     def _step_flying(self, u: RallyJoinPosInputS, y: RallyJoinPosOutputS) -> None:
         """在直飞阶段生成指向盘旋圆切入点 T 的指令，到达 T 附近后转入圆弧飞行。"""
@@ -637,7 +615,6 @@ class RallyJoinPos(PosCalcBase):
             y.selfCmd.v.vd = 0.0
             y.selfCmd.v.vUp = clamp(d_h * 0.5, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = 0.0
-        y.selfCmd.v.vTheta = 0.0
 
         # 触发半径夹到 self._arc_capture_radius_m（按 loiter_radius_m 反解，见 init）：T 是圆上固定点，
         # 容差越大，切到 LOITERING 那一拍的切向航向（按飞机此刻实际角度算）跟 FLYING 直飞航向（按 T 处
@@ -709,7 +686,6 @@ class RallyJoinPos(PosCalcBase):
         self._away_from_slot = entry_can_start_away
         self._last_slot_remaining_angle = entry_arc_angle if entry_can_start_away else None
         self._slot_near_window_armed = entry_can_arm_crossing
-        self._reached_slot_once = False
         self._state = RALLY_STATE_LOITERING
 
     def _rally_arc_to_slot_m(self, theta: float) -> float:
@@ -792,8 +768,6 @@ class RallyJoinPos(PosCalcBase):
         crossed_slot = crossing_candidate and forward_progress * self._loiter_radius > _EPSILON_HORIZ
         hold_previous_for_noise = crossing_candidate and not crossed_slot
         if crossed_slot:
-            # reached、圈数消费和 EXITED 共用同一个真实越点事件，避免三套判据漂移。
-            self._reached_slot_once = True
             # 越点后同时撤销远区和近窗布防，下一圈必须重新完整经过两个门槛。
             self._away_from_slot = False
             self._slot_near_window_armed = False
@@ -840,7 +814,6 @@ class RallyJoinPos(PosCalcBase):
         d_h = self._slot.h - u.selfState.pos.h
         y.selfCmd.v.vUp = clamp(d_h * 0.3, self._v_up_min, self._v_up_max)
         y.selfCmd.v.dVPsi = 0.0
-        y.selfCmd.v.vTheta = 0.0
 
 def _ccw_entry_tangent(px: float, py: float, cx: float, cy: float, r: float) -> tuple[float, float, float] | None:
     """求外部点 (px,py) 到圆 (cx,cy,r) 上、能顺势接上 CCW 弧线的切点。

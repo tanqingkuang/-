@@ -10,6 +10,7 @@ from itertools import product
 from unittest.mock import patch
 
 from src.algorithm.context.context import FormContextS, reset_context
+from src.algorithm.context import leaf_types
 from src.algorithm.context.leaf_types import (
     AlgorithmClockS,
     CommDirE,
@@ -21,6 +22,7 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     MotionProfS,
     NetWorkS,
+    PosCalcStatusS,
     PosInEarthS,
     RallyPhaseE,
     RallyPlanS,
@@ -28,18 +30,23 @@ from src.algorithm.context.leaf_types import (
     VdInEarthS,
     WayLineS,
     WayPointInputS,
-    WayPointS,
     copy_follower_state,
+)
+from src.algorithm.entity.base import EntityBase
+from src.algorithm.entity.leader_follower import (
+    FOLLOWER_PROFILE,
+    LEADER_PROFILE,
+    create_leader_follower_entity,
 )
 from src.algorithm.entity.leader_follower.follower import FollowerEntity
 from src.algorithm.entity.leader_follower.leader import LeaderEntity
-from src.algorithm.entity.leader_follower import LEADER_PROFILE, create_leader_follower_entity
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
     EntityManagerInitS,
     EntityOutputS,
     EntityProfileE,
+    EntityRuntimeS,
     VelCmdLimitS,
 )
 from src.algorithm.units.algo.pos_calc import PosCalcManager
@@ -144,36 +151,26 @@ def _follower_state(
     node_id: str,
     *,
     pos_err_m: float = 0.0,
-    arrived: int = 0,
-    valid: bool = True,
     last_update_s: float = 0.0,
     rally_state: str = "EXITED",
     planned_path_length_m: float = -1.0,
-    reached_slot_once: bool = False,
 ) -> FollowerStateS:
     """构造长机侧保存的僚机状态。"""
 
     return FollowerStateS(
         id=node_id,
-        pos=PosInEarthS(),
         posErr_m=pos_err_m,
-        arrived=arrived,
-        valid=valid,
         lastUpdate_s=last_update_s,
         rally_state=rally_state,
         plannedPathLength_m=planned_path_length_m,
-        reachedSlotOnce=reached_slot_once,
     )
 
 
 def _follower_status_msg(
     source: str = "R02",
     *,
-    pos_east: float = 0.0,
-    pos_north: float = 0.0,
-    pos_h: float = 500.0,
     pos_err_m: float = 0.0,
-    arrived: int = 0,
+    heading_err_rad: float = 0.0,
     rally_state: str = "EXITED",
     planned_path_length_m: float = -1.0,
 ) -> MessageEnvelope:
@@ -185,12 +182,8 @@ def _follower_status_msg(
         target="R01",
         timestamp=0.0,
         payload={
-            "id": source,
-            "pos_east": pos_east,
-            "pos_north": pos_north,
-            "pos_h": pos_h,
             "pos_err_m": pos_err_m,
-            "arrived": arrived,
+            "heading_err_rad": heading_err_rad,
             "rally_state": rally_state,
             "planned_path_length_m": planned_path_length_m,
         },
@@ -326,12 +319,12 @@ def _task_step(
     remote: FormStageE,
     states: list[FollowerStateS] | None = None,
     now_s: float = 0.0,
-    leader_join_exited: bool = True,
+    leader_exited: bool = True,
     leader_path_length_m: float = -1.0,
 ) -> RallyTaskOutputS:
     """推进 Rally 任务一拍并返回输出端口。"""
 
-    ctx.posCalcStatus.join_exited = leader_join_exited
+    ctx.posCalcStatus.rally_state = RALLY_STATE_EXITED if leader_exited else RALLY_STATE_FLYING
     ctx.posCalcStatus.planned_path_length_m = leader_path_length_m
     ctx.clock.now_s = now_s
     output = RallyTaskOutputS(cmd=ctx.cmd)
@@ -399,7 +392,7 @@ def _step_with_paths(
         remote=FormStageE.RALLY,
         states=states,
         now_s=now_s,
-        leader_join_exited=False,
+        leader_exited=False,
         leader_path_length_m=leader_path,
     )
 
@@ -446,14 +439,12 @@ def _line(
     start: tuple[float, float, float],
     end: tuple[float, float, float],
     speed: float = 20.0,
-    idx: int = 0,
 ) -> WayLineS:
     """构造直线航段。"""
 
     return WayLineS(
-        idx=idx,
-        start=WayPointS(idx=idx, pos=PosInEarthS(*start)),
-        end=WayPointS(idx=idx + 1, pos=PosInEarthS(*end)),
+        start=PosInEarthS(*start),
+        end=PosInEarthS(*end),
         vdCmd=speed,
     )
 
@@ -466,8 +457,8 @@ def _route(
     """构造两点航线（WayPointInputS 列表）。"""
 
     return [
-        WayPointInputS(idx=0, pos=PosInEarthS(*start), vdCmd=speed),
-        WayPointInputS(idx=1, pos=PosInEarthS(*end), vdCmd=speed),
+        WayPointInputS(pos=PosInEarthS(*start), vdCmd=speed),
+        WayPointInputS(pos=PosInEarthS(*end), vdCmd=speed),
     ]
 
 
@@ -496,23 +487,104 @@ def _rally_cfg(
 class FollowerStateTests(unittest.TestCase):
     """验证集结扩展叶类型和上下文字段。"""
 
+    def test_leaf_types_only_keep_runtime_consumed_fields(self) -> None:
+        """叶类型不得继续暴露无消费者、重复或纯兼容字段。"""
+
+        self.assertFalse(hasattr(FormStageE, "RECONFIG"))
+        self.assertEqual(
+            set(PosCalcStatusS.__dataclass_fields__),
+            {"rally_state", "planned_path_length_m"},
+        )
+        self.assertEqual(
+            set(FollowerStateS.__dataclass_fields__),
+            {
+                "id",
+                "posErr_m",
+                "headingErr_rad",
+                "lastUpdate_s",
+                "plannedPathLength_m",
+                "rally_state",
+            },
+        )
+        self.assertNotIn("vTheta", VdInEarthS.__dataclass_fields__)
+        self.assertNotIn("idx", WayPointInputS.__dataclass_fields__)
+        self.assertFalse(hasattr(leaf_types, "WayPointS"))
+        self.assertNotIn("idx", WayLineS.__dataclass_fields__)
+        self.assertFalse(hasattr(FormContextS(), "posTrackCommand"))
+
     def test_rally_leaf_type_defaults_and_copy_helpers(self) -> None:
         """验证默认值与复制函数覆盖所有集结扩展字段。"""
 
+        self.assertEqual(FormStageE.DISBAND, 3)
         self.assertEqual(FormStageE.STANDBY, 4)
-        self.assertFalse(FollowerStateS().valid)
         follower_src = FollowerStateS(
             id="R02",
-            pos=PosInEarthS(1.0, 2.0, 3.0),
             posErr_m=4.0,
-            arrived=1,
-            valid=True,
+            headingErr_rad=0.2,
             lastUpdate_s=5.0,
         )
         follower_dst = FollowerStateS()
         copy_follower_state(follower_src, follower_dst)
         self.assertEqual(follower_dst, follower_src)
-        self.assertIsNot(follower_dst.pos, follower_src.pos)
+
+    def test_disband_stage_is_only_a_reserved_protocol_value(self) -> None:
+        """解散阶段仅占位，未实现前策略表和各任务模式都必须拒绝。"""
+
+        with self.assertRaises(ValueError):
+            LEADER_PROFILE.require_strategies(FormStageE.DISBAND, RallyPhaseE.JOINING)
+
+        active = _rally_task(expected=())
+        disabled = Rally()
+        disabled.init(_rally_process_init(RallyTaskInitS(), enabled=False))
+        passive = Rally()
+        passive.init(
+            EntityManagerInitS(
+                EntityInitS(
+                    selfInit=FormSelfInitS("R02"),
+                    rally_cfg=RallyTaskInitS(),
+                    rally_leader_id="R01",
+                ),
+                FOLLOWER_PROFILE,
+            )
+        )
+
+        for mode, task in (("active", active), ("disabled", disabled), ("passive", passive)):
+            with self.subTest(mode=mode):
+                cxt = FormContextS()
+                output = RallyTaskOutputS(cmd=cxt.cmd, rallyCompleted=True)
+                with self.assertRaises(ValueError):
+                    task._advance(
+                        RallyTaskInputS(
+                            remote=RemoteCmdS(FormStageE.DISBAND),
+                            cmd=cxt.cmd,
+                            clock=cxt.clock,
+                            posCalcStatus=cxt.posCalcStatus,
+                        ),
+                        output,
+                    )
+                self.assertEqual(cxt.cmd, FormSnapshotS())
+                self.assertTrue(output.rallyCompleted)
+
+        class _BoundaryEntity(EntityBase):
+            PROFILE = LEADER_PROFILE
+
+        boundary = _BoundaryEntity()
+        runtime = EntityRuntimeS()
+        boundary.cxt = runtime.context
+        boundary._remote = runtime.remote
+        boundary._inbox = runtime.inbox
+        with self.assertRaises(ValueError):
+            boundary._prepare_input(
+                EntityInputS(
+                    selfState=_motion(east=99.0),
+                    inbox=[_follower_status_msg("R02")],
+                    remote=RemoteCmdS(FormStageE.DISBAND),
+                    now_s=8.0,
+                )
+            )
+        self.assertEqual(boundary.cxt, FormContextS())
+        self.assertEqual(boundary._remote, RemoteCmdS())
+        self.assertEqual(boundary._inbox, [])
 
     def test_context_contains_rally_fields_and_reset_clears_them(self) -> None:
         """验证 Context 拥有独立的集结状态列表，reset 原地清理集结字段。"""
@@ -522,12 +594,12 @@ class FollowerStateTests(unittest.TestCase):
         self.assertIsNot(first.followerStates, second.followerStates)
 
         first.followerStates.append(_follower_state("R02"))
-        first.rally_t_ref_valid = True
+        first.rallyPlan.valid = True
 
         reset_context(first)
 
         self.assertEqual(first.followerStates, [])
-        self.assertFalse(first.rally_t_ref_valid)
+        self.assertFalse(first.rallyPlan.valid)
 
 
 class EntityBoundaryTypesTests(unittest.TestCase):
@@ -684,15 +756,15 @@ class RallyTaskTests(unittest.TestCase):
         self.assertEqual(ctx.cmd.stage, FormStageE.HOLD)
         self.assertEqual(ctx.cmd.pattern, 1)
 
-    def test_approach_requires_all_expected_arrived_and_fresh(self) -> None:
+    def test_approach_requires_all_expected_exited_and_fresh(self) -> None:
         """验证 JOINING→LOOSE 由全部期望僚机 EXITED 且长机 EXITED 立即推进（无计时器）。"""
 
         task = _rally_task(expected=("R02", "R03"), dt_s=0.1)
         ctx = FormContextS()
-        # rally_state 默认 "EXITED"；leader_join_exited 默认 True
+        # rally_state 默认 "EXITED"；leader_exited 默认 True
         all_exited = [
-            _follower_state("R02", valid=True, last_update_s=0.0, pos_err_m=99.0),
-            _follower_state("R03", valid=True, last_update_s=0.0, pos_err_m=99.0),
+            _follower_state("R02", last_update_s=0.0, pos_err_m=99.0),
+            _follower_state("R03", last_update_s=0.0, pos_err_m=99.0),
         ]
 
         # 全部 EXITED + 长机 EXITED → 首帧即推进到 step=1
@@ -703,22 +775,22 @@ class RallyTaskTests(unittest.TestCase):
         # 注：过期且已 EXITED 不阻塞（EXITED 是终态，见 #12 fix）
         ctx = FormContextS()
         task = _rally_task(expected=("R02",), dt_s=0.1)
-        stale = [_follower_state("R02", valid=True, last_update_s=0.0, rally_state="FLYING")]
+        stale = [_follower_state("R02", last_update_s=0.0, rally_state="FLYING")]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=stale, now_s=1.0)
         self.assertEqual(ctx.cmd.step, 0)
 
         # 僚机 FLYING（未切出）→ 不推进
         ctx = FormContextS()
         task = _rally_task(expected=("R02",), dt_s=0.1)
-        flying = [_follower_state("R02", valid=True, last_update_s=0.0, rally_state="FLYING")]
+        flying = [_follower_state("R02", last_update_s=0.0, rally_state="FLYING")]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=flying, now_s=0.0)
         self.assertEqual(ctx.cmd.step, 0)
 
         # 长机未 EXITED → 不推进（即使僚机已 EXITED）
         ctx = FormContextS()
         task = _rally_task(expected=("R02",), dt_s=0.1)
-        follower_exited = [_follower_state("R02", valid=True, last_update_s=0.0)]
-        _task_step(task, ctx, remote=FormStageE.RALLY, states=follower_exited, now_s=0.0, leader_join_exited=False)
+        follower_exited = [_follower_state("R02", last_update_s=0.0)]
+        _task_step(task, ctx, remote=FormStageE.RALLY, states=follower_exited, now_s=0.0, leader_exited=False)
         self.assertEqual(ctx.cmd.step, 0)
 
     def test_exited_follower_not_blocked_by_stale_timeout(self) -> None:
@@ -726,7 +798,7 @@ class RallyTaskTests(unittest.TestCase):
         task = _rally_task(expected=("R02",), dt_s=0.1)
         ctx = FormContextS()
         # 先推进：R02 在 now_s=0.0 时已 EXITED，正常切到 step=1
-        exited_state = [_follower_state("R02", valid=True, last_update_s=0.0)]
+        exited_state = [_follower_state("R02", last_update_s=0.0)]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=exited_state, now_s=0.0)
         self.assertEqual(ctx.cmd.step, 1)
 
@@ -734,7 +806,7 @@ class RallyTaskTests(unittest.TestCase):
         ctx = FormContextS()
         task = _rally_task(expected=("R02",), dt_s=0.1)
         # R02 在 t=0 时 EXITED，到 t=10 时数据已过期（stale_timeout_s=0.5）
-        stale_exited = [_follower_state("R02", valid=True, last_update_s=0.0, rally_state="EXITED")]
+        stale_exited = [_follower_state("R02", last_update_s=0.0, rally_state="EXITED")]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=stale_exited, now_s=10.0)
         # EXITED 是终态，过期不应阻止推进
         self.assertEqual(ctx.cmd.step, 1, "stale EXITED entry should not block JOINING→CATCHUP transition")
@@ -1074,8 +1146,8 @@ class RallyTaskTests(unittest.TestCase):
             catchup_radius_m=3.0,
         )
         ctx = FormContextS()
-        ok = [_follower_state("R02", pos_err_m=1.0, arrived=1, valid=True, last_update_s=0.0)]
-        bad = [_follower_state("R02", pos_err_m=5.0, arrived=1, valid=True, last_update_s=0.0)]
+        ok = [_follower_state("R02", pos_err_m=1.0, last_update_s=0.0)]
+        bad = [_follower_state("R02", pos_err_m=5.0, last_update_s=0.0)]
 
         # JOINING→CATCHUP(1)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok, now_s=0.0)
@@ -1116,8 +1188,8 @@ class RallyTaskTests(unittest.TestCase):
         ctx.cmd.stage = FormStageE.RALLY
         ctx.cmd.step = RallyPhaseE.LOOSE
         coarse_only = [
-            _follower_state("R02", pos_err_m=4.0, valid=True, last_update_s=0.0),
-            _follower_state("R03", pos_err_m=14.0, valid=True, last_update_s=0.0),
+            _follower_state("R02", pos_err_m=4.0, last_update_s=0.0),
+            _follower_state("R03", pos_err_m=14.0, last_update_s=0.0),
         ]
 
         waiting = _task_step(
@@ -1133,8 +1205,8 @@ class RallyTaskTests(unittest.TestCase):
         self.assertFalse(waiting.rallyCompleted)
 
         all_tight = [
-            _follower_state("R02", pos_err_m=4.0, valid=True, last_update_s=0.1),
-            _follower_state("R03", pos_err_m=4.5, valid=True, last_update_s=0.1),
+            _follower_state("R02", pos_err_m=4.0, last_update_s=0.1),
+            _follower_state("R03", pos_err_m=4.5, last_update_s=0.1),
         ]
         completed = _task_step(
             task,
@@ -1156,7 +1228,7 @@ class RallyTaskTests(unittest.TestCase):
             stable_hold_s=0.1,
         )
         ctx = FormContextS()
-        ok = [_follower_state("R02", pos_err_m=1.0, arrived=1, valid=True, last_update_s=0.0)]
+        ok = [_follower_state("R02", pos_err_m=1.0, last_update_s=0.0)]
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
         _task_step(task, ctx, remote=FormStageE.RALLY, states=ok)
@@ -1217,7 +1289,7 @@ class FormationInboundTests(unittest.TestCase):
         inbound.init(FormationInboundInitS("R02"))
         messages = [
             MessageEnvelope("unknown", "X", "R02", 0.0, {}),
-            _follower_status_msg("R03", pos_east=30.0, planned_path_length_m=800.0),
+            _follower_status_msg("R03", planned_path_length_m=800.0),
             _leader_msg(t_ref=90.0, loop_counts={"R01": 0, "R02": 2}),
         ]
 
@@ -1344,8 +1416,6 @@ class FormationOutboundTests(unittest.TestCase):
         cxt.selfCmd = _motion(east=4.0, north=6.0, h=3.0)
         cxt.posCalcStatus.rally_state = RALLY_STATE_LOITERING
         cxt.posCalcStatus.planned_path_length_m = 321.0
-        cxt.posCalcStatus.reached_slot_once = True
-        cxt.posCalcStatus.join_exited = True
         outbound = FormationOutbound()
         outbound.init(FormationOutboundInitS(
             selfId="R02",
@@ -1361,15 +1431,17 @@ class FormationOutboundTests(unittest.TestCase):
         self.assertAlmostEqual(message.payload["pos_err_m"], 5.0)
         self.assertEqual(message.payload["rally_state"], RALLY_STATE_LOITERING)
         self.assertEqual(message.payload["planned_path_length_m"], 321.0)
-        self.assertEqual(message.payload["reached_slot_once"], True)
-        self.assertEqual(message.payload["arrived"], 1)
+        self.assertEqual(
+            set(message.payload),
+            {"pos_err_m", "heading_err_rad", "rally_state", "planned_path_length_m"},
+        )
 
 
 class FollowerStatusTests(unittest.TestCase):
     """验证僚机回报发送与长机入站解析。"""
 
     def test_follower_broadcast_targets_leader_and_reports_error(self) -> None:
-        """验证回报消息目标、topic、位置误差与到达锁存来自输入端口。"""
+        """验证回报消息目标、topic 与精简状态载荷。"""
 
         outbound = FollowerBroadcast()
         outbound.init(FollowerBroadcastInitS(selfId="R02", leaderId="R01"))
@@ -1379,7 +1451,6 @@ class FollowerStatusTests(unittest.TestCase):
             FollowerBroadcastInputS(
                 selfState=_motion(east=1.0, north=2.0, h=3.0),
                 selfCmd=_motion(east=4.0, north=6.0, h=3.0),
-                selfArrived=1,
             ),
             output,
         )
@@ -1389,8 +1460,11 @@ class FollowerStatusTests(unittest.TestCase):
         self.assertEqual(msg.topic, FOLLOWER_STATUS_TOPIC)
         self.assertEqual(msg.source, "R02")
         self.assertEqual(msg.target, "R01")
-        self.assertEqual(msg.payload["arrived"], 1)
         self.assertAlmostEqual(msg.payload["pos_err_m"], 5.0)
+        self.assertEqual(
+            set(msg.payload),
+            {"pos_err_m", "heading_err_rad", "rally_state", "planned_path_length_m"},
+        )
 
     def test_follower_broadcast_supports_standby_rally_state_constant(self) -> None:
         """验证待命回报使用统一常量，避免业务代码散落裸字符串。"""
@@ -1453,7 +1527,7 @@ class FollowerStatusTests(unittest.TestCase):
             FollowerStatusInputS(inbox=[valid], clock=AlgorithmClockS(now_s=5.0)),
             FollowerStatusOutputS(followerStates=states),
         )
-        invalid = _follower_status_msg("R02", pos_east=99.0)
+        invalid = _follower_status_msg("R02", pos_err_m=99.0)
         invalid.payload["planned_path_length_m"] = -2.0
         inbound.step(
             FollowerStatusInputS(inbox=[invalid], clock=AlgorithmClockS(now_s=6.0)),
@@ -1462,7 +1536,7 @@ class FollowerStatusTests(unittest.TestCase):
 
         self.assertEqual(len(states), 1)
         self.assertEqual(states[0].plannedPathLength_m, 1000.0)
-        self.assertAlmostEqual(states[0].pos.east, 0.0)
+        self.assertAlmostEqual(states[0].posErr_m, 0.0)
         self.assertAlmostEqual(states[0].lastUpdate_s, 5.0)
 
     def test_follower_status_accepts_unplanned_sentinel_during_standby(self) -> None:
@@ -1471,7 +1545,7 @@ class FollowerStatusTests(unittest.TestCase):
         states: list[FollowerStateS] = []
         inbound = FollowerStatus()
         inbound.init(None)
-        message = _follower_status_msg("R02", rally_state=RALLY_STATE_STANDBY, pos_east=8.0)
+        message = _follower_status_msg("R02", rally_state=RALLY_STATE_STANDBY, pos_err_m=8.0)
         message.payload["planned_path_length_m"] = -1.0
         inbound.step(
             FollowerStatusInputS(inbox=[message], clock=AlgorithmClockS(now_s=5.0)),
@@ -1480,7 +1554,7 @@ class FollowerStatusTests(unittest.TestCase):
 
         self.assertEqual(states[0].plannedPathLength_m, -1.0)
         self.assertEqual(states[0].rally_state, RALLY_STATE_STANDBY)
-        self.assertAlmostEqual(states[0].pos.east, 8.0)
+        self.assertAlmostEqual(states[0].posErr_m, 8.0)
 
     def test_follower_broadcast_rejects_empty_leader_id_and_missing_ports(self) -> None:
         """验证显式 leaderId 和端口绑定是必需条件。"""
@@ -1503,8 +1577,8 @@ class FollowerStatusTests(unittest.TestCase):
         inbound.step(
             FollowerStatusInputS(
                 inbox=[
-                    _follower_status_msg("R02", pos_east=1.0, pos_north=2.0, pos_h=3.0, pos_err_m=4.0),
-                    _follower_status_msg("R03", pos_east=5.0, pos_north=6.0, pos_h=7.0, arrived=1),
+                    _follower_status_msg("R02", pos_err_m=4.0),
+                    _follower_status_msg("R03", heading_err_rad=0.3),
                 ],
                 clock=AlgorithmClockS(now_s=10.0),
             ),
@@ -1512,18 +1586,17 @@ class FollowerStatusTests(unittest.TestCase):
         )
 
         self.assertEqual([state.id for state in states], ["R02", "R03"])
-        self.assertTrue(states[0].valid)
         self.assertAlmostEqual(states[0].lastUpdate_s, 10.0)
         self.assertAlmostEqual(states[0].posErr_m, 4.0)
-        self.assertEqual(states[1].arrived, 1)
+        self.assertAlmostEqual(states[1].headingErr_rad, 0.3)
 
         original = states[0]
         inbound.step(
             FollowerStatusInputS(
                 inbox=[
                     MessageEnvelope("node.status", "R99", "R01", 0.0, {"health": "normal"}),
-                    MessageEnvelope(FOLLOWER_STATUS_TOPIC, "R04", "R01", 0.0, {"pos_east": 1.0}),
-                    _follower_status_msg("R02", pos_east=8.0, pos_err_m=1.5),
+                    MessageEnvelope(FOLLOWER_STATUS_TOPIC, "R04", "R01", 0.0, {"pos_err_m": 1.0}),
+                    _follower_status_msg("R02", pos_err_m=1.5),
                 ],
                 clock=AlgorithmClockS(now_s=11.0),
             ),
@@ -1532,7 +1605,6 @@ class FollowerStatusTests(unittest.TestCase):
 
         self.assertIs(states[0], original)
         self.assertEqual(len(states), 2)
-        self.assertAlmostEqual(states[0].pos.east, 8.0)
         self.assertAlmostEqual(states[0].posErr_m, 1.5)
         self.assertAlmostEqual(states[0].lastUpdate_s, 11.0)
 
@@ -1544,8 +1616,8 @@ class FollowerStatusTests(unittest.TestCase):
         )
         self.assertEqual(states[-1].id, "R05")
 
-    def test_follower_status_defaults_missing_rally_state_to_legacy_flying(self) -> None:
-        """验证旧协议缺省 rally_state 时按 FLYING 兼容，而不是误判为待命。"""
+    def test_follower_status_rejects_missing_required_field(self) -> None:
+        """验证精简协议缺少 rally_state 时整条丢弃。"""
 
         states: list[FollowerStateS] = []
         inbound = FollowerStatus()
@@ -1556,10 +1628,9 @@ class FollowerStatusTests(unittest.TestCase):
             "R01",
             0.0,
             {
-                "pos_east": 1.0,
-                "pos_north": 2.0,
-                "pos_h": 3.0,
                 "pos_err_m": 4.0,
+                "heading_err_rad": 0.0,
+                "planned_path_length_m": 10.0,
             },
         )
 
@@ -1568,8 +1639,7 @@ class FollowerStatusTests(unittest.TestCase):
             FollowerStatusOutputS(followerStates=states),
         )
 
-        self.assertEqual(len(states), 1)
-        self.assertEqual(states[0].rally_state, RALLY_STATE_FLYING)
+        self.assertEqual(states, [])
 
     def test_follower_status_rejects_non_finite_payload_atomically(self) -> None:
         """验证非有限或转换失败的回报不会新增条目，也不会部分覆盖已有状态。"""
@@ -1577,21 +1647,17 @@ class FollowerStatusTests(unittest.TestCase):
         inbound = FollowerStatus()
         inbound.init(None)
         invalid_fields = {
-            "pos_east": float("nan"),
-            "pos_north": float("inf"),
-            "pos_h": float("-inf"),
             "pos_err_m": float("nan"),
             "heading_err_rad": float("inf"),
             "planned_path_length_m": float("-inf"),
         }
         for field_name, invalid_value in invalid_fields.items():
             with self.subTest(field=field_name):
-                baseline = _follower_state("R02", pos_err_m=4.0, arrived=1, valid=True, last_update_s=10.0)
-                baseline.pos = _pos(1.0, 2.0, 3.0)
+                baseline = _follower_state("R02", pos_err_m=4.0, last_update_s=10.0)
                 baseline.headingErr_rad = 0.2
                 baseline.plannedPathLength_m = 20.0
                 states = [baseline]
-                msg = _follower_status_msg("R02", pos_east=99.0, pos_err_m=1.0)
+                msg = _follower_status_msg("R02", pos_err_m=1.0)
                 msg.payload[field_name] = invalid_value
 
                 inbound.step(
@@ -1600,20 +1666,17 @@ class FollowerStatusTests(unittest.TestCase):
                 )
 
                 self.assertEqual(states, [baseline])
-                self.assertEqual(baseline.pos, _pos(1.0, 2.0, 3.0))
                 self.assertEqual(baseline.posErr_m, 4.0)
                 self.assertEqual(baseline.lastUpdate_s, 10.0)
 
-        baseline = _follower_state("R02", pos_err_m=4.0, arrived=1, valid=True, last_update_s=10.0)
-        baseline.pos = _pos(1.0, 2.0, 3.0)
-        malformed = _follower_status_msg("R02", pos_east=99.0)
+        baseline = _follower_state("R02", pos_err_m=4.0, last_update_s=10.0)
+        malformed = _follower_status_msg("R02")
         malformed.payload["pos_err_m"] = "非法数值"
         states = [baseline]
         inbound.step(
             FollowerStatusInputS(inbox=[malformed], clock=AlgorithmClockS(now_s=11.0)),
             FollowerStatusOutputS(followerStates=states),
         )
-        self.assertEqual(baseline.pos, _pos(1.0, 2.0, 3.0))
         self.assertEqual(baseline.lastUpdate_s, 10.0)
 
         new_invalid = _follower_status_msg("R03")
@@ -1645,9 +1708,10 @@ class RallyCommunicationTests(unittest.TestCase):
         expected = deepcopy((ctx.leaderState, ctx.cmd))
 
         invalid_states = (
+            (FormStageE.DISBAND, RallyPhaseE.JOINING),
             (FormStageE.HOLD, RallyPhaseE.LOOSE),
             (FormStageE.RALLY, 9),
-            (FormStageE.RECONFIG, RallyPhaseE.JOINING),
+            (99, RallyPhaseE.JOINING),
         )
         for stage, step in invalid_states:
             with self.subTest(stage=stage, step=step):
@@ -2517,7 +2581,6 @@ class RallyJoinPosTests(unittest.TestCase):
         )
 
         self.assertEqual(join.state, RALLY_STATE_EXITED)
-        self.assertTrue(join.reached_slot_once)
 
     def test_single_tick_crossing_from_outside_near_window_consumes_one_loop(self) -> None:
         """多圈计划从 0.4rad 单拍跨到 -0.1rad 时，每拍只消费一圈。"""
@@ -2556,7 +2619,6 @@ class RallyJoinPosTests(unittest.TestCase):
                 ),
                 output,
             )
-        self.assertFalse(after_slot.reached_slot_once)
         self.assertEqual(after_slot.remaining_loops, 1)
 
         noise, noise_output = _join_loitering_with_plan(assigned_loops=1)
@@ -2571,7 +2633,6 @@ class RallyJoinPosTests(unittest.TestCase):
                 ),
                 noise_output,
             )
-        self.assertFalse(noise.reached_slot_once)
         self.assertEqual(noise.remaining_loops, 1)
 
         reverse, reverse_output = _join_loitering_with_plan(assigned_loops=2)
@@ -3416,10 +3477,8 @@ class RallyJoinPosTests(unittest.TestCase):
         self.assertGreater(t_now, 80.0,
             msg="must not exit right after reaching the tangent entry point when its arc angle to M_i is ~350°, not ~10°")
 
-    def test_rally_join_pos_reached_slot_once_stays_false_when_entry_point_lands_just_past_slot_angle(self) -> None:
-        """回归用例：同一个"切入点弦长近、真实弧长约 350°"场景下，进 LOITERING 那一拍
-        reached_slot_once 必须仍是 False（不能被对称弧距 ang_dist 误判成"已到达"，
-        否则会在 T_ref 聚合里被过早剔除，复现"到达 T 就退出 T_ref 聚合"的问题）。"""
+    def test_rally_join_pos_does_not_exit_when_entry_point_lands_just_past_slot_angle(self) -> None:
+        """切入点弦长虽近但真实弧长约 350° 时，进入盘旋首拍不得误切出。"""
 
         join = RallyJoinPos()
         join.init(RallyJoinPosInitS(
@@ -3432,7 +3491,7 @@ class RallyJoinPosTests(unittest.TestCase):
             mission_heading_rad=0.0,
             mission_speed_mps=20.0,
         ))
-        # t_ref_valid=False：只观察进 LOITERING 那一拍的 reached_slot_once，不触发切出评估。
+        # 计划无效时只观察进入 LOITERING 的首拍，不触发切出评估。
         state = _motion(east=-950.08, north=-170.61, h=500.0)
         out = RallyJoinPosOutputS(selfCmd=MotionProfS())
         t_now = 0.0
@@ -3440,9 +3499,7 @@ class RallyJoinPosTests(unittest.TestCase):
         for _ in range(20000):
             _step_rally_join(join, _rally_join_input(selfState=state, t_ref_valid=False, t_now=t_now), out)
             if join.state == RALLY_STATE_LOITERING:
-                self.assertFalse(join.reached_slot_once,
-                    msg="entering LOITERING via a tangent point far from M_i (in true arc-length terms) "
-                        "must not immediately flip reached_slot_once to True")
+                self.assertEqual(join.state, RALLY_STATE_LOITERING)
                 return
             state = _motion(
                 east=state.pos.east + out.selfCmd.v.vEast * dt,
@@ -3542,7 +3599,6 @@ class RallyJoinPosTests(unittest.TestCase):
         assert join._entry_point is not None
         self.assertEqual(join._entry_point, join._slot)
         self.assertEqual(join.state, RALLY_STATE_LOITERING)
-        self.assertFalse(join.reached_slot_once)
 
         _step_rally_join(join,
             _rally_join_input(
@@ -3556,7 +3612,6 @@ class RallyJoinPosTests(unittest.TestCase):
         )
 
         self.assertEqual(join.state, RALLY_STATE_EXITED)
-        self.assertTrue(join.reached_slot_once)
 
     def test_point_before_near_window_exits_on_first_real_crossing(self) -> None:
         """点前约 0.5rad 切入时应保留 away 布防，并在首次真实跨零按零圈计划切出。"""
@@ -3578,7 +3633,6 @@ class RallyJoinPosTests(unittest.TestCase):
                 output,
             )
             self.assertEqual(join.state, RALLY_STATE_LOITERING)
-            self.assertFalse(join.reached_slot_once)
 
         _step_rally_join(join,
             _rally_join_input(
@@ -3592,7 +3646,6 @@ class RallyJoinPosTests(unittest.TestCase):
         )
 
         self.assertEqual(join.state, RALLY_STATE_EXITED)
-        self.assertTrue(join.reached_slot_once)
 
 
 class RallyEntityTests(unittest.TestCase):
@@ -3720,7 +3773,7 @@ class RallyEntityTests(unittest.TestCase):
         self.assertIs(follower_slot._u.selfState, follower.cxt.selfState)
         self.assertIs(leader_route._y.selfCmd, leader.cxt.selfCmd)
         self.assertIs(leader_rally._y.status, leader.cxt.posCalcStatus)
-        self.assertIs(follower_slot._y.posTrackCommand, follower.cxt.posTrackCommand)
+        self.assertIs(follower_slot._y.selfCmd, follower.cxt.selfCmd)
         self.assertFalse(hasattr(leader_route, "_cxt"))
         self.assertFalse(hasattr(leader_rally, "_cxt"))
         self.assertFalse(hasattr(follower_slot, "_cxt"))
@@ -3747,15 +3800,15 @@ class RallyEntityTests(unittest.TestCase):
             ),
             EntityOutputS(),
         )
-        self.assertTrue(follower.cxt.rally_t_ref_valid)
-        self.assertEqual(follower.cxt.rally_loop_counts.get("R02"), 2)
+        self.assertTrue(follower.cxt.rallyPlan.valid)
+        self.assertEqual(follower.cxt.rallyPlan.loop_counts.get("R02"), 2)
 
         follower.reset()
         follower.step(EntityInputS(selfState=state, inbox=[]), EntityOutputS())
 
-        self.assertEqual(follower.cxt.rally_t_ref, 0.0)
-        self.assertFalse(follower.cxt.rally_t_ref_valid)
-        self.assertEqual(follower.cxt.rally_loop_counts, {})
+        self.assertEqual(follower.cxt.rallyPlan.t_ref, 0.0)
+        self.assertFalse(follower.cxt.rallyPlan.valid)
+        self.assertEqual(follower.cxt.rallyPlan.loop_counts, {})
 
     def test_five_aircraft_entities_lock_plan_consume_loops_and_enter_catchup(self) -> None:
         """五实体应经真实消息链路锁存计划、按圈切出并用回传推进 CATCHUP。"""
@@ -3846,7 +3899,7 @@ class RallyEntityTests(unittest.TestCase):
                 inbox=plan_message,
                 now_s=1.0 + index * 10.0,
             ), entry_output)
-            self.assertTrue(follower.cxt.rally_t_ref_valid, msg=node_id)
+            self.assertTrue(follower.cxt.rallyPlan.valid, msg=node_id)
             self.assertEqual(join.remaining_loops, locked_loop_counts[node_id], msg=node_id)
             self.assertEqual(join.state, RALLY_STATE_LOITERING, msg=node_id)
 
@@ -3917,8 +3970,8 @@ class RallyEntityTests(unittest.TestCase):
             EntityOutputS(),
         )
 
-        self.assertFalse(follower.cxt.rally_t_ref_valid)
-        self.assertNotIn("R02", follower.cxt.rally_loop_counts)
+        self.assertFalse(follower.cxt.rallyPlan.valid)
+        self.assertNotIn("R02", follower.cxt.rallyPlan.loop_counts)
 
     def test_follower_receives_own_fixed_loop_assignment(self) -> None:
         """僚机仅在收到本机非负圈数时启用同步计划并接线到位置解算。"""
@@ -3944,8 +3997,8 @@ class RallyEntityTests(unittest.TestCase):
             EntityOutputS(),
         )
 
-        self.assertTrue(follower.cxt.rally_t_ref_valid)
-        self.assertEqual(follower.cxt.rally_loop_counts.get("R02"), 2)
+        self.assertTrue(follower.cxt.rallyPlan.valid)
+        self.assertEqual(follower.cxt.rallyPlan.loop_counts.get("R02"), 2)
 
     def test_rally_follower_joining_uses_speed_only_forward_control(self) -> None:
         """JOINING 前向通道只跟踪协调速度，进入 CATCHUP 后恢复位置跟踪。"""
@@ -4051,7 +4104,6 @@ class RallyEntityTests(unittest.TestCase):
         self.assertGreater(math.hypot(output.selfCmd.v.vEast, output.selfCmd.v.vNorth), 1.0)
         self.assertGreater(abs(output.selfAccCmd.accEast) + abs(output.selfAccCmd.accNorth), 0.01)
         self.assertEqual(output.outbox[0].payload["rally_state"], RALLY_STATE_STANDBY)
-        self.assertEqual(output.outbox[0].payload["arrived"], 0)
 
     def test_rally_follower_standby_keeps_subject_flow_slots(self) -> None:
         """验证僚机待命不在实体主体流程早退，仍经过轨迹规划槽位后再进入位置解算。"""
@@ -4142,9 +4194,8 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         first = _drive_follower_across_rally_slot(follower)
-        # 僚机真实越过目标点且固定计划为零圈 → RallyJoinPos 进入 EXITED，上报 arrived=1。
+        # 僚机真实越过目标点且固定计划为零圈 → RallyJoinPos 进入 EXITED 并上报离散状态。
         self.assertEqual(follower.cxt.posCalcStatus.rally_state, RALLY_STATE_EXITED)
-        self.assertEqual(first.outbox[0].payload["arrived"], 1)
         self.assertEqual(first.outbox[0].payload["rally_state"], RALLY_STATE_EXITED)
 
         second = EntityOutputS()
@@ -4193,7 +4244,7 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         self.assertEqual(follower.cxt.posCalcStatus.rally_state, RALLY_STATE_LOITERING)
-        self.assertEqual(output.outbox[0].payload["arrived"], 0)
+        self.assertEqual(output.outbox[0].payload["rally_state"], RALLY_STATE_LOITERING)
 
     def test_rally_follower_none_clears_join_state_for_compatible_stop(self) -> None:
         """验证僚机进入兼容 NONE 停控时清除 EXITED 位置状态，但不声明新任务生命周期。"""
@@ -4221,10 +4272,9 @@ class RallyEntityTests(unittest.TestCase):
         )
 
         self.assertEqual(follower.cxt.posCalcStatus.rally_state, RALLY_STATE_FLYING)
-        self.assertEqual(none_output.outbox[0].payload["arrived"], 0)
 
     def test_rally_follower_none_outputs_current_position_zero_velocity(self) -> None:
-        """验证僚机收到 NONE 时输出当前位置零速并清到达上报。"""
+        """验证僚机收到 NONE 时输出当前位置和零速度。"""
 
         follower = FollowerEntity()
         follower.init(
@@ -4248,7 +4298,6 @@ class RallyEntityTests(unittest.TestCase):
         assert output.selfCmd is not None
         self.assertEqual(output.selfCmd.pos, PosInEarthS(1.0, 2.0, 3.0))
         self.assertEqual(output.selfCmd.v, VdInEarthS())
-        self.assertEqual(output.outbox[0].payload["arrived"], 0)
 
     def test_rally_leader_outputs_completion_event_once(self) -> None:
         """验证集结长机仅在自然完成转换首帧输出完成事件。"""
@@ -4264,7 +4313,7 @@ class RallyEntityTests(unittest.TestCase):
         )
         # 本用例只验证完成事件，直接把汇合子状态置为已切出，避免固定位置夹具无法模拟完整盘旋轨迹。
         _entity_rally_join(leader)._state = RALLY_STATE_EXITED
-        status = _follower_status_msg("R02", pos_err_m=1.0, arrived=1)
+        status = _follower_status_msg("R02", pos_err_m=1.0)
 
         outputs: list[EntityOutputS] = []
         for now_s in (0.0, 0.1, 0.2, 0.3, 0.4):
@@ -4324,7 +4373,7 @@ class RallyEntityTests(unittest.TestCase):
         leader.step(
             EntityInputS(
                 selfState=_motion(east=0.0, north=0.0, h=500.0, v_east=20.0),
-                inbox=[_follower_status_msg("R02", pos_err_m=1.0, arrived=1)],
+                inbox=[_follower_status_msg("R02", pos_err_m=1.0)],
                 remote=RemoteCmdS(FormStageE.STANDBY),
                 now_s=1.0,
             ),
@@ -4337,7 +4386,7 @@ class RallyEntityTests(unittest.TestCase):
         self.assertFalse(hasattr(leader, "_standby_u"))
         self.assertEqual([state.id for state in leader.cxt.followerStates], ["R02"])
         self.assertEqual(output.outbox[0].topic, "formation.leader")
-        self.assertEqual(output.outbox[0].payload["cmd"]["stage"], int(FormStageE.STANDBY))
+        self.assertEqual(output.outbox[0].payload["cmd"]["stage"], 4)
 
     def test_rally_leader_standby_does_not_clear_entity_state_before_flow(self) -> None:
         """验证 STANDBY 不在实体主体流程前清理已有状态，清理职责不属于待命位置解算。"""
@@ -4357,7 +4406,7 @@ class RallyEntityTests(unittest.TestCase):
         leader.step(
             EntityInputS(
                 selfState=_motion(east=0.0, north=0.0, h=500.0, v_east=20.0),
-                inbox=[_follower_status_msg("R02", pos_err_m=1.0, arrived=1)],
+                inbox=[_follower_status_msg("R02", pos_err_m=1.0)],
                 remote=RemoteCmdS(FormStageE.STANDBY),
                 now_s=1.0,
             ),
@@ -4393,7 +4442,7 @@ class RallyEntityTests(unittest.TestCase):
         leader.step(
             EntityInputS(
                 selfState=_motion(east=0.0, north=0.0, h=500.0, v_east=20.0),
-                inbox=[_follower_status_msg("R02", pos_err_m=1.0, arrived=1)],
+                inbox=[_follower_status_msg("R02", pos_err_m=1.0)],
                 remote=RemoteCmdS(FormStageE.STANDBY),
                 now_s=1.0,
             ),

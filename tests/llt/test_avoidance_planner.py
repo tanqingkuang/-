@@ -38,10 +38,10 @@ def _straights_collision_free(result: PlanResult, obstacles, clearance) -> bool:
     # 属于允许的边界相切。因此把判定半径收一个 epsilon：允许贴边界，但仍拦截真正穿入安全间距的点。
     margin = max(0.0, clearance - 1e-6)
     for line in _route_lines(result):
-        if line.start.turnSign == 0.0:
-            if blocked(obstacles, line.start.pos.east, line.start.pos.north, margin):
+        if line.turnSign == 0.0:
+            if blocked(obstacles, line.start.east, line.start.north, margin):
                 return False
-            if blocked(obstacles, line.end.pos.east, line.end.pos.north, margin):
+            if blocked(obstacles, line.end.east, line.end.north, margin):
                 return False
     return True
 
@@ -52,8 +52,8 @@ def _route_collision_hits(result: PlanResult, obstacles, clearance: float = 0.0)
     for line_index, line in enumerate(_route_lines(result)):
         for sample_index in range(1001):
             ratio = sample_index / 1000.0
-            east = line.start.pos.east + (line.end.pos.east - line.start.pos.east) * ratio
-            north = line.start.pos.north + (line.end.pos.north - line.start.pos.north) * ratio
+            east = line.start.east + (line.end.east - line.start.east) * ratio
+            north = line.start.north + (line.end.north - line.start.north) * ratio
             for obstacle in obstacles:
                 if blocked([obstacle], east, north, clearance):
                     hits.append((line_index, obstacle.id))
@@ -69,8 +69,8 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         result = plan_avoidance_route(wps, [], **COMMON)
         self.assertTrue(result.ok, result.detail)
         lines = _route_lines(result)
-        self.assertEqual(lines[0].start.pos.east, 0.0)
-        self.assertEqual(lines[-1].end.pos.east, 2000.0)
+        self.assertEqual(lines[0].start.east, 0.0)
+        self.assertEqual(lines[-1].end.east, 2000.0)
 
     def test_clear_leg_skips_astar_search(self) -> None:
         wps = [(0.0, 0.0, 1000.0), (2000.0, 0.0, 1000.0), (4000.0, 0.0, 1000.0)]
@@ -169,7 +169,7 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         result = plan_avoidance_route(wps, obstacles, **COMMON)
         self.assertTrue(result.ok, result.detail)
         lines = _route_lines(result)
-        self.assertTrue(any(line.start.turnSign != 0.0 for line in lines))
+        self.assertTrue(any(line.turnSign != 0.0 for line in lines))
         self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))
 
     def test_hug_arc_rescues_fixed_radius_leg_too_short(self) -> None:
@@ -187,7 +187,7 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         assert result.route is not None
         from src.algorithm.units.algo.arc_path import arc_radius
 
-        arcs = [ln for ln in _route_lines(result) if ln.start.turnSign != 0.0]
+        arcs = [ln for ln in _route_lines(result) if ln.turnSign != 0.0]
         self.assertTrue(arcs, "应折叠出贴障弧")
         # 至少有一段弧的半径是障碍膨胀半径(600)，而不是最小转弯半径(400)。
         self.assertTrue(any(abs(arc_radius(a) - 600.0) < 1.0 for a in arcs))
@@ -197,10 +197,10 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
         result = plan_avoidance_route(wps, [make_circle("C1", 900.0, 0.0, 180.0)], **COMMON)
         self.assertTrue(result.ok, result.detail)
         lines = _route_lines(result)
-        self.assertAlmostEqual(lines[0].start.pos.h, 1000.0)
-        self.assertAlmostEqual(lines[-1].end.pos.h, 1400.0)
+        self.assertAlmostEqual(lines[0].start.h, 1000.0)
+        self.assertAlmostEqual(lines[-1].end.h, 1400.0)
         # 高度沿航线单调上升。
-        heights = [line.start.pos.h for line in lines] + [lines[-1].end.pos.h]
+        heights = [line.start.h for line in lines] + [lines[-1].end.h]
         self.assertTrue(all(b >= a - 1e-6 for a, b in zip(heights, heights[1:])))
 
     def test_endpoint_in_obstacle_reports_code(self) -> None:
@@ -248,7 +248,7 @@ class PlanAvoidanceRouteTests(unittest.TestCase):
             self.assertTrue(result.ok, result.detail)
             lines = _route_lines(result)
             self.assertTrue(
-                any(line.start.turnSign != 0.0 for line in lines),
+                any(line.turnSign != 0.0 for line in lines),
                 f"allow_arc={allow_arc} 长机展开后应有圆弧段(平滑过弯)",
             )
             self.assertTrue(_straights_collision_free(result, obstacles, CLEARANCE))

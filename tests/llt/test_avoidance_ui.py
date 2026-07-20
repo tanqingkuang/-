@@ -240,8 +240,8 @@ class RouteToPolylineTests(unittest.TestCase):
             PosInEarthS(0.0, 0.0, 0.0), PosInEarthS(1000.0, 0.0, 0.0), PosInEarthS(1000.0, 1000.0, 0.0), 200.0
         )
         route = [
-            WayPointInputS(idx=0, pos=t1, turnSign=sign, center=center),
-            WayPointInputS(idx=1, pos=t2),
+            WayPointInputS(pos=t1, turnSign=sign, center=center),
+            WayPointInputS(pos=t2),
         ]
         markers = preview_route_marker_points(route)
         self.assertEqual(len(markers), 2)
@@ -256,8 +256,8 @@ class RouteToPolylineTests(unittest.TestCase):
             PosInEarthS(0.0, 0.0, 0.0), PosInEarthS(1000.0, 0.0, 0.0), PosInEarthS(1000.0, 1000.0, 0.0), 200.0
         )
         route = [
-            WayPointInputS(idx=0, pos=t1, turnSign=sign, center=center),
-            WayPointInputS(idx=1, pos=t2),
+            WayPointInputS(pos=t1, turnSign=sign, center=center),
+            WayPointInputS(pos=t2),
         ]
         poly = route_to_polyline(route)
         self.assertGreater(len(poly), 2)
@@ -535,13 +535,12 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         output = Path(temp_dir.name) / "avoidance_output"
         route = [
             WayPointInputS(
-                idx=0,
                 pos=PosInEarthS(0.0, 0.0, 1000.0),
                 vdCmd=18.0,
                 turnSign=1.0,
                 center=PosInEarthS(0.0, 100.0, 1000.0),
             ),
-            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 100.0, 1000.0), vdCmd=18.0),
+            WayPointInputS(pos=PosInEarthS(100.0, 100.0, 1000.0), vdCmd=18.0),
         ]
         window._preview_route = route
         window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=39.0, longitude_deg=116.0)
@@ -575,8 +574,8 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         self.addCleanup(temp_dir.cleanup)
         output = Path(temp_dir.name) / "manual_name"
         window._preview_route = [
-            WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
-            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
         ]
         window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=31.0, longitude_deg=118.0)
         window.export_route_button.setEnabled(True)
@@ -609,8 +608,8 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         )
         window.current_config_path = config_path
         window._preview_route = [
-            WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
-            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
         ]
 
         with patch("src.ui.gui.main_window_avoidance.QFileDialog.getSaveFileName", return_value=("", "")) as dialog:
@@ -628,13 +627,12 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         output = Path(temp_dir.name) / "manual_name.XML"
         window._preview_route = [
             WayPointInputS(
-                idx=0,
                 pos=PosInEarthS(0.0, 0.0, 2400.0),
                 vdCmd=45.0,
                 turnSign=1.0,
                 center=PosInEarthS(0.0, 100.0, 2400.0),
             ),
-            WayPointInputS(idx=1, pos=PosInEarthS(100.0, 100.0, 2400.0), vdCmd=45.0),
+            WayPointInputS(pos=PosInEarthS(100.0, 100.0, 2400.0), vdCmd=45.0),
         ]
         window._avoidance_params.geo_origin = GeoOrigin(latitude_deg=31.0, longitude_deg=118.0)
         window.export_route_button.setEnabled(True)

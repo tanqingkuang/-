@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import atan2, ceil, cos, degrees, hypot, radians, sin, tan
 
-from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS  # noqa: F401  WayPointS via WayLineS
+from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS
 from src.algorithm.units.algo.arc_path import arc_swept_rad, corner_arc
 
 from .obstacle import ObstacleS, inside
@@ -110,12 +110,10 @@ def _arc_sample_points(arc: tuple, radius: float, step: float) -> list[Point]:
     """采样圆弧 T1→T2 上的点（含两端）。注意：复用 arc_swept_rad 求扫掠角，按弧长密采。"""
     t1, t2, center, turn_sign = arc
     line = WayLineS(
-        start=WayPointS(
-            pos=PosInEarthS(t1.east, t1.north, t1.h),
-            turnSign=turn_sign,
-            center=PosInEarthS(center.east, center.north, center.h),
-        ),
-        end=WayPointS(pos=PosInEarthS(t2.east, t2.north, t2.h)),
+        start=PosInEarthS(t1.east, t1.north, t1.h),
+        end=PosInEarthS(t2.east, t2.north, t2.h),
+        turnSign=turn_sign,
+        center=PosInEarthS(center.east, center.north, center.h),
     )
     swept = arc_swept_rad(line)
     arc_length = radius * abs(swept)

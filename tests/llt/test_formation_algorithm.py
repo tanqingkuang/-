@@ -18,7 +18,6 @@ from src.algorithm.context.leaf_types import (
     PosTrackDiagS,
     VdInEarthS,
     WayLineS,
-    WayPointS,
     copy_motion,
 )
 from src.algorithm.entity.types import EntityRuntimeS, VelCmdLimitS
@@ -233,8 +232,9 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=3.0, north=4.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
-            end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
+            start=PosInEarthS(0.0, 0.0, 5.0),
+            end=PosInEarthS(10.0, 0.0, 5.0),
+            vdCmd=7.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
@@ -253,8 +253,9 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=3.0, north=4.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
-            end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
+            start=PosInEarthS(0.0, 0.0, 5.0),
+            end=PosInEarthS(10.0, 0.0, 5.0),
+            vdCmd=7.0,
         )
         route = RouteInterp()
         route.init(RouteInterpInitS(lookAheadDistance=2.0))
@@ -274,8 +275,9 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=5.0, north=0.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(5.0, 5.0, 5.0), vdCmd=10.0),
-            end=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0)),
+            start=PosInEarthS(5.0, 5.0, 5.0),
+            end=PosInEarthS(0.0, 0.0, 5.0),
+            vdCmd=10.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
@@ -294,8 +296,9 @@ class PosCalcTests(unittest.TestCase):
         ctx = FormContextS()
         ctx.selfState = _motion(east=15.0, north=3.0, h=5.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 5.0), vdCmd=7.0),
-            end=WayPointS(pos=PosInEarthS(10.0, 0.0, 5.0)),
+            start=PosInEarthS(0.0, 0.0, 5.0),
+            end=PosInEarthS(10.0, 0.0, 5.0),
+            vdCmd=7.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
@@ -315,8 +318,9 @@ class PosCalcTests(unittest.TestCase):
         # 起点放在航段起点，专注校验速度分解；航段水平 3-4-5、爬升 30m。
         ctx.selfState = _motion(east=0.0, north=0.0, h=1000.0)
         ctx.wayLine = WayLineS(
-            start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
-            end=WayPointS(pos=PosInEarthS(30.0, 40.0, 1030.0)),
+            start=PosInEarthS(0.0, 0.0, 1000.0),
+            end=PosInEarthS(30.0, 40.0, 1030.0),
+            vdCmd=50.0,
         )
         u = RouteInterpInputS(selfState=ctx.selfState, wayLine=ctx.wayLine)
         y = RouteInterpOutputS(selfCmd=ctx.selfCmd)
@@ -329,7 +333,6 @@ class PosCalcTests(unittest.TestCase):
         self.assertAlmostEqual(ctx.selfCmd.v.vUp, 30.0)
         # 核心回归点：地速恒等于 vdCmd，不被爬升角的 cosγ 压小。
         self.assertAlmostEqual(ctx.selfCmd.v.vd, 50.0)
-        self.assertAlmostEqual(ctx.selfCmd.v.vTheta, math.atan2(30.0, 50.0))
         self.assertAlmostEqual(ctx.selfCmd.v.vPsi, math.atan2(40.0, 30.0))
 
     def test_route_interp_rejects_pure_vertical_segment(self) -> None:
@@ -338,8 +341,9 @@ class PosCalcTests(unittest.TestCase):
         u = RouteInterpInputS(
             selfState=_motion(h=1000.0),
             wayLine=WayLineS(
-                start=WayPointS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=50.0),
-                end=WayPointS(pos=PosInEarthS(0.0, 0.0, 1100.0)),
+                start=PosInEarthS(0.0, 0.0, 1000.0),
+                end=PosInEarthS(0.0, 0.0, 1100.0),
+                vdCmd=50.0,
             ),
         )
         with self.assertRaisesRegex(ValueError, "horizontal"):
@@ -350,13 +354,11 @@ class PosCalcTests(unittest.TestCase):
 
         # 东->南右转圆弧，R=400：切入(1600,0)、切出(2000,-400)、圆心(1600,-400)、turnSign=-1。
         line = WayLineS(
-            start=WayPointS(
-                pos=PosInEarthS(1600.0, 0.0, 1000.0),
-                vdCmd=20.0,
-                turnSign=-1.0,
-                center=PosInEarthS(1600.0, -400.0, 1000.0),
-            ),
-            end=WayPointS(pos=PosInEarthS(2000.0, -400.0, 1000.0)),
+            start=PosInEarthS(1600.0, 0.0, 1000.0),
+            end=PosInEarthS(2000.0, -400.0, 1000.0),
+            vdCmd=20.0,
+            turnSign=-1.0,
+            center=PosInEarthS(1600.0, -400.0, 1000.0),
         )
         # 飞机恰在弧中点(进度 0.5)，航向东南(-45°)。
         mid_e = 1600.0 + 400.0 * math.cos(math.pi / 4.0)
@@ -1218,33 +1220,33 @@ class ProcessUnitTests(unittest.TestCase):
             LeaderRouteInitS(
                 [
                     WayLineS(
-                        idx=0,
-                        start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0),
-                        end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(100.0, 0.0, 1000.0),
+                        vdCmd=8.0,
                     ),
                     WayLineS(
-                        idx=1,
-                        start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=8.0),
-                        end=WayPointS(idx=2, pos=PosInEarthS(200.0, 0.0, 1000.0)),
+                        start=PosInEarthS(100.0, 0.0, 1000.0),
+                        end=PosInEarthS(200.0, 0.0, 1000.0),
+                        vdCmd=8.0,
                     ),
                 ]
             )
         )
         copy_motion(_motion(east=50.0, h=1000.0), ctx.selfState)
         planner.step()
-        self.assertEqual(ctx.wayLine.idx, 0)
+        self.assertEqual(ctx.wayLine.start.east, 0.0)
 
         copy_motion(_motion(east=120.0, h=1000.0), ctx.selfState)
         planner.step()
-        self.assertEqual(ctx.wayLine.idx, 1)
-        original_end = ctx.wayLine.end.pos.east
+        self.assertEqual(ctx.wayLine.start.east, 100.0)
+        original_end = ctx.wayLine.end.east
 
         noop = Noop()
         noop.bind(EntityRuntimeS(context=ctx))
         noop.init(TraPlanInitS())
         noop.step()
 
-        self.assertEqual(ctx.wayLine.end.pos.east, original_end)
+        self.assertEqual(ctx.wayLine.end.east, original_end)
 
     def test_leader_route_switches_by_20deg_turn_radius(self) -> None:
         """验证多航段交接按 20deg 坡度转弯半径乘 1.2 裕度提前切到下一航段。"""
@@ -1256,14 +1258,14 @@ class ProcessUnitTests(unittest.TestCase):
             LeaderRouteInitS(
                 [
                     WayLineS(
-                        idx=0,
-                        start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=10.0),
-                        end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(100.0, 0.0, 1000.0),
+                        vdCmd=10.0,
                     ),
                     WayLineS(
-                        idx=1,
-                        start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=10.0),
-                        end=WayPointS(idx=2, pos=PosInEarthS(100.0, 100.0, 1000.0)),
+                        start=PosInEarthS(100.0, 0.0, 1000.0),
+                        end=PosInEarthS(100.0, 100.0, 1000.0),
+                        vdCmd=10.0,
                     ),
                 ]
             )
@@ -1271,11 +1273,11 @@ class ProcessUnitTests(unittest.TestCase):
 
         copy_motion(_motion(east=65.0, h=1000.0), ctx.selfState)
         planner.step()
-        self.assertEqual(ctx.wayLine.idx, 0)
+        self.assertEqual(ctx.wayLine.start.east, 0.0)
 
         copy_motion(_motion(east=73.0, h=1000.0), ctx.selfState)
         planner.step()
-        self.assertEqual(ctx.wayLine.idx, 1)
+        self.assertEqual(ctx.wayLine.start.east, 100.0)
 
     def test_leader_route_switch_distance_scales_with_heading_change(self) -> None:
         """验证非 90deg 转弯按 R*tan(delta_psi/2) 提前切段，避免浅转弯过早切角。"""
@@ -1287,14 +1289,14 @@ class ProcessUnitTests(unittest.TestCase):
             LeaderRouteInitS(
                 [
                     WayLineS(
-                        idx=0,
-                        start=WayPointS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=10.0),
-                        end=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0)),
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(100.0, 0.0, 1000.0),
+                        vdCmd=10.0,
                     ),
                     WayLineS(
-                        idx=1,
-                        start=WayPointS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=10.0),
-                        end=WayPointS(idx=2, pos=PosInEarthS(186.6, 50.0, 1000.0)),
+                        start=PosInEarthS(100.0, 0.0, 1000.0),
+                        end=PosInEarthS(186.6, 50.0, 1000.0),
+                        vdCmd=10.0,
                     ),
                 ]
             )
@@ -1302,11 +1304,11 @@ class ProcessUnitTests(unittest.TestCase):
 
         copy_motion(_motion(east=80.0, h=1000.0), ctx.selfState)
         planner.step()
-        self.assertEqual(ctx.wayLine.idx, 0)
+        self.assertEqual(ctx.wayLine.start.east, 0.0)
 
         copy_motion(_motion(east=93.0, h=1000.0), ctx.selfState)
         planner.step()
-        self.assertEqual(ctx.wayLine.idx, 1)
+        self.assertEqual(ctx.wayLine.start.east, 100.0)
 
     def test_leader_broadcast_targets_topology_and_inbound_parses_latest(self) -> None:
         """验证长机广播按拓扑生成多播目标，僚机收消息解析长机状态和编队指令。"""

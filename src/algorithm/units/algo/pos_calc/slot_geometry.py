@@ -12,9 +12,6 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     MotionProfS,
     PosCalcStatusS,
-    PosCalcStrategyE,
-    PosTrackCommandE,
-    PosTrackCommandS,
     RallyPhaseE,
     copy_velocity,
 )
@@ -77,7 +74,6 @@ class SlotGeometryOutputS:
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
-    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
 
 
 class SlotGeometry(PosCalcBase):
@@ -111,7 +107,6 @@ class SlotGeometry(PosCalcBase):
         self._y = SlotGeometryOutputS(
             selfCmd=cxt.selfCmd,
             status=cxt.posCalcStatus,
-            posTrackCommand=cxt.posTrackCommand,
         )
         self._bound = True
 
@@ -211,24 +206,14 @@ class SlotGeometry(PosCalcBase):
             y.selfCmd.v.vNorth = frame.v.vNorth + rel_n
             y.selfCmd.v.vUp = frame.v.vUp + rel_u
         # 前向待飞距闭环已下沉到 PidCompose；本单元只产出几何目标与刚体/重构速度前馈。
-        # 三个 ENU 速度分量更新后必须同步派生 vd、vPsi、vTheta，保证下游读到自洽指令。
+        # 三个 ENU 速度分量更新后必须同步派生 vd、vPsi，保证下游读到自洽指令。
         y.selfCmd.v.vd = math.hypot(y.selfCmd.v.vEast, y.selfCmd.v.vNorth)
         y.selfCmd.v.vPsi = (
             math.atan2(y.selfCmd.v.vNorth, y.selfCmd.v.vEast)
             if y.selfCmd.v.vd > 0.0
             else 0.0
         )
-        y.selfCmd.v.vTheta = math.atan2(y.selfCmd.v.vUp, y.selfCmd.v.vd)
-        self._write_common_output(y)
         return None
-
-    def _write_common_output(self, y: SlotGeometryOutputS) -> None:
-        """完整填写本策略公共输出。"""
-        if y.status is not None:
-            # 槽位策略只拥有活动策略字段，不清除已完成的集结诊断。
-            y.status.active_strategy = PosCalcStrategyE.SLOT_GEOMETRY
-        if y.posTrackCommand is not None:
-            y.posTrackCommand.mode = PosTrackCommandE.POSITION_TRACK
 
     def reset(self) -> None:
         """复位 SlotGeometry 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""

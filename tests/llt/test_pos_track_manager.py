@@ -9,7 +9,6 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     MotionProfS,
     PosInEarthS,
-    PosTrackCommandE,
     RallyPhaseE,
     VdInEarthS,
 )
@@ -29,7 +28,7 @@ from src.algorithm.units.algo.pos_track import (
 )
 
 
-def _runtime(command: PosTrackCommandE) -> EntityRuntimeS:
+def _runtime() -> EntityRuntimeS:
     """构造完整绑定的位置跟踪运行环境。"""
 
     runtime = EntityRuntimeS()
@@ -41,7 +40,6 @@ def _runtime(command: PosTrackCommandE) -> EntityRuntimeS:
         pos=PosInEarthS(100.0, 0.0, 500.0),
         v=VdInEarthS(vEast=10.0, vd=10.0),
     )
-    runtime.context.posTrackCommand.mode = command
     return runtime
 
 
@@ -62,8 +60,8 @@ class PosTrackManagerTests(unittest.TestCase):
 
         leader = PosTrackManager()
         follower = PosTrackManager()
-        leader.bind(_runtime(PosTrackCommandE.NOOP))
-        follower.bind(_runtime(PosTrackCommandE.NOOP))
+        leader.bind(_runtime())
+        follower.bind(_runtime())
         leader.init(_entity_cfg())
         follower.init(_entity_cfg(FOLLOWER_PROFILE))
 
@@ -84,7 +82,7 @@ class PosTrackManagerTests(unittest.TestCase):
         """运行期应查完整表，不能继续按 PosCalc 控制命令选择产品。"""
 
         manager = PosTrackManager()
-        runtime = _runtime(PosTrackCommandE.POSITION_TRACK)
+        runtime = _runtime()
         runtime.context.cmd.stage = FormStageE.STANDBY
         runtime.context.cmd.step = RallyPhaseE.JOINING
         manager.bind(runtime)
@@ -107,20 +105,20 @@ class PosTrackManagerTests(unittest.TestCase):
         """运行期遇到表外状态必须失败，不能退回 PosCalc 控制命令。"""
 
         manager = PosTrackManager()
-        runtime = _runtime(PosTrackCommandE.SPEED_TRACK)
-        runtime.context.cmd.stage = FormStageE.RECONFIG
+        runtime = _runtime()
+        runtime.context.cmd.stage = 99  # type: ignore[assignment]
         runtime.context.cmd.step = RallyPhaseE.JOINING
         manager.bind(runtime)
         manager.init(_entity_cfg())
 
-        with self.assertRaisesRegex(ValueError, "未配置"):
+        with self.assertRaisesRegex(ValueError, "非法"):
             manager.step()
 
     def test_noop_clears_control_output(self) -> None:
         """NOOP 应只清零加速度并保留既有诊断和 PosCalc 目标快照。"""
 
         manager = PosTrackManager()
-        runtime = _runtime(PosTrackCommandE.NOOP)
+        runtime = _runtime()
         runtime.context.cmd.stage = FormStageE.NONE
         manager.bind(runtime)
         manager.init(_entity_cfg())

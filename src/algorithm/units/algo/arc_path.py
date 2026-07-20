@@ -1,8 +1,8 @@
 """航线圆弧几何工具。注意：仅处理水平面(东/北)几何，高度由调用方按进度线性插值。
 
 约定：转向符号 turn_sign：+1 左转(逆时针/CCW)、-1 右转(顺时针/CW)，与航迹偏航角速率 dVPsi 同号。
-圆弧航段 WayLineS：start.pos=切入点、end.pos=切出点、start.turnSign=转向、start.center=圆心。
-半径由 start.pos 与 start.center 的距离推导，不再作为顶层字段存储。
+圆弧航段 WayLineS：start=切入点、end=切出点、turnSign=转向、center=圆心。
+半径由 start 与 center 的距离推导，不再作为独立字段存储。
 """
 
 from __future__ import annotations
@@ -145,62 +145,62 @@ def common_tangent(
 
 
 def arc_radius(line: WayLineS) -> float:
-    """从 start.pos 到 start.center 距离推导圆弧半径。注意：仅对 start.turnSign!=0 的圆弧段有意义。"""
+    """从 start 到 center 距离推导圆弧半径。注意：仅对 turnSign!=0 的圆弧段有意义。"""
     return math.hypot(
-        line.start.pos.east - line.start.center.east,
-        line.start.pos.north - line.start.center.north,
+        line.start.east - line.center.east,
+        line.start.north - line.center.north,
     )
 
 
 def arc_swept_rad(line: WayLineS) -> float:
-    """求圆弧航段的扫掠角(带符号，左正)。注意：仅用于 start.turnSign!=0 的圆弧段。"""
-    center = line.start.center
-    a_start = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
-    a_end = math.atan2(line.end.pos.north - center.north, line.end.pos.east - center.east)
+    """求圆弧航段的扫掠角(带符号，左正)。注意：仅用于 turnSign!=0 的圆弧段。"""
+    center = line.center
+    a_start = math.atan2(line.start.north - center.north, line.start.east - center.east)
+    a_end = math.atan2(line.end.north - center.north, line.end.east - center.east)
     delta = math.atan2(math.sin(a_end - a_start), math.cos(a_end - a_start))  # wrap 到 (-pi,pi]
     # 取与 turnSign 同向的扫掠；若 wrap 后符号相反，补一圈到同向。
-    if line.start.turnSign >= 0.0 and delta < 0.0:
+    if line.turnSign >= 0.0 and delta < 0.0:
         delta += 2.0 * math.pi
-    elif line.start.turnSign < 0.0 and delta > 0.0:
+    elif line.turnSign < 0.0 and delta > 0.0:
         delta -= 2.0 * math.pi
     return delta
 
 
 def segment_length(line: WayLineS) -> float:
     """求航段水平长度。注意：直线取首末水平距离，圆弧取 R·|扫掠角|。"""
-    if line.start.turnSign != 0.0:
+    if line.turnSign != 0.0:
         return arc_radius(line) * abs(arc_swept_rad(line))
     return math.hypot(
-        line.end.pos.east - line.start.pos.east,
-        line.end.pos.north - line.start.pos.north,
+        line.end.east - line.start.east,
+        line.end.north - line.start.north,
     )
 
 
 def heading_at_s(line: WayLineS, s: float) -> float:
     """求航段在距起点弧长 s 处的航迹航向(弧度)。注意：s 会被钳到 [0, 段长]。"""
-    if line.start.turnSign != 0.0:
+    if line.turnSign != 0.0:
         r = arc_radius(line)
         swept = arc_swept_rad(line)
         total = r * abs(swept)
         s = max(0.0, min(total, s))
         sign = 1.0 if swept >= 0.0 else -1.0
-        center = line.start.center
-        a_start = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
+        center = line.center
+        a_start = math.atan2(line.start.north - center.north, line.start.east - center.east)
         radial = a_start + sign * (s / r)
         return radial + sign * (math.pi / 2.0)  # 切向 = 径向转 90°(按转向)
     return math.atan2(
-        line.end.pos.north - line.start.pos.north,
-        line.end.pos.east - line.start.pos.east,
+        line.end.north - line.start.north,
+        line.end.east - line.start.east,
     )
 
 
 def project_arc(line: WayLineS, east: float, north: float) -> tuple[PosInEarthS, float, float, float]:
     """把一点投影到圆弧航段。返回 (投影点, 弧长 s, 进度[0,1], 该处航向)。注意：投影钳在弧两端之间。"""
     r = arc_radius(line)
-    center = line.start.center
+    center = line.center
     swept = arc_swept_rad(line)
     sign = 1.0 if swept >= 0.0 else -1.0
-    a_start = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
+    a_start = math.atan2(line.start.north - center.north, line.start.east - center.east)
     a_pt = math.atan2(north - center.north, east - center.east)
     # 相对起点的有向夹角，折算到转向方向并钳进弧内。
     delta = math.atan2(math.sin(a_pt - a_start), math.cos(a_pt - a_start))
@@ -220,4 +220,4 @@ def project_arc(line: WayLineS, east: float, north: float) -> tuple[PosInEarthS,
 
 def _lerp_height(line: WayLineS, progress: float) -> float:
     """按进度在圆弧首末点之间线性插值高度。注意：水平转弯通常首末等高。"""
-    return line.start.pos.h + (line.end.pos.h - line.start.pos.h) * progress
+    return line.start.h + (line.end.h - line.start.h) * progress

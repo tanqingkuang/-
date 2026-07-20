@@ -9,9 +9,6 @@ from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosCalcStatusS,
-    PosCalcStrategyE,
-    PosTrackCommandE,
-    PosTrackCommandS,
     WayLineS,
 )
 from src.algorithm.units.algo import arc_path
@@ -44,7 +41,6 @@ class RouteInterpOutputS:
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
-    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
 
 
 class RouteInterp(PosCalcBase):
@@ -68,7 +64,6 @@ class RouteInterp(PosCalcBase):
         self._y = RouteInterpOutputS(
             selfCmd=cxt.selfCmd,
             status=cxt.posCalcStatus,
-            posTrackCommand=cxt.posTrackCommand,
         )
         self._bound = True
 
@@ -97,26 +92,17 @@ class RouteInterp(PosCalcBase):
             raise ValueError("RouteInterp ports must be bound")
         # 从这里开始只使用策略私有端口，不读取共享黑板。
         line = u.wayLine
-        if line.start.turnSign != 0.0:
+        if line.turnSign != 0.0:
             self._interp_arc(line, u.selfState, y.selfCmd)
         else:
             self._interp_straight(line, u.selfState, y.selfCmd)
         # 曲率前馈(直线/圆弧通用)：dVPsi = vd·κ_ff，κ_ff 为 σ 前瞻窗内的平均曲率(航向差/窗长)。
         y.selfCmd.v.dVPsi = self._curvature_ff(u)
-        self._write_common_output(y)
-
-    def _write_common_output(self, y: RouteInterpOutputS) -> None:
-        """完整填写本策略公共输出。"""
-        if y.status is not None:
-            # 航线策略不拥有集结诊断，只更新公共活动策略字段。
-            y.status.active_strategy = PosCalcStrategyE.ROUTE_INTERP
-        if y.posTrackCommand is not None:
-            y.posTrackCommand.mode = PosTrackCommandE.SPEED_TRACK
 
     def _interp_straight(self, line: WayLineS, self_state: MotionProfS, self_cmd: MotionProfS) -> None:
         """直线航段：把本体投影到航段并按 L1 延拓，给出目标位置与沿航段速度。注意：行为与历史一致。"""
-        start = line.start.pos
-        end = line.end.pos
+        start = line.start
+        end = line.end
         dx = end.east - start.east
         dy = end.north - start.north
         dz = end.h - start.h
@@ -139,12 +125,11 @@ class RouteInterp(PosCalcBase):
         hlen = math.hypot(dx, dy)
         if hlen <= 0.0:
             raise ValueError("wayLine must have non-zero horizontal length")
-        self_cmd.v.vEast = line.start.vdCmd * dx / hlen
-        self_cmd.v.vNorth = line.start.vdCmd * dy / hlen
-        self_cmd.v.vUp = line.start.vdCmd * dz / hlen
+        self_cmd.v.vEast = line.vdCmd * dx / hlen
+        self_cmd.v.vNorth = line.vdCmd * dy / hlen
+        self_cmd.v.vUp = line.vdCmd * dz / hlen
         self_cmd.v.vd = math.hypot(self_cmd.v.vEast, self_cmd.v.vNorth)
-        self_cmd.v.vTheta = math.atan2(self_cmd.v.vUp, self_cmd.v.vd) if line.start.vdCmd else 0.0
-        self_cmd.v.vPsi = math.atan2(self_cmd.v.vNorth, self_cmd.v.vEast) if line.start.vdCmd else 0.0
+        self_cmd.v.vPsi = math.atan2(self_cmd.v.vNorth, self_cmd.v.vEast) if line.vdCmd else 0.0
 
     def _interp_arc(self, line: WayLineS, self_state: MotionProfS, self_cmd: MotionProfS) -> None:
         """圆弧航段：把本体投影到弧上(目标点=投影点，避免前视弓高)，给出切向速度。"""
@@ -154,13 +139,12 @@ class RouteInterp(PosCalcBase):
         self_cmd.pos.h = proj.h
         # 垂向按弧首末高度沿弧长线性变化(水平转弯时通常为 0)。
         seg_len = arc_path.segment_length(line)
-        slope = (line.end.pos.h - line.start.pos.h) / seg_len if seg_len > 0.0 else 0.0
-        self_cmd.v.vEast = line.start.vdCmd * math.cos(heading)
-        self_cmd.v.vNorth = line.start.vdCmd * math.sin(heading)
-        self_cmd.v.vUp = line.start.vdCmd * slope
+        slope = (line.end.h - line.start.h) / seg_len if seg_len > 0.0 else 0.0
+        self_cmd.v.vEast = line.vdCmd * math.cos(heading)
+        self_cmd.v.vNorth = line.vdCmd * math.sin(heading)
+        self_cmd.v.vUp = line.vdCmd * slope
         self_cmd.v.vd = math.hypot(self_cmd.v.vEast, self_cmd.v.vNorth)
-        self_cmd.v.vTheta = math.atan2(self_cmd.v.vUp, self_cmd.v.vd) if line.start.vdCmd else 0.0
-        self_cmd.v.vPsi = heading if line.start.vdCmd else 0.0
+        self_cmd.v.vPsi = heading if line.vdCmd else 0.0
         del progress  # 进度仅用于内部高度插值，已在 project_arc 内处理
 
     def _curvature_ff(self, u: RouteInterpInputS) -> float:
@@ -176,7 +160,7 @@ class RouteInterp(PosCalcBase):
         remain = seg_len - s0
         if lead <= remain:
             psi1 = arc_path.heading_at_s(line, s0 + lead)
-        elif u.nextWayLine is not None and u.nextWayLine.start.turnSign != 0.0:
+        elif u.nextWayLine is not None and u.nextWayLine.turnSign != 0.0:
             # 仅当下一段是圆弧才跨段前瞻；直线下一段(含尖角)不跨，避免在直线上凭空前馈。
             psi1 = arc_path.heading_at_s(u.nextWayLine, lead - remain)
         else:
@@ -191,13 +175,13 @@ class RouteInterp(PosCalcBase):
 
 def _arclength_on(line: WayLineS, east: float, north: float) -> float:
     """求一点在航段上的投影弧长。注意：直线取水平投影并钳在段内，圆弧取弧投影。"""
-    if line.start.turnSign != 0.0:
+    if line.turnSign != 0.0:
         _proj, s, _prog, _hdg = arc_path.project_arc(line, east, north)
         return s
-    dx = line.end.pos.east - line.start.pos.east
-    dy = line.end.pos.north - line.start.pos.north
+    dx = line.end.east - line.start.east
+    dy = line.end.north - line.start.north
     hlen2 = dx * dx + dy * dy
     if hlen2 <= 0.0:
         return 0.0
-    t = ((east - line.start.pos.east) * dx + (north - line.start.pos.north) * dy) / hlen2
+    t = ((east - line.start.east) * dx + (north - line.start.north) * dy) / hlen2
     return max(0.0, min(1.0, t)) * math.sqrt(hlen2)

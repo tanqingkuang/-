@@ -186,8 +186,8 @@ class SimControlRallyTests(unittest.TestCase):
             self.addCleanup(controller.close)
             controller.load_config(str(_write_json(Path(tmp), _rally_config())))
             override = [
-                WayPointInputS(idx=0, pos=PosInEarthS(east=100.0, north=200.0, h=500.0), vdCmd=20.0),
-                WayPointInputS(idx=1, pos=PosInEarthS(east=100.0, north=400.0, h=500.0), vdCmd=20.0),
+                WayPointInputS(pos=PosInEarthS(east=100.0, north=200.0, h=500.0), vdCmd=20.0),
+                WayPointInputS(pos=PosInEarthS(east=100.0, north=400.0, h=500.0), vdCmd=20.0),
             ]
 
             result = controller.apply_avoidance_route(override)

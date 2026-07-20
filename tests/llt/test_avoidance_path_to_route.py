@@ -12,7 +12,7 @@ from src.algorithm.units.process.tra_plan.avoidance.obstacle import (
     blocked,
     make_circle,
 )
-from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS
+from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS
 from src.algorithm.units.algo.arc_path import arc_swept_rad
 from src.algorithm.units.process.tra_plan.avoidance.path_to_route import (
     assign_transition_radius,
@@ -114,14 +114,14 @@ class PointsToRouteTests(unittest.TestCase):
             [(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0
         )
         lines = waypoint_inputs_to_waylines(wpi)
-        arcs = [ln for ln in lines if ln.start.turnSign != 0.0]
+        arcs = [ln for ln in lines if ln.turnSign != 0.0]
         self.assertEqual(len(arcs), 1)
         arc = arcs[0]
         # 左转（东→北）turnSign 应为 +1，且圆心到两切点距离均为 R。
-        self.assertEqual(arc.start.turnSign, 1.0)
+        self.assertEqual(arc.turnSign, 1.0)
         r = arc_radius(arc)
         self.assertAlmostEqual(r, 200.0)
-        r_end = math.hypot(arc.end.pos.east - arc.start.center.east, arc.end.pos.north - arc.start.center.north)
+        r_end = math.hypot(arc.end.east - arc.center.east, arc.end.north - arc.center.north)
         self.assertAlmostEqual(r_end, 200.0, places=6)
         # 圆弧段长 = R·|扫掠角|，90° 转弯 ≈ R·pi/2。
         self.assertAlmostEqual(segment_length(arc), 200.0 * math.pi / 2.0, places=3)
@@ -135,16 +135,16 @@ class PointsToRouteTests(unittest.TestCase):
         lines = waypoint_inputs_to_waylines(wpi)
 
         self.assertEqual(len(lines), 2)
-        self.assertTrue(all(line.start.turnSign == 0.0 for line in lines))
-        self.assertAlmostEqual(lines[0].end.pos.east, 10.0)
-        self.assertAlmostEqual(lines[0].end.pos.north, 0.0)
-        self.assertAlmostEqual(lines[1].start.pos.east, 10.0)
-        self.assertAlmostEqual(lines[1].start.pos.north, 0.0)
+        self.assertTrue(all(line.turnSign == 0.0 for line in lines))
+        self.assertAlmostEqual(lines[0].end.east, 10.0)
+        self.assertAlmostEqual(lines[0].end.north, 0.0)
+        self.assertAlmostEqual(lines[1].start.east, 10.0)
+        self.assertAlmostEqual(lines[1].start.north, 0.0)
 
     def test_with_radius_inserts_arc_via_conversion(self) -> None:
         wpi = _route_with_radius([(0.0, 0.0), (1000.0, 0.0), (1000.0, 1000.0)], turn_radius_m=200.0, speed_mps=20.0)
         lines = waypoint_inputs_to_waylines(wpi)
-        self.assertTrue(any(ln.start.turnSign != 0.0 for ln in lines))
+        self.assertTrue(any(ln.turnSign != 0.0 for ln in lines))
 
     def test_endpoints_have_correct_pos(self) -> None:
         wpi = points_to_route(
@@ -306,8 +306,10 @@ class BakeObstacleHugArcsTests(unittest.TestCase):
         # 扫掠角应约等于顶点跨度(250°→290°≈40°)的底部局部弧，而非绕大半圈。
         idx = out.index(arc)
         line = WayLineS(
-            start=WayPointS(pos=arc.pos, turnSign=arc.turnSign, center=arc.center),
-            end=WayPointS(pos=out[idx + 1].pos),
+            start=arc.pos,
+            end=out[idx + 1].pos,
+            turnSign=arc.turnSign,
+            center=arc.center,
         )
         self.assertAlmostEqual(math.degrees(arc_swept_rad(line)), 40.0, delta=5.0)
 
@@ -324,8 +326,10 @@ class BakeObstacleHugArcsTests(unittest.TestCase):
         for node, nxt in zip(out, out[1:]):
             if node.turnSign != 0.0:
                 line = WayLineS(
-                    start=WayPointS(pos=node.pos, turnSign=node.turnSign, center=node.center),
-                    end=WayPointS(pos=nxt.pos),
+                    start=node.pos,
+                    end=nxt.pos,
+                    turnSign=node.turnSign,
+                    center=node.center,
                 )
                 self.assertLessEqual(
                     abs(math.degrees(arc_swept_rad(line))), 180.0, "贴障弧不应绕大半圈"
@@ -398,13 +402,13 @@ class AStarToRouteIntegrationTests(unittest.TestCase):
         lines = waypoint_inputs_to_waylines(wpi)
         self.assertGreaterEqual(len(lines), 1)
         # 起终点与规划一致。
-        self.assertAlmostEqual(lines[0].start.pos.east, 0.0)
-        self.assertAlmostEqual(lines[-1].end.pos.east, 1000.0)
+        self.assertAlmostEqual(lines[0].start.east, 0.0)
+        self.assertAlmostEqual(lines[-1].end.east, 1000.0)
         # 直线段端点应在障碍外（圆弧外凸是否触障由步骤4 校验，这里只查直线骨架）。
         for line in lines:
-            if line.start.turnSign == 0.0:
-                self.assertFalse(blocked(obstacles, line.start.pos.east, line.start.pos.north, clearance))
-                self.assertFalse(blocked(obstacles, line.end.pos.east, line.end.pos.north, clearance))
+            if line.turnSign == 0.0:
+                self.assertFalse(blocked(obstacles, line.start.east, line.start.north, clearance))
+                self.assertFalse(blocked(obstacles, line.end.east, line.end.north, clearance))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""僚机将本机位置、槽位误差、到达状态打包广播给长机。注意：target 为显式配置的 leaderId，不依赖拓扑推断。"""
+"""僚机将本机跟踪误差和集结状态广播给长机。注意：target 为显式配置的 leaderId，不依赖拓扑推断。"""
 
 from __future__ import annotations
 
@@ -26,10 +26,8 @@ class FollowerBroadcastInputS:
 
     selfState: MotionProfS | None = None
     selfCmd: MotionProfS | None = None  # 端口 → Context.selfCmd，当前目标（用于计算 posErr_m）
-    selfArrived: int = 0  # 兼容旧协议；新协议使用 rally_state
     rally_state: str = RALLY_STATE_STANDBY  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
     planned_path_length_m: float = -1.0  # 本次集结不含额外整圈的基础水平航程；-1 表示尚未规划
-    reached_slot_once: bool = False  # 是否已至少一次路过 M_i，作为汇合过程诊断量广播
 
 
 @dataclass
@@ -40,7 +38,7 @@ class FollowerBroadcastOutputS:
 
 
 class FollowerBroadcast:
-    """僚机广播单元：把本机位置、到目标距离、到达标志打包为 formation.follower_status 消息。注意：每帧覆盖发送，不累积。"""
+    """僚机广播单元：把跟踪误差和集结状态打包为 formation.follower_status 消息。注意：每帧覆盖发送，不累积。"""
 
     def __init__(self) -> None:
         """初始化 FollowerBroadcast 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
@@ -60,7 +58,6 @@ class FollowerBroadcast:
             raise ValueError("FollowerBroadcast input ports must be bound")
         # 僚机回报每帧只保留当前状态，先清 outbox 防止上帧消息重复发送。
         # target 使用显式 leaderId，而不是从拓扑反推，避免多长机/旁路链路场景误投递。
-        # arrived 来自实体锁存值，不能由当前 pos_err_m 反算，否则越过 M_i 后会反复抖动。
         # pos_err_m 跟随 selfCmd：JOINING 表示到 M_i，CATCHUP/LOOSE 表示到当前槽位。
         y.outbox.clear()
         pos_err_m = dist3d(u.selfState.pos, u.selfCmd.pos)
@@ -72,16 +69,10 @@ class FollowerBroadcast:
                 target=self._leader_id,
                 timestamp=0.0,
                 payload={
-                    "id": self._self_id,
-                    "pos_east": u.selfState.pos.east,
-                    "pos_north": u.selfState.pos.north,
-                    "pos_h": u.selfState.pos.h,
                     "pos_err_m": pos_err_m,
                     "heading_err_rad": heading_err_rad,
-                    "arrived": int(u.selfArrived),
                     "rally_state": u.rally_state,
                     "planned_path_length_m": float(u.planned_path_length_m),
-                    "reached_slot_once": bool(u.reached_slot_once),
                 },
             )
         )

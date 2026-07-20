@@ -22,7 +22,6 @@ def motion_payload(motion: MotionProfS) -> dict[str, dict[str, float]]:
             "vEast": motion.v.vEast,
             "vNorth": motion.v.vNorth,
             "vUp": motion.v.vUp,
-            "vTheta": motion.v.vTheta,
             "vPsi": motion.v.vPsi,
             "vd": motion.v.vd,
             "dVPsi": motion.v.dVPsi,

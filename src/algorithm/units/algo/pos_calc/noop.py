@@ -8,9 +8,6 @@ from src.algorithm.context.context import FormContextS
 from src.algorithm.context.leaf_types import (
     MotionProfS,
     PosCalcStatusS,
-    PosCalcStrategyE,
-    PosTrackCommandE,
-    PosTrackCommandS,
     copy_position,
     zero_velocity,
 )
@@ -33,7 +30,6 @@ class _NoopOutputS:
 
     selfCmd: MotionProfS = field(default_factory=MotionProfS)
     status: PosCalcStatusS = field(default_factory=PosCalcStatusS)
-    posTrackCommand: PosTrackCommandS = field(default_factory=PosTrackCommandS)
 
 
 class NoopPosCalc(PosCalcBase):
@@ -51,7 +47,6 @@ class NoopPosCalc(PosCalcBase):
         self._y = _NoopOutputS(
             selfCmd=cxt.selfCmd,
             status=cxt.posCalcStatus,
-            posTrackCommand=cxt.posTrackCommand,
         )
         self._bound = True
 
@@ -64,8 +59,6 @@ class NoopPosCalc(PosCalcBase):
         if not self._bound:
             raise ValueError("NoopPosCalc 尚未绑定端口")
         self._calculate(self._u.selfState, self._y.selfCmd)
-        self._y.status.active_strategy = PosCalcStrategyE.NOOP
-        self._y.posTrackCommand.mode = PosTrackCommandE.NOOP
 
     def reset(self) -> None:
         """复位停控策略。注意：无跨帧算法状态。"""

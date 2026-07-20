@@ -183,7 +183,6 @@ class FormationOutbound(OutboundBase):
         if u.selfState is None or u.selfCmd is None or u.posCalcStatus is None:
             raise ValueError("FormationOutbound follower ports must be bound")
         # 位置和航向误差均以本拍 selfCmd 为目标，避免实体重复保存派生量。
-        # PosCalcStatus 已锁存越点和切出事件，不能按瞬时距离重新推导 arrived。
         pos_err_m = dist3d(u.selfState.pos, u.selfCmd.pos)
         heading_err_rad = abs(
             math.remainder(u.selfState.v.vPsi - u.selfCmd.v.vPsi, 2.0 * math.pi)
@@ -199,16 +198,10 @@ class FormationOutbound(OutboundBase):
                 target=self._leader_id,
                 timestamp=0.0,
                 payload={
-                    "id": self._self_id,
-                    "pos_east": u.selfState.pos.east,
-                    "pos_north": u.selfState.pos.north,
-                    "pos_h": u.selfState.pos.h,
                     "pos_err_m": pos_err_m,
                     "heading_err_rad": heading_err_rad,
-                    "arrived": int(status.join_exited),
                     "rally_state": status.rally_state,
                     "planned_path_length_m": float(status.planned_path_length_m),
-                    "reached_slot_once": bool(status.reached_slot_once),
                 },
             )
         )
