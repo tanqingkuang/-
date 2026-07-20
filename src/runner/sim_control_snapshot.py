@@ -45,6 +45,7 @@ class SimulationControllerSnapshotMixin:
         )
         slot_by_id = {slot.id: slot for slot in slot_row}
         for state in self._model.read_states().values():
+            algorithm = self._node_algorithms.get(state.node_id)
             diag = self._control_diagnostics.get(state.node_id, PosTrackDiagS())
             control = self._current_controls.get(state.node_id)
             # 原始控制指令取限幅前缓存值；任一 ENU 轴触达模型幅值上限即记饱和。
@@ -113,6 +114,8 @@ class SimulationControllerSnapshotMixin:
                     cross_track_error_m=self._cross_track_error(state, route),
                     distance_to_go_m=self._distance_to_go(state, route),
                     rally_phase=rally_phases.get(state.node_id, ""),
+                    # 直接记录算法任务阶段，离线分析据此严格识别全队 HOLD。
+                    task_stage=algorithm.current_stage().name if algorithm is not None else "",
                     # 评测补充：原始 ENU 加速度指令与饱和证据、算法耗时、标称槽位。
                     cmd_acc_east_mps2=cmd_acc[0],
                     cmd_acc_north_mps2=cmd_acc[1],

@@ -23,3 +23,16 @@ result\run_batch.bat configs\base.json
 ```bat
 result\run_batch.bat configs\base.json 5
 ```
+
+编队精度分析与仿真分开执行。双击 `analyze_accuracy.bat` 后选择某次仿真目录中的 `snapshots.jsonl`；也可以直接传入快照文件：
+
+```bat
+result\analyze_accuracy.bat
+result\analyze_accuracy.bat result\simulation_data\logs\run-1784530025\snapshots.jsonl
+```
+
+分析报告写入 `result/analysis/run-*/`：
+
+- `formation_accuracy_detail.csv`：每架僚机一行的编队位置与位置跟踪指标。
+
+报告先要求全队任务状态同时为 `HOLD`，再要求全队最差三维编队位置误差连续满足配置门限。只有稳定判定完成后的数据才进入统计；目录中只生成逐僚机指标 CSV，不再生成汇总 CSV 和 JSON。

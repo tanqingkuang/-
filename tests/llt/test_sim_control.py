@@ -1330,6 +1330,7 @@ class SimulationControllerTests(unittest.TestCase):
             node = payload["nodes"][0]
 
             self.assertEqual(result.code, "OK")
+            self.assertEqual(node["task_stage"], "HOLD")
             for key in (
                 "cmd_pos_east_m",
                 "cmd_pos_north_m",

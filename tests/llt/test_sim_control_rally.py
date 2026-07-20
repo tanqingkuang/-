@@ -699,6 +699,15 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertEqual(controller.switch_formation(1).code, "OK")
         self.assertEqual(controller.switch_formation(2).code, "OK")
 
+    def test_repository_rally_demo_route_uses_smooth_corner_arcs(self) -> None:
+        """验证五机任务航线三个内部直角配置 700 米圆弧过渡。"""
+
+        route_path = Path("configs/element/rally_demo_mission_route.json")
+        route = json.loads(route_path.read_text(encoding="utf-8"))
+        radii = [float(point["R"]) for point in route["waypoints"]]
+        # 首末点没有两侧航段，半径无意义；三个内部拐点必须显式启用圆弧。
+        self.assertEqual(radii, [0.0, 700.0, 700.0, 700.0, 0.0])
+
     def test_repository_rally_demo_initial_heading_points_toward_rally_origin(self) -> None:
         """验证默认五机集结配置初始航向大致对齐集结航线起点，避免起始瞬间大转向。
 

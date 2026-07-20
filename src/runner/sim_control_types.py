@@ -117,6 +117,8 @@ class NodeState:
     cross_track_error_m: float | None = None
     distance_to_go_m: float | None = None
     rally_phase: str = ""  # 集结阶段字符串，如 JOINING/FLYING、CATCHUP、LOOSE、HOLD
+    # 任务阶段直接记录算法黑板中的 cmd.stage，供离线分析准确识别 HOLD。
+    task_stage: str = ""  # FormStageE 名称，如 RALLY、HOLD。
     # 评测补充字段：原始控制指令、饱和证据、算法耗时与槽位上下文，均为增量字段，
     # 旧日志缺失时离线分析工具按"通道不可用"处理，不得用 0 兜底。
     # cmd_acc_* 是位置跟踪器输出的 ENU 原始加速度指令（模型限幅前）。

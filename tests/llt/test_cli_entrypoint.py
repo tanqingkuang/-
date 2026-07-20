@@ -80,12 +80,33 @@ class BatchBatTests(unittest.TestCase):
         self.assertNotIn("--auto-run", script)
         self.assertNotIn("PyInstaller", script)
         self.assertNotIn("build_windows_full_release.ps1", script)
+        self.assertNotIn("analyze_formation_accuracy.py", script)
         self.assertIn("simulation_data", script)
 
     def test_batch_bat_uses_windows_line_endings(self) -> None:
         """BAT 必须使用 CRLF，避免 CMD 将下一行首字符吞掉后直接退出。"""
 
         content = (PROJECT_ROOT / "result" / "run_batch.bat").read_bytes()
+
+        self.assertIn(b"\r\n", content)
+        self.assertNotIn(b"\n", content.replace(b"\r\n", b""))
+
+
+class AnalysisBatTests(unittest.TestCase):
+    """验证编队精度分析使用独立 BAT，不与仿真脚本耦合。"""
+
+    def test_accuracy_bat_supports_snapshot_selection(self) -> None:
+        """分析 BAT 应弹出快照选择框，并允许直接传入快照文件。"""
+
+        script = (PROJECT_ROOT / "result" / "analyze_accuracy.bat").read_text(encoding="utf-8")
+
+        self.assertIn("analyze_formation_accuracy.py", script)
+        self.assertIn("analysis", script)
+
+    def test_accuracy_bat_uses_windows_line_endings(self) -> None:
+        """独立分析 BAT 同样必须使用 CRLF，保证双击执行稳定。"""
+
+        content = (PROJECT_ROOT / "result" / "analyze_accuracy.bat").read_bytes()
 
         self.assertIn(b"\r\n", content)
         self.assertNotIn(b"\n", content.replace(b"\r\n", b""))
