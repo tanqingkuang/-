@@ -51,6 +51,13 @@ class WindowsPackagingScriptTests(unittest.TestCase):
             self.assertIn("--icon $AppIconPath", script)
             self.assertIn("src/ui/gui/assets/app_icon.png;src/ui/gui/assets", script)
 
+    def test_release_scripts_keep_pure_gui_entrypoint(self) -> None:
+        """Windows GUI exe 应继续使用 main_window，不混入无界面批处理入口。"""
+
+        for script_path in (FULL_RELEASE_SCRIPT, LITE_RELEASE_SCRIPT):
+            script = script_path.read_text(encoding="utf-8")
+            self.assertIn("src/ui/gui/main_window.py", script)
+            self.assertNotIn("src/main.py", script)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,2 @@
+# Windows 批处理脚本在所有平台检出时统一使用 CRLF。
+*.bat text eol=crlf

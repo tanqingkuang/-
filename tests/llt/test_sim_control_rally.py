@@ -8,6 +8,7 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.algorithm.context.leaf_types import FormStageE, PosInEarthS, WayPointInputS
 from src.algorithm.units.algo.pos_calc.rally_join_pos import RALLY_STATE_STANDBY
@@ -363,6 +364,63 @@ class SimControlRallyTests(unittest.TestCase):
                 self.assertIsNotNone(join._standby_center_e, msg=node_id)
                 self.assertIsNotNone(join._standby_center_n, msg=node_id)
 
+    def test_auto_rally_is_activated_before_background_worker_starts(self) -> None:
+        """自动集结必须在工作线程启动前完成，首个后台 tick 不得仍处于待命。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+
+            def assert_rally_already_active() -> None:
+                phases = {
+                    algorithm.current_rally_phase_str()
+                    for algorithm in controller._node_algorithms.values()
+                }
+                self.assertEqual(controller._tick_index, 0)
+                self.assertNotIn("LOCAL_LOITER", phases)
+
+            with patch.object(
+                controller,
+                "_start_worker_unlocked",
+                side_effect=assert_rally_already_active,
+            ) as start_worker:
+                result = controller.start(auto_rally=True)
+
+            self.assertEqual(result.code, "OK")
+            start_worker.assert_called_once_with()
+            rally_events = [
+                event
+                for event in controller.get_recent_events()
+                if event.message == "开始集结"
+            ]
+            self.assertEqual([event.time_s for event in rally_events], [0.0])
+
+    def test_auto_rally_does_not_retrigger_when_resuming_from_pause(self) -> None:
+        """暂停后携带同一自动集结参数恢复时只重启工作线程，不重复触发集结。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_json(Path(tmp), _rally_config())))
+
+            with patch.object(controller, "_start_worker_unlocked") as start_worker:
+                first_start = controller.start(auto_rally=True)
+                pause_result = controller.pause()
+                resume_result = controller.start(auto_rally=True)
+
+            self.assertEqual(first_start.code, "OK")
+            self.assertEqual(pause_result.code, "OK")
+            self.assertEqual(resume_result.code, "OK")
+            self.assertEqual(controller.get_snapshot().run_state, "RUNNING")
+            self.assertEqual(start_worker.call_count, 2)
+            rally_events = [
+                event
+                for event in controller.get_recent_events()
+                if event.message == "开始集结"
+            ]
+            self.assertEqual(len(rally_events), 1)
+
     def test_start_rally_first_tick_prime_does_not_advance_ordinary_nodes_or_communication(self) -> None:
         """验证首 tick 预热只初始化集结节点，不推进普通节点或通信状态。"""
 
@@ -698,6 +756,15 @@ class SimControlRallyTests(unittest.TestCase):
         self.assertEqual(len(snapshot.route_segments), 4)
         self.assertEqual(controller.switch_formation(1).code, "OK")
         self.assertEqual(controller.switch_formation(2).code, "OK")
+
+    def test_repository_rally_demo_route_uses_smooth_corner_arcs(self) -> None:
+        """验证五机任务航线三个内部直角配置 700 米圆弧过渡。"""
+
+        route_path = Path("configs/element/rally_demo_mission_route.json")
+        route = json.loads(route_path.read_text(encoding="utf-8"))
+        radii = [float(point["R"]) for point in route["waypoints"]]
+        # 首末点没有两侧航段，半径无意义；三个内部拐点必须显式启用圆弧。
+        self.assertEqual(radii, [0.0, 700.0, 700.0, 700.0, 0.0])
 
     def test_repository_rally_demo_initial_heading_points_toward_rally_origin(self) -> None:
         """验证默认五机集结配置初始航向大致对齐集结航线起点，避免起始瞬间大转向。
