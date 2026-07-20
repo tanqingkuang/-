@@ -32,15 +32,21 @@ from src.algorithm.context.leaf_types import (
     WayPointInputS,
     copy_follower_state,
 )
+from src.algorithm.entity.base import EntityBase
+from src.algorithm.entity.leader_follower import (
+    FOLLOWER_PROFILE,
+    LEADER_PROFILE,
+    create_leader_follower_entity,
+)
 from src.algorithm.entity.leader_follower.follower import FollowerEntity
 from src.algorithm.entity.leader_follower.leader import LeaderEntity
-from src.algorithm.entity.leader_follower import LEADER_PROFILE, create_leader_follower_entity
 from src.algorithm.entity.types import (
     EntityInitS,
     EntityInputS,
     EntityManagerInitS,
     EntityOutputS,
     EntityProfileE,
+    EntityRuntimeS,
     VelCmdLimitS,
 )
 from src.algorithm.units.algo.pos_calc import PosCalcManager
@@ -522,10 +528,63 @@ class FollowerStateTests(unittest.TestCase):
         self.assertEqual(follower_dst, follower_src)
 
     def test_disband_stage_is_only_a_reserved_protocol_value(self) -> None:
-        """解散阶段仅占位，未实现前不得被实体策略表接受。"""
+        """解散阶段仅占位，未实现前策略表和各任务模式都必须拒绝。"""
 
         with self.assertRaises(ValueError):
             LEADER_PROFILE.require_strategies(FormStageE.DISBAND, RallyPhaseE.JOINING)
+
+        active = _rally_task(expected=())
+        disabled = Rally()
+        disabled.init(_rally_process_init(RallyTaskInitS(), enabled=False))
+        passive = Rally()
+        passive.init(
+            EntityManagerInitS(
+                EntityInitS(
+                    selfInit=FormSelfInitS("R02"),
+                    rally_cfg=RallyTaskInitS(),
+                    rally_leader_id="R01",
+                ),
+                FOLLOWER_PROFILE,
+            )
+        )
+
+        for mode, task in (("active", active), ("disabled", disabled), ("passive", passive)):
+            with self.subTest(mode=mode):
+                cxt = FormContextS()
+                output = RallyTaskOutputS(cmd=cxt.cmd, rallyCompleted=True)
+                with self.assertRaises(ValueError):
+                    task._advance(
+                        RallyTaskInputS(
+                            remote=RemoteCmdS(FormStageE.DISBAND),
+                            cmd=cxt.cmd,
+                            clock=cxt.clock,
+                            posCalcStatus=cxt.posCalcStatus,
+                        ),
+                        output,
+                    )
+                self.assertEqual(cxt.cmd, FormSnapshotS())
+                self.assertTrue(output.rallyCompleted)
+
+        class _BoundaryEntity(EntityBase):
+            PROFILE = LEADER_PROFILE
+
+        boundary = _BoundaryEntity()
+        runtime = EntityRuntimeS()
+        boundary.cxt = runtime.context
+        boundary._remote = runtime.remote
+        boundary._inbox = runtime.inbox
+        with self.assertRaises(ValueError):
+            boundary._prepare_input(
+                EntityInputS(
+                    selfState=_motion(east=99.0),
+                    inbox=[_follower_status_msg("R02")],
+                    remote=RemoteCmdS(FormStageE.DISBAND),
+                    now_s=8.0,
+                )
+            )
+        self.assertEqual(boundary.cxt, FormContextS())
+        self.assertEqual(boundary._remote, RemoteCmdS())
+        self.assertEqual(boundary._inbox, [])
 
     def test_context_contains_rally_fields_and_reset_clears_them(self) -> None:
         """验证 Context 拥有独立的集结状态列表，reset 原地清理集结字段。"""

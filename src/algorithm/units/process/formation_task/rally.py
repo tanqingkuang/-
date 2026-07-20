@@ -177,24 +177,30 @@ class Rally(FormationTaskBase):
         """按已绑定端口推进任务状态机。"""
         if y.cmd is None or u.clock is None:
             raise ValueError("Rally ports must be bound")
+        remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
+        # 任务只接受已经实现的四种远控阶段；预留枚举必须在修改任何输出前拒绝。
+        if not isinstance(remote_stage, FormStageE) or remote_stage not in (
+            FormStageE.NONE,
+            FormStageE.RALLY,
+            FormStageE.HOLD,
+            FormStageE.STANDBY,
+        ):
+            raise ValueError(f"Rally 不支持的远控阶段: {remote_stage!r}")
         y.rallyCompleted = False
         if not self._enabled:
             # 直接 HOLD 共用同一任务流程容器，但不进入任何集结子阶段。
-            remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
             y.cmd.stage = FormStageE.NONE if remote_stage == FormStageE.NONE else FormStageE.HOLD
             y.cmd.step = RallyPhaseE.JOINING
             y.cmd.pattern = 0 if y.cmd.stage == FormStageE.NONE else self._target_pattern
             return
         if self._passive:
             # 僚机的任务指令已由 Inbound 写入黑板；本流程只保证本地待命优先于旧广播。
-            remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
             if remote_stage == FormStageE.STANDBY:
                 y.cmd.stage = FormStageE.STANDBY
                 y.cmd.step = RallyPhaseE.JOINING
             return
         self._write_plan(y)
 
-        remote_stage = u.remote.stage if u.remote is not None else FormStageE.NONE
         now_s = u.clock.now_s
         states = u.followerStates if u.followerStates is not None else []
 

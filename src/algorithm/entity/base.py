@@ -149,10 +149,17 @@ class EntityBase:
 
     def _prepare_input(self, u: EntityInputS) -> None:
         """把实体边界输入写入共享运行时。注意：空字段沿用上一拍状态。"""
+        if u.remote is not None:
+            remote_stage = u.remote.stage
+            # 外部远控必须属于当前 Profile 的可执行阶段；预留枚举不得污染本拍其他输入。
+            if not isinstance(remote_stage, FormStageE) or not any(
+                state_stage == remote_stage for state_stage, _ in self.profile.state_sequence
+            ):
+                raise ValueError(f"{type(self).__name__} 不支持的远控阶段: {remote_stage!r}")
         if u.selfState is not None:
             copy_motion(u.selfState, self.cxt.selfState)
         if u.remote is not None:
-            self._remote.stage = u.remote.stage
+            self._remote.stage = remote_stage
         elif self.MISSING_REMOTE_STAGE is not None:
             # 僚机以空 remote 释放本地待命覆盖；其他身份默认沿用上一拍远控值。
             self._remote.stage = self.MISSING_REMOTE_STAGE

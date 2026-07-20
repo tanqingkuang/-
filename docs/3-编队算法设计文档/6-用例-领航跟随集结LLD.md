@@ -421,6 +421,8 @@ remote == RALLY:
 
 **`step`** 按 `u.cmd.step` 路由（只在 `remote.stage == RALLY` 且 `cmd.stage != HOLD` 时执行）：
 
+远控阶段只接受当前实体 Profile 已注册的 `NONE/RALLY/HOLD/STANDBY`。预留的 `DISBAND` 以及非枚举值会在实体边界和 Rally 任务入口、任何本拍状态修改之前抛出 `ValueError`，不得按“其余值”落入 RALLY 分支。
+
 ```text
 辅助函数 is_valid(entry):
   entry 未找到 OR lastUpdate_s/now_s 非有限值 OR (now_s - lastUpdate_s) > staleTimeout_s → False；否则 True
