@@ -86,7 +86,7 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
         self.assertEqual(self.controller.apply_avoidance_route([]).code, "ERR_CONFIG_INVALID")
 
     def test_apply_single_point_rejected(self) -> None:
-        single = [WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0)]
+        single = [WayPointInputS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0)]
         self.assertEqual(self.controller.apply_avoidance_route(single).code, "ERR_CONFIG_INVALID")
 
     def test_adopted_route_display_has_no_transition_arcs(self) -> None:
@@ -97,7 +97,7 @@ class ApplyAvoidanceRouteTests(unittest.TestCase):
         self.assertEqual(self.controller.apply_avoidance_route(route).code, "OK")
         display = self.controller._display_route
         assert display is not None
-        self.assertTrue(all(line.start.turnSign == 0.0 for line in display))
+        self.assertTrue(all(line.turnSign == 0.0 for line in display))
         self.assertTrue(any(wpi.r > 0.0 for wpi in self.controller._leader_route))
 
     def test_adopted_baked_arc_route_carries_radius_to_snapshot(self) -> None:

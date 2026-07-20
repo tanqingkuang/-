@@ -14,7 +14,6 @@ from src.algorithm.context.leaf_types import (
     VdInEarthS,
     WayLineS,
     WayPointInputS,
-    WayPointS,
 )
 from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     rally_loose_target,
@@ -36,7 +35,7 @@ def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
     # 环境状态内部角度为弧度，日志/快照显示角度另在快照模块转换。
     # 制导算法跟踪的是地面航线，因此横风下必须观察地速而不是空速分量。
     # 地速仍以东北天 ENU 表示，算法内部需要 FUR 时由统一坐标转换函数处理。
-    # vPsi 和 vTheta 都从地速向量派生，避免角度与速度分量来自不同参考系。
+    # vPsi 从地速向量派生，避免角度与速度分量来自不同参考系。
     # vd 按算法既有契约表示水平地速，不把爬升或下降速度计入前向速度标量。
     # dVPsi 表示地面航迹转率，空速航向转率只用于环境模型的物理积分与限幅。
     return MotionProfS(
@@ -47,7 +46,6 @@ def _motion_from_aircraft_state(state: AircraftState) -> MotionProfS:
             vEast=state.ground_vx_mps,
             vNorth=state.ground_vy_mps,
             vUp=state.ground_vz_mps,
-            vTheta=state.ground_theta_rad,
             vPsi=state.ground_psi_rad,
             vd=state.ground_horizontal_speed_mps,
             # 地面航迹角速率左转为正，与 vPsi（自东向逆时针）同向；边界处转为 rad/s。
@@ -263,22 +261,22 @@ def _build_leader_route(config: dict[str, object] | None = None, *, insert_arcs:
 
     segments = route_config.get("segments", route_config.get("lines"))
     if segments is None:
-        wl = _wayline_from_config(route_config, 0, "route")
+        wl = _wayline_from_config(route_config, "route")
         return [
-            WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd),
-            WayPointInputS(idx=1, pos=wl.end.pos, vdCmd=wl.start.vdCmd),
+            WayPointInputS(pos=wl.start, vdCmd=wl.vdCmd),
+            WayPointInputS(pos=wl.end, vdCmd=wl.vdCmd),
         ]
     if not isinstance(segments, list) or not segments:
         raise ValueError("route.segments must be a non-empty list")
     wpi_list: list[WayPointInputS] = []
     for index, segment in enumerate(segments):
-        wl = _wayline_from_config(segment, index, f"route.segments[{index}]", route_config)
+        wl = _wayline_from_config(segment, f"route.segments[{index}]", route_config)
         if not wpi_list:
-            wpi_list.append(WayPointInputS(idx=0, pos=wl.start.pos, vdCmd=wl.start.vdCmd))
+            wpi_list.append(WayPointInputS(pos=wl.start, vdCmd=wl.vdCmd))
         else:
             # 衔接航点的 vdCmd 描述“该点之后一段”，因此取下一航段速度。
-            wpi_list[-1].vdCmd = wl.start.vdCmd
-        wpi_list.append(WayPointInputS(idx=len(wpi_list), pos=wl.end.pos, vdCmd=wl.start.vdCmd))
+            wpi_list[-1].vdCmd = wl.vdCmd
+        wpi_list.append(WayPointInputS(pos=wl.end, vdCmd=wl.vdCmd))
     return wpi_list
 
 
@@ -358,7 +356,6 @@ def _wpi_from_waypoints(
     n = len(points)
     return [
         WayPointInputS(
-            idx=index,
             pos=points[index],
             vdCmd=speed,
             # 已烘焙圆弧已经给出真实曲率，不能再同时按 R 插入交接圆弧。
@@ -375,7 +372,6 @@ def _wpi_from_waypoints(
 
 def _wayline_from_config(
     segment_config: object,
-    index: int,
     field_name: str,
     route_defaults: dict[str, object] | None = None,
 ) -> WayLineS:
@@ -407,17 +403,17 @@ def _wayline_from_config(
     if start.east == end.east and start.north == end.north and start.h == end.h:
         raise ValueError(f"{field_name} start and end must be different")
     return WayLineS(
-        idx=index,
-        start=WayPointS(idx=index, pos=start, vdCmd=speed),
-        end=WayPointS(idx=index + 1, pos=end),
+        start=start,
+        end=end,
+        vdCmd=speed,
     )
 
 
 def _default_leader_wpi() -> list[WayPointInputS]:
     """生成默认长机航点输入。注意：只作为配置缺省兜底。"""
     return [
-        WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0),
-        WayPointInputS(idx=1, pos=PosInEarthS(1000.0, 0.0, 1000.0), vdCmd=8.0),
+        WayPointInputS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=8.0),
+        WayPointInputS(pos=PosInEarthS(1000.0, 0.0, 1000.0), vdCmd=8.0),
     ]
 
 
@@ -455,18 +451,18 @@ def _route_state_from_wayline(route: WayLineS) -> RouteState:
     # turn_sign 在 ENU 俯视平面按逆时针左转为正，与航向角增长方向一致。
     # 右侧偏差的正方向仍由 FUR z 轴定义，不应从 turn_sign 的符号反推。
     from src.algorithm.units.algo.arc_path import arc_radius as _arc_radius
-    radius_m = _arc_radius(route) if route.start.turnSign != 0.0 else 0.0
+    radius_m = _arc_radius(route) if route.turnSign != 0.0 else 0.0
     return RouteState(
-        start_x_m=route.start.pos.east,
-        start_y_m=route.start.pos.north,
-        start_altitude_m=route.start.pos.h,
-        end_x_m=route.end.pos.east,
-        end_y_m=route.end.pos.north,
-        end_altitude_m=route.end.pos.h,
+        start_x_m=route.start.east,
+        start_y_m=route.start.north,
+        start_altitude_m=route.start.h,
+        end_x_m=route.end.east,
+        end_y_m=route.end.north,
+        end_altitude_m=route.end.h,
         radius_m=radius_m,
-        center_x_m=route.start.center.east,
-        center_y_m=route.start.center.north,
-        turn_sign=route.start.turnSign,
+        center_x_m=route.center.east,
+        center_y_m=route.center.north,
+        turn_sign=route.turnSign,
     )
 
 

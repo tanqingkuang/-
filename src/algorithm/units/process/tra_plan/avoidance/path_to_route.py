@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import replace
 from math import atan2, ceil, cos, hypot, pi, sin
 
-from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS, WayPointS
+from src.algorithm.context.leaf_types import PosInEarthS, WayLineS, WayPointInputS
 from src.algorithm.units.algo.arc_path import arc_swept_rad, common_tangent, corner_arc, tangent_point
 
 from .obstacle import ObstacleS, blocked, inside, obstacle_bounds
@@ -187,7 +187,7 @@ def points_to_route(
     result: list[WayPointInputS] = []
     for i, (east, north) in enumerate(points):
         alt = altitudes[i] if altitudes is not None else altitude_m
-        result.append(WayPointInputS(idx=i, pos=PosInEarthS(east, north, alt), vdCmd=speed_mps, r=0.0))
+        result.append(WayPointInputS(pos=PosInEarthS(east, north, alt), vdCmd=speed_mps, r=0.0))
     return result
 
 
@@ -233,13 +233,13 @@ def bake_transition_arcs(route: list[WayPointInputS]) -> list[WayPointInputS]:
                 tangent_out = hypot(wpi.pos.east - t2.east, wpi.pos.north - t2.north)
                 if tangent_in <= in_leg + 1e-9 and tangent_out <= out_leg + 1e-9:
                     out.append(
-                        WayPointInputS(idx=len(out), pos=t1, vdCmd=route[i - 1].vdCmd, turnSign=turn_sign, center=center)
+                        WayPointInputS(pos=t1, vdCmd=route[i - 1].vdCmd, turnSign=turn_sign, center=center)
                     )
-                    out.append(WayPointInputS(idx=len(out), pos=t2, vdCmd=wpi.vdCmd))
+                    out.append(WayPointInputS(pos=t2, vdCmd=wpi.vdCmd))
                     baked = True
         if not baked:
             out.append(
-                WayPointInputS(idx=len(out), pos=wpi.pos, vdCmd=wpi.vdCmd, r=wpi.r, turnSign=wpi.turnSign, center=wpi.center)
+                WayPointInputS(pos=wpi.pos, vdCmd=wpi.vdCmd, r=wpi.r, turnSign=wpi.turnSign, center=wpi.center)
             )
     return out
 
@@ -299,12 +299,10 @@ def _sample_hug_arc(
 ) -> list[Point]:
     """采样贴障弧 T1→T2 上的点（含两端），用于触障复核。复用 arc_swept_rad 求扫掠角后按弧长密采。"""
     line = WayLineS(
-        start=WayPointS(
-            pos=PosInEarthS(t1.east, t1.north, 0.0),
-            turnSign=turn_sign,
-            center=PosInEarthS(center.east, center.north, 0.0),
-        ),
-        end=WayPointS(pos=PosInEarthS(t2.east, t2.north, 0.0)),
+        start=PosInEarthS(t1.east, t1.north, 0.0),
+        end=PosInEarthS(t2.east, t2.north, 0.0),
+        turnSign=turn_sign,
+        center=PosInEarthS(center.east, center.north, 0.0),
     )
     swept = arc_swept_rad(line)  # 带符号扫掠角，决定采样沿弧推进方向
     segments = max(1, ceil(radius * abs(swept) / step))  # 按弧长/步长定段数，至少 1 段
@@ -330,12 +328,10 @@ def _hug_arc_span_sane(
     切角)是允许的；明显超扫(超过跨度 + 90° 余量)即判定切点选反、绕了长边，拒绝折叠。
     """
     line = WayLineS(
-        start=WayPointS(
-            pos=PosInEarthS(t_in.east, t_in.north, 0.0),
-            turnSign=turn_sign,
-            center=PosInEarthS(center.east, center.north, 0.0),
-        ),
-        end=WayPointS(pos=PosInEarthS(t_out.east, t_out.north, 0.0)),
+        start=PosInEarthS(t_in.east, t_in.north, 0.0),
+        end=PosInEarthS(t_out.east, t_out.north, 0.0),
+        turnSign=turn_sign,
+        center=PosInEarthS(center.east, center.north, 0.0),
     )
     swept = abs(arc_swept_rad(line))  # 弧扫掠角(绝对值)
     two_pi = 2.0 * pi
@@ -479,11 +475,11 @@ def _assemble_hug_arcs(
             t_in, t_out = endpoints[m]
             arc_center = PosInEarthS(obstacle.center.east, obstacle.center.north, route[i0].pos.h)
             # 弧用两航点表示：切入点(带 turnSign/圆心) + 切出点(直线)，整串 i0..j0 被这两点取代。
-            out.append(WayPointInputS(idx=len(out), pos=t_in, vdCmd=route[i0 - 1].vdCmd, turnSign=sign, center=arc_center))
-            out.append(WayPointInputS(idx=len(out), pos=t_out, vdCmd=route[j0].vdCmd))
+            out.append(WayPointInputS(pos=t_in, vdCmd=route[i0 - 1].vdCmd, turnSign=sign, center=arc_center))
+            out.append(WayPointInputS(pos=t_out, vdCmd=route[j0].vdCmd))
             k = j0 + 1  # 跳过被折叠的整段贴障顶点
         else:
-            out.append(replace(route[k], idx=len(out)))  # 非折叠点原样保留(重排 idx)
+            out.append(replace(route[k]))  # 非折叠点复制保留，避免复用可变航点对象
             k += 1
     return out
 

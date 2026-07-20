@@ -58,35 +58,29 @@ def _follower_state(
     node_id: str,
     *,
     pos_err_m: float = 0.0,
-    arrived: int = 0,
-    valid: bool = True,
     last_update_s: float = 0.0,
     rally_state: str = "EXITED",
-    eta_s: float = 0.0,
-    reached_slot_once: bool = False,
+    planned_path_length_m: float = -1.0,
 ) -> FollowerStateS:
     return FollowerStateS(
-        id=node_id, pos=PosInEarthS(), posErr_m=pos_err_m, arrived=arrived, valid=valid,
-        lastUpdate_s=last_update_s, rally_state=rally_state, eta_s=eta_s, reachedSlotOnce=reached_slot_once,
+        id=node_id, posErr_m=pos_err_m, lastUpdate_s=last_update_s,
+        rally_state=rally_state, plannedPathLength_m=planned_path_length_m,
     )
 
 
 def _follower_status_msg(
     source: str = "R02",
     *,
-    pos_east: float = 0.0,
-    pos_north: float = 0.0,
-    pos_h: float = 500.0,
     pos_err_m: float = 0.0,
-    arrived: int = 0,
+    heading_err_rad: float = 0.0,
     rally_state: str = "EXITED",
-    eta_s: float = 0.0,
+    planned_path_length_m: float = -1.0,
 ) -> MessageEnvelope:
     return MessageEnvelope(
         topic=FOLLOWER_STATUS_TOPIC, source=source, target="R01", timestamp=0.0,
         payload={
-            "id": source, "pos_east": pos_east, "pos_north": pos_north, "pos_h": pos_h,
-            "pos_err_m": pos_err_m, "arrived": arrived, "rally_state": rally_state, "eta_s": eta_s,
+            "pos_err_m": pos_err_m, "heading_err_rad": heading_err_rad,
+            "rally_state": rally_state, "planned_path_length_m": planned_path_length_m,
         },
     )
 
@@ -143,18 +137,14 @@ def _task_step(
     remote: FormStageE,
     states: list[FollowerStateS] | None = None,
     now_s: float = 0.0,
-    leader_join_exited: bool = True,
-    leader_join_flying: bool = False,
-    leader_join_reached_slot_once: bool = False,
-    leader_eta_s: float = 0.0,
+    leader_exited: bool = True,
 ) -> RallyTaskOutputS:
     """推进 Rally 任务一拍并返回输出端口。"""
     output = RallyTaskOutputS(cmd=ctx.cmd, rallyPlan=ctx.rallyPlan)
     task.step(
         RallyTaskInputS(
-            remote=RemoteCmdS(remote), cmd=ctx.cmd, followerStates=states or [], now_s=now_s,
-            leader_join_exited=leader_join_exited, leader_join_flying=leader_join_flying,
-            leader_join_reached_slot_once=leader_join_reached_slot_once, leader_eta_s=leader_eta_s,
+            remote=RemoteCmdS(remote), cmd=ctx.cmd, followerStates=states or [],
+            clock=ctx.clock, posCalcStatus=ctx.posCalcStatus,
         ),
         output,
     )
@@ -177,8 +167,8 @@ def _comm_init() -> FormCommInitS:
 def _route(start: tuple, end: tuple, speed: float = 20.0) -> list[WayPointInputS]:
     """构造两点航线（WayPointInputS 列表）。"""
     return [
-        WayPointInputS(idx=0, pos=PosInEarthS(*start), vdCmd=speed),
-        WayPointInputS(idx=1, pos=PosInEarthS(*end), vdCmd=speed),
+        WayPointInputS(pos=PosInEarthS(*start), vdCmd=speed),
+        WayPointInputS(pos=PosInEarthS(*end), vdCmd=speed),
     ]
 
 
@@ -203,8 +193,8 @@ def _rally_cfg(
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_follower_state_defaults_invalid` | `FollowerStateS()` 默认 `valid is False`、`arrived==0`、`lastUpdate_s==0.0` |
-| `test_copy_follower_state_copies_valid_and_last_update` | `copy_follower_state` 复制 `id/pos/posErr_m/arrived/valid/lastUpdate_s` |
+| `test_leaf_types_only_keep_runtime_consumed_fields` | `FollowerStateS`、`PosCalcStatusS` 与航段类型只保留运行期实际消费字段 |
+| `test_rally_leaf_type_defaults_and_copy_helpers` | `copy_follower_state` 完整复制精简后的六个字段 |
 | `test_context_contains_rally_fields` | `FormContextS` 含公共计划与 `followerStates`，且列表默认独立 |
 | `test_reset_context_clears_rally_state` | `reset_context` 后公共计划和 `followerStates` 恢复默认值 |
 
@@ -253,9 +243,7 @@ def _rally_cfg(
 | ------ | ---- |
 | `test_empty_expected_followers_advances_by_timers` | `expectedFollowerIds=[]` 时，APPROACH/LOOSE 可按计时器立即推进 |
 | `test_missing_follower_states_freezes_approach` | 期望列表非空但 `followerStates=[]`，保持 `APPROACH`，`_arrive_timer` 不累加 |
-| `test_invalid_or_stale_follower_freezes_approach` | `valid=False` 或 `now_s-lastUpdate_s>staleTimeout_s`，不切 LOOSE |
-| `test_arrived_flag_controls_approach_not_pos_error` | `arrived==1` 且 `posErr_m` 很大，APPROACH 仍可按到达锁存推进 |
-| `test_arrive_timer_requires_continuous_arrived` | 连续满足到达才切 LOOSE，中间一帧未到达会清零计时器 |
+| `test_approach_requires_all_expected_exited_and_fresh` | 全部参与者均为 `EXITED` 时才从 JOINING 推进；非终态回报还必须未超时 |
 | `test_first_rally_frame_writes_target_pattern` | 第一拍 `RALLY/APPROACH` 即写 `cmd.pattern=targetPattern` |
 | `test_loose_uses_position_error_threshold` | LOOSE 阶段按 `posErr_m < convergenceRadius_m` 判定稳定 |
 | `test_loose_timer_resets_when_any_expected_follower_outside_radius` | 任一期望僚机误差超阈值，`_stable_timer` 清零 |
@@ -269,9 +257,8 @@ def _rally_cfg(
 | ------ | ---- |
 | `test_targets_leader_from_cfg` | `cfg.leaderId` 非空时，`MessageEnvelope.target` 等于 `cfg.leaderId` |
 | `test_broadcast_topic_is_follower_status` | 输出 topic 固定为 `formation.follower_status` |
-| `test_payload_contains_position_error_and_arrived` | payload 含 `id/pos_east/pos_north/pos_h/pos_err_m/arrived` |
+| `test_follower_broadcast_targets_leader_and_reports_error` | payload 只含 `pos_err_m/heading_err_rad/rally_state/planned_path_length_m` |
 | `test_pos_error_is_distance_to_self_cmd` | `pos_err_m = norm(selfState.pos - selfCmd.pos)` |
-| `test_arrived_uses_entity_latched_value` | `arrived` 直接等于 `u.selfArrived`，不由当前距离反算 |
 | `test_empty_leader_id_raises_value_error` | `cfg.leaderId == ""` 时 `init()` 抛 `ValueError`（不依赖 netWork 推断） |
 | `test_missing_ports_raise_value_error` | `selfState/selfCmd/outbox` 未绑定时抛 `ValueError` |
 
@@ -346,19 +333,9 @@ def _rally_cfg(
 | `test_rally_join_pos_capture_window_uses_worst_case_of_approach_and_loiter_min_speed` | 回归用例：`required_capture_radius_m` 按 `max(approach_speed_mps, loiter_speed_min_mps)` 取更快一侧的速度反解单步安全边界，不能只看 `approach_speed_mps`（LOITERING 圆弧巡航速度若显著更快，用较慢的 approach 速度反解会算出偏小的安全边界） |
 | `test_rally_join_pos_exit_heading_matches_mission_heading_from_opposite_arrival` | 回归用例：即便从任务航向正对侧飞来（旧版会导致切出反向），切出速度方向仍精确等于 `mission_heading_rad` |
 | `test_rally_join_pos_does_not_exit_immediately_when_entry_point_lands_just_past_slot_angle` | 回归用例：切入点 T 弦长离 M_i 很近但真实 CCW 弧长约 350°（T 在角度上"刚越过" M_i）时，不会被对称弧距 `ang_dist` 误判成"已到达"而跳过圆弧直接切出 |
-| `test_rally_join_pos_reached_slot_once_stays_false_when_entry_point_lands_just_past_slot_angle` | 回归用例：同一个"弦长近、真实弧长约 350°"场景下，进 LOITERING 那一拍 `reached_slot_once` 必须仍是 False，不能被对称弧距误判成"已到达"（复现过一次：`_step_loitering` 里独立的 `ang_dist` 判断会把 `_enter_arc` 刚设对的 False 立刻翻回 True，修复为复用 `_away_from_slot` 同一判据） |
+| `test_rally_join_pos_does_not_exit_when_entry_point_lands_just_past_slot_angle` | 同一个“弦长近、真实弧长约 350°”场景下，进入 LOITERING 首拍不得被对称弧距误判为切出 |
 | `test_rally_join_pos_loitering_targets_nominal_radius_not_actual` | LOITERING 阶段的位置指令/向心前馈按期望半径 `loiter_radius_m` 给出，不跟随飞机此刻的实际半径漂移 |
 | `test_rally_join_pos_falls_back_to_direct_flight_when_starting_inside_circle` | 已知限制：起点落在盘旋圆内部/圆上（无切线可求）时退化为直飞 `loose_slot`，不抛异常 |
-
-**T_ref 聚合新增回归用例**（`reached_slot_once`，修复"到达切入点 T 就过早退出 T_ref 聚合"问题，位于
-`tests/llt/test_formation_rally.py::RallyTaskTests`，与本节其余 `RallyJoinPos` 单测不同类）：
-
-| 测试名 | 断言 |
-| ------ | ---- |
-| `test_t_ref_counts_loitering_follower_that_has_not_reached_slot_once` | LOITERING 但尚未首次路过 M_i（`reachedSlotOnce=False`）的僚机 ETA 仍计入 T_ref，不因状态从 FLYING 变成 LOITERING 就被剔除 |
-| `test_t_ref_excludes_loitering_follower_after_reaching_slot_once` | 已首次路过 M_i（`reachedSlotOnce=True`）、纯粹盘旋等待的僚机不再计入 T_ref，避免其每圈波动的 ETA 反复推高/拉低基准时间 |
-
----
 
 ## 10. TestSlotGeometry - 最终槽位几何
 
@@ -378,17 +355,16 @@ def _rally_cfg(
 
 ## 11/12. TestRallyEntity - 集结长机/僚机实体主链路
 
-> 本节原分为 TestLeaderEntity/TestFollowerEntity 两节，列出的测试名（`test_rally_before_arrival_uses_rally_approach`、
-> `_self_arrived`、`_rally_target` 等）描述的是 `RallyApproach` 直飞 M_i、到达即锁存的旧流程测试点，随
+> 本节原分为 TestLeaderEntity/TestFollowerEntity 两节，旧版描述的是 `RallyApproach` 直飞 M_i、到达即锁存的流程测试点，随
 > `RallyJoinPos`（切线进圆）重构已全部替换。当前长机/僚机实体级测试合并为同一个 `RallyEntityTests`
 > 类（`tests/llt/test_formation_rally.py`），下表按实际用例重写。
 
 | 测试名 | 断言 |
 | ------ | ---- |
-| `test_rally_follower_latches_arrival_and_switches_to_slot_after_step_one` | 僚机位于目标点且 T_ref 已有效时 `RallyJoinPos` 进入 `EXITED`，上报 `arrived=1`/`rally_state=EXITED`；长机推进到 `step=1`（CATCHUP）后 `selfCmd.pos` 变为 `SlotGeometry` 按长机状态算出的最终槽位 |
-| `test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start` | 冷启动尚无有效 T_ref（`t_ref_valid=False`）时，即便已到目标点附近，`RallyJoinPos` 进入 `LOITERING` 而非直接 `EXITED`，上报 `arrived=0` |
-| `test_rally_follower_none_resets_join_state_for_restart` | 已 `EXITED` 的僚机收到 `stage=NONE` 后，`RallyJoinPos` 复位回 `FLYING`，上报 `arrived=0`，允许下一轮重新执行 JOINING |
-| `test_rally_follower_none_outputs_current_position_zero_velocity` | `stage=NONE` 时 `selfCmd.pos` 复制本机当前位置、`selfCmd.v` 为零速，上报 `arrived=0` |
+| `test_rally_follower_latches_arrival_and_switches_to_slot_after_step_one` | 僚机切出后上报 `rally_state=EXITED`；长机推进到 CATCHUP 后改用 `SlotGeometry` 计算最终槽位 |
+| `test_rally_follower_waits_when_t_ref_is_not_valid_at_cold_start` | 冷启动尚无有效 T_ref 时，僚机进入 `LOITERING` 而非直接 `EXITED` |
+| `test_rally_follower_none_resets_join_state_for_restart` | 已 `EXITED` 的僚机收到 `stage=NONE` 后，`RallyJoinPos` 复位回 `FLYING` |
+| `test_rally_follower_none_outputs_current_position_zero_velocity` | `stage=NONE` 时 `selfCmd.pos` 复制本机当前位置、`selfCmd.v` 为零速 |
 | `test_rally_leader_outputs_completion_event_once` | 长机汇合子状态置 `EXITED` 后推进多帧，LOOSE 收敛后直接进入 HOLD；`rallyCompleted` 只在转换首帧为 True |
 | `test_rally_leader_none_resets_join_state` | 长机处于 `HOLD` 且已 `EXITED` 时收到 `remote=NONE`，`RallyJoinPos` 复位回 `FLYING` |
 | `test_rally_leader_init_rejects_empty_route_list` | `route=[]`（空列表而非 `None`）时 `init()` 显式抛 `ValueError`，不应因空列表索引抛 `IndexError` |
@@ -424,7 +400,7 @@ def _rally_cfg(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_two_followers_reach_hold_after_rally` | 1 长机 + 2 僚机配置，运行足够时长后长机 `cmd.stage==HOLD` |
-| `test_followers_first_report_arrived_then_slot_error_converges` | 僚机先广播 `arrived=1`，之后 `posErr_m` 进入松散/紧密阈值 |
+| `test_followers_first_report_exited_then_slot_error_converges` | 僚机先广播 `rally_state=EXITED`，之后 `posErr_m` 进入松散/紧密阈值 |
 | `test_link_loss_freezes_rally_progress` | 某期望僚机链路丢失超过 `staleTimeout_s` 时，Rally 不推进到下一阶段 |
 | `test_recover_after_link_loss_allows_progress` | 链路恢复并重新收到有效状态后，状态机继续推进 |
 | `test_reset_restarts_rally_from_approach` | 集结运行中调用 `reset()`，仿真复位且 `_remote_stage` 重置为 `RALLY`，下一帧长机输出 `cmd.stage=RALLY/step=0`（NONE→RALLY 重启语义已在 TestRallyTaskRemote.test_none_then_rally_allows_restart 单元级覆盖） |
@@ -440,9 +416,9 @@ def _rally_cfg(
 | Rally 参数校验与 reset | TestRallyTaskValidation |
 | remote NONE/HOLD/RALLY 语义 | TestRallyTaskRemote |
 | JOINING/CATCHUP/LOOSE/HOLD 状态流转 | TestRallyTask |
-| expectedFollowerIds、valid、lastUpdate_s、超时冻结 | TestRallyTask, TestFollowerStatusInbound |
+| expectedFollowerIds、lastUpdate_s、超时冻结 | TestRallyTask, TestFollowerStatusInbound |
 | `cmd.pattern` 首拍写入 targetPattern | TestRallyTask |
-| 僚机状态广播与锁存 arrived/rally_state/eta_s/reached_slot_once | TestFollowerBroadcast, TestRallyEntity |
+| 僚机状态广播与锁存 rally_state/误差/基础航程 | TestFollowerBroadcast, TestRallyEntity |
 | 长机解析僚机回报 | TestFollowerStatusInbound |
 | 统一长机广播携带阶段、队形与公共计划 | TestRallyLeaderBroadcastAndInbound |
 | RallyJoinPos 切入盘旋圆、圆弧汇合、切出航向 | TestRallyJoinPos |

@@ -269,7 +269,11 @@ class Rally(FormationTaskBase):
                     self._plan_ready = True
                     self._write_plan(y)
 
-            leader_exited = u.posCalcStatus.join_exited if u.posCalcStatus is not None else False
+            leader_exited = (
+                u.posCalcStatus.rally_state == RALLY_STATE_EXITED
+                if u.posCalcStatus is not None
+                else False
+            )
             if self._all_participants_exited(state_map, now_s, leader_exited):
                 next_step = RallyPhaseE.CATCHUP
             else:
@@ -505,8 +509,8 @@ class Rally(FormationTaskBase):
         return -(-value.numerator // value.denominator)
 
     def _is_valid(self, entry: FollowerStateS, now_s: float) -> bool:
-        """判断单架僚机状态条目是否有效（未超时且 valid=True）。"""
-        if not entry.valid or not math.isfinite(entry.lastUpdate_s) or not math.isfinite(now_s):
+        """判断单架僚机状态条目是否有效（时间有限且未超时）。"""
+        if not math.isfinite(entry.lastUpdate_s) or not math.isfinite(now_s):
             return False
         return (now_s - entry.lastUpdate_s) <= self._stale_timeout_s
 

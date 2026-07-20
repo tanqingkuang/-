@@ -31,9 +31,9 @@ from src.algorithm.units.process.tra_plan import (
 def _route() -> list[WayPointInputS]:
     """构造两航段任务航线。"""
     return [
-        WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=20.0),
-        WayPointInputS(idx=1, pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=20.0),
-        WayPointInputS(idx=2, pos=PosInEarthS(200.0, 0.0, 1000.0), vdCmd=20.0),
+        WayPointInputS(pos=PosInEarthS(0.0, 0.0, 1000.0), vdCmd=20.0),
+        WayPointInputS(pos=PosInEarthS(100.0, 0.0, 1000.0), vdCmd=20.0),
+        WayPointInputS(pos=PosInEarthS(200.0, 0.0, 1000.0), vdCmd=20.0),
     ]
 
 
@@ -72,14 +72,14 @@ class TraPlanManagerTests(unittest.TestCase):
         """验证僚机显式只配置 NOOP 时可在任意正常阶段执行。"""
         runtime = EntityRuntimeS()
         runtime.context.cmd.stage = FormStageE.HOLD
-        runtime.context.wayLine.idx = 9
+        runtime.context.wayLine.start.east = 900.0
         manager = TraPlanManager()
         manager.bind(runtime)
         manager.init(_entity_cfg(FOLLOWER_PROFILE))
 
         manager.step()
 
-        self.assertEqual(runtime.context.wayLine.idx, 9)
+        self.assertEqual(runtime.context.wayLine.start.east, 900.0)
 
     def test_leader_routes_by_cmd_and_preserves_cached_route_state(self) -> None:
         """验证待命不推进航段，恢复任务航线后继续使用同一产品状态。"""
@@ -96,15 +96,15 @@ class TraPlanManagerTests(unittest.TestCase):
         cxt.cmd.stage = FormStageE.STANDBY
         cxt.cmd.step = RallyPhaseE.JOINING
         cxt.selfState.pos = PosInEarthS(120.0, 0.0, 1000.0)
-        copy_wayline(WayLineS(idx=9), cxt.wayLine)
+        copy_wayline(WayLineS(start=PosInEarthS(900.0, 0.0, 0.0)), cxt.wayLine)
 
         manager.step()
-        self.assertEqual(cxt.wayLine.idx, 9)
+        self.assertEqual(cxt.wayLine.start.east, 900.0)
 
         cxt.cmd.stage = FormStageE.RALLY
         cxt.cmd.step = RallyPhaseE.CATCHUP
         manager.step()
-        self.assertEqual(cxt.wayLine.idx, 1)
+        self.assertEqual(cxt.wayLine.start.east, 100.0)
 
         cxt.cmd.stage = FormStageE.STANDBY
         cxt.cmd.step = RallyPhaseE.JOINING
@@ -113,7 +113,7 @@ class TraPlanManagerTests(unittest.TestCase):
         cxt.selfState.pos.east = 10.0
         manager.step()
 
-        self.assertEqual(cxt.wayLine.idx, 1)
+        self.assertEqual(cxt.wayLine.start.east, 100.0)
         self.assertEqual(
             {strategy: id(product) for strategy, product in manager._registry.items()},
             product_ids,
@@ -121,7 +121,7 @@ class TraPlanManagerTests(unittest.TestCase):
 
         manager.reset()
         manager.step()
-        self.assertEqual(cxt.wayLine.idx, 0)
+        self.assertEqual(cxt.wayLine.start.east, 0.0)
 
 
 if __name__ == "__main__":

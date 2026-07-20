@@ -183,7 +183,7 @@ def inside(obs, east, north, clearance=0.0) -> bool:
 
 这里有**两个互相独立**的概念，曾被混在一个开关里，现已拆开：
 
-1. **交接半径 R（拐点圆弧）**：两条**直线航段**在拐点处用多大半径平滑过渡。这是避障输出的固有动作，**与 `allow_arc` 无关**，由补充函数 `assign_transition_radius()` 在可飞性校验**之后**统一补：凡"入段、出段都是直线"的内部拐点都设 `WayPointInputS.r=turn_radius_m`，再由 `waypoint_inputs_to_waylines()` 展开为相切圆弧 `WayLineS`（`start.turnSign≠0`）。
+1. **交接半径 R（拐点圆弧）**：两条**直线航段**在拐点处用多大半径平滑过渡。这是避障输出的固有动作，**与 `allow_arc` 无关**，由补充函数 `assign_transition_radius()` 在可飞性校验**之后**统一补：凡“入段、出段都是直线”的内部拐点都设 `WayPointInputS.r=turn_radius_m`，再由 `waypoint_inputs_to_waylines()` 展开为相切圆弧 `WayLineS`（`turnSign≠0`）。
 2. **航段自身曲率（`allow_arc`）**：指**航段本身是不是一条曲线**（例如将来贴着障碍边界走的弧线段），而不是拐点怎么交接。`allow_arc=false` 表示所有航段（腿）都是直线，`allow_arc=true` 才允许出现"航段即曲线"。
 
 二者正交：`allow_arc=false`（航段都是直线）时，直线-直线拐点**照样**按 R 切交接圆弧——这正是"长机自动在两航段之间加交接圆弧"的能力来源。`allow_arc` 只控制航段骨架能否弯，不会取消拐点交接圆弧。

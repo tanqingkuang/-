@@ -12,13 +12,11 @@ from src.algorithm.context.leaf_types import (
     FormStageE,
     MotionProfS,
     PosInEarthS,
-    PosTrackCommandE,
     PosTrackStrategyE,
     RallyPhaseE,
     VdInEarthS,
     WayLineS,
     WayPointInputS,
-    WayPointS,
 )
 from src.algorithm.entity.types import (
     EntityInitS,
@@ -55,8 +53,8 @@ def _route() -> list[WayPointInputS]:
     """构造水平向东的两点航线。"""
 
     return [
-        WayPointInputS(idx=0, pos=PosInEarthS(0.0, 0.0, 500.0), vdCmd=20.0),
-        WayPointInputS(idx=1, pos=PosInEarthS(1000.0, 0.0, 500.0), vdCmd=20.0),
+        WayPointInputS(pos=PosInEarthS(0.0, 0.0, 500.0), vdCmd=20.0),
+        WayPointInputS(pos=PosInEarthS(1000.0, 0.0, 500.0), vdCmd=20.0),
     ]
 
 
@@ -67,8 +65,9 @@ def _runtime() -> EntityRuntimeS:
     runtime.context.selfState = _motion()
     runtime.context.cmd = FormSnapshotS(stage=FormStageE.HOLD)
     runtime.context.wayLine = WayLineS(
-        start=WayPointS(pos=PosInEarthS(0.0, 0.0, 500.0), vdCmd=20.0),
-        end=WayPointS(pos=PosInEarthS(1000.0, 0.0, 500.0), vdCmd=20.0),
+        start=PosInEarthS(0.0, 0.0, 500.0),
+        end=PosInEarthS(1000.0, 0.0, 500.0),
+        vdCmd=20.0,
     )
     return runtime
 
@@ -201,7 +200,7 @@ class PosCalcManagerTests(unittest.TestCase):
         """运行期遇到表外状态必须直接报错，不能退回角色默认策略。"""
 
         runtime = _runtime()
-        runtime.context.cmd.stage = FormStageE.RECONFIG
+        runtime.context.cmd.stage = 99  # type: ignore[assignment]
         runtime.context.cmd.step = RallyPhaseE.JOINING
         manager = PosCalcManager()
         manager.bind(runtime)
@@ -215,7 +214,7 @@ class PosCalcManagerTests(unittest.TestCase):
             )
         )
 
-        with self.assertRaisesRegex(ValueError, "未配置"):
+        with self.assertRaisesRegex(ValueError, "非法"):
             manager.step()
 
     def test_noop_writes_current_position_and_zero_velocity(self) -> None:
@@ -231,8 +230,7 @@ class PosCalcManagerTests(unittest.TestCase):
 
         manager.step()
 
-        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.NOOP)
-        self.assertEqual(cxt.posTrackCommand.mode, PosTrackCommandE.NOOP)
+        self.assertEqual(manager._active_strategy, PosCalcStrategyE.NOOP)
         self.assertEqual(cxt.selfCmd.pos, cxt.selfState.pos)
         self.assertEqual(cxt.selfCmd.v, VdInEarthS())
 
@@ -258,18 +256,16 @@ class PosCalcManagerTests(unittest.TestCase):
 
         cxt.cmd.stage = FormStageE.STANDBY
         manager.step()
-        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.RALLY_JOIN)
-        self.assertEqual(cxt.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
+        self.assertEqual(manager._active_strategy, PosCalcStrategyE.RALLY_JOIN)
 
         cxt.cmd.stage = FormStageE.RALLY
         cxt.cmd.step = RallyPhaseE.JOINING
         manager.step()
-        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.RALLY_JOIN)
+        self.assertEqual(manager._active_strategy, PosCalcStrategyE.RALLY_JOIN)
 
         cxt.cmd.stage = FormStageE.HOLD
         manager.step()
-        self.assertEqual(cxt.posCalcStatus.active_strategy, PosCalcStrategyE.ROUTE_INTERP)
-        self.assertEqual(cxt.posTrackCommand.mode, PosTrackCommandE.SPEED_TRACK)
+        self.assertEqual(manager._active_strategy, PosCalcStrategyE.ROUTE_INTERP)
         self.assertIs(manager._registry[PosCalcStrategyE.RALLY_JOIN], rally_product)
         self.assertIs(manager._registry[PosCalcStrategyE.ROUTE_INTERP], route_product)
 
@@ -320,7 +316,7 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.step()
 
         self.assertIs(cxt.posCalcStatus, status)
-        self.assertEqual(status.active_strategy, PosCalcStrategyE.RALLY_JOIN)
+        self.assertEqual(manager._active_strategy, PosCalcStrategyE.RALLY_JOIN)
         self.assertNotEqual(status.rally_state, "")
         self.assertGreaterEqual(status.planned_path_length_m, -1.0)
 
@@ -349,12 +345,13 @@ class PosCalcManagerTests(unittest.TestCase):
 
         cxt.cmd.stage = FormStageE.STANDBY
         manager.step()
-        self.assertEqual(cxt.posCalcStatus.remaining_loops, 0)
+        rally = manager._registry[PosCalcStrategyE.RALLY_JOIN]
+        self.assertEqual(rally.remaining_loops, 0)  # type: ignore[attr-defined]
 
         cxt.cmd.stage = FormStageE.RALLY
         cxt.cmd.step = RallyPhaseE.JOINING
         manager.step()
-        self.assertEqual(cxt.posCalcStatus.remaining_loops, 2)
+        self.assertEqual(rally.remaining_loops, 2)  # type: ignore[attr-defined]
 
     def test_all_products_bind_private_ports_without_holding_context(self) -> None:
         """所有位置解算产品应在 bind 时绑定所需字段，不得在 step 中持有完整黑板。"""
@@ -382,7 +379,6 @@ class PosCalcManagerTests(unittest.TestCase):
             self.assertFalse(hasattr(product, "_cxt"))
             self.assertIs(product._y.selfCmd, cxt.selfCmd)  # type: ignore[attr-defined]
             self.assertIs(product._y.status, cxt.posCalcStatus)  # type: ignore[attr-defined]
-            self.assertIs(product._y.posTrackCommand, cxt.posTrackCommand)  # type: ignore[attr-defined]
         self.assertIs(noop._u.selfState, cxt.selfState)  # type: ignore[attr-defined]
         self.assertIs(route._u.selfState, cxt.selfState)  # type: ignore[attr-defined]
         self.assertIs(route._u.wayLine, cxt.wayLine)  # type: ignore[attr-defined]

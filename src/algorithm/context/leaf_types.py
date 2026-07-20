@@ -13,7 +13,6 @@ class FormStageE(IntEnum):
     NONE = 0
     RALLY = 1
     HOLD = 2
-    RECONFIG = 3
     STANDBY = 4
 
 
@@ -41,14 +40,6 @@ class PosCalcStrategyE(IntEnum):
     RALLY_JOIN = 3  # 集结：待命、转场、盘旋和切出
 
 
-class PosTrackCommandE(IntEnum):
-    """位置跟踪命令枚举。注意：由 PosCalc 发布，与控制产品策略固定一一对应。"""
-
-    NOOP = 0  # 输出零加速度
-    SPEED_TRACK = 1  # 前向只使用速度闭环
-    POSITION_TRACK = 2  # 前向使用位置和速度串级闭环
-
-
 class PosTrackStrategyE(IntEnum):
     """位置跟踪产品策略枚举。注意：只表达具体控制产品，不表达任务阶段。"""
 
@@ -58,23 +49,11 @@ class PosTrackStrategyE(IntEnum):
 
 
 @dataclass
-class PosTrackCommandS:
-    """位置跟踪命令载体。注意：PosCalc 和 PosTrack 端口绑定同一可变对象。"""
-
-    mode: PosTrackCommandE = PosTrackCommandE.NOOP  # 本拍期望执行的控制语义
-
-
-@dataclass
 class PosCalcStatusS:
     """位置解算运行状态。注意：位置解算原地写入，其他流程读取上一拍反馈。"""
 
-    active_strategy: PosCalcStrategyE | None = None  # 本拍实际执行的策略
     rally_state: str = ""  # 集结位置解算内部状态；未装配时为空
     planned_path_length_m: float = -1.0  # 不含额外整圈的锁存基础航程
-    remaining_path_length_m: float = -1.0  # 当前到下一次切出点的基础剩余航程
-    remaining_loops: int = 0  # 固定协调计划尚未消费的整圈数
-    reached_slot_once: bool = False  # 是否真实越过过松散点
-    join_exited: bool = False  # 是否已经从集结圆切出
 
 
 @dataclass
@@ -145,7 +124,6 @@ class VdInEarthS:
     vEast: float = 0.0  # 东向速度，米每秒
     vNorth: float = 0.0  # 北向速度，米每秒
     vUp: float = 0.0  # 天向速度，米每秒
-    vTheta: float = 0.0  # 俯仰角，弧度
     vPsi: float = 0.0  # 航向角，弧度
     vd: float = 0.0  # 地速标量，米每秒
     dVPsi: float = 0.0  # 航迹偏航角速率(水平航向角变化率)，弧度每秒
@@ -194,30 +172,20 @@ class PosTrackDiagS:
 
 
 @dataclass
-class WayPointS:
-    """单个航路点，携带该点之后一段的航段属性。注意：turnSign!=0 表示该点起始处为圆弧段。"""
-
-    idx: int = 0  # 航路点序号
-    pos: PosInEarthS = field(default_factory=PosInEarthS)  # 航路点地理系位置
-    vdCmd: float = 0.0  # 该点之后一段的地速指令，米每秒
-    turnSign: float = 0.0  # 该点之后一段的转向：+1 左转/逆时针、-1 右转/顺时针、0 直线
-    center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心(仅 turnSign!=0 有意义)
-
-
-@dataclass
 class WayLineS:
-    """单段航段。注意：start.* 描述本段属性，end.* 描述下一段属性(供前瞻)。"""
+    """单段航段。注意：速度、转向和圆心均描述当前段，下一段属性由 nextWayLine 提供。"""
 
-    idx: int = 0  # 航段序号
-    start: WayPointS = field(default_factory=WayPointS)  # 航段起点；start.turnSign!=0 表示本段为圆弧
-    end: WayPointS = field(default_factory=WayPointS)  # 航段终点；end.turnSign/vdCmd 描述下一段
+    start: PosInEarthS = field(default_factory=PosInEarthS)  # 航段起点
+    end: PosInEarthS = field(default_factory=PosInEarthS)  # 航段终点
+    vdCmd: float = 0.0  # 当前段地速指令，米每秒
+    turnSign: float = 0.0  # 当前段转向：+1 左转、-1 右转、0 直线
+    center: PosInEarthS = field(default_factory=PosInEarthS)  # 圆弧圆心，仅曲线段有意义
 
 
 @dataclass
 class WayPointInputS:
     """用户输入的原始航点，供长机 init 转换为内部 WayLineS 序列。"""
 
-    idx: int = 0  # 航点编号，从 0 开始
     pos: PosInEarthS = field(default_factory=PosInEarthS)  # 航点位置
     vdCmd: float = 0.0  # 该航点之后一段的地速指令，米每秒
     r: float = 0.0  # 该拐点处的期望圆弧半径(米)；0=不做圆弧；首末点无意义
@@ -263,7 +231,6 @@ def copy_velocity(src: VdInEarthS, dst: VdInEarthS) -> None:
     dst.vEast = src.vEast
     dst.vNorth = src.vNorth
     dst.vUp = src.vUp
-    dst.vTheta = src.vTheta
     dst.vPsi = src.vPsi
     dst.vd = src.vd
     dst.dVPsi = src.dVPsi
@@ -282,18 +249,12 @@ def copy_pos_track_diag(src: PosTrackDiagS, dst: PosTrackDiagS) -> None:
 
 
 def copy_wayline(src: WayLineS, dst: WayLineS) -> None:
-    """复制单段航线数据，供算法模块安全读写。注意：起终点对象不能复用原引用。"""
-    dst.idx = src.idx
-    dst.start.idx = src.start.idx
-    copy_position(src.start.pos, dst.start.pos)
-    dst.start.vdCmd = src.start.vdCmd
-    dst.start.turnSign = src.start.turnSign
-    copy_position(src.start.center, dst.start.center)
-    dst.end.idx = src.end.idx
-    copy_position(src.end.pos, dst.end.pos)
-    dst.end.vdCmd = src.end.vdCmd
-    dst.end.turnSign = src.end.turnSign
-    copy_position(src.end.center, dst.end.center)
+    """复制单段航线数据，供算法模块安全读写。注意：嵌套位置对象不能复用原引用。"""
+    copy_position(src.start, dst.start)
+    copy_position(src.end, dst.end)
+    dst.vdCmd = src.vdCmd
+    dst.turnSign = src.turnSign
+    copy_position(src.center, dst.center)
 
 
 def copy_snapshot(src: FormSnapshotS, dst: FormSnapshotS) -> None:
@@ -308,7 +269,6 @@ def zero_velocity(v: VdInEarthS) -> None:
     v.vEast = 0.0
     v.vNorth = 0.0
     v.vUp = 0.0
-    v.vTheta = 0.0
     v.vPsi = 0.0
     v.vd = 0.0
     v.dVPsi = 0.0
@@ -326,15 +286,11 @@ class FollowerStateS:
     """单架僚机向长机回报的集结状态快照。注意：id 与节点 ID 对应；posErr 为到当前目标的合距离。"""
 
     id: str = ""  # 节点 ID，与 envelope.source 对应
-    pos: PosInEarthS = field(default_factory=PosInEarthS)  # 实际位置
     posErr_m: float = 0.0  # 到当前目标的三维距离，米；CATCHUP 阶段为 dist3d(self, slot)
     headingErr_rad: float = 0.0  # 当前航向与目标航向之差的绝对值，弧度
-    arrived: int = 0  # 兼容旧协议；新协议以 rally_state == EXITED 为准
-    valid: bool = False  # 本帧数据是否有效（收到最新报文则置 True）
     lastUpdate_s: float = 0.0  # 最近一次收到该机报文的仿真时间戳，秒
     plannedPathLength_m: float = -1.0  # 本次集结不含额外整圈的基础水平航程；负值表示尚未规划
     rally_state: str = "STANDBY"  # 集结汇合状态：STANDBY / FLYING / LOITERING / EXITED
-    reachedSlotOnce: bool = False  # 是否已至少一次路过松散点 M_i，保留为汇合过程诊断量
 
 
 def dist3d(a: "PosInEarthS", b: "PosInEarthS") -> float:
@@ -346,14 +302,10 @@ def dist3d(a: "PosInEarthS", b: "PosInEarthS") -> float:
 
 
 def copy_follower_state(src: FollowerStateS, dst: FollowerStateS) -> None:
-    """复制单架僚机状态快照。注意：pos 为嵌套对象，须逐字段复制。"""
+    """复制单架僚机状态快照。注意：新增业务字段时须同步补齐。"""
     dst.id = src.id
-    copy_position(src.pos, dst.pos)
     dst.posErr_m = src.posErr_m
     dst.headingErr_rad = src.headingErr_rad
-    dst.arrived = src.arrived
-    dst.valid = src.valid
     dst.lastUpdate_s = src.lastUpdate_s
     dst.plannedPathLength_m = src.plannedPathLength_m
     dst.rally_state = src.rally_state
-    dst.reachedSlotOnce = src.reachedSlotOnce

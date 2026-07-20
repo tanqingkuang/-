@@ -194,7 +194,7 @@ def planned_route_from_waypoints(route: list[WayPointInputS] | tuple[WayPointInp
         polyline=tuple(_route_to_polyline_from_lines(display_lines)),
         markers=tuple(_route_marker_points_from_lines(display_lines)),
         segment_count=len(display_lines),
-        arc_count=sum(1 for line in display_lines if line.start.turnSign != 0.0),
+        arc_count=sum(1 for line in display_lines if line.turnSign != 0.0),
         transition_radius_count=sum(1 for point in waypoints if point.r > 0.0),
     )
 
@@ -570,9 +570,9 @@ def _sample_wayline_arc(line: WayLineS, step_deg: float = 6.0) -> list[tuple[flo
     """把圆弧航段采样为显示折线。注意：复用算法层统一圆弧语义。"""
 
     # 圆弧起点、圆心和转向共同决定唯一扫掠方向。
-    center = line.start.center
+    center = line.center
     radius = _arc_radius_fn(line)
-    start_angle = math.atan2(line.start.pos.north - center.north, line.start.pos.east - center.east)
+    start_angle = math.atan2(line.start.north - center.north, line.start.east - center.east)
     swept = arc_swept_rad(line)
     segments = max(1, int(abs(math.degrees(swept)) / step_deg))
     return [
@@ -590,10 +590,10 @@ def _route_to_polyline_from_lines(lines: list[WayLineS]) -> list[tuple[float, fl
     # 先按航段展开，再统一删除相邻共点。
     raw: list[tuple[float, float]] = []
     for line in lines:
-        if line.start.turnSign != 0.0:
+        if line.turnSign != 0.0:
             raw.extend(_sample_wayline_arc(line))
         else:
-            raw.extend(((line.start.pos.east, line.start.pos.north), (line.end.pos.east, line.end.pos.north)))
+            raw.extend(((line.start.east, line.start.north), (line.end.east, line.end.north)))
     return _deduplicate_points(raw)
 
 
@@ -602,8 +602,8 @@ def _route_marker_points_from_lines(lines: list[WayLineS]) -> list[tuple[float, 
 
     if not lines:
         return []
-    raw = [(lines[0].start.pos.east, lines[0].start.pos.north)]
-    raw.extend((line.end.pos.east, line.end.pos.north) for line in lines)
+    raw = [(lines[0].start.east, lines[0].start.north)]
+    raw.extend((line.end.east, line.end.north) for line in lines)
     return _deduplicate_points(raw)
 
 

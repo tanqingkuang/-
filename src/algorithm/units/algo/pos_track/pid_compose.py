@@ -268,4 +268,3 @@ def _write_limited_effective_velocity(
     effective_cmd.v.vUp = v_up
     effective_cmd.v.vd = horizontal
     effective_cmd.v.vPsi = math.atan2(v_north, v_east)
-    effective_cmd.v.vTheta = math.atan2(v_up, horizontal)

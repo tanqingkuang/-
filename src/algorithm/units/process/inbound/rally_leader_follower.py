@@ -61,7 +61,6 @@ def _parse_motion_payload(payload: object) -> MotionProfS:
     parsed.v.vEast = _finite_number(vd.get("vEast", 0.0))
     parsed.v.vNorth = _finite_number(vd.get("vNorth", 0.0))
     parsed.v.vUp = _finite_number(vd.get("vUp", 0.0))
-    parsed.v.vTheta = _finite_number(vd.get("vTheta", 0.0))
     parsed.v.vPsi = _finite_number(vd.get("vPsi", 0.0))
     parsed.v.vd = _finite_number(vd.get("vd", 0.0))
     parsed.v.dVPsi = _finite_number(vd.get("dVPsi", 0.0))
@@ -140,7 +139,7 @@ class RallyLeaderFollowerOutputS:
     leaderState: MotionProfS | None = None
     cmd: FormSnapshotS | None = None
     leaderCmd: MotionProfS | None = None  # 长机跟踪指令；None 时接收端可沿用 leaderState。
-    t_ref: float = 0.0  # 长机广播的集结基准时刻（秒）；由实体每帧复制到 cxt.rally_t_ref
+    t_ref: float = 0.0  # 长机广播的集结基准时刻（秒）；由实体每帧复制到 cxt.rallyPlan
     t_ref_valid: bool = False  # 旧格式或非法 t_ref 默认 False，禁止冷启动误切出
     loopCounts: dict[str, int] = field(default_factory=dict)  # 长机固定计划的节点整数圈数映射
 

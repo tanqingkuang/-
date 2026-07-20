@@ -283,9 +283,7 @@ class SimulationControllerSnapshotMixin:
         stages = [algorithm.current_stage() for algorithm in algorithms]
         rally_phases = [algorithm.current_rally_phase_str() for algorithm in algorithms]
         active_rally_phases = {"RALLY_TRANSIT", "RALLY_LOITER", "RALLY_EXITED", "CATCHUP", "LOOSE"}
-        # 按优先级聚合各节点编队阶段：重构 > 集结 > 保持 > 待命。
-        if any(stage == FormStageE.RECONFIG for stage in stages):
-            return "重构"
+        # 按优先级聚合各节点编队阶段：集结 > 保持 > 待命；故障重构已在上方判断。
         if any(phase in active_rally_phases for phase in rally_phases) or any(stage == FormStageE.RALLY for stage in stages):
             return "集结"
         if any(phase == "HOLD" for phase in rally_phases) or any(stage == FormStageE.HOLD for stage in stages):
