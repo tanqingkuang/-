@@ -17,6 +17,7 @@ from src.data.control_effect_analysis import (
     calc_summary,
     convergence_time_s,
     load_snapshot_samples,
+    main as analyze_main,
     metric_rows_for_source,
     points_for,
     sliding_window,
@@ -83,6 +84,30 @@ class ControlEffectAnalysisTests(unittest.TestCase):
             self.assertEqual(exported[0]["channel"], "track_pos_err_x_m")
             self.assertEqual(exported[0]["channel_label"], "前向位置误差 x")
             self.assertIn("max_abs_time_s", exported[0])
+
+    def test_cli_uses_common_analysis_and_exports_all_channels(self) -> None:
+        """命令行入口应直接复用通用内核导出全量控制效果指标。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_dir = root / "run-test"
+            run_dir.mkdir()
+            snapshot_path = self._write_snapshots(run_dir / "snapshots.jsonl")
+            output_root = root / "analysis"
+
+            exit_code = analyze_main(
+                [str(snapshot_path), "--output-root", str(output_root)]
+            )
+            output_path = output_root / "run-test" / "control_effect_metrics.csv"
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(output_path.is_file())
+            with output_path.open(encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                {row["channel"] for row in rows},
+                {channel.field_name or channel.key for channel in GUI_CHANNELS},
+            )
 
     def test_load_rejects_missing_channel_field(self) -> None:
         """缺少默认误差通道字段时应给出明确错误，而不是按 0 兜底。"""

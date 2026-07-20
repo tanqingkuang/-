@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import math
+import sys
 from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -727,3 +729,81 @@ def write_metrics_csv(
             # A/B 顺序写入同一个 CSV，input_label 保留来源。
             for row in metric_rows_for_source(source, start_s, end_s, channels=channel_list):
                 writer.writerow(row)
+
+
+def _choose_snapshot_file() -> Path | None:
+    """弹出文件选择框并返回用户选择的仿真快照。"""
+
+    # tkinter 只在省略命令行路径时按需加载，无界面批处理不引入 GUI 依赖。
+    from tkinter import Tk, filedialog
+
+    project_root = Path(__file__).resolve().parents[2]
+    root = Tk()
+    root.withdraw()
+    try:
+        selected = filedialog.askopenfilename(
+            title="选择要分析的仿真快照",
+            initialdir=project_root / "result" / "simulation_data" / "logs",
+            filetypes=(("仿真快照", "snapshots.jsonl"), ("JSONL 文件", "*.jsonl")),
+        )
+    finally:
+        root.destroy()
+    return Path(selected) if selected else None
+
+
+def _parse_cli_args(argv: list[str]) -> argparse.Namespace:
+    """解析控制效果分析命令行参数。"""
+
+    project_root = Path(__file__).resolve().parents[2]
+    parser = argparse.ArgumentParser(description="生成控制效果指标报告")
+    parser.add_argument(
+        "snapshot_file",
+        type=Path,
+        nargs="?",
+        help="要分析的 snapshots.jsonl；省略时弹出文件选择框",
+    )
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=project_root / "result" / "analysis",
+        help="分析报告根目录",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """使用通用控制效果分析口径导出单次仿真的全量指标。"""
+
+    args = _parse_cli_args(list(sys.argv[1:] if argv is None else argv))
+    try:
+        selected_file = args.snapshot_file or _choose_snapshot_file()
+        if selected_file is None:
+            print("已取消控制效果分析。")
+            return 0
+        snapshot_file = selected_file.resolve()
+        if snapshot_file.name.lower() != "snapshots.jsonl" or not snapshot_file.is_file():
+            raise ValueError(f"请选择有效的 snapshots.jsonl：{snapshot_file}")
+        source = load_snapshot_samples(
+            snapshot_file,
+            label=snapshot_file.parent.name,
+            channels=GUI_CHANNELS,
+        )
+        output_dir = args.output_root.resolve() / source.label
+        output_dir.mkdir(parents=True, exist_ok=True)
+        output_path = output_dir / "control_effect_metrics.csv"
+        write_metrics_csv(
+            output_path,
+            [source],
+            source.t_min,
+            source.t_max,
+            channels=GUI_CHANNELS,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"控制效果分析失败：{exc}")
+        return 1
+    print(f"控制效果分析完成：{output_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

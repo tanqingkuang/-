@@ -121,14 +121,15 @@ class BatchBatTests(unittest.TestCase):
 
 
 class AnalysisBatTests(unittest.TestCase):
-    """验证编队精度分析使用独立 BAT，不与仿真脚本耦合。"""
+    """验证控制效果分析使用独立 BAT，不与仿真脚本耦合。"""
 
     def test_accuracy_bat_supports_snapshot_selection(self) -> None:
-        """分析 BAT 应弹出快照选择框，并允许直接传入快照文件。"""
+        """分析 BAT 应直接调用现有控制效果分析模块。"""
 
         script = (PROJECT_ROOT / "result" / "analyze_accuracy.bat").read_text(encoding="utf-8")
 
-        self.assertIn("analyze_formation_accuracy.py", script)
+        self.assertIn("-m src.data.control_effect_analysis", script)
+        self.assertNotIn("analyze_formation_accuracy.py", script)
         self.assertIn("analysis", script)
 
     def test_accuracy_bat_uses_windows_line_endings(self) -> None:
