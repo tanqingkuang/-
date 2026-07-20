@@ -271,7 +271,7 @@ def _rally_cfg(
 | `test_parses_two_follower_messages` | 两条 `formation.follower_status` 写入两个 `FollowerStateS`，字段完整 |
 | `test_updates_existing_entry_in_place` | 已有同 ID 条目时原地更新，不追加重复项 |
 | `test_appends_new_follower_entry` | 新 source 追加到 `followerStates` |
-| `test_sets_valid_and_last_update` | 收到报文后 `valid=True`、`lastUpdate_s=now_s` |
+| `test_follower_status_parses_updates_filters_and_uses_source_id` | 成功解析即创建或原地更新状态条目并写入 `lastUpdate_s=now_s`；时效性仅由该时间戳判断 |
 | `test_empty_inbox_keeps_last_update` | 断链帧不更新 `lastUpdate_s`，不清空旧状态 |
 | `test_filters_non_follower_status_topics` | `formation.leader`、`node.status` 等非目标 topic 被忽略 |
 | `test_ignores_non_dict_or_incomplete_payload` | payload 非 dict 或关键字段缺失时跳过，不写半截状态 |

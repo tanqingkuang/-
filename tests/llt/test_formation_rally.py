@@ -509,7 +509,7 @@ class FollowerStateTests(unittest.TestCase):
     def test_rally_leaf_type_defaults_and_copy_helpers(self) -> None:
         """验证默认值与复制函数覆盖所有集结扩展字段。"""
 
-        self.assertEqual(FormStageE.STANDBY, 4)
+        self.assertEqual(FormStageE.STANDBY, 3)
         follower_src = FollowerStateS(
             id="R02",
             posErr_m=4.0,

@@ -13,7 +13,7 @@ class FormStageE(IntEnum):
     NONE = 0
     RALLY = 1
     HOLD = 2
-    STANDBY = 4
+    STANDBY = 3
 
 
 class CommDirE(IntEnum):
