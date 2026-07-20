@@ -423,7 +423,7 @@ remote == RALLY:
 
 ```text
 辅助函数 is_valid(entry):
-  entry 未找到 OR valid==False OR (now_s - lastUpdate_s) > staleTimeout_s → False；否则 True
+  entry 未找到 OR lastUpdate_s/now_s 非有限值 OR (now_s - lastUpdate_s) > staleTimeout_s → False；否则 True
 
 辅助函数 all_participants_exited(leader_exited):
   （用于 JOINING→CATCHUP：期望僚机与长机自身是否都已 RallyJoinPos.state==EXITED）
@@ -482,7 +482,7 @@ sub=LOOSE:
 
 - expectedFollowerIds 为空 → 各门控立即通过、计时器立即累加（测试用）
 - 期望列表非空但 followerStates 为空 → 门控 False，不切换
-- 某机超时（断链）→ is_valid=False，计时器冻结
+- 某机超时（断链且 lastUpdate_s 过旧）→ is_valid=False，计时器冻结
 - JOINING：某机仍在 FLYING/LOITERING（未 EXITED）→ all_participants_exited=False，不进 CATCHUP；
   已 EXITED 的机不因随后断链被撤销
 - CATCHUP：位置或航向任一超阈值 → `_catchup_stable_timer` 清零；两者同时达标并连续满足
@@ -535,8 +535,8 @@ FormationInbound 的私有输入绑定 `runtime.inbox/context.clock`，输出绑
 
 测试：
 
-- inbox 含 2 僚机广播 → followerStates 各字段（含 valid/lastUpdate_s）解析正确
-- inbox 为空（断链）→ followerStates 的 lastUpdate_s 不更新，valid 不变（由超时逻辑在 Rally 侧处理）
+- inbox 含 2 僚机广播 → 成功解析后创建或更新 followerStates 条目，各字段及 lastUpdate_s 正确
+- inbox 为空（断链）→ followerStates 的 lastUpdate_s 不更新，由 Rally 侧按时间戳超时判断有效性
 - inbox 含非僚机报文 → 正确过滤
 
 ---

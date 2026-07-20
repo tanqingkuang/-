@@ -509,7 +509,8 @@ class FollowerStateTests(unittest.TestCase):
     def test_rally_leaf_type_defaults_and_copy_helpers(self) -> None:
         """验证默认值与复制函数覆盖所有集结扩展字段。"""
 
-        self.assertEqual(FormStageE.STANDBY, 3)
+        self.assertEqual(FormStageE.DISBAND, 3)
+        self.assertEqual(FormStageE.STANDBY, 4)
         follower_src = FollowerStateS(
             id="R02",
             posErr_m=4.0,
@@ -519,6 +520,12 @@ class FollowerStateTests(unittest.TestCase):
         follower_dst = FollowerStateS()
         copy_follower_state(follower_src, follower_dst)
         self.assertEqual(follower_dst, follower_src)
+
+    def test_disband_stage_is_only_a_reserved_protocol_value(self) -> None:
+        """解散阶段仅占位，未实现前不得被实体策略表接受。"""
+
+        with self.assertRaises(ValueError):
+            LEADER_PROFILE.require_strategies(FormStageE.DISBAND, RallyPhaseE.JOINING)
 
     def test_context_contains_rally_fields_and_reset_clears_them(self) -> None:
         """验证 Context 拥有独立的集结状态列表，reset 原地清理集结字段。"""
@@ -1642,6 +1649,7 @@ class RallyCommunicationTests(unittest.TestCase):
         expected = deepcopy((ctx.leaderState, ctx.cmd))
 
         invalid_states = (
+            (FormStageE.DISBAND, RallyPhaseE.JOINING),
             (FormStageE.HOLD, RallyPhaseE.LOOSE),
             (FormStageE.RALLY, 9),
             (99, RallyPhaseE.JOINING),
@@ -4319,7 +4327,7 @@ class RallyEntityTests(unittest.TestCase):
         self.assertFalse(hasattr(leader, "_standby_u"))
         self.assertEqual([state.id for state in leader.cxt.followerStates], ["R02"])
         self.assertEqual(output.outbox[0].topic, "formation.leader")
-        self.assertEqual(output.outbox[0].payload["cmd"]["stage"], int(FormStageE.STANDBY))
+        self.assertEqual(output.outbox[0].payload["cmd"]["stage"], 4)
 
     def test_rally_leader_standby_does_not_clear_entity_state_before_flow(self) -> None:
         """验证 STANDBY 不在实体主体流程前清理已有状态，清理职责不属于待命位置解算。"""

@@ -194,7 +194,8 @@ def _rally_cfg(
 | 测试名 | 断言 |
 | ------ | ---- |
 | `test_leaf_types_only_keep_runtime_consumed_fields` | `FollowerStateS`、`PosCalcStatusS` 与航段类型只保留运行期实际消费字段 |
-| `test_rally_leaf_type_defaults_and_copy_helpers` | `copy_follower_state` 完整复制精简后的六个字段 |
+| `test_rally_leaf_type_defaults_and_copy_helpers` | `DISBAND=3` 作为解散预留值，既有线协议 `STANDBY=4` 保持不变；`copy_follower_state` 完整复制精简后的六个字段 |
+| `test_disband_stage_is_only_a_reserved_protocol_value` | 解散功能实现前，实体策略表明确拒绝 `DISBAND` 阶段 |
 | `test_context_contains_rally_fields` | `FormContextS` 含公共计划与 `followerStates`，且列表默认独立 |
 | `test_reset_context_clears_rally_state` | `reset_context` 后公共计划和 `followerStates` 恢复默认值 |
 

@@ -13,7 +13,8 @@ class FormStageE(IntEnum):
     NONE = 0
     RALLY = 1
     HOLD = 2
-    STANDBY = 3
+    DISBAND = 3  # 解散预留值；当前未注册实体策略，不可执行
+    STANDBY = 4
 
 
 class CommDirE(IntEnum):

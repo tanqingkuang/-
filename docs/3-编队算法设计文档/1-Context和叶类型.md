@@ -11,7 +11,8 @@ class FormStageE(IntEnum):   # 编队阶段（指令/状态共用）
     NONE = 0
     RALLY = 1                # 集结
     HOLD = 2                 # 编队保持
-    STANDBY = 3              # 集结待命
+    DISBAND = 3              # 解散（预留，当前未实现）
+    STANDBY = 4              # 集结待命
 
 # 注：编队队形不再用枚举表示。cmd.pattern 是"纯整型队形索引"（0 起），
 # 直接作为 formPos 的行号；队形语义由配置的队形列表顺序决定，代码不认死任何队形名。
