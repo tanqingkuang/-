@@ -108,6 +108,22 @@ class FormationAccuracyAnalysisTests(unittest.TestCase):
         self.assertIsNone(report.stable_start_s)
         self.assertEqual(report.metric_rows, ())
 
+    def test_rally_config_without_tight_radius_uses_runtime_default(self) -> None:
+        """集结配置省略紧队形半径时应沿用运行时 2 米缺省值。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = self._write_run(Path(tmp), (4.0, 3.0, 3.0, 3.0, 3.0, 3.0))
+            config_path = run_dir / "config.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            del config["rally_cfg"]["tight_radius_m"]
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+            report = analyze_formation_accuracy(run_dir)
+
+        self.assertEqual(report.status, "保持未稳定")
+        self.assertIsNone(report.stable_start_s)
+        self.assertEqual(report.metric_rows, ())
+
     def test_each_follower_has_exactly_one_metric_row(self) -> None:
         """多僚机场景应每机一行，不追加全队或分轴指标行。"""
 

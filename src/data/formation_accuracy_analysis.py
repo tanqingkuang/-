@@ -76,10 +76,12 @@ def _read_thresholds(run_dir: Path) -> tuple[float, float]:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(config, dict):
         raise ValueError("config.json 根节点必须是对象")
-    # 普通保持场景可能没有 rally_cfg，使用与设计文档一致的保守默认值。
+    # 普通保持场景可能没有 rally_cfg，继续使用设计文档的保守门限；集结配置省略
+    # tight_radius_m 时必须与运行时 _build_rally_task_init 的 2 米缺省值一致。
     rally_cfg = config.get("rally_cfg")
-    cfg = rally_cfg if isinstance(rally_cfg, dict) else {}
-    return float(cfg.get("tight_radius_m", 5.0)), float(cfg.get("stable_hold_s", 5.0))
+    if not isinstance(rally_cfg, dict):
+        return 5.0, 5.0
+    return float(rally_cfg.get("tight_radius_m", 2.0)), float(rally_cfg.get("stable_hold_s", 5.0))
 
 
 def _aligned_norm_series(

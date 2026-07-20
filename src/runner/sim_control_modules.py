@@ -595,6 +595,8 @@ class _DataLogger:
         self._event_file = None
         self._file_logging_disabled = False
         self.last_error_message = ""
+        self.persisted_snapshot_count = 0
+        self.persisted_event_count = 0
 
     def reset(self) -> None:
         """重置日志记录器状态。注意：只清当前运行，不创建文件目录。"""
@@ -604,6 +606,8 @@ class _DataLogger:
         self.run_dir = None
         self._file_logging_disabled = False
         self.last_error_message = ""
+        self.persisted_snapshot_count = 0
+        self.persisted_event_count = 0
 
     def open(self, run_id: str, config: dict[str, object]) -> bool:
         """打开数据记录器资源。注意：文件打开失败时返回 False 而不打断仿真。"""
@@ -623,6 +627,7 @@ class _DataLogger:
             self._event_file = (self.run_dir / "events.jsonl").open("w", encoding="utf-8", buffering=1)
             for event in self.events:
                 self._event_file.write(json.dumps(self._serialize_record(asdict(event)), ensure_ascii=False) + "\n")
+                self.persisted_event_count += 1
         except OSError as exc:
             self._disable_file_logging(exc)
             return False
@@ -639,6 +644,7 @@ class _DataLogger:
             record = self._serialize_record(asdict(snapshot), omit_keys=self._SNAPSHOT_OMIT_KEYS)
             try:
                 self._snapshot_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                self.persisted_snapshot_count += 1
             except OSError as exc:
                 self._disable_file_logging(exc)
                 return False
@@ -650,6 +656,7 @@ class _DataLogger:
         if self._event_file is not None:
             try:
                 self._event_file.write(json.dumps(self._serialize_record(asdict(event)), ensure_ascii=False) + "\n")
+                self.persisted_event_count += 1
             except OSError as exc:
                 self._disable_file_logging(exc)
                 return False

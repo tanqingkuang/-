@@ -23,16 +23,19 @@ if not exist "%CONFIG_PATH%" (
 
 set "SOURCE_PYTHON=%VENV_PYTHON%"
 if not exist "%SOURCE_PYTHON%" set "SOURCE_PYTHON=python.exe"
-"%SOURCE_PYTHON%" -c "import PySide6" >nul 2>&1
+echo [运行] 正在以 %PLAYBACK_RATE%x 无界面运行：%CONFIG_PATH%
+if not exist "%DATA_ROOT%" mkdir "%DATA_ROOT%"
 if errorlevel 1 (
-    echo [失败] 当前 Python 环境缺少 PySide6，无法运行源码验证模式。
-    echo 请在已能直接运行本项目的 Python 环境中执行本脚本。
+    echo [失败] 无法创建数据目录：%DATA_ROOT%
     pause
     exit /b 1
 )
-echo [运行] 正在以 %PLAYBACK_RATE%x 无界面运行：%CONFIG_PATH%
-if not exist "%DATA_ROOT%" mkdir "%DATA_ROOT%"
 pushd "%DATA_ROOT%"
+if errorlevel 1 (
+    echo [失败] 无法进入数据目录：%DATA_ROOT%
+    pause
+    exit /b 1
+)
 "%SOURCE_PYTHON%" "%PROJECT_ROOT%\src\main.py" --config "%CONFIG_PATH%" --rate "%PLAYBACK_RATE%"
 set "EXIT_CODE=%ERRORLEVEL%"
 popd

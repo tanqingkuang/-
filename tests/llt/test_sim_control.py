@@ -1427,6 +1427,77 @@ class SimulationControllerTests(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
+    def test_validate_file_log_flushes_and_accepts_complete_output(self) -> None:
+        """无界面入口验收前应刷新缓冲，并确认三类日志文件均已生成。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                controller.set_file_log_enabled(True)
+                controller.load_config(str(_write_config(Path(tmp), duration_s=0.1, step_s=0.01)))
+                controller.step(10)
+
+                result = controller.validate_file_log()
+
+                self.assertEqual(result.code, "OK")
+                assert controller._logger.run_dir is not None
+                self.assertTrue((controller._logger.run_dir / "config.json").is_file())
+                self.assertTrue((controller._logger.run_dir / "snapshots.jsonl").is_file())
+                self.assertTrue((controller._logger.run_dir / "events.jsonl").is_file())
+                controller.close()
+            finally:
+                os.chdir(cwd)
+
+    def test_file_log_forces_finished_snapshot_outside_sampling_boundary(self) -> None:
+        """总时长不在采样点上时也必须落盘终态，不能让末帧停留在 RUNNING。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                config_path = _write_config(Path(tmp), duration_s=0.105, step_s=0.005)
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                config["algorithm_decimation"] = 10
+                config_path.write_text(json.dumps(config), encoding="utf-8")
+                controller = SimulationController()
+                controller.set_file_log_enabled(True)
+                try:
+                    self.assertEqual(controller.load_config(str(config_path)).code, "OK")
+                    self.assertEqual(controller.step(21).code, "OK")
+
+                    result = controller.validate_file_log()
+                    assert controller._logger.run_dir is not None
+                    records = [
+                        json.loads(line)
+                        for line in (controller._logger.run_dir / "snapshots.jsonl")
+                        .read_text(encoding="utf-8")
+                        .splitlines()
+                    ]
+
+                    self.assertEqual(result.code, "OK")
+                    self.assertEqual([record["time_s"] for record in records], [0.05, 0.1, 0.105])
+                    self.assertEqual(records[-1]["run_state"], "FINISHED")
+                finally:
+                    controller.close()
+            finally:
+                os.chdir(cwd)
+
+    def test_validate_file_log_rejects_disabled_logger_after_write_failure(self) -> None:
+        """运行中写盘失败后，即使仿真结束也不得通过落盘验收。"""
+
+        controller = SimulationController()
+        self.addCleanup(controller.close)
+        controller.set_file_log_enabled(True)
+        controller._logger._file_logging_disabled = True
+        controller._logger.last_error_message = "disk unavailable"
+
+        result = controller.validate_file_log()
+
+        self.assertEqual(result.code, "ERR_LOG_FAILED")
+        self.assertIn("disk unavailable", result.message)
+
     def test_data_logger_rounds_persisted_snapshot_precision(self) -> None:
         """关键数据日志落盘时按字段语义四舍五入，内存快照保留原始精度。"""
         with tempfile.TemporaryDirectory() as tmp:

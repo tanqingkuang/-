@@ -59,19 +59,18 @@ def run_simulation(config_path: Path, *, playback_rate: float = 10.0) -> int:
             node.role in {"rally_leader", "rally_follower"}
             for node in controller.get_snapshot().nodes
         )
-        result = controller.start()
+        result = controller.start(auto_rally=has_rally_nodes)
         if result.code != "OK":
             _print_status(f"仿真失败 [{result.code}]: {result.message}")
             return 1
-        if has_rally_nodes:
-            result = controller.start_rally()
-            if result.code != "OK":
-                _print_status(f"仿真失败 [{result.code}]: {result.message}")
-                return 1
         _print_status(f"仿真开始: {config_path}，倍率 {playback_rate:g}x")
         while True:
             snapshot = controller.get_snapshot()
             if snapshot.run_state == RunState.FINISHED:
+                log_result = controller.validate_file_log()
+                if log_result.code != "OK":
+                    _print_status(f"仿真失败 [{log_result.code}]: {log_result.message}")
+                    return 1
                 _print_status(f"仿真完成: {config_path}")
                 return 0
             if snapshot.run_state != RunState.RUNNING:

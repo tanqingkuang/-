@@ -137,6 +137,43 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         with self._lock:
             self._file_log_override = enabled
 
+    def validate_file_log(self) -> CommandResult:
+        """刷新并验收本次文件日志。注意：供依赖落盘产物的无界面入口在成功退出前调用。"""
+
+        with self._lock:
+            if not self._file_log_effective_unlocked():
+                return CommandResult("ERR_LOG_FAILED", "文件日志未启用")
+            self._logger.flush()
+            if self._logger._file_logging_disabled:
+                message = self._logger.last_error_message or "文件日志已因写入失败停用"
+                return CommandResult("ERR_LOG_FAILED", message)
+            if not self._logger.opened or self._logger.run_dir is None:
+                return CommandResult("ERR_LOG_FAILED", "日志文件未打开")
+            expected_files = ("config.json", "snapshots.jsonl", "events.jsonl")
+            missing_files = [
+                filename
+                for filename in expected_files
+                if not (self._logger.run_dir / filename).is_file()
+            ]
+            if missing_files:
+                return CommandResult(
+                    "ERR_LOG_FAILED",
+                    f"日志文件缺失: {', '.join(missing_files)}",
+                )
+            if self._logger.persisted_snapshot_count != len(self._logger.snapshots):
+                return CommandResult("ERR_LOG_FAILED", "快照日志未完整写入")
+            if self._logger.persisted_event_count != len(self._logger.events):
+                return CommandResult("ERR_LOG_FAILED", "事件日志未完整写入")
+            if self._run_state != RunState.FINISHED or not self._logger.snapshots:
+                return CommandResult("ERR_LOG_FAILED", "日志中缺少仿真终态快照")
+            terminal_snapshot = self._logger.snapshots[-1]
+            if (
+                terminal_snapshot.run_state != RunState.FINISHED
+                or abs(terminal_snapshot.time_s - self._duration_s) > _TIME_EPSILON_S
+            ):
+                return CommandResult("ERR_LOG_FAILED", "日志末帧不是完整仿真终态")
+            return CommandResult("OK", "日志已完整落盘")
+
     def _file_log_effective_unlocked(self) -> bool:
         """返回当前生效的文件日志开关。注意：override 优先于配置默认值。"""
         if self._file_log_override is not None:
@@ -210,8 +247,8 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             next_cursor = TimedSnapshotCursor(generation, snapshot_count)
         return next_cursor, snapshots
 
-    def start(self) -> CommandResult:
-        """启动或继续 SimulationController 的运行流程。注意：重复调用应保持状态一致。"""
+    def start(self, *, auto_rally: bool = False) -> CommandResult:
+        """启动或继续运行。注意：auto_rally 只在 READY 首次启动时原子触发集结。"""
 
         should_stop_worker = False
         # 第一段持锁：做状态前置校验，并判断是否需要先回收残留旧线程。
@@ -242,7 +279,16 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             if self._run_state == RunState.RUNNING:
                 return CommandResult("OK", "already running")
             # 切到运行态，清停止标志并拉起后台线程开始自动推进。
+            previous_state = self._run_state
             self._run_state = RunState.RUNNING
+            # PAUSED 表示继续既有任务，不能把入口参数误解为再次下发集结命令。
+            if auto_rally and previous_state == RunState.READY:
+                rally_result = self._start_rally_unlocked()
+                if rally_result.code != "OK":
+                    self._run_state = previous_state
+                    self._control_report = self._derive_control_report_unlocked()
+                    self._latest_snapshot = self._make_snapshot_unlocked()
+                    return rally_result
             self._control_report = self._derive_control_report_unlocked()
             self._cpu_utilization = 0.0
             self._stop_requested.clear()
@@ -265,24 +311,32 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_INVALID_STATE", "集结已结束，请重置后重试")
             if self._run_state not in {RunState.RUNNING, RunState.PAUSED}:
                 return CommandResult("ERR_INVALID_STATE", "当前状态不能开始集结")
-            rally_algorithms = {
-                node_id: algorithm
-                for node_id, algorithm in self._node_algorithms.items()
-                if algorithm.is_rally_role()
-            }
-            if not rally_algorithms:
-                return CommandResult("ERR_INVALID_STATE", "当前配置没有集结节点")
-            # 首 tick 立即点击时先建立待命圆，避免 RallyJoinPos 直接沿旧点到圆切线启动。
-            self._prime_rally_standby_unlocked(rally_algorithms)
-            results = [algorithm.start_rally() for algorithm in rally_algorithms.values()]
-            if not any(ok for ok, _message in results):
-                message = next((message for _ok, message in results if message), "当前状态不能开始集结")
-                return CommandResult("ERR_INVALID_STATE", message)
-            self._control_report = self._derive_control_report_unlocked()
-            self._append_event_unlocked("INFO", "SimControl", "开始集结")
-            self._latest_snapshot = self._make_snapshot_unlocked()
+            result = self._start_rally_unlocked()
+            if result.code != "OK":
+                return result
             snapshot = self._latest_snapshot
         self._notify_subscribers(snapshot)
+        return CommandResult("OK", "开始集结")
+
+    def _start_rally_unlocked(self) -> CommandResult:
+        """在已持锁状态下触发集结。注意：调用方负责校验控制器运行状态。"""
+
+        rally_algorithms = {
+            node_id: algorithm
+            for node_id, algorithm in self._node_algorithms.items()
+            if algorithm.is_rally_role()
+        }
+        if not rally_algorithms:
+            return CommandResult("ERR_INVALID_STATE", "当前配置没有集结节点")
+        # 首 tick 立即触发时先建立待命圆，避免 RallyJoinPos 直接沿旧点到圆切线启动。
+        self._prime_rally_standby_unlocked(rally_algorithms)
+        results = [algorithm.start_rally() for algorithm in rally_algorithms.values()]
+        if not any(ok for ok, _message in results):
+            message = next((message for _ok, message in results if message), "当前状态不能开始集结")
+            return CommandResult("ERR_INVALID_STATE", message)
+        self._control_report = self._derive_control_report_unlocked()
+        self._append_event_unlocked("INFO", "SimControl", "开始集结")
+        self._latest_snapshot = self._make_snapshot_unlocked()
         return CommandResult("OK", "开始集结")
 
     def pause(self) -> CommandResult:
@@ -860,7 +914,9 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._tick_index += 1
 
         # 状态机收尾：到达总时长则置 FINISHED 并锁定回报；否则在运行态刷新回报文本。
-        if self._time_s >= self._duration_s:
+        if self._time_s + _TIME_EPSILON_S >= self._duration_s:
+            # 浮点累计可能略小于精确边界，进入终态时统一钳到配置总时长。
+            self._time_s = self._duration_s
             self._run_state = RunState.FINISHED
             self._control_report = self._derive_control_report_unlocked()
         elif self._run_state in {RunState.RUNNING, RunState.PAUSED}:
@@ -876,10 +932,13 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         if force_snapshot or should_refresh_display or should_log_snapshot:
             self._latest_snapshot = self._make_snapshot_unlocked()
             snapshot = self._latest_snapshot
-        # 关键数据按采样周期定时记录；若单个 tick 跨过多个采样点，只记录当前最新状态一次。
-        if should_log_snapshot and snapshot is not None:
+        # 关键数据通常按采样周期记录；结束时额外强制落一帧，避免非采样点时长丢失末段。
+        should_persist_snapshot = should_log_snapshot or self._run_state == RunState.FINISHED
+        if should_persist_snapshot and snapshot is not None:
             if not self._logger.write_snapshot(snapshot):
                 self._append_event_unlocked("WARN", "DataLogger", f"snapshot log failed: {self._logger.last_error_message}")
+        # 若单个 tick 跨过多个采样点，只记录当前最新状态一次并推进全部已越过边界。
+        if should_log_snapshot:
             while self._time_s + _TIME_EPSILON_S >= self._next_log_sample_time_s:
                 self._next_log_sample_time_s += self._log_sample_period_s
         # 仅当强制产帧、达到显示刷新间隔或仿真结束时才回传快照，否则返回 None 抑制 UI 刷新。

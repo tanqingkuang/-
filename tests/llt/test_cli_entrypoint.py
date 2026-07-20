@@ -40,7 +40,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         controller.load_config.return_value = CommandResult("OK", "loaded")
         controller.set_playback_rate.return_value = CommandResult("OK", "rate updated")
         controller.start.return_value = CommandResult("OK", "started")
-        controller.start_rally.return_value = CommandResult("OK", "开始集结")
+        controller.validate_file_log.return_value = CommandResult("OK", "日志已完整落盘")
         controller.get_snapshot.side_effect = [
             SimpleNamespace(run_state=RunState.READY, nodes=[SimpleNamespace(role="rally_leader")]),
             SimpleNamespace(run_state=RunState.RUNNING, nodes=[]),
@@ -56,9 +56,33 @@ class HeadlessRunnerTests(unittest.TestCase):
         controller.set_file_log_enabled.assert_called_once_with(True)
         controller.load_config.assert_called_once_with(str(Path("configs/base.json")))
         controller.set_playback_rate.assert_called_once_with(10.0)
-        controller.start.assert_called_once_with()
-        controller.start_rally.assert_called_once_with()
+        controller.start.assert_called_once_with(auto_rally=True)
+        controller.start_rally.assert_not_called()
+        controller.validate_file_log.assert_called_once_with()
         sleep.assert_called_once()
+        controller.close.assert_called_once_with()
+
+    def test_headless_run_reports_file_log_failure(self) -> None:
+        """仿真进入终态但日志不完整时必须返回非零退出码。"""
+
+        from src.main import run_simulation
+
+        controller = MagicMock()
+        controller.load_config.return_value = CommandResult("OK", "loaded")
+        controller.set_playback_rate.return_value = CommandResult("OK", "rate updated")
+        controller.start.return_value = CommandResult("OK", "started")
+        controller.validate_file_log.return_value = CommandResult("ERR_LOG_FAILED", "磁盘空间不足")
+        controller.get_snapshot.side_effect = [
+            SimpleNamespace(run_state=RunState.READY, nodes=[]),
+            SimpleNamespace(run_state=RunState.FINISHED, nodes=[]),
+        ]
+
+        with patch("src.main.SimulationController", return_value=controller):
+            exit_code = run_simulation(Path("configs/base.json"), playback_rate=10.0)
+
+        self.assertEqual(exit_code, 1)
+        controller.start.assert_called_once_with(auto_rally=False)
+        controller.validate_file_log.assert_called_once_with()
         controller.close.assert_called_once_with()
 
 
@@ -79,9 +103,13 @@ class BatchBatTests(unittest.TestCase):
         self.assertIn('--rate "%PLAYBACK_RATE%"', script)
         self.assertNotIn("--auto-run", script)
         self.assertNotIn("PyInstaller", script)
+        self.assertNotIn("import PySide6", script)
         self.assertNotIn("build_windows_full_release.ps1", script)
         self.assertNotIn("analyze_formation_accuracy.py", script)
         self.assertIn("simulation_data", script)
+        self.assertIn('if errorlevel 1 (', script)
+        self.assertIn('[失败] 无法创建数据目录', script)
+        self.assertIn('[失败] 无法进入数据目录', script)
 
     def test_batch_bat_uses_windows_line_endings(self) -> None:
         """BAT 必须使用 CRLF，避免 CMD 将下一行首字符吞掉后直接退出。"""
