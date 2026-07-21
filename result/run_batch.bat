@@ -9,7 +9,7 @@ set "DATA_ROOT=%~dp0simulation_data"
 set "VENV_PYTHON=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 set "CONFIG_PATH=%PROJECT_ROOT%\configs\rally_demo_5_aircraft.json"
 set "PLAYBACK_RATE=20"
-set "SEEDS=0 1 2"
+set "SEEDS=0 1 2 3 4"
 
 if not "%~1"=="" (
     set "CONFIG_PATH=%~f1"

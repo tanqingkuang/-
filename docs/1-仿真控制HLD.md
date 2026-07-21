@@ -86,6 +86,7 @@ ResultCode = Literal[
 | `air_psi_v_deg/air_theta_deg/air_psi_dot_deg_s` | `float` | 动力学空速航迹角、倾角及航向角速率；物理滚转包线检查使用空速角速率 |
 | `ground_speed_mps` | `float` | 三维地速标量，单位 m/s；算法 `vd` 另取水平地速 |
 | `vx_mps/vy_mps/vz_mps` | `float` | 东北天地速分量，即空速分量加风速，供制导、UI 和日志使用 |
+| `wind_east_mps/wind_north_mps/wind_up_mps` | `float` | 当前全局 ENU 风矢量，供日志直接观察和复现紊流过程 |
 | `nx/ny/nz` | `float` | 动力学空速 FUR 中的前向、上法向、右侧向有符号过载分量 |
 | `n_normal` | `float` | 法向合过载 `sqrt(ny^2+nz^2)`，恒非负 |
 | `phi_deg` | `float` | 滚转角，单位 deg；右倾/右翼下沉为正 |
@@ -115,6 +116,7 @@ ResultCode = Literal[
 | `latency_ms` | `float` | 当前延迟 |
 | `loss_rate` | `float` | 当前丢包率，范围 `[0, 1]` |
 | `status` | `str` | `normal` / `degraded` / `lost` |
+| `frame_rate_hz` | `float \| None` | 运行级发送帧频限制；`None` 表示标称节拍 |
 
 约束：
 

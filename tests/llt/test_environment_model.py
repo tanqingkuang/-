@@ -502,6 +502,110 @@ class TestFilterResponse(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestWindDisturbance(unittest.TestCase):
+    def test_uncertainty_turbulence_is_global_reproducible_and_resettable(self) -> None:
+        """全局紊流应随时间变化，同 seed 可复现，reset 后从相同序列重放。"""
+
+        config = {
+            "nodes": [
+                {"node_id": "A01", "speed_mps": 15.0},
+                {"node_id": "A02", "speed_mps": 15.0},
+            ]
+        }
+        params = {
+            "horizontal_sigma_mps": 0.8,
+            "vertical_sigma_mps": 0.3,
+            "correlation_time_s": 2.0,
+        }
+        first = ModelIterator()
+        second = ModelIterator()
+        for model in (first, second):
+            model.init(config, seed=2)
+            model.set_uncertainty_turbulence({"params": params})
+
+        initial = first._wind_velocity_mps
+        self.assertNotEqual(initial, (0.0, 0.0, 0.0))
+        self.assertEqual(initial, second._wind_velocity_mps)
+        first_states = first.read_states()
+        self.assertEqual(
+            (
+                first_states["A01"].wind_east_mps,
+                first_states["A01"].wind_north_mps,
+                first_states["A01"].wind_up_mps,
+            ),
+            (
+                first_states["A02"].wind_east_mps,
+                first_states["A02"].wind_north_mps,
+                first_states["A02"].wind_up_mps,
+            ),
+        )
+
+        first_series: list[tuple[float, float, float]] = []
+        second_series: list[tuple[float, float, float]] = []
+        for _ in range(20):
+            first.advance_uncertainty(0.05)
+            second.advance_uncertainty(0.05)
+            first.step(0.05)
+            second.step(0.05)
+            first_series.append(first._wind_velocity_mps)
+            second_series.append(second._wind_velocity_mps)
+
+        self.assertEqual(first_series, second_series)
+        self.assertGreater(len(set(first_series)), 1)
+
+        first.reset()
+
+        self.assertEqual(first._wind_velocity_mps, initial)
+        replay: list[tuple[float, float, float]] = []
+        for _ in range(20):
+            first.advance_uncertainty(0.05)
+            first.step(0.05)
+            replay.append(first._wind_velocity_mps)
+        self.assertEqual(replay, first_series)
+
+    def test_turbulence_course_change_updates_ground_course_rate(self) -> None:
+        """紊流改写地速航向时，地面转率必须等于相邻航向的包角差分。"""
+
+        model = ModelIterator()
+        model.init({"nodes": [{"node_id": "A", "speed_mps": 20.0}]}, seed=2)
+        model.set_uncertainty_turbulence(
+            {
+                "params": {
+                    "horizontal_sigma_mps": 0.8,
+                    "vertical_sigma_mps": 0.3,
+                    "correlation_time_s": 2.0,
+                }
+            }
+        )
+        before = model.read_states()["A"].ground_psi_rad
+
+        model.advance_uncertainty(0.005)
+
+        after_wind = model.read_states()["A"]
+        course_delta = math.atan2(
+            math.sin(after_wind.ground_psi_rad - before),
+            math.cos(after_wind.ground_psi_rad - before),
+        )
+        expected_deg_s = math.degrees(course_delta / 0.005)
+        self.assertGreater(abs(expected_deg_s), 1.0)
+        self.assertAlmostEqual(
+            after_wind.ground_psi_dot_deg_s,
+            expected_deg_s,
+            delta=1e-9,
+        )
+
+        model.step(0.005)
+
+        after_step = model.read_states()["A"]
+        total_delta = math.atan2(
+            math.sin(after_step.ground_psi_rad - before),
+            math.cos(after_step.ground_psi_rad - before),
+        )
+        self.assertAlmostEqual(
+            after_step.ground_psi_dot_deg_s,
+            math.degrees(total_delta / 0.005),
+            delta=1e-9,
+        )
+
     def test_wind_moves_ground_position(self):
         it = ModelIterator()
         it.init({"nodes": [{"node_id": "A", "speed_mps": 15.0}]}, seed=0)

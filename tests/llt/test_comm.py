@@ -347,6 +347,71 @@ class TestBasicRouting(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestQoS(unittest.TestCase):
+    def test_uncertainty_latency_becomes_reset_baseline(self) -> None:
+        """初始化时延不确定性应成为本次运行基线，reset 后仍然保持。"""
+
+        channel = _ch(_minimal_config(latency_ms=20.0))
+        channel.set_uncertainty_latency_ms(50.0)
+        channel.inject_link_qos("A01-A02", latency_ms=200.0, loss_rate=None)
+
+        channel.reset()
+
+        self.assertTrue(channel.read_link_states())
+        self.assertTrue(
+            all(state.latency_ms == 50.0 for state in channel.read_link_states())
+        )
+
+    def test_uncertainty_frame_rate_limits_complete_frames_and_survives_reset(self) -> None:
+        """初始化帧频应按链路限流完整发送帧，并在 reset 后继续作为运行基线。"""
+
+        channel = _ch(_minimal_config(latency_ms=0.0))
+        channel.set_uncertainty_frame_rate_hz(10.0)
+        for timestamp in (0.0, 0.05, 0.1):
+            channel.send(
+                [
+                    _make_msg("A01", "A02", topic="state", ts=timestamp),
+                    _make_msg("A01", "A02", topic="command", ts=timestamp),
+                ]
+            )
+        channel.tick(0.001)
+
+        received = channel.read_inbox("A02")
+        self.assertEqual(
+            [(message.timestamp, message.topic) for message in received],
+            [
+                (0.0, "state"),
+                (0.0, "command"),
+                (0.1, "state"),
+                (0.1, "command"),
+            ],
+        )
+        self.assertTrue(
+            all(state.frame_rate_hz == 10.0 for state in channel.read_link_states())
+        )
+
+        channel.reset()
+        channel.send([_make_msg("A01", "A02", ts=0.0)])
+        channel.tick(0.001)
+
+        self.assertEqual(len(channel.read_inbox("A02")), 1)
+        self.assertTrue(
+            all(state.frame_rate_hz == 10.0 for state in channel.read_link_states())
+        )
+
+    def test_uncertainty_loss_rate_becomes_reset_baseline(self) -> None:
+        """初始化丢包率不确定性应成为本次运行基线，reset 后仍然保持。"""
+
+        channel = _ch(_minimal_config(loss_rate=0.04), seed=1)
+        channel.set_uncertainty_loss_rate(0.023)
+        channel.inject_link_qos("A01-A02", latency_ms=None, loss_rate=0.9)
+
+        channel.reset()
+
+        self.assertTrue(channel.read_link_states())
+        self.assertTrue(
+            all(state.loss_rate == 0.023 for state in channel.read_link_states())
+        )
+
     def test_latency_delays_delivery(self):
         cfg = {
             "nodes": [{"node_id": "A01"}, {"node_id": "A02"}],

@@ -467,7 +467,6 @@ class _DisturbanceEngine(DisturbanceManager):
 
     def tick(self, time_s: float, dt_s: float) -> list[SimulationEvent]:
         """推进模块内部时钟或动态状态一个周期。注意：调用频率应与仿真步长一致。"""
-        del dt_s
         events: list[SimulationEvent] = []
         remaining: list[tuple[DisturbanceCommand, float]] = []
         had_expiry = False
@@ -485,6 +484,9 @@ class _DisturbanceEngine(DisturbanceManager):
             self._clear_dynamic_effects()
             for command, until_s in self._active:
                 self._apply(command, until_s)
+        # 运行级紊流由初始化 seed 启动，但其随机过程仍由加扰模块按基础节拍统一推进。
+        if self._model is not None:
+            self._model.advance_uncertainty(dt_s)
         return events
 
     def clear(self) -> None:

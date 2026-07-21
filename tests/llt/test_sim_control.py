@@ -161,8 +161,8 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(motion.v.vPsi, math.radians(45.0))
         self.assertAlmostEqual(motion.v.dVPsi, math.radians(2.5))
 
-    def test_seed_two_applies_wind_uncertainty_and_reset_reapplies_it(self) -> None:
-        """seed=2 应添加北向恒定风；动态清除保留基础风，reset 后仍生效。"""
+    def test_seed_two_applies_global_turbulence_and_reset_replays_it(self) -> None:
+        """seed=2 应添加全局紊流；动态清除保留紊流，reset 后重放相同序列。"""
 
         with tempfile.TemporaryDirectory() as tmp:
             config_path = _write_config(Path(tmp))
@@ -178,23 +178,96 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(result.code, "OK")
             self.assertEqual(controller._seed, 2)
             self.assertIsInstance(controller._disturbance, DisturbanceManager)
-            initial = controller._model.read_states()["A01"]
-            self.assertAlmostEqual(initial.wind_east_mps, 0.0, places=12)
-            self.assertAlmostEqual(initial.wind_north_mps, 4.1)
-            self.assertAlmostEqual(initial.wind_up_mps, 0.0)
+            initial_states = controller._model.read_states()
+            initial = (
+                initial_states["A01"].wind_east_mps,
+                initial_states["A01"].wind_north_mps,
+                initial_states["A01"].wind_up_mps,
+            )
+            self.assertNotEqual(initial, (0.0, 0.0, 0.0))
+            self.assertEqual(
+                initial,
+                (
+                    initial_states["A02"].wind_east_mps,
+                    initial_states["A02"].wind_north_mps,
+                    initial_states["A02"].wind_up_mps,
+                ),
+            )
+            initial_snapshot = controller.get_snapshot()
+            self.assertTrue(initial_snapshot.nodes)
+            self.assertEqual(
+                (
+                    initial_snapshot.nodes[0].wind_east_mps,
+                    initial_snapshot.nodes[0].wind_north_mps,
+                    initial_snapshot.nodes[0].wind_up_mps,
+                ),
+                initial,
+            )
 
             self.assertEqual(
                 controller.inject_disturbance(DisturbanceCommand("clear")).code,
                 "OK",
             )
             cleared = controller._model.read_states()["A01"]
-            self.assertAlmostEqual(cleared.wind_east_mps, 0.0, places=12)
-            self.assertAlmostEqual(cleared.wind_north_mps, 4.1)
-            self.assertAlmostEqual(cleared.wind_up_mps, 0.0)
+            self.assertEqual(
+                (cleared.wind_east_mps, cleared.wind_north_mps, cleared.wind_up_mps),
+                initial,
+            )
+
+            initial_ground_course_rad = initial_states["A01"].ground_psi_rad
+            controller.step(1)
+            advanced_states = controller._model.read_states()
+            advanced = (
+                advanced_states["A01"].wind_east_mps,
+                advanced_states["A01"].wind_north_mps,
+                advanced_states["A01"].wind_up_mps,
+            )
+            self.assertNotEqual(advanced, initial)
+            self.assertEqual(
+                advanced,
+                (
+                    advanced_states["A02"].wind_east_mps,
+                    advanced_states["A02"].wind_north_mps,
+                    advanced_states["A02"].wind_up_mps,
+                ),
+            )
+            course_delta_rad = math.atan2(
+                math.sin(
+                    advanced_states["A01"].ground_psi_rad
+                    - initial_ground_course_rad
+                ),
+                math.cos(
+                    advanced_states["A01"].ground_psi_rad
+                    - initial_ground_course_rad
+                ),
+            )
+            expected_course_rate_rad_s = course_delta_rad / controller._step_s
+            self.assertAlmostEqual(
+                math.radians(advanced_states["A01"].ground_psi_dot_deg_s),
+                expected_course_rate_rad_s,
+                delta=1e-9,
+            )
+            self.assertAlmostEqual(
+                _motion_from_aircraft_state(advanced_states["A01"]).v.dVPsi,
+                expected_course_rate_rad_s,
+                delta=1e-9,
+            )
+            advanced_snapshot = controller.get_snapshot()
+            self.assertEqual(
+                (
+                    advanced_snapshot.nodes[0].wind_east_mps,
+                    advanced_snapshot.nodes[0].wind_north_mps,
+                    advanced_snapshot.nodes[0].wind_up_mps,
+                ),
+                advanced,
+            )
 
             self.assertEqual(controller.reset().code, "OK")
             reset = controller._model.read_states()["A01"]
-            self.assertAlmostEqual(reset.wind_north_mps, 4.1)
+            self.assertEqual(
+                (reset.wind_east_mps, reset.wind_north_mps, reset.wind_up_mps),
+                initial,
+            )
 
     def test_expired_single_fault_does_not_clear_uncertainty_wind(self) -> None:
         """唯一限时故障到期后只能撤销故障，初始化基础风必须继续生效。"""
@@ -214,11 +287,16 @@ class SimulationControllerTests(unittest.TestCase):
 
             controller.step(2)
 
-            wind = controller._model.read_states()["A01"]
+            states = controller._model.read_states()
+            wind = states["A01"]
             self.assertEqual(controller._disturbance.read_health()["A02"], "normal")
-            self.assertAlmostEqual(wind.wind_east_mps, 0.0, places=12)
-            self.assertAlmostEqual(wind.wind_north_mps, 4.1)
-            self.assertAlmostEqual(wind.wind_up_mps, 0.0)
+            self.assertNotEqual(
+                (wind.wind_east_mps, wind.wind_north_mps, wind.wind_up_mps),
+                (0.0, 0.0, 0.0),
+            )
+            self.assertEqual(wind.wind_east_mps, states["A02"].wind_east_mps)
+            self.assertEqual(wind.wind_north_mps, states["A02"].wind_north_mps)
+            self.assertEqual(wind.wind_up_mps, states["A02"].wind_up_mps)
 
     def test_default_seed_zero_ignores_seed_declared_in_config(self) -> None:
         """调用方未指定运行 seed 时应使用默认 0，不读取配置中的历史 seed。"""
@@ -239,6 +317,74 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(wind.wind_east_mps, 0.0)
             self.assertEqual(wind.wind_north_mps, 0.0)
             self.assertEqual(wind.wind_up_mps, 0.0)
+
+    def test_seed_one_applies_global_loss_and_restores_it_after_dynamic_loss(self) -> None:
+        """seed=1 应设置全链路 2.3% 丢包率，并在动态链路丢包到期后恢复该基线。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            result = controller.load_config(str(_write_config(Path(tmp))), seed=1)
+
+            self.assertEqual(result.code, "OK")
+            self.assertTrue(controller.get_snapshot().links)
+            self.assertTrue(
+                all(link.loss_rate == 0.023 for link in controller.get_snapshot().links)
+            )
+
+            controller.inject_disturbance(
+                DisturbanceCommand(
+                    "link_loss",
+                    target="A01-A02",
+                    duration_s=0.003,
+                    params={"loss_rate": 0.9},
+                )
+            )
+            controller.step(2)
+
+            self.assertTrue(
+                all(link.loss_rate == 0.023 for link in controller.get_snapshot().links)
+            )
+
+    def test_seed_three_applies_global_link_frame_rate(self) -> None:
+        """seed=3 应把全链路发送帧频限制为 10 Hz，并在快照中保留实际值。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(_write_config(Path(tmp))), seed=3)
+
+            self.assertEqual(result.code, "OK")
+            self.assertIsNotNone(controller._disturbance.uncertainty_case)
+            self.assertEqual(
+                controller._disturbance.uncertainty_case.name,
+                "全链路发送帧频 10 Hz",
+            )
+            self.assertTrue(controller.get_snapshot().links)
+            self.assertTrue(
+                all(link.frame_rate_hz == 10.0 for link in controller.get_snapshot().links)
+            )
+
+    def test_seed_four_applies_global_link_latency(self) -> None:
+        """seed=4 应把全链路初始化时延设置为 50 ms。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(_write_config(Path(tmp))), seed=4)
+
+            self.assertEqual(result.code, "OK")
+            self.assertIsNotNone(controller._disturbance.uncertainty_case)
+            self.assertEqual(
+                controller._disturbance.uncertainty_case.name,
+                "全链路时延 50 ms",
+            )
+            self.assertTrue(controller.get_snapshot().links)
+            self.assertTrue(
+                all(link.latency_ms == 50.0 for link in controller.get_snapshot().links)
+            )
 
     def test_snapshot_exposes_air_speed_ground_track_and_fur_loads(self) -> None:
         """节点快照应区分空速标量与地速航迹，并完整输出前、上、右载荷。"""

@@ -28,28 +28,78 @@ class UncertaintyCase:
     apply: UncertaintyApply
 
 
-def _apply_wind_uncertainty(
+def _apply_turbulence_uncertainty(
     model: ModelIterator,
     comm: CommunicationChannel,
     params: Mapping[str, object],
 ) -> None:
-    """向模型注入全局恒定风。注意：通信句柄为统一回调签名的预留参数。"""
+    """向模型注入全局轻度紊流。注意：通信句柄为统一回调签名的预留参数。"""
 
     del comm
-    model.set_uncertainty_wind({"params": dict(params)})
+    model.set_uncertainty_turbulence({"params": dict(params)})
+
+
+def _apply_link_loss_uncertainty(
+    model: ModelIterator,
+    comm: CommunicationChannel,
+    params: Mapping[str, object],
+) -> None:
+    """设置全链路初始化丢包率。注意：模型句柄为统一回调签名的预留参数。"""
+
+    del model
+    comm.set_uncertainty_loss_rate(float(params["loss_rate"]))
+
+
+def _apply_link_frame_rate_uncertainty(
+    model: ModelIterator,
+    comm: CommunicationChannel,
+    params: Mapping[str, object],
+) -> None:
+    """设置全链路初始化发送帧频。注意：模型句柄为统一回调签名的预留参数。"""
+
+    del model
+    comm.set_uncertainty_frame_rate_hz(float(params["frame_rate_hz"]))
+
+
+def _apply_link_latency_uncertainty(
+    model: ModelIterator,
+    comm: CommunicationChannel,
+    params: Mapping[str, object],
+) -> None:
+    """设置全链路初始化时延。注意：模型句柄为统一回调签名的预留参数。"""
+
+    del model
+    comm.set_uncertainty_latency_ms(float(params["latency_ms"]))
 
 
 _UNCERTAINTY_REGISTRY: dict[int, UncertaintyCase] = {
-    # seed=2 是首个演示算例；其他 seed 暂不注册，以免改变既有配置的随机序列语义。
+    1: UncertaintyCase(
+        seed=1,
+        name="全链路丢包率 2.3%",
+        params={"loss_rate": 0.023},
+        apply=_apply_link_loss_uncertainty,
+    ),
     2: UncertaintyCase(
         seed=2,
-        name="北向恒定风 4.1 m/s",
+        name="全局轻度紊流风",
         params={
-            "speed_mps": 4.1,
-            "direction_deg": 90.0,
-            "vertical_mps": 0.0,
+            "horizontal_sigma_mps": 0.8,
+            "vertical_sigma_mps": 0.3,
+            "correlation_time_s": 2.0,
         },
-        apply=_apply_wind_uncertainty,
+        apply=_apply_turbulence_uncertainty,
+    ),
+    3: UncertaintyCase(
+        seed=3,
+        name="全链路发送帧频 10 Hz",
+        params={"frame_rate_hz": 10.0},
+        apply=_apply_link_frame_rate_uncertainty,
+    ),
+    4: UncertaintyCase(
+        seed=4,
+        name="全链路时延 50 ms",
+        params={"latency_ms": 50.0},
+        apply=_apply_link_latency_uncertainty,
     ),
 }
 

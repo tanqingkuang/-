@@ -128,7 +128,7 @@ class BatchBatTests(unittest.TestCase):
         self.assertNotIn("src\\ui\\gui\\main_window.py", script)
         self.assertIn("--config", script)
         self.assertIn('set "PLAYBACK_RATE=20"', script)
-        self.assertIn('set "SEEDS=0 1 2"', script)
+        self.assertIn('set "SEEDS=0 1 2 3 4"', script)
         self.assertIn('if not "%~3"=="" set "SEEDS=%~3"', script)
         self.assertIn('--rate "%PLAYBACK_RATE%"', script)
         self.assertIn("for %%S in (%SEEDS%) do", script)

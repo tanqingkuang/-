@@ -6,6 +6,8 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
+import numpy as np
+
 from src.common.coordinates import enu_to_fur, fur_basis_from_angles, fur_to_enu
 
 
@@ -486,24 +488,45 @@ class ModelIterator:
         self._states: dict[str, AircraftState] = {}
         self._initial_states: dict[str, AircraftState] = {}
         self._controls: dict[str, AccelerationCommand] = {}
+        # 模型保存运行 seed，仅供模型侧随机不确定性建立可复现序列。
+        self._seed = 0
         # 初始化不确定性风属于本次运行基线，动态故障清理不得修改。
         self._uncertainty_wind_velocity_mps = (0.0, 0.0, 0.0)
+        # 紊流是全局运行级风场，所有飞机在同一仿真时刻共享同一 ENU 矢量。
+        self._turbulence_velocity_mps: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # sigma 三元组依次对应 ENU 东、北、天；水平两个方向使用相同强度。
+        self._turbulence_sigma_mps: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # 相关时间越大，风速变化越缓慢；它不代表扰动持续时间。
+        self._turbulence_correlation_time_s = 1.0
+        self._turbulence_enabled = False
+        # 紊流独占 RNG，不与通信丢包的随机数消耗顺序耦合。
+        self._turbulence_rng = np.random.default_rng(0)
         # 动态风属于运行期覆盖层，可由 clear 或到期清理独立撤销。
         self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
-        # 有效风是两层 ENU 矢量之和，动力学和状态展示统一读取该值。
+        # 有效风是恒定基线、紊流和动态风三层之和，动力学与状态展示统一读取该值。
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
+        # 紊流拍开始时保存各机上一地速航向，供本拍结束计算实际离散地面转率。
+        self._ground_course_reference_rad: dict[str, float] = {}
+        self._ground_course_reference_dt_s: float | None = None
         self._time_s = 0.0
 
     def init(self, config: dict[str, object], seed: int) -> None:
         """按配置初始化 ModelIterator。注意：调用方需先准备好必要依赖和输入数据。"""
 
-        del seed  # 本模型确定性，无需随机种子
+        self._seed = seed
         self._config = self._parse_model_config(config.get("model", {}))
         self._system = PointMass3DoFModel(self._config)
         self._time_s = 0.0
         self._uncertainty_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._turbulence_velocity_mps = (0.0, 0.0, 0.0)
+        self._turbulence_sigma_mps = (0.0, 0.0, 0.0)
+        self._turbulence_correlation_time_s = 1.0
+        self._turbulence_enabled = False
+        self._turbulence_rng = np.random.default_rng(seed)
         self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._ground_course_reference_rad = {}
+        self._ground_course_reference_dt_s = None
         self._states = {}
 
         nodes = config.get("nodes", [])
@@ -559,18 +582,23 @@ class ModelIterator:
     def step(self, dt_s: float) -> None:
         """推进 ModelIterator 一个处理周期。注意：输入输出约定需与上下游模块保持一致。"""
 
-        # 逐机独立积分一步（机间无耦合）；缺省指令视为零加速度。
-        for node_id, state in self._states.items():
-            control = self._controls.get(node_id, AccelerationCommand())
-            vector = self._system.step(
-                state.as_vector(),
-                control.as_vector(),
-                self._wind_velocity_mps,
-                dt_s,
-            )
-            state.update_from_vector(vector)
-            # 积分后刷新展示用过载/滚转/偏航角速率，保持与新加速度同步。
-            self._update_inputs_from_filtered_acceleration(state)
+        try:
+            # 逐机独立积分一步（机间无耦合）；缺省指令视为零加速度。
+            for node_id, state in self._states.items():
+                control = self._controls.get(node_id, AccelerationCommand())
+                vector = self._system.step(
+                    state.as_vector(),
+                    control.as_vector(),
+                    self._wind_velocity_mps,
+                    dt_s,
+                )
+                state.update_from_vector(vector)
+                # 积分后刷新展示用过载/滚转/偏航角速率，保持与新加速度同步。
+                self._update_inputs_from_filtered_acceleration(state)
+        finally:
+            # 相邻航向参考只属于当前基础拍，不能泄漏到下一次独立模型调用。
+            self._ground_course_reference_rad = {}
+            self._ground_course_reference_dt_s = None
         self._time_s += dt_s
 
     def tick(self, dt_s: float) -> None:
@@ -589,6 +617,82 @@ class ModelIterator:
 
         # 单次设置后作为运行基线保存，不进入动态扰动活动表和到期流程。
         self._uncertainty_wind_velocity_mps = self._wind_vector_from_command(command)
+        self._refresh_effective_wind()
+
+    def set_uncertainty_turbulence(self, command: object) -> None:
+        """设置全局轻度紊流。注意：同一 seed 下随机序列可复现。"""
+
+        params = self._command_params(command)
+        # 本算例采用零均值紊流，参数只描述稳态标准差和时间相关性。
+        horizontal_sigma_mps = float(params.get("horizontal_sigma_mps", 0.0))
+        vertical_sigma_mps = float(params.get("vertical_sigma_mps", 0.0))
+        correlation_time_s = float(params.get("correlation_time_s", 0.0))
+        values = (horizontal_sigma_mps, vertical_sigma_mps, correlation_time_s)
+        if (
+            not all(math.isfinite(value) for value in values)
+            or horizontal_sigma_mps < 0.0
+            or vertical_sigma_mps < 0.0
+            or correlation_time_s <= 0.0
+        ):
+            raise ValueError(
+                "turbulence params require finite sigma >= 0 and correlation_time_s > 0"
+            )
+        self._turbulence_sigma_mps = (
+            # 东、北向共享水平标准差，垂向单独配置以反映轻度紊流强度差异。
+            horizontal_sigma_mps,
+            horizontal_sigma_mps,
+            vertical_sigma_mps,
+        )
+        self._turbulence_correlation_time_s = correlation_time_s
+        self._turbulence_enabled = True
+        self._restart_uncertainty_turbulence()
+        self._refresh_effective_wind()
+
+    def _restart_uncertainty_turbulence(self) -> None:
+        """重启紊流随机序列。注意：初始化和 reset 必须得到相同首帧。"""
+
+        self._turbulence_rng = np.random.default_rng(self._seed)
+        if not self._turbulence_enabled:
+            self._turbulence_velocity_mps = (0.0, 0.0, 0.0)
+            return
+        # 首帧直接从稳态分布采样，避免每次仿真开头出现人为的从零缓慢爬升。
+        initial = self._turbulence_rng.normal(
+            loc=0.0,
+            scale=self._turbulence_sigma_mps,
+            size=3,
+        )
+        values = [float(value) for value in initial]
+        self._turbulence_velocity_mps = (values[0], values[1], values[2])
+
+    def advance_uncertainty(self, dt_s: float) -> None:
+        """推进模型侧运行级不确定性。注意：由加扰模块按基础仿真节拍调用。"""
+
+        if not self._turbulence_enabled:
+            return
+        if not math.isfinite(dt_s) or dt_s <= 0.0:
+            raise ValueError("uncertainty dt_s must be finite and positive")
+        # 必须在改写风速前记录地速航向，才能把风和飞机运动共同造成的航向变化计入本拍。
+        self._ground_course_reference_rad = {
+            node_id: state.ground_psi_rad
+            for node_id, state in self._states.items()
+        }
+        self._ground_course_reference_dt_s = dt_s
+        # 一阶高斯-马尔可夫过程的精确离散衰减系数：a = exp(-dt/tau)。
+        decay = math.exp(-dt_s / self._turbulence_correlation_time_s)
+        # sqrt(1-a^2) 保持离散过程的稳态方差等于配置 sigma^2。
+        innovation_scale = math.sqrt(max(0.0, 1.0 - decay * decay))
+        # 三轴使用独立标准正态创新，但最终作为一组全局风矢量施加给全部飞机。
+        noise = self._turbulence_rng.normal(loc=0.0, scale=1.0, size=3)
+        updated = [
+            decay * current + sigma * innovation_scale * float(sample)
+            for current, sigma, sample in zip(
+                self._turbulence_velocity_mps,
+                self._turbulence_sigma_mps,
+                noise,
+                strict=True,
+            )
+        ]
+        self._turbulence_velocity_mps = (updated[0], updated[1], updated[2])
         self._refresh_effective_wind()
 
     @classmethod
@@ -627,6 +731,9 @@ class ModelIterator:
 
         self._time_s = 0.0
         self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._ground_course_reference_rad = {}
+        self._ground_course_reference_dt_s = None
+        self._restart_uncertainty_turbulence()
         # 从初始基线深拷贝恢复状态，控制指令清零。
         self._states = {
             node_id: replace(state)
@@ -646,8 +753,13 @@ class ModelIterator:
         self._initial_states.clear()
         self._controls.clear()
         self._uncertainty_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._turbulence_velocity_mps = (0.0, 0.0, 0.0)
+        self._turbulence_sigma_mps = (0.0, 0.0, 0.0)
+        self._turbulence_enabled = False
         self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._ground_course_reference_rad = {}
+        self._ground_course_reference_dt_s = None
 
     def _make_initial_state(self, node: dict[str, object], index: int) -> AircraftState:
         """根据节点配置构造初始飞机状态。注意：配置缺省值需与 base.json 约定一致。"""
@@ -799,12 +911,13 @@ class ModelIterator:
             self._update_inputs_from_filtered_acceleration(state)
 
     def _refresh_effective_wind(self) -> None:
-        """合成初始化风和动态风并同步状态。注意：两层均使用 ENU 矢量。"""
+        """合成恒定基线、紊流和动态风并同步状态。注意：三层均使用 ENU 矢量。"""
 
         self._wind_velocity_mps = tuple(
-            uncertainty + dynamic
-            for uncertainty, dynamic in zip(
+            uncertainty + turbulence + dynamic
+            for uncertainty, turbulence, dynamic in zip(
                 self._uncertainty_wind_velocity_mps,
+                self._turbulence_velocity_mps,
                 self._dynamic_wind_velocity_mps,
                 strict=True,
             )
@@ -816,7 +929,19 @@ class ModelIterator:
         state: AircraftState,
         inputs: PointMassInputs,
     ) -> float:
-        """计算恒定风场下的地面航迹角速率。注意：地速退化时返回零。"""
+        """计算地面航迹角速率。注意：紊流拍优先使用相邻地速航向差分。"""
+        reference_dt_s = self._ground_course_reference_dt_s
+        previous_course_rad = self._ground_course_reference_rad.get(state.node_id)
+        if reference_dt_s is not None and previous_course_rad is not None:
+            current_course_rad = state.ground_psi_rad
+            # atan2(sin Δψ, cos Δψ) 把跨越 ±π 的航向变化规范到最短包角。
+            course_delta_rad = math.atan2(
+                math.sin(current_course_rad - previous_course_rad),
+                math.cos(current_course_rad - previous_course_rad),
+            )
+            return course_delta_rad / reference_dt_s
+
+        # 无时变风参考时继续使用解析地速矢量导数，保持恒定风和标称路径原有语义。
         gravity = self._config.gravity_mps2
         speed = state.speed_mps
         speed_safe = max(self._config.min_speed_mps, speed)

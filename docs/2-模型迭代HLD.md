@@ -11,7 +11,7 @@
 - 接收算法输出的东北天三轴加速度层指令，先经过欠阻尼二阶内回路，模拟响应滞后和超调。
 - 将滤波后的东北天加速度转换为动力学空速 FUR 中的有符号分量 `nx/ny/nz`，并派生 `n_normal/phi` 用于载荷包线和对外状态。
 - 接收 stochastic 扰动配置；传感器噪声、定位漂移、控制滞后通过模型扩展接口接入，不进入三自由度质点积分核心。
-- 接收加扰 push 的风扰动态扰动；节点健康状态属于仿真控制层，不由模型管理。
+- 接收加扰 push 的全局风场；恒定风、运行级紊流和动态风按 ENU 矢量分层叠加，节点健康状态不由模型管理。
 - 向仿真控制提供算法所需的状态读出接口。
 
 ## 3. 边界
@@ -27,7 +27,7 @@
 - 生命周期：`init`、`close`
 - tick 节拍：`step`，`tick` 作为兼容别名
 - 状态读写：`read_states`、`apply_controls`
-- stochastic 配置扩展契约：`set_sensor_noise`、`set_position_drift`、`set_control_lag`
+- stochastic 配置扩展契约：`set_uncertainty_turbulence`、`advance_uncertainty`、`set_sensor_noise`、`set_position_drift`、`set_control_lag`
 - 动态注入：`inject_wind`、`clear_wind`
 
 ## 5. 三自由度质点模型
@@ -44,4 +44,3 @@
 ## 6. 关联代码
 
 - `src/environment/model.py`
-

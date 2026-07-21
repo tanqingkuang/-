@@ -23,7 +23,7 @@ result\run_batch.bat configs\base.json 5
 result\run_batch.bat configs\base.json 50 2
 ```
 
-`run_batch.bat` 默认并发启动 seed 0、1、2 三个最小化进程：
+`run_batch.bat` 默认并发启动 seed 0、1、2、3、4 五个最小化进程：
 
 ```bat
 result\run_batch.bat
@@ -32,11 +32,19 @@ result\run_batch.bat
 三个参数依次为配置、倍率和 seed 列表。seed 列表含空格时需要加双引号：
 
 ```bat
-result\run_batch.bat configs\base.json 50 "0 1 2"
+result\run_batch.bat configs\base.json 50 "0 1 2 3 4"
 ```
 
 每次运行分别生成 `snapshots_seed_0.jsonl`、`snapshots_seed_1.jsonl` 等文件；
 运行目录也包含对应 seed，批量并发时不会混淆结果。
+
+当前不确定性算例：
+
+- `seed=0`：标称状态。
+- `seed=1`：全链路丢包率 2.3%。
+- `seed=2`：全局轻度紊流风（水平标准差 0.8 m/s、垂向标准差 0.3 m/s、相关时间 2 s）。
+- `seed=3`：全链路发送帧频限制为 10 Hz（标称算法发送节拍为 20 Hz）。
+- `seed=4`：全链路时延设置为 50 ms。
 
 控制效果分析与仿真分开执行。双击 `analyze_accuracy.bat` 后选择某次仿真目录中的
 `snapshots_seed_<seed>.jsonl`；也可以直接传入快照文件：
