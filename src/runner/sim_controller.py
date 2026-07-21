@@ -149,7 +149,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                 return CommandResult("ERR_LOG_FAILED", message)
             if not self._logger.opened or self._logger.run_dir is None:
                 return CommandResult("ERR_LOG_FAILED", "日志文件未打开")
-            expected_files = ("config.json", "snapshots.jsonl", "events.jsonl")
+            expected_files = ("config.json", self._logger.snapshot_filename, "events.jsonl")
             missing_files = [
                 filename
                 for filename in expected_files
@@ -180,8 +180,11 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             return self._file_log_override
         return self._file_log_enabled
 
-    def load_config(self, path: str) -> CommandResult:
-        """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
+    def load_config(self, path: str, *, seed: int = 0) -> CommandResult:
+        """读取仿真配置并按运行入参 seed 初始化。注意：配置内同名字段不参与选择。"""
+
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            return CommandResult("ERR_INVALID_ARGUMENT", "seed must be a non-negative integer")
 
         # 先做轻量前置校验：已关闭或运行中不允许加载新配置。
         with self._lock:
@@ -206,7 +209,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             # 新配置：清除上一个配置遗留的避障航线覆盖，回到该配置的原始长机航线。
             self._leader_route_override = None
             try:
-                self._init_modules_unlocked(config)
+                self._init_modules_unlocked(config, seed)
             except Exception as exc:  # noqa: BLE001 - 首版统一映射模块初始化失败
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             # 加载成功转入 READY/待命，准备 start。
@@ -408,7 +411,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         self._stop_worker()
         with self._lock:
             try:
-                self._init_modules_unlocked(config)
+                self._init_modules_unlocked(config, self._seed)
             except Exception as exc:  # noqa: BLE001
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             # 重置后回到 READY/待命，等待再次 start。
@@ -437,7 +440,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         with self._lock:
             self._leader_route_override = route
             try:
-                self._init_modules_unlocked(config)
+                self._init_modules_unlocked(config, self._seed)
             except Exception as exc:  # noqa: BLE001
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             self._run_state = RunState.READY
@@ -464,7 +467,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
         with self._lock:
             self._leader_route_override = None
             try:
-                self._init_modules_unlocked(config)
+                self._init_modules_unlocked(config, self._seed)
             except Exception as exc:  # noqa: BLE001
                 return CommandResult("ERR_MODULE_INIT_FAILED", str(exc))
             self._run_state = RunState.READY
@@ -650,23 +653,22 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             # 取最近 limit 条（事件队列已按时间追加）。
             return events[-limit:]
 
-    def run_until_complete(self, config: object | str, *, seed: int | None = None) -> CommandResult:
+    def run_until_complete(self, config: object | str, *, seed: int = 0) -> CommandResult:
         """同步运行到仿真结束。注意：主要供 CLI 或批处理使用。"""
 
         # config 可为文件路径（走 load_config）或内联 dict（直接校验+初始化）。
         if isinstance(config, str):
-            result = self.load_config(config)
+            result = self.load_config(config, seed=seed)
             if result.code != "OK":
                 return result
         elif isinstance(config, dict):
+            if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+                return CommandResult("ERR_INVALID_ARGUMENT", "seed must be a non-negative integer")
             with self._lock:
                 config_copy = dict(config)
-                # 允许参数 seed 覆盖配置内 seed，便于批量复现实验。
-                if seed is not None:
-                    config_copy["seed"] = seed
                 try:
                     self._config_loader.validate(config_copy)
-                    self._init_modules_unlocked(config_copy)
+                    self._init_modules_unlocked(config_copy, seed)
                 except Exception as exc:  # noqa: BLE001
                     return CommandResult("ERR_CONFIG_INVALID", str(exc))
                 self._run_state = RunState.READY
@@ -707,11 +709,12 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
                     return CommandResult("ERR_TICK_FAILED", str(exc))
         return CommandResult("OK", "finished")
 
-    def _init_modules_unlocked(self, config: dict[str, object]) -> None:
+    def _init_modules_unlocked(self, config: dict[str, object], seed: int) -> None:
         """在已持锁状态下初始化仿真模块。注意：不得在未加载配置时调用。"""
-        # 缓存配置并读取核心运行参数（种子、总时长、步长、倍率）。
+        # 缓存配置并记录本次运行 seed；配置原值不作为输入，只在日志副本中被实际值覆盖。
         self._config = dict(config)
-        self._seed = int(config.get("seed", 0))
+        self._seed = seed
+        self._config["seed"] = seed
         self._duration_s = float(config.get("duration_s", 120.0))
         self._step_s = float(config.get("step_s", 0.005))
         self._playback_rate = float(config.get("playback_rate", 1.0))
@@ -953,7 +956,7 @@ class SimulationController(SimulationControllerLoopMixin, SimulationControllerSn
             return
         if self._config is None or self._logger.opened or self._logger._file_logging_disabled:
             return
-        if not self._logger.open(f"run-{int(time.time())}", self._config):
+        if not self._logger.open(f"run-seed-{self._seed}-{int(time.time())}", self._config):
             self._append_event_unlocked("WARN", "DataLogger", f"open log failed: {self._logger.last_error_message}")
 
     def _run_formation_algorithms_unlocked(self) -> None:

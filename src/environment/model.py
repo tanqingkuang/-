@@ -486,6 +486,11 @@ class ModelIterator:
         self._states: dict[str, AircraftState] = {}
         self._initial_states: dict[str, AircraftState] = {}
         self._controls: dict[str, AccelerationCommand] = {}
+        # 初始化不确定性风属于本次运行基线，动态故障清理不得修改。
+        self._uncertainty_wind_velocity_mps = (0.0, 0.0, 0.0)
+        # 动态风属于运行期覆盖层，可由 clear 或到期清理独立撤销。
+        self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
+        # 有效风是两层 ENU 矢量之和，动力学和状态展示统一读取该值。
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
         self._time_s = 0.0
 
@@ -496,6 +501,8 @@ class ModelIterator:
         self._config = self._parse_model_config(config.get("model", {}))
         self._system = PointMass3DoFModel(self._config)
         self._time_s = 0.0
+        self._uncertainty_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
         self._wind_velocity_mps = (0.0, 0.0, 0.0)
         self._states = {}
 
@@ -572,9 +579,23 @@ class ModelIterator:
         self.step(dt_s)  # tick 与 step 等价，提供统一生命周期接口名
 
     def inject_wind(self, command: object) -> None:
-        """注入恒定风场扰动。注意：风速单位为米每秒。"""
+        """注入动态恒定风。注意：与初始化不确定性风按 ENU 矢量叠加。"""
 
-        params = self._command_params(command)
+        self._dynamic_wind_velocity_mps = self._wind_vector_from_command(command)
+        self._refresh_effective_wind()
+
+    def set_uncertainty_wind(self, command: object) -> None:
+        """设置初始化不确定性风。注意：仅在模型初始化完成后调用一次。"""
+
+        # 单次设置后作为运行基线保存，不进入动态扰动活动表和到期流程。
+        self._uncertainty_wind_velocity_mps = self._wind_vector_from_command(command)
+        self._refresh_effective_wind()
+
+    @classmethod
+    def _wind_vector_from_command(cls, command: object) -> tuple[float, float, float]:
+        """解析风场命令并返回 ENU 风矢量。注意：水平风速必须非负且全部参数有限。"""
+
+        params = cls._command_params(command)
         speed_mps = float(params.get("speed_mps", 0.0))
         direction_deg = float(params.get("direction_deg", 0.0))
         vertical_mps = float(params.get("vertical_mps", 0.0))
@@ -589,24 +610,23 @@ class ModelIterator:
             )
         direction_rad = math.radians(direction_deg)
         # 风方向角按 ENU：0° 指东、90° 指北；水平风速分解到东/北，竖直分量单独给出。
-        self._wind_velocity_mps = (
+        return (
             speed_mps * math.cos(direction_rad),
             speed_mps * math.sin(direction_rad),
             vertical_mps,
         )
-        self._sync_wind_to_states()
 
     def clear_wind(self) -> None:
-        """清除当前风场扰动。注意：不会重置飞机运动状态。"""
+        """清除动态风场扰动。注意：初始化不确定性风保持不变。"""
 
-        self._wind_velocity_mps = (0.0, 0.0, 0.0)  # 风速归零，飞行状态不动
-        self._sync_wind_to_states()
+        self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._refresh_effective_wind()
 
     def reset(self) -> None:
         """复位 ModelIterator 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
 
         self._time_s = 0.0
-        self._wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
         # 从初始基线深拷贝恢复状态，控制指令清零。
         self._states = {
             node_id: replace(state)
@@ -616,6 +636,8 @@ class ModelIterator:
             node_id: AccelerationCommand()
             for node_id in self._states
         }
+        # reset 只撤销运行期动态风，初始化不确定性仍属于本次运行环境。
+        self._refresh_effective_wind()
 
     def close(self) -> None:
         """释放 ModelIterator 持有的资源。注意：关闭后不应继续调用运行接口。"""
@@ -623,6 +645,9 @@ class ModelIterator:
         self._states.clear()
         self._initial_states.clear()
         self._controls.clear()
+        self._uncertainty_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._dynamic_wind_velocity_mps = (0.0, 0.0, 0.0)
+        self._wind_velocity_mps = (0.0, 0.0, 0.0)
 
     def _make_initial_state(self, node: dict[str, object], index: int) -> AircraftState:
         """根据节点配置构造初始飞机状态。注意：配置缺省值需与 base.json 约定一致。"""
@@ -772,6 +797,19 @@ class ModelIterator:
             state.wind_up_mps = wind_up
             # 横风会立即改变地面航迹角及其角速率，事件注入当拍就要刷新。
             self._update_inputs_from_filtered_acceleration(state)
+
+    def _refresh_effective_wind(self) -> None:
+        """合成初始化风和动态风并同步状态。注意：两层均使用 ENU 矢量。"""
+
+        self._wind_velocity_mps = tuple(
+            uncertainty + dynamic
+            for uncertainty, dynamic in zip(
+                self._uncertainty_wind_velocity_mps,
+                self._dynamic_wind_velocity_mps,
+                strict=True,
+            )
+        )
+        self._sync_wind_to_states()
 
     def _ground_psi_dot_rad_s(
         self,

@@ -1,5 +1,5 @@
 {
-  "duration_s": 1000.0,
+  "duration_s": 500.0,
   "step_s": 0.005,
   "playback_rate": 1.0,
   "seed": 1,
@@ -78,7 +78,7 @@
       "x_m": 2500.0,
       "y_m": 1000.0,
       "altitude_m": 500.0,
-      "psi_v_deg": -158.20,
+      "psi_v_deg": -158.2,
       "speed_mps": 20.0,
       "cross_track_error_m": 0.0,
       "distance_to_go_m": 0.0

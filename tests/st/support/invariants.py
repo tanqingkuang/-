@@ -58,7 +58,7 @@ def check_run_completed(run: ScenarioRun) -> list[CheckIssue]:
         if level == "ERROR" or (level == "WARN" and not _warn_allowed(message)):
             issues.append(CheckIssue(scenario, "UT-01", "事件日志含错误或非白名单告警", time_s=_time(event), field=level, actual=message, limit="无 ERROR/WARN"))
     if not run.snapshots:
-        issues.append(CheckIssue(scenario, "UT-01", "未生成 snapshots.jsonl", actual=0, limit=">0"))
+        issues.append(CheckIssue(scenario, "UT-01", "未生成 seed 快照 JSONL", actual=0, limit=">0"))
         return issues
     duration = float(run.config.get("duration_s", 0.0))
     final_time = float(run.snapshots[-1].get("time_s", 0.0))

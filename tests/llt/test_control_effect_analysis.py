@@ -92,7 +92,7 @@ class ControlEffectAnalysisTests(unittest.TestCase):
             root = Path(tmp)
             run_dir = root / "run-test"
             run_dir.mkdir()
-            snapshot_path = self._write_snapshots(run_dir / "snapshots.jsonl")
+            snapshot_path = self._write_snapshots(run_dir / "snapshots_seed_0.jsonl")
             output_root = root / "analysis"
 
             exit_code = analyze_main(

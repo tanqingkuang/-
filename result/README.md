@@ -1,18 +1,11 @@
 # 一键仿真
 
-直接双击 `run_batch.bat`。脚本优先使用项目 `.venv`，通过 `src/main.py` 默认以 10 倍速从源码无界面运行；集结场景会自动触发集结。该过程不会启动 GUI、生成 exe 或安装依赖。
+直接双击 `run_batch.bat`。脚本优先使用项目 `.venv`，通过 `src/main.py` 默认以 20 倍速从源码无界面运行；集结场景会自动触发集结。该过程不会启动 GUI、生成 exe 或安装依赖。
 
-脚本默认运行 `configs/rally_demo_5_aircraft.json`，仿真数据写入 `result/simulation_data/logs/run-*`。
+脚本默认运行 `configs/rally_demo_5_aircraft.json`，仿真数据写入
+`result/simulation_data/logs/run-seed-<seed>-*`。
 
 也可以在命令行传入其他仿真 JSON：
-
-```bat
-result\run_batch.bat configs\base.json
-```
-
-当前脚本完成单份 JSON 的源码无界面一键仿真；后续批量不确定性任务将在该入口上扩展。
-
-指定其他配置：
 
 ```bat
 result\run_batch.bat configs\base.json
@@ -24,11 +17,33 @@ result\run_batch.bat configs\base.json
 result\run_batch.bat configs\base.json 5
 ```
 
-控制效果分析与仿真分开执行。双击 `analyze_accuracy.bat` 后选择某次仿真目录中的 `snapshots.jsonl`；也可以直接传入快照文件：
+第三个参数指定不确定性 seed 列表。单独运行 seed 2：
+
+```bat
+result\run_batch.bat configs\base.json 50 2
+```
+
+`run_batch.bat` 默认并发启动 seed 0、1、2 三个最小化进程：
+
+```bat
+result\run_batch.bat
+```
+
+三个参数依次为配置、倍率和 seed 列表。seed 列表含空格时需要加双引号：
+
+```bat
+result\run_batch.bat configs\base.json 50 "0 1 2"
+```
+
+每次运行分别生成 `snapshots_seed_0.jsonl`、`snapshots_seed_1.jsonl` 等文件；
+运行目录也包含对应 seed，批量并发时不会混淆结果。
+
+控制效果分析与仿真分开执行。双击 `analyze_accuracy.bat` 后选择某次仿真目录中的
+`snapshots_seed_<seed>.jsonl`；也可以直接传入快照文件：
 
 ```bat
 result\analyze_accuracy.bat
-result\analyze_accuracy.bat result\simulation_data\logs\run-1784530025\snapshots.jsonl
+result\analyze_accuracy.bat result\simulation_data\logs\run-seed-2-1784530025\snapshots_seed_2.jsonl
 ```
 
 分析报告写入 `result/analysis/run-*/`：

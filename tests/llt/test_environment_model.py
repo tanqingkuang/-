@@ -521,6 +521,22 @@ class TestWindDisturbance(unittest.TestCase):
         it.clear_wind()
         self.assertEqual(it._wind_velocity_mps, (0.0, 0.0, 0.0))
 
+    def test_clear_dynamic_wind_preserves_initial_uncertainty_wind(self) -> None:
+        """清除动态风时应恢复初始化基础风，不能把运行级不确定性归零。"""
+
+        it = ModelIterator()
+        it.init({"nodes": [{"node_id": "A", "speed_mps": 15.0}]}, seed=2)
+        it.set_uncertainty_wind(
+            {"params": {"speed_mps": 4.1, "direction_deg": 90.0}}
+        )
+        it.inject_wind({"params": {"speed_mps": 10.0, "direction_deg": 0.0}})
+
+        it.clear_wind()
+
+        self.assertAlmostEqual(it._wind_velocity_mps[0], 0.0, places=12)
+        self.assertAlmostEqual(it._wind_velocity_mps[1], 4.1)
+        self.assertAlmostEqual(it._wind_velocity_mps[2], 0.0)
+
 
 
 # ---------------------------------------------------------------------------

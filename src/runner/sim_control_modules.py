@@ -42,6 +42,7 @@ from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
 from src.common.envelope import MessageEnvelope
 from src.data.config_loader import resolve_config_references
 from src.environment.comm import CommunicationChannel
+from src.environment.disturb import DisturbanceManager
 from src.environment.model import AccelerationCommand, AircraftState, ModelIterator, node_id_from_config
 from src.runner.sim_control_constants import (
     _DEFAULT_ALGORITHM_DECIMATION,
@@ -391,7 +392,7 @@ class _NodeAlgorithm:
         return cxt.wayLine
 
 
-class _DisturbanceEngine:
+class _DisturbanceEngine(DisturbanceManager):
     """动态扰动执行器。注意：当前实现覆盖风场、节点故障和链路扰动。"""
 
     # 扰动引擎只记录动态影响，不改写原始配置对象。
@@ -400,6 +401,7 @@ class _DisturbanceEngine:
     # 模型风场、通信链路和节点健康分属不同子系统，这里统一协调撤销顺序。
     def __init__(self) -> None:
         """初始化 _DisturbanceEngine 实例，建立后续运行所需状态。注意：构造阶段不应启动耗时流程。"""
+        super().__init__()
         # 活跃扰动列表，元素为 (命令, 到期时刻)。
         self._active: list[tuple[DisturbanceCommand, float]] = []
         self._model: ModelIterator | None = None
@@ -417,7 +419,6 @@ class _DisturbanceEngine:
         comm: CommunicationChannel,
     ) -> None:
         """按配置初始化 _DisturbanceEngine。注意：调用方需先准备好必要依赖和输入数据。"""
-        del seed
         self._active = []
         self._faulted_links = set()
         self._degraded_links = {}
@@ -432,6 +433,8 @@ class _DisturbanceEngine:
         }
         # 当前健康初始等于基线（副本，运行期被扰动修改）。
         self._node_health = dict(self._baseline_health)
+        # 模型和通信完成初始化后再按 seed 查表；不确定性在首个仿真 tick 前生效。
+        self.apply_uncertainty(seed, model, comm)
 
     def read_health(self) -> dict[str, str]:
         """读取扰动模块健康状态。注意：用于状态表和回报显示。"""
@@ -591,6 +594,7 @@ class _DataLogger:
         self.events: list[SimulationEvent] = []
         self.opened = False
         self.run_dir: Path | None = None
+        self.snapshot_filename = "snapshots_seed_0.jsonl"
         self._snapshot_file = None
         self._event_file = None
         self._file_logging_disabled = False
@@ -604,6 +608,7 @@ class _DataLogger:
         self.snapshots.clear()
         self.events.clear()
         self.run_dir = None
+        self.snapshot_filename = "snapshots_seed_0.jsonl"
         self._file_logging_disabled = False
         self.last_error_message = ""
         self.persisted_snapshot_count = 0
@@ -616,6 +621,7 @@ class _DataLogger:
         if self._file_logging_disabled:
             return False
         try:
+            self.snapshot_filename = f"snapshots_seed_{int(config.get('seed', 0))}.jsonl"
             self.run_dir = self._make_run_dir(run_id)
             self.run_dir.mkdir(parents=True, exist_ok=False)
             (self.run_dir / "config.json").write_text(
@@ -623,7 +629,7 @@ class _DataLogger:
                 encoding="utf-8",
             )
             # 使用行缓冲，仿真中断时也尽量保留已记录数据。
-            self._snapshot_file = (self.run_dir / "snapshots.jsonl").open("w", encoding="utf-8", buffering=1)
+            self._snapshot_file = (self.run_dir / self.snapshot_filename).open("w", encoding="utf-8", buffering=1)
             self._event_file = (self.run_dir / "events.jsonl").open("w", encoding="utf-8", buffering=1)
             for event in self.events:
                 self._event_file.write(json.dumps(self._serialize_record(asdict(event)), ensure_ascii=False) + "\n")

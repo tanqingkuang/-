@@ -38,6 +38,21 @@ class SimulationAdapterStructureTests(unittest.TestCase):
         self.assertEqual(self.adapter.last_result_message, "测试拒绝")
         self.adapter.snapshot.assert_called_once_with()
 
+    def test_load_config_forwards_default_and_explicit_seed(self) -> None:
+        """GUI 配置入口应始终把运行 seed 显式传给控制器，默认值为 0。"""
+
+        self.adapter.controller.load_config = Mock(
+            return_value=CommandResult("ERR_CONFIG_INVALID", "测试中止后续加载")
+        )
+        self.adapter.snapshot = Mock(return_value=object())
+
+        self.adapter.load_config("default.json")
+        self.adapter.controller.load_config.assert_called_once_with("default.json", seed=0)
+
+        self.adapter.controller.load_config.reset_mock()
+        self.adapter.load_config("seeded.json", seed=2)
+        self.adapter.controller.load_config.assert_called_once_with("seeded.json", seed=2)
+
     def test_reset_trail_state_can_preserve_or_drop_cursor_and_velocity(self) -> None:
         """同一清理入口按调用场景选择是否清速度基准与固定时钟游标。"""
 
