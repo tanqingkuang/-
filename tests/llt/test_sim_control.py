@@ -122,6 +122,32 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertTrue(controller.get_recent_events())
             controller.close()
 
+    def test_runtime_seed_defaults_to_zero_and_ignores_config_seed(self) -> None:
+        """load 和两种同步运行入口未传 seed 时均固定使用 0。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_config(Path(tmp))
+            config = json.loads(path.read_text(encoding="utf-8"))
+            config["seed"] = 99
+            path.write_text(json.dumps(config), encoding="utf-8")
+            load_controller = SimulationController()
+            self.addCleanup(load_controller.close)
+
+            load_result = load_controller.load_config(str(path))
+
+            self.assertEqual(load_result.code, "OK")
+            self.assertEqual(load_controller._seed, 0)
+
+            for config_input in (str(path), config):
+                with self.subTest(config_type=type(config_input).__name__):
+                    run_controller = SimulationController()
+                    self.addCleanup(run_controller.close)
+
+                    run_result = run_controller.run_until_complete(config_input)
+
+                    self.assertEqual(run_result.code, "OK")
+                    self.assertEqual(run_controller._seed, 0)
+
     def test_load_hold_config_skips_unused_rally_product_validation(self) -> None:
         """普通保持允许单侧前向限幅，不创建或校验未启用的集结位置解算产品。"""
 

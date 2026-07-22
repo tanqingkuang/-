@@ -29,6 +29,10 @@ result\run_batch.bat configs\base.json 50 2
 result\run_batch.bat
 ```
 
+该 BAT 是异步启动器：负责展开 seed 列表并发起各仿真进程，全部进程成功发起后即完成启动职责，
+不主动等待子进程结束，也不汇总子进程退出码。单个 seed 的运行结果以对应进程输出和
+`run-seed-<seed>-*` 目录内的日志为准。
+
 三个参数依次为配置、倍率和 seed 列表。seed 列表含空格时需要加双引号：
 
 ```bat

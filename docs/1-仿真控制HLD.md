@@ -172,7 +172,7 @@ UI HLD 中的用户操作统一映射到仿真控制应用层接口：
 
 | UI 操作 | 仿真控制接口 | 说明 |
 | --- | --- | --- |
-| 选择配置文件 | `load_config(path)` | 解析、校验并保存配置，返回命令执行结果 |
+| 选择配置文件 | `load_config(path, seed=0)` | 解析、校验并保存配置，按运行入参 seed 选择不确定性，返回命令执行结果 |
 | 开始 / 继续 | `start()` | 从 `READY` 或 `PAUSED` 进入运行；`PAUSED` 下语义为继续 |
 | 暂停 | `pause()` | 从 `RUNNING` 进入 `PAUSED` |
 | 单步 | `step(count=1)` | 通常在 `READY` / `PAUSED` 下推进指定步数 |
@@ -204,12 +204,13 @@ controller = SimulationController()
 ### 5.3 加载配置
 
 ```python
-def load_config(path: str) -> CommandResult
+def load_config(path: str, *, seed: int = 0) -> CommandResult
 ```
 
 语义：
 
 - 读取 `.yaml`、`.yml` 或 `.json` 配置。
+- `seed` 是默认值为 0 的非负整数运行参数；配置文件中的同名历史字段不参与不确定性选择。
 - 校验必填字段、节点列表、链路拓扑、航线 `route`、队形 `formation`、仿真时长、步长、算法分频、扰动配置；`step_s` 必须满足 `0 < step_s <= 0.1`，避免单个基础 tick 跨过多个固定快照边界。
 - **航线只支持经纬度**：`route`（含 `route_file` 引用）的航点必须给 `latitude_deg` + `longitude_deg`，加载期由 `route_to_internal` 统一转成内部 ENU（以首航点为 ENU 原点）；非经纬(如 ENU `x_m`/`y_m`)航线在加载期被拒绝，返回 `ERR_CONFIG_INVALID`。节点初始位置 `nodes[*]` 不受此约束；`formation.formation_files` 引用的外部队形文件使用局部航迹坐标 `x_forward_y_up_z_right`，同样不参与经纬转换。
 - **有效航线语义**：初始有效航线是 `route_file` 展开的 `route`；调用 `apply_avoidance_route()` 采用避障规划结果后，覆盖航线成为新的有效航线并触发模块重新初始化。集结中心、集结方向、高度分层、GUI 集结几何和集结完成后的任务飞行全部读取同一条有效航线，确保集结阶段也遵循避障结果。
@@ -420,13 +421,14 @@ def get_recent_events(limit: int = 200, min_level: EventLevel | None = None) -> 
 ### 5.15 headless 运行
 
 ```python
-def run_until_complete(config: object | str, *, seed: int | None = None) -> CommandResult
+def run_until_complete(config: object | str, *, seed: int = 0) -> CommandResult
 ```
 
 语义：
 
 - 给 CLI / 批量仿真使用。
-- 若传入路径，内部执行 `load_config(path)`。
+- 若传入路径，内部执行 `load_config(path, seed=seed)`；若传入内联配置，也使用同一个运行 seed 初始化全部模块。
+- `seed` 与 `load_config()` 契约相同：省略时固定为 0。
 - 从 `READY` 运行到 `FINISHED`；异常场景另行设计。
 - 过程中按日志配置落盘；可以不启用快照订阅。
 
@@ -597,7 +599,7 @@ class DataLogger:
 - 关键数据日志是定时记录的仿真数据，固定 `10 Hz`，由仿真控制按 sim-time 调度调用 `write_snapshot()`；播放倍率只改变单位墙钟内推进的仿真时间，不改变日志采样点。
 - 记录对象为 `SimulationSnapshot` 的关键数据子集，至少包含 `time_s`、`run_state`、节点状态和链路状态；节点状态包含位置/速度指令与控制误差，供后处理和未来 UI 使用；`step_s`、`route`、`route_segments` 不写入关键数据日志。事件对象只通过 `write_event()` 作为诊断信息记录，不参与 10Hz 定时采样。
 - GUI 顶部“日志”窗口只展示 `SimulationEvent` 最近事件，不读取关键数据日志文件，也不决定关键数据日志频率。
-- 日志组件在首次实际推进仿真时在工作目录下创建 `logs/<run-id>/`，其中 `snapshots.jsonl` 记录 10Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存本次运行配置；内存列表用于测试和运行期查询。
+- 日志组件在首次实际推进仿真时在工作目录下创建 `logs/run-seed-<seed>-<run-id>/`，其中 `snapshots_seed_<seed>.jsonl` 记录 10Hz 关键数据快照，`events.jsonl` 记录诊断事件，`config.json` 保存含实际运行 seed 的本次运行配置；内存列表用于测试和运行期查询。
 - 日志落盘时按字段语义做十进制四舍五入：时间类字段保留 `3` 位小数，位置/距离和速度类字段保留 `2` 位小数，加速度类字段保留 `3` 位小数，过载字段 `nx/ny/nz/n_normal` 保留 `4` 位小数，角度类字段保留 `2` 位小数；仿真内部状态不因日志格式截断。
 
 日志写入失败策略：
@@ -641,7 +643,7 @@ class DataLogger:
 
 ## 12. 模块归属
 
-仿真控制负责稳定的应用层接口和调度闭环。配置加载、动态扰动和关键数据日志可以作为仿真控制内部组件实现，也可以按数据组 / 环境组边界拆分为独立模块；拆分后的接口语义保持本章定义不变。CLI 入口只包装配置加载与 `run_until_complete(config)`，不改变仿真控制的应用层契约。
+仿真控制负责稳定的应用层接口和调度闭环。配置加载、动态扰动和关键数据日志可以作为仿真控制内部组件实现，也可以按数据组 / 环境组边界拆分为独立模块；拆分后的接口语义保持本章定义不变。CLI 入口只包装配置加载与 `run_until_complete(config, seed=seed)`，不改变仿真控制的应用层契约。
 
 ## 13. 关联代码
 

@@ -47,6 +47,7 @@ for %%S in (%SEEDS%) do (
     )
 )
 
-echo [完成] 已启动全部 seed，结果将写入 result\simulation_data\logs\run-seed-*。
+echo [已启动] 全部 seed 进程均已发起，结果将写入 result\simulation_data\logs\run-seed-*。
+echo [提示] 本脚本不等待子进程结束；请分别查看各进程输出和对应日志。
 pause
 exit /b 0

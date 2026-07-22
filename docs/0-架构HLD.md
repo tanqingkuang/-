@@ -39,7 +39,7 @@
 | Actor | 用户 | 操作人员，下发配置与运行指令、查看实时显示 |
 | Boundary | 控制界面 | 接收用户输入（算法选择、航线、扰动设置等）（GUI 模式启用；批量模式不启） |
 | Boundary | 实时显示 | 向用户推送仿真过程状态（GUI 模式启用；批量模式不启） |
-| Boundary | CLI 入口 | 接收 CLI 参数（`--config` `--seed` `--output` `--headless` 等）、加载配置文件、应用 CLI 覆盖并调用 `仿真控制.run_until_complete(config)`；Python 批量脚本也可直接调用 `SimulationController.run_until_complete(config)` API |
+| Boundary | CLI 入口 | 接收 CLI 参数（`--config` `--seed` `--output` `--headless` 等）、加载配置文件、应用 CLI 覆盖并调用 `仿真控制.run_until_complete(config, seed=seed)`；Python 批量脚本也可直接调用该 API，seed 省略时固定为 0 |
 | Control | 仿真控制 | ① 基于配置和界面初始化各算法和模型，并将拓扑/QoS 等参数下发给通信功能；<br />② 任务调度（编队算法、模型迭代、加扰）；<br />③ 把扰动配置 + 不确定性索引整体下发给加扰；节拍触发加扰 tick；转发 UI 经控制界面下发的动态扰动注入命令；<br />④ 关键数据定时落盘；<br />⑤ 实时数据推送 |
 | Control | 模型迭代 | 统一推进所有飞机的动力学积分；内部按 init 配置 + seed 实施传感器噪声 / 定位漂移 / 控制滞后；通过 inject_wind / inject_fault 接受加扰 push 的动态扰动 |
 | Control | 编队算法 | 飞行实体 ×N（N≥1，含编队、制导、控制律，产出 control）+ 非飞行协调实体 ×0/1（只调度、不产 control）。协调能力或以单元寄宿在某飞行实体内（领航-跟随寄宿长机），或独立成非飞行协调实体（地面站 / 虚拟节点 / 参考节点）；分布式方法无协调实体（见 3.3） |
@@ -184,7 +184,7 @@ docs/
 | GUI | PySide6 | LGPL，官方 Qt for Python；headless 模式按需 import |
 | 三维可视化（可选） | matplotlib / vispy | PA 标注为"可选" |
 | 测试 | pytest + pytest-cov | |
-| 日志格式 | JSONL | 运行数据写入 `logs/<run-id>/snapshots.jsonl`、`events.jsonl` 和 `config.json`；跨语言二进制时序格式作为独立日志后端扩展 |
+| 日志格式 | JSONL | 运行数据写入 `logs/run-seed-<seed>-<run-id>/snapshots_seed_<seed>.jsonl`、`events.jsonl` 和 `config.json`；跨语言二进制时序格式作为独立日志后端扩展 |
 
 ### 4.3.3 测试分级
 
@@ -203,7 +203,7 @@ python 仿真为**单进程 tick 循环**。运行模式分两种（UI 模式与
 
 - 启动 → 启 UI → UI 加载配置文件并显示
 - 用户在 UI 调参（修改的就是配置对象本身）
-- 用户选择配置 → UI 调 `仿真控制.load_config(path)`
+- 用户选择配置 → UI 调 `仿真控制.load_config(path, seed=0)`
 - 用户点"运行" → UI 调 `仿真控制.start()`
 - 运行中：UI 可调 `pause / start / step / reset / inject_disturbance`（`start()` 在暂停态表示继续；step 用于 pause 态下单步推进，PA 单步仿真需求由此落地）；仿真控制 推送实时数据流给 实时显示
 - 跑完：用户选择关闭 / 重跑
@@ -226,17 +226,17 @@ sequenceDiagram
     end
 
     User->>UI: ⑥ 点"运行"
-    UI->>SimCtrl: ⑦ load_config(path)
+    UI->>SimCtrl: ⑦ load_config(path, seed=0)
     UI->>SimCtrl: ⑧ start()
     Note over SimCtrl: 进入 tick 循环（见 4.4.3）<br/>运行中 UI 继续可调<br/>pause / start / step / reset / inject_disturbance
 ```
 
 ### 4.4.2 不带 UI 的批量仿真
 
-启动方式：Python 批量脚本直接调用 `SimulationController.run_until_complete(config)`，或由 CLI 包装该 API。
+启动方式：Python 批量脚本直接调用 `SimulationController.run_until_complete(config, seed=seed)`，或由 CLI 包装该 API。
 
 - 外层 bat / shell 循环起 N 个进程（不同不确定性索引），多进程并发由 OS 层调度（`xargs -P` / GNU parallel / Win task scheduler）
-- 单进程内：CLI 解析参数并应用配置覆盖 → 调 `run_until_complete(config)` → 跑完落盘 → 退出
+- 单进程内：CLI 解析参数并应用配置覆盖 → 调 `run_until_complete(config, seed=seed)` → 跑完落盘 → 退出
 - 不启 控制界面 / 实时显示；关键数据 按节拍落盘，头部写实际不确定性索引
 - 失败 / 重试 / 进度跟踪 / 资源限流由脚本层管，**平台不感知"批量"概念**
 
@@ -256,7 +256,7 @@ sequenceDiagram
         CLI->>Cfg: ③ 读基础配置
         Cfg-->>CLI: ④ 配置对象
         Note over CLI: CLI 参数覆盖（不确定性索引等）
-        CLI->>SimCtrl: ⑤ run_until_complete(config)
+        CLI->>SimCtrl: ⑤ run_until_complete(config, seed=seed)
         Note over SimCtrl: 进入 tick 循环（见 4.4.3）<br/>结束后进程退出
     end
 
@@ -349,4 +349,4 @@ sequenceDiagram
 | **配置文件** | 仿真控制 init 时读，按段下发到各 Control | 算法 / 拓扑+QoS / 扰动 / 航线 / 机型 / 日志 各配置段；schema 见 LLD |
 | **飞行模型**（机型参数） | 模型迭代 init 时读 | 质量、气动系数、惯量等机型常量 |
 | **关键数据** | 仿真控制 按 `10 Hz` sim-time 节拍写，头部写入实际 不确定性索引；离线分析工具读 | 仿真过程关键变量持久化；日志格式三种仿真统一对齐，schema 见 LLD |
-| **不确定性** | 包含两部分：<br />① **不确定性索引**——配置文件 或 CLI `--seed` 输入，落盘时写入 关键数据 头部；<br />② **不确定性组合**——加扰 内部由索引经不确定性生成器展开，逐 tick 产出风扰/丢包/噪声等扰动样本 | 仿真可复现性的横切支点；同一索引 → 同一组合，单次复现 + 批量并行的统一开关 |
+| **不确定性** | 包含两部分：<br />① **不确定性索引**——由 GUI、CLI 或 API 以非负整数运行参数 `seed` 显式传入，省略时为 0；配置文件中的历史同名字段不参与选择；<br />② **不确定性组合**——加扰内部由索引经不确定性注册表展开，逐 tick 产出风扰/丢包等扰动样本 | 仿真可复现性的横切支点；同一索引 → 同一组合，单次复现 + 批量并行的统一开关 |

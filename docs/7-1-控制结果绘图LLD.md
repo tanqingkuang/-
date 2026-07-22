@@ -7,11 +7,11 @@
 | 组件 | 定位 | 数据来源 |
 | --- | --- | --- |
 | `LiveMonitorWindow` | 运行中实时监控三轴控制误差是否收敛、是否发散 | `SimulationController.get_snapshot()` 内存快照 |
-| `OfflinePlotWindow` | 运行结束后加载日志文件、回放并分析控制误差时序曲线 | `logs/<run-id>/snapshots.jsonl` 落盘文件 |
+| `OfflinePlotWindow` | 运行结束后加载日志文件、回放并分析控制误差时序曲线 | `logs/run-seed-<seed>-<run-id>/snapshots_seed_<seed>.jsonl` 落盘文件 |
 
 实时窗口持有 `SimulationController` 引用，用 `QTimer`（100 ms）轮询 `get_snapshot()`。绘图时间统一取 `snapshot.time_s`，不走 JSONL，不解析文件。
 
-离线窗口不持有控制器引用，不使用定时器；用户通过文件对话框选择 `snapshots.jsonl`，一次性加载全部帧，静态渲染完整时序曲线。
+离线窗口不持有控制器引用，不使用定时器；用户通过文件对话框选择 `snapshots_seed_<seed>.jsonl`，一次性加载全部帧，静态渲染完整时序曲线。
 
 主窗口入口：标准菜单栏 **控制监控(&V)**，包含两个菜单项：
 
@@ -279,9 +279,9 @@ QtCharts 为硬依赖，代码中不做降级保护。
 
 ### 9.1 定位
 
-`OfflinePlotWindow`（`QDialog`）是纯离线可视化组件，不依赖仿真控制器，不使用定时器。用户选择 `snapshots.jsonl` 文件后，窗口一次性加载所有帧，静态渲染完整时序曲线，便于事后分析控制误差收敛情况。
+`OfflinePlotWindow`（`QDialog`）是纯离线可视化组件，不依赖仿真控制器，不使用定时器。用户选择 `snapshots_seed_<seed>.jsonl` 文件后，窗口一次性加载所有帧，静态渲染完整时序曲线，便于事后分析控制误差收敛情况。
 
-### 9.2 数据源：snapshots.jsonl
+### 9.2 数据源：snapshots_seed_&lt;seed&gt;.jsonl
 
 `_DataLogger.write_snapshot()` 按 10 Hz（仿真时间）写入，每行一个 JSON 对象，字段与 `SimulationSnapshot` 一致，省略 `step_s`、`route`、`route_segments`。
 
