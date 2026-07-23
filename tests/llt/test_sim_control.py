@@ -18,6 +18,7 @@ from src.algorithm.units.algo.arc_path import arc_radius
 from src.algorithm.units.algo.pos_calc import PosCalcStrategyE
 from src.algorithm.units.algo.pos_track import PosTrackStrategyE
 from src.environment.model import AircraftState
+from src.environment.disturb import DisturbanceManager
 from src.runner.sim_control import (
     DisturbanceCommand,
     LinkState,
@@ -121,6 +122,32 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertTrue(controller.get_recent_events())
             controller.close()
 
+    def test_runtime_seed_defaults_to_zero_and_ignores_config_seed(self) -> None:
+        """load 和两种同步运行入口未传 seed 时均固定使用 0。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = _write_config(Path(tmp))
+            config = json.loads(path.read_text(encoding="utf-8"))
+            config["seed"] = 99
+            path.write_text(json.dumps(config), encoding="utf-8")
+            load_controller = SimulationController()
+            self.addCleanup(load_controller.close)
+
+            load_result = load_controller.load_config(str(path))
+
+            self.assertEqual(load_result.code, "OK")
+            self.assertEqual(load_controller._seed, 0)
+
+            for config_input in (str(path), config):
+                with self.subTest(config_type=type(config_input).__name__):
+                    run_controller = SimulationController()
+                    self.addCleanup(run_controller.close)
+
+                    run_result = run_controller.run_until_complete(config_input)
+
+                    self.assertEqual(run_result.code, "OK")
+                    self.assertEqual(run_controller._seed, 0)
+
     def test_load_hold_config_skips_unused_rally_product_validation(self) -> None:
         """普通保持允许单侧前向限幅，不创建或校验未启用的集结位置解算产品。"""
 
@@ -159,6 +186,231 @@ class SimulationControllerTests(unittest.TestCase):
         self.assertAlmostEqual(motion.v.vd, math.sqrt(200.0))
         self.assertAlmostEqual(motion.v.vPsi, math.radians(45.0))
         self.assertAlmostEqual(motion.v.dVPsi, math.radians(2.5))
+
+    def test_seed_two_applies_global_turbulence_and_reset_replays_it(self) -> None:
+        """seed=2 应添加全局紊流；动态清除保留紊流，reset 后重放相同序列。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            # 配置中的 seed 故意设为其他值，证明运行入参才是唯一权威。
+            config["seed"] = 99
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(config_path), seed=2)
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(controller._seed, 2)
+            self.assertIsInstance(controller._disturbance, DisturbanceManager)
+            initial_states = controller._model.read_states()
+            initial = (
+                initial_states["A01"].wind_east_mps,
+                initial_states["A01"].wind_north_mps,
+                initial_states["A01"].wind_up_mps,
+            )
+            self.assertNotEqual(initial, (0.0, 0.0, 0.0))
+            self.assertEqual(
+                initial,
+                (
+                    initial_states["A02"].wind_east_mps,
+                    initial_states["A02"].wind_north_mps,
+                    initial_states["A02"].wind_up_mps,
+                ),
+            )
+            initial_snapshot = controller.get_snapshot()
+            self.assertTrue(initial_snapshot.nodes)
+            self.assertEqual(
+                (
+                    initial_snapshot.nodes[0].wind_east_mps,
+                    initial_snapshot.nodes[0].wind_north_mps,
+                    initial_snapshot.nodes[0].wind_up_mps,
+                ),
+                initial,
+            )
+
+            self.assertEqual(
+                controller.inject_disturbance(DisturbanceCommand("clear")).code,
+                "OK",
+            )
+            cleared = controller._model.read_states()["A01"]
+            self.assertEqual(
+                (cleared.wind_east_mps, cleared.wind_north_mps, cleared.wind_up_mps),
+                initial,
+            )
+
+            initial_ground_course_rad = initial_states["A01"].ground_psi_rad
+            controller.step(1)
+            advanced_states = controller._model.read_states()
+            advanced = (
+                advanced_states["A01"].wind_east_mps,
+                advanced_states["A01"].wind_north_mps,
+                advanced_states["A01"].wind_up_mps,
+            )
+            self.assertNotEqual(advanced, initial)
+            self.assertEqual(
+                advanced,
+                (
+                    advanced_states["A02"].wind_east_mps,
+                    advanced_states["A02"].wind_north_mps,
+                    advanced_states["A02"].wind_up_mps,
+                ),
+            )
+            course_delta_rad = math.atan2(
+                math.sin(
+                    advanced_states["A01"].ground_psi_rad
+                    - initial_ground_course_rad
+                ),
+                math.cos(
+                    advanced_states["A01"].ground_psi_rad
+                    - initial_ground_course_rad
+                ),
+            )
+            expected_course_rate_rad_s = course_delta_rad / controller._step_s
+            self.assertAlmostEqual(
+                math.radians(advanced_states["A01"].ground_psi_dot_deg_s),
+                expected_course_rate_rad_s,
+                delta=1e-9,
+            )
+            self.assertAlmostEqual(
+                _motion_from_aircraft_state(advanced_states["A01"]).v.dVPsi,
+                expected_course_rate_rad_s,
+                delta=1e-9,
+            )
+            advanced_snapshot = controller.get_snapshot()
+            self.assertEqual(
+                (
+                    advanced_snapshot.nodes[0].wind_east_mps,
+                    advanced_snapshot.nodes[0].wind_north_mps,
+                    advanced_snapshot.nodes[0].wind_up_mps,
+                ),
+                advanced,
+            )
+
+            self.assertEqual(controller.reset().code, "OK")
+            reset = controller._model.read_states()["A01"]
+            self.assertEqual(
+                (reset.wind_east_mps, reset.wind_north_mps, reset.wind_up_mps),
+                initial,
+            )
+
+    def test_expired_single_fault_does_not_clear_uncertainty_wind(self) -> None:
+        """唯一限时故障到期后只能撤销故障，初始化基础风必须继续生效。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            controller.load_config(str(_write_config(Path(tmp))), seed=2)
+            controller.inject_disturbance(
+                DisturbanceCommand(
+                    "node_fault",
+                    target="A02",
+                    duration_s=0.003,
+                    params={"mode": "fault"},
+                )
+            )
+
+            controller.step(2)
+
+            states = controller._model.read_states()
+            wind = states["A01"]
+            self.assertEqual(controller._disturbance.read_health()["A02"], "normal")
+            self.assertNotEqual(
+                (wind.wind_east_mps, wind.wind_north_mps, wind.wind_up_mps),
+                (0.0, 0.0, 0.0),
+            )
+            self.assertEqual(wind.wind_east_mps, states["A02"].wind_east_mps)
+            self.assertEqual(wind.wind_north_mps, states["A02"].wind_north_mps)
+            self.assertEqual(wind.wind_up_mps, states["A02"].wind_up_mps)
+
+    def test_default_seed_zero_ignores_seed_declared_in_config(self) -> None:
+        """调用方未指定运行 seed 时应使用默认 0，不读取配置中的历史 seed。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = _write_config(Path(tmp))
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["seed"] = 2
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(config_path))
+            wind = controller._model.read_states()["A01"]
+
+            self.assertEqual(result.code, "OK")
+            self.assertEqual(controller._seed, 0)
+            self.assertEqual(wind.wind_east_mps, 0.0)
+            self.assertEqual(wind.wind_north_mps, 0.0)
+            self.assertEqual(wind.wind_up_mps, 0.0)
+
+    def test_seed_one_applies_global_loss_and_restores_it_after_dynamic_loss(self) -> None:
+        """seed=1 应设置全链路 2.3% 丢包率，并在动态链路丢包到期后恢复该基线。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+            result = controller.load_config(str(_write_config(Path(tmp))), seed=1)
+
+            self.assertEqual(result.code, "OK")
+            self.assertTrue(controller.get_snapshot().links)
+            self.assertTrue(
+                all(link.loss_rate == 0.023 for link in controller.get_snapshot().links)
+            )
+
+            controller.inject_disturbance(
+                DisturbanceCommand(
+                    "link_loss",
+                    target="A01-A02",
+                    duration_s=0.003,
+                    params={"loss_rate": 0.9},
+                )
+            )
+            controller.step(2)
+
+            self.assertTrue(
+                all(link.loss_rate == 0.023 for link in controller.get_snapshot().links)
+            )
+
+    def test_seed_three_applies_global_link_frame_rate(self) -> None:
+        """seed=3 应把全链路发送帧频限制为 10 Hz，并在快照中保留实际值。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(_write_config(Path(tmp))), seed=3)
+
+            self.assertEqual(result.code, "OK")
+            self.assertIsNotNone(controller._disturbance.uncertainty_case)
+            self.assertEqual(
+                controller._disturbance.uncertainty_case.name,
+                "全链路发送帧频 10 Hz",
+            )
+            self.assertTrue(controller.get_snapshot().links)
+            self.assertTrue(
+                all(link.frame_rate_hz == 10.0 for link in controller.get_snapshot().links)
+            )
+
+    def test_seed_four_applies_global_link_latency(self) -> None:
+        """seed=4 应把全链路初始化时延设置为 50 ms。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            controller = SimulationController()
+            self.addCleanup(controller.close)
+
+            result = controller.load_config(str(_write_config(Path(tmp))), seed=4)
+
+            self.assertEqual(result.code, "OK")
+            self.assertIsNotNone(controller._disturbance.uncertainty_case)
+            self.assertEqual(
+                controller._disturbance.uncertainty_case.name,
+                "全链路时延 50 ms",
+            )
+            self.assertTrue(controller.get_snapshot().links)
+            self.assertTrue(
+                all(link.latency_ms == 50.0 for link in controller.get_snapshot().links)
+            )
 
     def test_snapshot_exposes_air_speed_ground_track_and_fur_loads(self) -> None:
         """节点快照应区分空速标量与地速航迹，并完整输出前、上、右载荷。"""
@@ -1270,13 +1522,13 @@ class SimulationControllerTests(unittest.TestCase):
 
             self.assertEqual(result.code, "OK")
             run_dirs = list((Path(tmp) / "logs").glob("run-*"))
-            lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+            lines = (run_dirs[0] / "snapshots_seed_0.jsonl").read_text(encoding="utf-8").splitlines()
             times = [round(json.loads(line)["time_s"], 6) for line in lines]
             # 每个算法拍都要有对应日志样本，耗时/指令/饱和序列才不会隔拍丢失。
             self.assertEqual(times, [0.05, 0.1, 0.15, 0.2])
 
     def test_timed_data_logger_persists_snapshot_files(self) -> None:
-        """关键数据日志应落盘到 logs/run-*/snapshots.jsonl，便于仿真后查找。"""
+        """关键数据日志应按 seed 命名落盘，便于仿真后查找。"""
         with tempfile.TemporaryDirectory() as tmp:
             cwd = Path.cwd()
             try:
@@ -1301,8 +1553,37 @@ class SimulationControllerTests(unittest.TestCase):
             self.assertEqual(len(run_dirs), 1)
             self.assertTrue((run_dirs[0] / "config.json").is_file())
             self.assertTrue((run_dirs[0] / "events.jsonl").is_file())
-            snapshot_lines = (run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()
+            snapshot_lines = (run_dirs[0] / "snapshots_seed_0.jsonl").read_text(encoding="utf-8").splitlines()
             self.assertEqual([round(json.loads(line)["time_s"], 6) for line in snapshot_lines], [0.1])
+
+    def test_snapshot_filename_and_run_directory_include_seed(self) -> None:
+        """运行目录和快照文件名应统一携带运行时 seed。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cwd = Path.cwd()
+            try:
+                os.chdir(tmp)
+                controller = SimulationController()
+                controller.set_file_log_enabled(True)
+                result = controller.run_until_complete(
+                    {
+                        "duration_s": 0.1,
+                        "step_s": 0.01,
+                        "nodes": [{"node_id": "A01"}],
+                        "links": [],
+                    },
+                    seed=2,
+                )
+                run_dir = controller._logger.run_dir
+
+                self.assertEqual(result.code, "OK")
+                self.assertIsNotNone(run_dir)
+                assert run_dir is not None
+                self.assertTrue(run_dir.name.startswith("run-seed-2-"))
+                self.assertTrue((run_dir / "snapshots_seed_2.jsonl").is_file())
+                controller.close()
+            finally:
+                os.chdir(cwd)
 
     def test_snapshot_log_contains_control_command_and_errors(self) -> None:
         """关键数据日志应包含控制目标指令和位置/速度误差，供后处理与 UI 复用。"""
@@ -1326,7 +1607,9 @@ class SimulationControllerTests(unittest.TestCase):
                 os.chdir(cwd)
 
             run_dirs = list((Path(tmp) / "logs").glob("run-*"))
-            payload = json.loads((run_dirs[0] / "snapshots.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            payload = json.loads(
+                (run_dirs[0] / "snapshots_seed_0.jsonl").read_text(encoding="utf-8").splitlines()[0]
+            )
             node = payload["nodes"][0]
 
             self.assertEqual(result.code, "OK")
@@ -1444,7 +1727,7 @@ class SimulationControllerTests(unittest.TestCase):
                 self.assertEqual(result.code, "OK")
                 assert controller._logger.run_dir is not None
                 self.assertTrue((controller._logger.run_dir / "config.json").is_file())
-                self.assertTrue((controller._logger.run_dir / "snapshots.jsonl").is_file())
+                self.assertTrue((controller._logger.run_dir / "snapshots_seed_0.jsonl").is_file())
                 self.assertTrue((controller._logger.run_dir / "events.jsonl").is_file())
                 controller.close()
             finally:
@@ -1471,7 +1754,7 @@ class SimulationControllerTests(unittest.TestCase):
                     assert controller._logger.run_dir is not None
                     records = [
                         json.loads(line)
-                        for line in (controller._logger.run_dir / "snapshots.jsonl")
+                        for line in (controller._logger.run_dir / "snapshots_seed_0.jsonl")
                         .read_text(encoding="utf-8")
                         .splitlines()
                     ]
@@ -1563,7 +1846,9 @@ class SimulationControllerTests(unittest.TestCase):
             finally:
                 os.chdir(cwd)
 
-            payload = json.loads((Path(tmp) / "logs" / "run-precision" / "snapshots.jsonl").read_text(encoding="utf-8"))
+            payload = json.loads(
+                (Path(tmp) / "logs" / "run-precision" / "snapshots_seed_0.jsonl").read_text(encoding="utf-8")
+            )
             node = payload["nodes"][0]
 
             self.assertEqual(payload["time_s"], 1.235)

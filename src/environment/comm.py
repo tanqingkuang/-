@@ -41,6 +41,7 @@ class LinkState:
     latency_ms: float
     loss_rate: float
     status: str
+    frame_rate_hz: float | None = None  # None 表示不限制发送帧频。
 
 
 def _validate_qos(latency_ms: float | None, loss_rate: float | None) -> None:
@@ -103,6 +104,8 @@ class CommunicationChannel:
         self._seed: int = 0
         self._time_s: float = 0.0
         self._base_links: dict[tuple[str, str], _LinkConfig] = {}
+        self._uncertainty_frame_rate_hz: float | None = None
+        self._last_frame_sent_s: dict[tuple[str, str], float] = {}
 
     def init(self, config: dict, seed: int) -> None:
         """按配置初始化 CommunicationChannel。注意：调用方需先准备好必要依赖和输入数据。"""
@@ -180,6 +183,8 @@ class CommunicationChannel:
         self._time_s: float = 0.0
         # 保存链路初始配置的深拷贝作为基线，reset() 据此撤销运行期注入的改动。
         self._base_links: dict[tuple[str, str], _LinkConfig] = copy.deepcopy(links)
+        self._uncertainty_frame_rate_hz = None
+        self._last_frame_sent_s = {}
 
     def reset(self) -> None:
         """复位 CommunicationChannel 的动态状态。注意：保留构造期依赖，只清理运行期数据。"""
@@ -192,6 +197,8 @@ class CommunicationChannel:
         # 用同一 seed 重建随机数发生器，保证复位后丢包序列可复现。
         self._rng = np.random.default_rng(self._seed)
         self._time_s = 0.0
+        # reset 后仿真时间从零开始，清除上一轮发送相位；运行级帧频基线保持不变。
+        self._last_frame_sent_s.clear()
 
     def close(self) -> None:
         """释放 CommunicationChannel 持有的资源。注意：关闭后不应继续调用运行接口。"""
@@ -199,6 +206,7 @@ class CommunicationChannel:
         self._links.clear()
         self._link_index.clear()
         self._in_flight.clear()
+        self._last_frame_sent_s.clear()
         for lst in self._inbox.values():
             lst.clear()
 
@@ -232,6 +240,8 @@ class CommunicationChannel:
 
     def send(self, messages: list[MessageEnvelope]) -> None:
         """发送一批通信消息。注意：链路丢失或丢包时消息可能被丢弃。"""
+        # 同一调用中相同链路、相同时间戳的多条消息属于一个发送帧，限流结论必须一致。
+        frame_decisions: dict[tuple[tuple[str, str], float], bool] = {}
         for msg in messages:
             # 源节点必须是已知节点，否则该消息无从发出，直接忽略。
             if msg.source not in self._inbox:
@@ -259,6 +269,13 @@ class CommunicationChannel:
                     continue
                 # 链路中断状态下整体不投递（区别于概率丢包）。
                 if cfg.status == "lost":
+                    continue
+                decision_key = (key, msg.timestamp)
+                frame_allowed = frame_decisions.get(decision_key)
+                if frame_allowed is None:
+                    frame_allowed = self._allow_frame(key, msg.timestamp)
+                    frame_decisions[decision_key] = frame_allowed
+                if not frame_allowed:
                     continue
                 # 伯努利丢包：以 loss_rate 概率丢弃本报文，体现链路误码/拥塞。
                 if self._rng.random() < cfg.loss_rate:
@@ -319,12 +336,62 @@ class CommunicationChannel:
                 latency_ms=cfg.latency_ms,
                 loss_rate=cfg.loss_rate,
                 status=cfg.status,
+                frame_rate_hz=self._uncertainty_frame_rate_hz,
             )
             for (src, dst), cfg in self._links.items()
         ]
         # 按链路 ID 排序，保证快照顺序稳定、便于上层折叠和显示比对。
         states.sort(key=lambda s: s.link_id)
         return states
+
+    def set_uncertainty_frame_rate_hz(self, frame_rate_hz: float) -> None:
+        """设置全链路初始化发送帧频。注意：该值在 reset 后仍作为本次运行基线。"""
+
+        normalized = _check_finite_num(frame_rate_hz, "frame_rate_hz")
+        if normalized <= 0:
+            raise ValueError(f"frame_rate_hz must be > 0, got {normalized}")
+        self._uncertainty_frame_rate_hz = normalized
+        # 初始化注入或显式重设帧频时从新相位开始，避免继承旧限流窗口。
+        self._last_frame_sent_s.clear()
+
+    def _allow_frame(self, key: tuple[str, str], timestamp_s: float) -> bool:
+        """判断当前链路发送帧是否通过帧频限制。注意：报文时间戳使用仿真时间。"""
+
+        frame_rate_hz = self._uncertainty_frame_rate_hz
+        if frame_rate_hz is None:
+            return True
+        last_sent_s = self._last_frame_sent_s.get(key)
+        period_s = 1.0 / frame_rate_hz
+        # 浮点时间在周期边界可能略小于理论值，容差只用于消除累计舍入误差。
+        if last_sent_s is not None and timestamp_s - last_sent_s < period_s - 1e-12:
+            return False
+        # 即使报文随后被概率丢弃，也已占用一次物理发送帧，下一帧仍需等待周期。
+        self._last_frame_sent_s[key] = timestamp_s
+        return True
+
+    def set_uncertainty_loss_rate(self, loss_rate: float) -> None:
+        """设置全链路初始化丢包率。注意：该值成为本次运行的 reset 基线。"""
+
+        normalized = _check_finite_num(loss_rate, "loss_rate")
+        _validate_qos(None, normalized)
+        # 只改变丢包概率，不重建 RNG；同一 seed 的后续随机序列仍然连续可复现。
+        # _links 是当前运行态，设置后首个发送周期立即按新概率判定。
+        # _base_links 是 reset 恢复源，必须同步为同一运行级不确定性基线。
+        # 同步更新运行态和复位基线，动态 QoS 到期或 reset 后都回到本次不确定性算例。
+        for links in (self._links, self._base_links):
+            for config in links.values():
+                config.loss_rate = normalized
+
+    def set_uncertainty_latency_ms(self, latency_ms: float) -> None:
+        """设置全链路初始化时延。注意：该值成为本次运行的 reset 基线。"""
+
+        # 复用 QoS 校验以保持配置与不确定性入口一致；零时延是合法的标称边界。
+        normalized = _check_finite_num(latency_ms, "latency_ms")
+        _validate_qos(normalized, None)
+        # 同步运行态和复位基线；后续动态 QoS 修改不会覆盖本次不确定性基线。
+        for links in (self._links, self._base_links):
+            for config in links.values():
+                config.latency_ms = normalized
 
     def inject_link_fault(
         self, link_id: str, status: str, duration_s: float | None = None

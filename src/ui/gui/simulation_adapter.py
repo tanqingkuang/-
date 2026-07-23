@@ -91,9 +91,10 @@ class ControllerSimulationAdapter:
             # 切到更短时长时只弹出队首过期点，不扫描或复制整个缓存。
             trail.expire(current_time, self.trail_seconds)
 
-    def load_config(self, path: str) -> Snapshot:
-        """读取并解析仿真配置文件。注意：文件路径由调用方保证存在且可读。"""
-        result = self.controller.load_config(path)
+    def load_config(self, path: str, *, seed: int = 0) -> Snapshot:
+        """按运行 seed 加载仿真配置。注意：seed 默认 0，不读取配置同名字段。"""
+        # GUI 与 BAT 使用同一入口语义：只传运行参数，不从场景文件反推 seed。
+        result = self.controller.load_config(path, seed=seed)
         self._record_result(result)
         # 仅在加载成功时重置缓存：清空旧尾迹/速度缓存，扰动复位为“无”。
         if result.code == "OK":

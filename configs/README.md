@@ -4,7 +4,7 @@
 
 模型 `limits` 中，`nx_min/max` 限制空速航迹前向过载，`n_normal_min/max` 限制非负法向合过载 `sqrt(ny^2+nz^2)`，`phi_min/max_deg` 限制右倾为正的滚转角；不对 `ny/nz` 分量分别配置独立限幅。
 
-顶层布尔字段 `log_enabled` 控制文件日志落盘（`logs/run-*/snapshots.jsonl`、`events.jsonl`、`config.json`），**默认 `false` 不落盘**，避免大数据量场景的 10Hz JSON 序列化与磁盘 IO 拖慢仿真；需要离线分析时在场景配置中显式写 `"log_enabled": true`。内存快照（GUI 尾迹/回放/日志窗口）不受该开关影响；自动化 ST 入口会无条件强制开启文件日志，场景文件无需声明。
+顶层布尔字段 `log_enabled` 控制文件日志落盘（`logs/run-seed-<seed>-*/snapshots_seed_<seed>.jsonl`、`events.jsonl`、`config.json`），**默认 `false` 不落盘**，避免大数据量场景的 10Hz JSON 序列化与磁盘 IO 拖慢仿真；需要离线分析时在场景配置中显式写 `"log_enabled": true`。内存快照（GUI 尾迹/回放/日志窗口）不受该开关影响；自动化 ST 入口会无条件强制开启文件日志，场景文件无需声明。运行 seed 是默认值为 0 的非负整数入参，配置文件中的历史 `seed` 字段不参与算例选择。
 
 ## `base.json`
 

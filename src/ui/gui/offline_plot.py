@@ -39,7 +39,7 @@ _X_MARGIN_S = 0.5  # X 轴右侧留白，避免末尾点被裁剪
 LOGGER = logging.getLogger(__name__)
 
 class OfflinePlotWindow(QDialog):
-    """离线控制误差回放绘图窗口。从 snapshots.jsonl 加载仿真记录并绘制完整时序曲线。"""
+    """离线控制误差回放绘图窗口。从 seed 快照加载仿真记录并绘制完整时序曲线。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化窗口控件与内部状态，构建顶栏、侧边栏和空图表区。"""
@@ -132,9 +132,9 @@ class OfflinePlotWindow(QDialog):
     # ── 数据加载 ──────────────────────────────────────────────────────────────
 
     def _choose_file(self) -> None:
-        """弹出文件选择对话框，加载选中的 snapshots.jsonl 文件。"""
+        """弹出文件选择对话框，加载选中的 seed 快照文件。"""
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择快照文件", "logs", "快照文件 (snapshots.jsonl *.jsonl)"
+            self, "选择快照文件", "logs", "快照文件 (snapshots_seed_*.jsonl)"
         )
         if path:
             self._load_file(path)

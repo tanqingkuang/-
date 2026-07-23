@@ -52,10 +52,13 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def run_scenario(config_path: str | Path, *, scenario: str | None = None, seed: int | None = None) -> ScenarioRun:
-    """运行一个 ST 场景并解析日志。注意：配置必须传文件路径，seed 以场景文件内固定值为准。"""
+    """运行一个 ST 场景并解析日志。注意：兼容层把旧场景 seed 转成显式运行入参。"""
 
     path = Path(config_path)
     scenario_name = scenario or path.stem
+    # ST 基线历史上把 seed 写在场景文件中；这里只负责读取并显式传给控制器，生产入口不再读取。
+    scenario_config = json.loads(path.read_text(encoding="utf-8"))
+    run_seed = int(scenario_config.get("seed", 0)) if seed is None else seed
     started = time.perf_counter()
     controller = SimulationController()
     # 文件日志默认关闭（见 log_enabled 开关），但 ST 三层检查依赖 snapshots/events 落盘，
@@ -63,9 +66,9 @@ def run_scenario(config_path: str | Path, *, scenario: str | None = None, seed: 
     controller.set_file_log_enabled(True)
     try:
         if _needs_planned_avoidance(path):
-            result = _run_with_planned_avoidance(controller, path)
+            result = _run_with_planned_avoidance(controller, path, run_seed)
         else:
-            result = controller.run_until_complete(str(path), seed=seed)
+            result = controller.run_until_complete(str(path), seed=run_seed)
         run_dir = _controller_run_dir(controller)
         controller.close()
         wall_time_s = time.perf_counter() - started
@@ -75,9 +78,9 @@ def run_scenario(config_path: str | Path, *, scenario: str | None = None, seed: 
         except Exception:
             pass
     if result.code == "OK" and run_dir is not None:
-        snapshots = read_jsonl(run_dir / "snapshots.jsonl")
-        events = read_jsonl(run_dir / "events.jsonl")
         config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+        snapshots = read_jsonl(run_dir / f"snapshots_seed_{int(config.get('seed', 0))}.jsonl")
+        events = read_jsonl(run_dir / "events.jsonl")
     else:
         snapshots = []
         events = []
@@ -93,7 +96,11 @@ def _needs_planned_avoidance(path: Path) -> bool:
     return isinstance(avoidance, dict) and bool(avoidance.get("enabled"))
 
 
-def _run_with_planned_avoidance(controller: SimulationController, path: Path) -> CommandResult:
+def _run_with_planned_avoidance(
+    controller: SimulationController,
+    path: Path,
+    seed: int,
+) -> CommandResult:
     """规划并采用避障航线后运行到结束。注意：全程使用公开控制器接口推进。"""
 
     raw = json.loads(path.read_text(encoding="utf-8"))
@@ -101,7 +108,7 @@ def _run_with_planned_avoidance(controller: SimulationController, path: Path) ->
     plan = _build_avoidance_plan(resolved)
     if plan.code != "OK":
         return CommandResult("ERR_CONFIG_INVALID", f"avoidance plan failed: {plan.code} {plan.detail}")
-    load = controller.load_config(str(path))
+    load = controller.load_config(str(path), seed=seed)
     if load.code != "OK":
         return load
     apply = controller.apply_avoidance_route(plan.route or [])

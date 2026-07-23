@@ -83,6 +83,10 @@ class NodeState:
     air_psi_v_deg: float = 0.0  # 空速航向角（度），左转为正。
     air_theta_deg: float = 0.0  # 空速航迹倾角（度），爬升为正。
     air_psi_dot_deg_s: float = 0.0  # 空速航向角速率（度/秒），用于物理限幅。
+    # 当前全局 ENU 风矢量显式落盘，避免离线分析从舍入后的地速与空速反推紊流。
+    wind_east_mps: float = 0.0
+    wind_north_mps: float = 0.0
+    wind_up_mps: float = 0.0
     # ground_speed_mps 是三维地速模长，而算法 vd 另有“水平地速”契约，二者不可互换。
     # air_psi_v_deg 与 psi_v_deg 在无风时相同，横风时分别代表机头气流方向和地面航迹方向。
     # air_theta_deg 与 theta_deg 在垂向风存在时可能不同，日志需同时保留以便追因。
@@ -147,6 +151,7 @@ class LinkState:
     latency_ms: float  # 折叠后时延（双工取两向最大）。
     loss_rate: float  # 折叠后丢包率（双工取两向最大）。
     status: str  # 折叠后状态（任一方向 lost 即 lost）。
+    frame_rate_hz: float | None = None  # 运行级发送帧频限制；None 表示标称节拍。
 
 
 @dataclass(frozen=True)

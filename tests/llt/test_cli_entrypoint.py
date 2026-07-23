@@ -25,7 +25,28 @@ class MainEntrypointTests(unittest.TestCase):
             exit_code = main.main(["--config", "configs/base.json"])
 
         self.assertEqual(exit_code, 0)
-        run_simulation.assert_called_once_with(Path("configs/base.json"), playback_rate=10.0)
+        run_simulation.assert_called_once_with(
+            Path("configs/base.json"),
+            playback_rate=10.0,
+            seed=0,
+        )
+
+    def test_main_forwards_seed_to_simulation(self) -> None:
+        """CLI 的 seed 应作为本次运行入参传入控制器链路。"""
+
+        from src import main
+
+        with patch.object(main, "run_simulation", return_value=0) as run_simulation:
+            exit_code = main.main(
+                ["--config", "configs/base.json", "--seed", "2"]
+            )
+
+        self.assertEqual(exit_code, 0)
+        run_simulation.assert_called_once_with(
+            Path("configs/base.json"),
+            playback_rate=10.0,
+            seed=2,
+        )
 
 
 class HeadlessRunnerTests(unittest.TestCase):
@@ -50,11 +71,18 @@ class HeadlessRunnerTests(unittest.TestCase):
             patch("src.main.SimulationController", return_value=controller),
             patch("src.main.time.sleep") as sleep,
         ):
-            exit_code = run_simulation(Path("configs/base.json"), playback_rate=10.0)
+            exit_code = run_simulation(
+                Path("configs/base.json"),
+                playback_rate=10.0,
+                seed=2,
+            )
 
         self.assertEqual(exit_code, 0)
         controller.set_file_log_enabled.assert_called_once_with(True)
-        controller.load_config.assert_called_once_with(str(Path("configs/base.json")))
+        controller.load_config.assert_called_once_with(
+            str(Path("configs/base.json")),
+            seed=2,
+        )
         controller.set_playback_rate.assert_called_once_with(10.0)
         controller.start.assert_called_once_with(auto_rally=True)
         controller.start_rally.assert_not_called()
@@ -89,8 +117,8 @@ class HeadlessRunnerTests(unittest.TestCase):
 class BatchBatTests(unittest.TestCase):
     """验证用户可双击的一键运行脚本契约。"""
 
-    def test_batch_bat_runs_headless_source_at_ten_times_rate(self) -> None:
-        """BAT 应直接按 10 倍速无界面运行源码，并固定使用 simulation_data。"""
+    def test_batch_bat_runs_headless_source_at_twenty_times_rate(self) -> None:
+        """BAT 应直接按 20 倍速无界面运行源码，并固定使用 simulation_data。"""
 
         script = (PROJECT_ROOT / "result" / "run_batch.bat").read_text(encoding="utf-8")
 
@@ -99,8 +127,13 @@ class BatchBatTests(unittest.TestCase):
         self.assertIn('"%SOURCE_PYTHON%" "%PROJECT_ROOT%\\src\\main.py"', script)
         self.assertNotIn("src\\ui\\gui\\main_window.py", script)
         self.assertIn("--config", script)
-        self.assertIn('set "PLAYBACK_RATE=10"', script)
+        self.assertIn('set "PLAYBACK_RATE=20"', script)
+        self.assertIn('set "SEEDS=0 1 2 3 4"', script)
+        self.assertIn('if not "%~3"=="" set "SEEDS=%~3"', script)
         self.assertIn('--rate "%PLAYBACK_RATE%"', script)
+        self.assertIn("for %%S in (%SEEDS%) do", script)
+        self.assertIn('start "seed-%%S" /min', script)
+        self.assertIn('--seed "%%S"', script)
         self.assertNotIn("--auto-run", script)
         self.assertNotIn("PyInstaller", script)
         self.assertNotIn("import PySide6", script)
@@ -109,7 +142,6 @@ class BatchBatTests(unittest.TestCase):
         self.assertIn("simulation_data", script)
         self.assertIn('if errorlevel 1 (', script)
         self.assertIn('[失败] 无法创建数据目录', script)
-        self.assertIn('[失败] 无法进入数据目录', script)
 
     def test_batch_bat_uses_windows_line_endings(self) -> None:
         """BAT 必须使用 CRLF，避免 CMD 将下一行首字符吞掉后直接退出。"""

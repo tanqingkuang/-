@@ -824,13 +824,16 @@ class Situation3DSceneDataTests(unittest.TestCase):
 
         deadline = time.monotonic() + 60.0
         height = layout_geometry_height()
-        while height < 2000.0 and time.monotonic() < deadline:
+        payload = json.loads(window.bridge.sceneData())
+        field_ready = bool(payload["terrain"]["surface"]["fieldReady"])
+        while (height < 2000.0 or not field_ready) and time.monotonic() < deadline:
             app.processEvents()
             time.sleep(0.05)
             height = layout_geometry_height()
+            payload = json.loads(window.bridge.sceneData())
+            field_ready = bool(payload["terrain"]["surface"]["fieldReady"])
         self.assertGreater(height, 2000.0, "READY 态下山地未自动替换占位地形")
-        payload = json.loads(window.bridge.sceneData())
-        self.assertTrue(payload["terrain"]["surface"]["fieldReady"])
+        self.assertTrue(field_ready, "READY 态下桥接数据未同步地形就绪状态")
         window.close()
 
     def test_layout_loading_cover_waits_for_ready_and_adjustable_minimum_duration(self) -> None:

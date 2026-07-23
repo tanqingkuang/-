@@ -30,6 +30,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="无界面运行一份编队仿真配置")
     parser.add_argument("--config", required=True, type=Path, help="仿真 JSON 配置文件路径")
     parser.add_argument("--rate", default=10.0, type=float, help="无界面运行倍率，默认 10 倍速")
+    # seed 是本次进程的运行参数，不从场景 JSON 推导，便于 BAT 批量替换。
+    parser.add_argument("--seed", default=0, type=int, help="不确定性算例及随机过程种子，默认 0")
     return parser.parse_args(argv)
 
 
@@ -40,14 +42,20 @@ def _print_status(message: str) -> None:
         print(message)
 
 
-def run_simulation(config_path: Path, *, playback_rate: float = 10.0) -> int:
+def run_simulation(
+    config_path: Path,
+    *,
+    playback_rate: float = 10.0,
+    seed: int = 0,
+) -> int:
     """按指定墙钟倍率无界面运行一份仿真，成功返回 0，失败返回 1。"""
 
     controller = SimulationController()
     try:
         # 无界面运行没有 GUI 内存回放入口，必须强制落盘供后续分析使用。
         controller.set_file_log_enabled(True)
-        result = controller.load_config(str(config_path))
+        # 显式传入控制器，确保配置文件中的历史 seed 字段不会覆盖 BAT 选择。
+        result = controller.load_config(str(config_path), seed=seed)
         if result.code != "OK":
             _print_status(f"仿真失败 [{result.code}]: {result.message}")
             return 1
@@ -63,7 +71,7 @@ def run_simulation(config_path: Path, *, playback_rate: float = 10.0) -> int:
         if result.code != "OK":
             _print_status(f"仿真失败 [{result.code}]: {result.message}")
             return 1
-        _print_status(f"仿真开始: {config_path}，倍率 {playback_rate:g}x")
+        _print_status(f"仿真开始: {config_path}，倍率 {playback_rate:g}x，seed={seed}")
         while True:
             snapshot = controller.get_snapshot()
             if snapshot.run_state == RunState.FINISHED:
@@ -90,7 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     """执行一键无界面仿真入口。"""
 
     args = _parse_args(list(sys.argv[1:] if argv is None else argv))
-    return run_simulation(args.config, playback_rate=args.rate)
+    return run_simulation(args.config, playback_rate=args.rate, seed=args.seed)
 
 
 if __name__ == "__main__":

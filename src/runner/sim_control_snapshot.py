@@ -75,6 +75,9 @@ class SimulationControllerSnapshotMixin:
                     air_psi_v_deg=state.psi_v_deg,
                     air_theta_deg=state.theta_deg,
                     air_psi_dot_deg_s=state.psi_dot_deg_s,
+                    wind_east_mps=state.wind_east_mps,
+                    wind_north_mps=state.wind_north_mps,
+                    wind_up_mps=state.wind_up_mps,
                     ground_speed_mps=state.ground_speed_mps,
                     vx_mps=state.ground_vx_mps,
                     vy_mps=state.ground_vy_mps,
@@ -183,6 +186,7 @@ class SimulationControllerSnapshotMixin:
                     latency_ms=max(state.latency_ms for state in directional_states),
                     loss_rate=max(state.loss_rate for state in directional_states),
                     status=status,
+                    frame_rate_hz=directional_states[0].frame_rate_hz,
                 )
             )
         return links

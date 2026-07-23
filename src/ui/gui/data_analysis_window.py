@@ -155,7 +155,7 @@ DEFAULT_CONV_HOLD_S = 5.0
 X_MARGIN_S = 0.5
 
 # 本窗口是人工离线观察工具，只报告物理量，不输出 PASS/FAIL 自动结论。
-# 输入契约只认 snapshots.jsonl，不读取 events/config，也不解释扰动原因。
+# 输入契约只认 seed 快照 JSONL，不读取 events/config，也不解释扰动原因。
 # A/B 是并列输入源，只做同表同图展示，不做差值、比值或自动结论。
 # 汇总表覆盖基础误差通道与扩展评测通道（几何裁判/过载/指令/耗时），
 # 扩展通道字段缺失（旧日志）时对应行显示空位；绘图通道单选不改变表格和导出内容。
@@ -243,7 +243,7 @@ class ChartPopupDialog(QDialog):
 
 
 class DataAnalysisWindow(QDialog):
-    """离线控制效果分析窗口。注意：只消费 snapshots.jsonl，不依赖仿真控制器。"""
+    """离线控制效果分析窗口。注意：只消费 seed 快照 JSONL，不依赖仿真控制器。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """初始化输入源、控件引用和界面布局。"""
@@ -319,7 +319,7 @@ class DataAnalysisWindow(QDialog):
             # 启用状态只控制参与分析，不会清空已经加载的文件数据。
             cb.toggled.connect(lambda checked, source_label=label: self._set_source_enabled(source_label, checked))
             self._source_checks[label] = cb
-            path_label = QLabel("未选择 snapshots.jsonl")
+            path_label = QLabel("未选择 snapshots_seed_<seed>.jsonl")
             path_label.setObjectName(f"offlinePath{label}")
             path_label.setMinimumWidth(320)
             path_label.setStyleSheet("color: #475569;")
@@ -566,7 +566,7 @@ class DataAnalysisWindow(QDialog):
             self,
             f"选择文件 {label}",
             "dist/logs",
-            "快照文件 (snapshots.jsonl *.jsonl)",
+            "快照文件 (snapshots_seed_*.jsonl)",
         )
         if path:
             self._load_file(label, path)
@@ -597,7 +597,7 @@ class DataAnalysisWindow(QDialog):
         source = self._sources[label]
         path_label = self._path_labels[label]
         if source.path is None:
-            path_label.setText("未选择 snapshots.jsonl")
+            path_label.setText("未选择 snapshots_seed_<seed>.jsonl")
             # 未选择文件时清空 tooltip，避免残留上一次路径。
             path_label.setToolTip("")
             return

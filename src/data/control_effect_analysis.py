@@ -744,7 +744,7 @@ def _choose_snapshot_file() -> Path | None:
         selected = filedialog.askopenfilename(
             title="选择要分析的仿真快照",
             initialdir=project_root / "result" / "simulation_data" / "logs",
-            filetypes=(("仿真快照", "snapshots.jsonl"), ("JSONL 文件", "*.jsonl")),
+            filetypes=(("仿真快照", "snapshots_seed_*.jsonl"),),
         )
     finally:
         root.destroy()
@@ -760,7 +760,7 @@ def _parse_cli_args(argv: list[str]) -> argparse.Namespace:
         "snapshot_file",
         type=Path,
         nargs="?",
-        help="要分析的 snapshots.jsonl；省略时弹出文件选择框",
+        help="要分析的 snapshots_seed_<seed>.jsonl；省略时弹出文件选择框",
     )
     parser.add_argument(
         "--output-root",
@@ -781,8 +781,8 @@ def main(argv: list[str] | None = None) -> int:
             print("已取消控制效果分析。")
             return 0
         snapshot_file = selected_file.resolve()
-        if snapshot_file.name.lower() != "snapshots.jsonl" or not snapshot_file.is_file():
-            raise ValueError(f"请选择有效的 snapshots.jsonl：{snapshot_file}")
+        if not snapshot_file.is_file():
+            raise ValueError(f"请选择有效的 snapshots_seed_<seed>.jsonl：{snapshot_file}")
         source = load_snapshot_samples(
             snapshot_file,
             label=snapshot_file.parent.name,

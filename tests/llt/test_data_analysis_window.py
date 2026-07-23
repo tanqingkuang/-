@@ -117,7 +117,7 @@ class DataAnalysisWindowTests(unittest.TestCase):
     def test_vertical_channel_buttons_switch_plot_channel(self) -> None:
         """垂向位置和垂向速度按钮应能切换当前绘图通道。"""
         with tempfile.TemporaryDirectory() as tmp:
-            path = self._write_snapshots(Path(tmp) / "snapshots.jsonl", offset=0.0)
+            path = self._write_snapshots(Path(tmp) / "snapshots_seed_0.jsonl", offset=0.0)
             window = DataAnalysisWindow()
             window.show()
             window._load_file("A", path)
@@ -183,7 +183,7 @@ class DataAnalysisWindowTests(unittest.TestCase):
     def test_loaded_file_displays_relative_path_when_under_workspace(self) -> None:
         """工作区内文件应在顶栏显示相对路径，而不是只显示文件名。"""
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as tmp:
-            path = self._write_snapshots(Path(tmp) / "snapshots.jsonl", offset=0.0)
+            path = self._write_snapshots(Path(tmp) / "snapshots_seed_0.jsonl", offset=0.0)
             window = DataAnalysisWindow()
             window.show()
             self.app.processEvents()
@@ -192,9 +192,9 @@ class DataAnalysisWindowTests(unittest.TestCase):
             self.app.processEvents()
 
             label_text = window._path_labels["A"].text()
-            self.assertNotEqual(label_text, "snapshots.jsonl")
-            self.assertTrue(label_text.endswith("snapshots.jsonl"))
-            self.assertIn("snapshots.jsonl", window._path_labels["A"].toolTip())
+            self.assertNotEqual(label_text, "snapshots_seed_0.jsonl")
+            self.assertTrue(label_text.endswith("snapshots_seed_0.jsonl"))
+            self.assertIn("snapshots_seed_0.jsonl", window._path_labels["A"].toolTip())
 
     def test_toggling_b_reuses_a_window_curve_cache(self) -> None:
         """B 图层显隐不应触发 A 图层的滑窗重复计算。"""

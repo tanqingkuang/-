@@ -26,7 +26,7 @@ SPEED_JUMP_MARGIN_FACTOR = 2.0
 # 物理限幅数值容差：日志已做小数舍入，保留 1e-2 量级余量。
 LIMIT_EPS = 0.05
 
-# 日志采样周期：当前控制器 snapshots.jsonl 固定 10Hz 落盘，不按 step_s 每积分步落盘。
+# 日志采样周期：当前控制器 seed 快照固定 10Hz 落盘，不按 step_s 每积分步落盘。
 LOG_SAMPLE_PERIOD_S = 0.1
 
 # T2 完成时间容差：只允许完成时间相对基线恶化 10%，变好仅提示刷新。

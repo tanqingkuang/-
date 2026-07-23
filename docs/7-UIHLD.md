@@ -118,7 +118,7 @@ UI 只调用仿真控制应用层接口。接口细节以 `docs/1-仿真控制HL
 
 UI 调用仿真控制：
 
-- `load_config(path)`
+- `load_config(path, seed=0)`：GUI 始终传入非负整数运行 seed，默认 0
 - `start()`
 - `pause()`
 - `step()`
