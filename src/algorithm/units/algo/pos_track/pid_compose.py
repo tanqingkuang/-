@@ -15,12 +15,29 @@ from src.algorithm.context.leaf_types import (
     PosTrackDiagS,
     copy_motion,
 )
-from src.algorithm.units.algo.formation_math import enu_to_track, track_to_enu
+from src.algorithm.units.algo.formation_math import clamp, enu_to_track, track_to_enu
 from src.algorithm.units.algo.pos_track.base import PosTrackBase, PosTrackInitS
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngle, LateralTrackAngleInitS
 
 if TYPE_CHECKING:
     from src.algorithm.entity.types import EntityRuntimeS
+
+
+_GRAVITY_MPS2 = 9.80665
+
+
+def _acceleration_bounds(
+    cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | None,
+) -> tuple[float, float]:
+    """取得单轴控制输出边界。注意：完整前馈与反馈共用同一执行层约束。"""
+    if isinstance(cfg, PPIInitS):
+        return cfg.accMin, cfg.accMax
+    if isinstance(cfg, LateralTrackAngleInitS):
+        limit = _GRAVITY_MPS2 * math.tan(cfg.rollMaxRad)
+        return -limit, limit
+    if isinstance(cfg, CtrlInitS) and cfg.outMax > 0.0:
+        return -cfg.outMax, cfg.outMax
+    return float("-inf"), float("inf")
 
 
 def _uses_position_error(cfg: CtrlInitS | PPIInitS | LateralTrackAngleInitS | None) -> bool:
@@ -101,6 +118,11 @@ class PidCompose(PosTrackBase):
         self._vertical: CtrlBase = Pid()
         self._diag_pos_enabled = (False, False, False)
         self._diag_vel_enabled = (False, False, False)
+        self._acceleration_bounds_track = (
+            (float("-inf"), float("inf")),
+            (float("-inf"), float("inf")),
+            (float("-inf"), float("inf")),
+        )
         self._u = PidComposeInputS()
         self._y = PidComposeOutputS()
         self._bound = False
@@ -140,6 +162,11 @@ class PidCompose(PosTrackBase):
             _uses_velocity_error(cfg.gainVertical),
             _uses_velocity_error(cfg.gainLateral),
         )
+        self._acceleration_bounds_track = (
+            _acceleration_bounds(cfg.gainForward),
+            _acceleration_bounds(cfg.gainVertical),
+            _acceleration_bounds(cfg.gainLateral),
+        )
 
     def step(self) -> None:
         """推进组合控制器。注意：只使用 bind 阶段绑定的专属端口。"""
@@ -147,8 +174,13 @@ class PidCompose(PosTrackBase):
             raise ValueError("PidCompose 尚未绑定端口")
         self._calculate(self._u, self._y)
 
-    def _calculate(self, u: PidComposeInputS, y: PidComposeOutputS) -> None:
-        """根据输入快照计算加速度和诊断。注意：本方法不访问黑板。"""
+    def _calculate(
+        self,
+        u: PidComposeInputS,
+        y: PidComposeOutputS,
+        acceleration_ff_enu: tuple[float, float, float] | None = None,
+    ) -> None:
+        """根据输入快照计算加速度和诊断。注意：可选目标加速度前馈使用 ENU 坐标。"""
         if u.selfCmd is None or u.selfState is None or y.accCmd is None:
             raise ValueError("PidCompose ports must be bound")
         if u.selfState.v.vd < self._v_min:
@@ -211,7 +243,11 @@ class PidCompose(PosTrackBase):
         # 必须用**本机自身地速** selfState.v.vd：飞机偏航率 psi_dot=a_lat/V_self(见 model.py)，
         # 要用前馈产生角速率 dVPsi 就得按本机速度换算 a_lat=dVPsi·V_self；用目标速度会在
         # V_self≠V_cmd(加减速/速度未收敛)时给出错误前馈。外/内侧僚机半径速度差异经 dVPsi 自动吸收。
-        lateral_ff = -u.selfCmd.v.dVPsi * u.selfState.v.vd
+        lateral_ff = (
+            -u.selfCmd.v.dVPsi * u.selfState.v.vd
+            if acceleration_ff_enu is None
+            else 0.0
+        )
         # 前向/法向：step(位置误差, 速度前馈, 实测速度)——Pid 走并联式、PPI 走串级 P+PI。
         # 横侧向：LateralTrackAngle 走串级 + 航迹角变限幅(消除大侧偏持续滚转→转圈)，需本机地速；
         #        无该配置时退回并联/串级 Pid(旧行为)。两路均叠加向心前馈 lateral_ff。
@@ -235,6 +271,18 @@ class PidCompose(PosTrackBase):
             self._vertical.step(pos_err[1], vel_ff[1], vel_actual[1]),
             lateral_acc,
         )
+        if acceleration_ff_enu is not None:
+            # 完整前馈先转入同一目标航迹系，再和反馈一起执行各轴总输出限幅。
+            # 这样前馈不会绕过前向/垂向加速度边界和侧向滚转角约束。
+            ff_track = enu_to_track(acceleration_ff_enu, frame)
+            acc_track = tuple(
+                clamp(value + feedforward, lower, upper)
+                for value, feedforward, (lower, upper) in zip(
+                    acc_track,
+                    ff_track,
+                    self._acceleration_bounds_track,
+                )
+            )
         acc_enu = track_to_enu(acc_track, frame)
         y.accCmd.accEast = acc_enu[0]
         y.accCmd.accNorth = acc_enu[1]

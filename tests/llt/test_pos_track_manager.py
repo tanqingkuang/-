@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import unittest
+from dataclasses import replace
 
 from src.algorithm.context.leaf_types import (
     AccInEarthS,
@@ -52,6 +54,25 @@ def _entity_cfg(profile: EntityProfileS = LEADER_PROFILE) -> EntityManagerInitS:
     )
 
 
+def _follower_profile(strategy: PosTrackStrategyE) -> EntityProfileS:
+    """复制僚机策略表并仅替换编队飞行阶段的位置跟踪产品。"""
+    return replace(
+        FOLLOWER_PROFILE,
+        route_changes=tuple(
+            replace(
+                change,
+                strategies=replace(
+                    change.strategies,
+                    pos_track=strategy,
+                ),
+            )
+            if change.strategies.pos_track == PosTrackStrategyE.PID_POSITION
+            else change
+            for change in FOLLOWER_PROFILE.route_changes
+        ),
+    )
+
+
 class PosTrackManagerTests(unittest.TestCase):
     """验证显式配置、固定映射和缓存产品。"""
 
@@ -77,6 +98,195 @@ class PosTrackManagerTests(unittest.TestCase):
                 PosTrackStrategyE.PID_POSITION,
             },
         )
+
+    def test_follower_profile_removes_turn_transport_and_centripetal_feedforward(self) -> None:
+        """无非惯性补偿产品应移除槽位运输速度和向心前馈，但不得改写位置解算原始指令。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        runtime.context.leaderState = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0, dVPsi=0.1),
+        )
+        runtime.context.leaderCmd = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0, dVPsi=0.1),
+        )
+        runtime.context.selfState = MotionProfS(
+            pos=PosInEarthS(40.0, -30.0, 500.0),
+            v=VdInEarthS(vEast=21.0, vNorth=-2.0, vd=(21.0**2 + 2.0**2) ** 0.5),
+        )
+        # r=(40,-30)，omega=0.1 时 omega×r=(3,4)；另保留 TD 重构速度 (1,-2)。
+        runtime.context.selfCmd = MotionProfS(
+            pos=PosInEarthS(40.0, -30.0, 500.0),
+            v=VdInEarthS(
+                vEast=24.0,
+                vNorth=2.0,
+                vd=(24.0**2 + 2.0**2) ** 0.5,
+                dVPsi=0.1,
+            ),
+        )
+        manager = PosTrackManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                _follower_profile(PosTrackStrategyE.PID_POSITION_NO_INERTIAL)
+            )
+        )
+
+        manager.step()
+
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accEast, 0.0)
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accNorth, 0.0)
+        self.assertAlmostEqual(runtime.context.effectiveCmd.v.vEast, 21.0)
+        self.assertAlmostEqual(runtime.context.effectiveCmd.v.vNorth, -2.0)
+        self.assertAlmostEqual(runtime.context.effectiveCmd.v.dVPsi, 0.0)
+        self.assertAlmostEqual(runtime.posTrackDiag.cmd_vel_east_mps, 21.0)
+        self.assertAlmostEqual(runtime.posTrackDiag.cmd_vel_north_mps, -2.0)
+        # 供其他模块读取的 PosCalc 原始目标不能被消融产品原地修改。
+        self.assertAlmostEqual(runtime.context.selfCmd.v.vEast, 24.0)
+        self.assertAlmostEqual(runtime.context.selfCmd.v.vNorth, 2.0)
+        self.assertAlmostEqual(runtime.context.selfCmd.v.dVPsi, 0.1)
+
+    def test_full_inertial_product_adds_leader_translational_acceleration(self) -> None:
+        """直线加速时完整产品应直接叠加长机平动加速度，现有位置反馈误差保持为零。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        runtime.context.selfState = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.selfCmd = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.leaderState = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.leaderAccCmd = AccInEarthS(2.0, 0.0, 0.0)
+        manager = PosTrackManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                _follower_profile(PosTrackStrategyE.PID_POSITION_FULL_INERTIAL)
+            )
+        )
+
+        manager.step()
+
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accEast, 2.0)
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accNorth, 0.0)
+
+    def test_full_inertial_product_limits_total_forward_acceleration(self) -> None:
+        """完整前馈与反馈叠加后的前向总加速度不得突破既有控制限幅。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        runtime.context.selfState = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.selfCmd = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.leaderState = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.leaderAccCmd = AccInEarthS(20.0, 0.0, 0.0)
+        manager = PosTrackManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                _follower_profile(PosTrackStrategyE.PID_POSITION_FULL_INERTIAL)
+            )
+        )
+
+        manager.step()
+
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accEast, 6.0)
+
+    def test_full_inertial_product_adds_angular_acceleration_and_rotating_slot_terms(self) -> None:
+        """变转率时完整产品应补出 alpha×r 和 omega×(omega×r)。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        runtime.context.selfState = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.selfCmd = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.leaderState = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        manager = PosTrackManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                _follower_profile(PosTrackStrategyE.PID_POSITION_FULL_INERTIAL)
+            )
+        )
+        runtime.context.leaderClock.now_s = 0.0
+        manager.step()
+
+        runtime.context.leaderClock.now_s = 1.0
+        runtime.context.selfCmd.v.dVPsi = 0.1
+        manager.step()
+
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accEast, -1.0)
+        self.assertAlmostEqual(
+            runtime.context.selfAccCmd.accNorth,
+            9.80665 * math.tan(math.radians(40.0)),
+        )
+
+    def test_full_inertial_alpha_uses_elapsed_time_between_new_yaw_rate_samples(self) -> None:
+        """重复读取旧转率时不得缩短角加速度差分时间。"""
+
+        runtime = _runtime()
+        runtime.context.cmd.stage = FormStageE.HOLD
+        runtime.context.cmd.step = RallyPhaseE.JOINING
+        runtime.context.selfState = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.selfCmd = MotionProfS(
+            pos=PosInEarthS(100.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        runtime.context.leaderState = MotionProfS(
+            pos=PosInEarthS(0.0, 0.0, 500.0),
+            v=VdInEarthS(vEast=20.0, vd=20.0),
+        )
+        manager = PosTrackManager()
+        manager.bind(runtime)
+        manager.init(
+            _entity_cfg(
+                _follower_profile(PosTrackStrategyE.PID_POSITION_FULL_INERTIAL)
+            )
+        )
+        for now_s in (0.0, 1.0, 2.0, 3.0):
+            # 本机时钟推进，但没有新长机报文，leaderClock 保持旧采样时刻。
+            runtime.context.clock.now_s = now_s
+            manager.step()
+
+        runtime.context.leaderClock.now_s = 4.0
+        runtime.context.selfCmd.v.dVPsi = 0.1
+        manager.step()
+
+        # alpha=0.1/4，r=(100,0)，故 alpha×r 的北向分量为 2.5。
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accEast, -1.0)
+        self.assertAlmostEqual(runtime.context.selfAccCmd.accNorth, 2.5)
 
     def test_stage_step_selects_cached_product_instead_of_pos_calc_command(self) -> None:
         """运行期应查完整表，不能继续按 PosCalc 控制命令选择产品。"""

@@ -39,6 +39,7 @@ class PosCalcStrategyE(IntEnum):
     ROUTE_INTERP = 1  # 长机：沿当前任务航段生成目标
     SLOT_GEOMETRY = 2  # 僚机：按长机状态解算编队槽位
     RALLY_JOIN = 3  # 集结：待命、转场、盘旋和切出
+    ROUTE_FORMATION = 4  # 僚机：按规划航线里程偏置解算编队目标
 
 
 class PosTrackStrategyE(IntEnum):
@@ -47,6 +48,8 @@ class PosTrackStrategyE(IntEnum):
     NOOP = 0  # 空控制产品
     PID_SPEED = 1  # 前向速度 PID 组合产品
     PID_POSITION = 2  # 前向位置和速度 PID 组合产品
+    PID_POSITION_NO_INERTIAL = 3  # 不含槽位旋转运输速度和转弯向心前馈的位置跟踪产品
+    PID_POSITION_FULL_INERTIAL = 4  # 完整运动学前馈产品：补充长机平动和角加速度项
 
 
 @dataclass
@@ -241,6 +244,13 @@ def copy_motion(src: MotionProfS, dst: MotionProfS) -> None:
     """复制运动状态对象，包含位置、速度和姿态信息。注意：嵌套对象需要逐层复制。"""
     copy_position(src.pos, dst.pos)
     copy_velocity(src.v, dst.v)
+
+
+def copy_acceleration(src: AccInEarthS, dst: AccInEarthS) -> None:
+    """复制地理系加速度。注意：用于协议入站原子提交和黑板复位。"""
+    dst.accEast = src.accEast
+    dst.accNorth = src.accNorth
+    dst.accUp = src.accUp
 
 
 def copy_pos_track_diag(src: PosTrackDiagS, dst: PosTrackDiagS) -> None:

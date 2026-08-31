@@ -1,0 +1,67 @@
+{
+  "experiment": {
+    "space_source": "docs\\编队跟随方案对比\\data\\航线里程跟随.json#SLOT_GEOMETRY",
+    "route_source": "docs\\编队跟随方案对比\\data\\航线里程跟随.json#ROUTE_FORMATION",
+    "frames_per_run": 3500,
+    "common_turn_window_s": [
+      40.0,
+      50.7
+    ],
+    "leader_max_frame_difference": 0.0
+  },
+  "theory": {
+    "turn_radius_m": 200.0,
+    "slot_offset_m": 100.0,
+    "leader_speed_mps": 20.0,
+    "yaw_rate_rad_s": 0.1,
+    "space_target_radius_m": 223.60679774997897,
+    "space_target_speed_mps": 22.360679774997898,
+    "space_target_centripetal_accel_mps2": 2.2360679774997902,
+    "space_target_bank_deg": 12.844725790952337,
+    "route_target_radius_m": 200.0,
+    "route_target_speed_mps": 20.0,
+    "route_target_centripetal_accel_mps2": 2.0,
+    "route_target_bank_deg": 11.527008320904656,
+    "route_chord_separation_m": 98.96158370180918
+  },
+  "measured": {
+    "空间队形跟随": {
+      "maneuver_start_s": 39.74000000000061,
+      "maneuver_end_s": 61.36000000000399,
+      "maneuver_duration_s": 21.62000000000338,
+      "maneuver_speed_mean_mps": 21.933955148160386,
+      "maneuver_speed_peak_mps": 24.18915468635868,
+      "maneuver_centripetal_accel_mean_mps2": 2.731190481035611,
+      "maneuver_centripetal_accel_peak_mps2": 10.541940527290015,
+      "maneuver_abs_roll_mean_deg": 14.872623169941999,
+      "maneuver_abs_roll_peak_deg": 47.06946628626632,
+      "maneuver_tracking_error_rms_m": 3.452977478357038,
+      "maneuver_tracking_error_peak_m": 7.437185915810161,
+      "common_turn_radius_mean_m": 224.3049255937666,
+      "common_turn_route_deviation_abs_mean_m": 24.304925593766587,
+      "common_turn_spatial_separation_mean_m": 98.8188552507678,
+      "common_turn_route_mileage_gap_mean_m": 91.21204917409304,
+      "common_turn_rigid_slot_error_mean_m": 2.7863839136304924,
+      "whole_run_minimum_separation_m": 97.60127634439843
+    },
+    "航线里程跟随": {
+      "maneuver_start_s": 35.1999999999999,
+      "maneuver_end_s": 52.50000000000261,
+      "maneuver_duration_s": 17.300000000002704,
+      "maneuver_speed_mean_mps": 20.02053532836144,
+      "maneuver_speed_peak_mps": 20.084183020879735,
+      "maneuver_centripetal_accel_mean_mps2": 1.9160712649444496,
+      "maneuver_centripetal_accel_peak_mps2": 2.8302965867064813,
+      "maneuver_abs_roll_mean_deg": 11.038493261501927,
+      "maneuver_abs_roll_peak_deg": 16.09866521452175,
+      "maneuver_tracking_error_rms_m": 0.33155565035201523,
+      "maneuver_tracking_error_peak_m": 1.8973223880498074,
+      "common_turn_radius_mean_m": 199.93743482019582,
+      "common_turn_route_deviation_abs_mean_m": 0.0625651798041854,
+      "common_turn_spatial_separation_mean_m": 98.45903617503787,
+      "common_turn_route_mileage_gap_mean_m": 99.49300010268973,
+      "common_turn_rigid_slot_error_mean_m": 24.732077509407866,
+      "whole_run_minimum_separation_m": 98.41238740449502
+    }
+  }
+}

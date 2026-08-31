@@ -31,6 +31,10 @@ from src.algorithm.units.algo.pos_calc.route_interp import (
     RouteInterpInputS,
     RouteInterpOutputS,
 )
+from src.algorithm.units.algo.pos_calc.route_formation import (
+    RouteFormation,
+    RouteFormationInitS,
+)
 from src.algorithm.units.algo.pos_calc.slot_geometry import (
     SlotGeometry,
     SlotGeometryInitS,
@@ -94,6 +98,571 @@ class FormationMathTests(unittest.TestCase):
         self.assertAlmostEqual(enu_to_track((0.0, 2.0, 3.0), northbound)[0], 2.0)
         self.assertAlmostEqual(enu_to_track((0.0, 2.0, 3.0), northbound)[1], 3.0)
         self.assertAlmostEqual(track_to_enu((2.0, 3.0, 0.0), northbound)[1], 2.0)
+
+
+class RouteFormationTests(unittest.TestCase):
+    """验证航线里程槽位与空间切线槽位具有不同且确定的几何语义。"""
+
+    def test_straight_route_uses_leader_progress_plus_forward_slot(self) -> None:
+        """直线上前方 100 m 槽位应落在长机规划里程前方 100 m。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=20.0, north=0.0, h=1000.0, v_east=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", 100.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(1000.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    )
+                ],
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, 120.0)
+        self.assertAlmostEqual(cxt.selfCmd.pos.north, 0.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.vEast, 20.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.dVPsi, 0.0)
+
+    def test_arc_route_keeps_forward_slot_on_same_radius(self) -> None:
+        """圆弧上前方槽位应沿弧长前移，不能落到长机切线外侧。"""
+
+        radius = 200.0
+        offset = 100.0
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=radius, north=0.0, h=1000.0, v_north=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", offset, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        start=PosInEarthS(radius, 0.0, 1000.0),
+                        end=PosInEarthS(0.0, radius, 1000.0),
+                        vdCmd=20.0,
+                        turnSign=1.0,
+                        center=PosInEarthS(0.0, 0.0, 1000.0),
+                    )
+                ],
+            )
+        )
+
+        strategy.step()
+
+        phase = offset / radius
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, radius * math.cos(phase))
+        self.assertAlmostEqual(cxt.selfCmd.pos.north, radius * math.sin(phase))
+        self.assertAlmostEqual(
+            math.hypot(cxt.selfCmd.pos.east, cxt.selfCmd.pos.north), radius
+        )
+        self.assertAlmostEqual(cxt.selfCmd.v.dVPsi, 20.0 / radius)
+
+    def test_route_progress_continues_beyond_last_endpoint(self) -> None:
+        """长机目标越过终点后，僚机目标应继续沿末段切线推进。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=1200.0, north=0.0, h=1000.0, v_east=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", -100.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(1000.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    )
+                ],
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, 1100.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.vEast, 20.0)
+
+    def test_route_velocity_follows_leader_progress_across_speed_boundary(self) -> None:
+        """僚机目标落在相邻变速航段时，速度前馈仍应匹配长机里程推进速度。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=110.0, h=1000.0, v_east=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", -20.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(100.0, 0.0, 1000.0),
+                        vdCmd=10.0,
+                    ),
+                    WayLineS(
+                        PosInEarthS(100.0, 0.0, 1000.0),
+                        PosInEarthS(200.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    ),
+                ],
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, 90.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.vEast, 20.0)
+
+    def test_route_start_extension_preserves_climb_slope(self) -> None:
+        """长机位于爬升航线起点前时，僚机目标高度应沿首段坡度连续延拓。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=-100.0, h=900.0, v_east=20.0, v_up=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", 0.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(100.0, 0.0, 1100.0),
+                        vdCmd=20.0,
+                    )
+                ],
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, -100.0)
+        self.assertAlmostEqual(cxt.selfCmd.pos.h, 900.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.vUp, 20.0)
+
+    def test_climbing_route_applies_vertical_slot_on_fur_up_axis(self) -> None:
+        """爬升航线的 slot.y 应沿 FUR 上法向旋转，不能直接当作 ENU 高度。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵向分层"],
+                formPos=[[FormPosS("F01", 0.0, 10.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(100.0, 0.0, 1100.0),
+                        vdCmd=20.0,
+                    )
+                ],
+            )
+        )
+
+        strategy.step()
+
+        offset = 10.0 / math.sqrt(2.0)
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, 20.0 - offset)
+        self.assertAlmostEqual(cxt.selfCmd.pos.north, 0.0)
+        self.assertAlmostEqual(cxt.selfCmd.pos.h, 1020.0 + offset)
+        self.assertAlmostEqual(cxt.selfCmd.v.vEast, 20.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.vUp, 20.0)
+
+    def test_vertical_transition_velocity_uses_fur_up_axis(self) -> None:
+        """爬升航线的 slot.y 重构速度应同时包含后向和天向分量。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        cxt.selfState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵向分层"],
+                formPos=[[FormPosS("F01", 0.0, 100.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(100.0, 0.0, 1100.0),
+                        vdCmd=20.0,
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=10.0,
+                vMaxVertical=10.0,
+                vMaxLateral=10.0,
+            )
+        )
+
+        strategy.step()
+
+        up_rate = 0.2 * strategy._td_vertical.x2
+        axis_component = up_rate / math.sqrt(2.0)
+        self.assertAlmostEqual(cxt.selfCmd.v.vEast, 20.0 - axis_component)
+        self.assertAlmostEqual(cxt.selfCmd.v.vUp, 20.0 + axis_component)
+
+    def test_direct_hold_seeds_transition_from_current_aircraft_state(self) -> None:
+        """直接保持从任意部署点接入时，首拍目标不得跳到最终航线槽位。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.selfState = _motion(east=-440.0, north=20.0, h=1005.0, v_east=20.0)
+        cxt.leaderState = _motion(east=-438.0, north=0.0, h=1000.0, v_east=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", -40.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(1000.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=5.0,
+                vMaxVertical=3.0,
+                vMaxLateral=4.0,
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, cxt.selfState.pos.east, places=2)
+        self.assertAlmostEqual(cxt.selfCmd.pos.north, cxt.selfState.pos.north, places=2)
+        first_target_error = math.sqrt(
+            (cxt.selfCmd.pos.east - cxt.selfState.pos.east) ** 2
+            + (cxt.selfCmd.pos.north - cxt.selfState.pos.north) ** 2
+            + (cxt.selfCmd.pos.h - cxt.selfState.pos.h) ** 2
+        )
+        self.assertLess(first_target_error, 0.1)
+
+    def test_direct_hold_seeds_rising_route_from_self_route_progress(self) -> None:
+        """爬升航线接入时应按本机里程播种，首拍目标不得重复叠加高度差。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        cxt.selfState = _motion(east=120.0, h=1120.0, v_east=20.0, v_up=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", 0.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(200.0, 0.0, 1200.0),
+                        vdCmd=20.0,
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=10.0,
+                vMaxVertical=10.0,
+                vMaxLateral=10.0,
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, cxt.selfState.pos.east, places=2)
+        self.assertAlmostEqual(cxt.selfCmd.pos.h, cxt.selfState.pos.h, places=2)
+
+    def test_direct_hold_seeds_fur_up_offset_without_first_target_jump(self) -> None:
+        """爬升航线上带上法向偏置接入时，TD 首拍目标应保持在本机当前位置。"""
+
+        offset = 10.0 / math.sqrt(2.0)
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        cxt.selfState = _motion(
+            east=120.0 - offset,
+            h=1120.0 + offset,
+            v_east=20.0,
+            v_up=20.0,
+        )
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵向分层"],
+                formPos=[[FormPosS("F01", 0.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(200.0, 0.0, 1200.0),
+                        vdCmd=20.0,
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=10.0,
+                vMaxVertical=10.0,
+                vMaxLateral=10.0,
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, cxt.selfState.pos.east, places=2)
+        self.assertAlmostEqual(cxt.selfCmd.pos.h, cxt.selfState.pos.h, places=2)
+
+    def test_direct_hold_seeds_arc_route_from_self_route_progress(self) -> None:
+        """圆弧航线接入时应使用本机弧长而非长机切线弦长播种前向槽位。"""
+
+        radius = 200.0
+        leader_phase = 0.1
+        follower_phase = 0.6
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(
+            east=radius * math.cos(leader_phase),
+            north=radius * math.sin(leader_phase),
+            h=1000.0,
+            v_east=-20.0 * math.sin(leader_phase),
+            v_north=20.0 * math.cos(leader_phase),
+        )
+        cxt.selfState = _motion(
+            east=radius * math.cos(follower_phase),
+            north=radius * math.sin(follower_phase),
+            h=1000.0,
+            v_east=-20.0 * math.sin(follower_phase),
+            v_north=20.0 * math.cos(follower_phase),
+        )
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", 0.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(radius, 0.0, 1000.0),
+                        PosInEarthS(0.0, radius, 1000.0),
+                        vdCmd=20.0,
+                        turnSign=1.0,
+                        center=PosInEarthS(0.0, 0.0, 1000.0),
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=10.0,
+                vMaxVertical=10.0,
+                vMaxLateral=10.0,
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.pos.east, cxt.selfState.pos.east, places=2)
+        self.assertAlmostEqual(cxt.selfCmd.pos.north, cxt.selfState.pos.north, places=2)
+
+    def test_arc_progress_speed_accounts_for_off_route_radius(self) -> None:
+        """长机偏离规划圆半径时，目标速度应匹配投影点的实际里程推进速度。"""
+
+        radius = 200.0
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=250.0, h=1000.0, v_north=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", 0.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(radius, 0.0, 1000.0),
+                        PosInEarthS(0.0, radius, 1000.0),
+                        vdCmd=20.0,
+                        turnSign=1.0,
+                        center=PosInEarthS(0.0, 0.0, 1000.0),
+                    )
+                ],
+            )
+        )
+
+        strategy.step()
+
+        self.assertAlmostEqual(cxt.selfCmd.v.vNorth, 16.0)
+
+    def test_forward_transition_velocity_follows_route_slope_and_offset_curvature(self) -> None:
+        """前向槽位重构速度应同步作用于航线坡度和横向偏置圆弧。"""
+
+        rising = FormContextS()
+        rising.cmd.pattern = 0
+        rising.leaderState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        rising.selfState = _motion(east=20.0, h=1020.0, v_east=20.0, v_up=20.0)
+        rising_strategy = RouteFormation()
+        rising_strategy.bind(rising)
+        rising_strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["纵队"],
+                formPos=[[FormPosS("F01", 100.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(200.0, 0.0, 1200.0),
+                        vdCmd=20.0,
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=10.0,
+                vMaxVertical=10.0,
+                vMaxLateral=10.0,
+            )
+        )
+        rising_strategy.step()
+        self.assertAlmostEqual(rising.selfCmd.v.vUp, rising.selfCmd.v.vEast)
+
+        radius = 200.0
+        turning = FormContextS()
+        turning.cmd.pattern = 0
+        turning.leaderState = _motion(east=radius, h=1000.0, v_north=20.0)
+        turning.selfState = _motion(east=radius + 50.0, h=1000.0, v_north=25.0)
+        turning_strategy = RouteFormation()
+        turning_strategy.bind(turning)
+        turning_strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["斜向"],
+                formPos=[[FormPosS("F01", 100.0, 0.0, 50.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(radius, 0.0, 1000.0),
+                        PosInEarthS(0.0, radius, 1000.0),
+                        vdCmd=20.0,
+                        turnSign=1.0,
+                        center=PosInEarthS(0.0, 0.0, 1000.0),
+                    )
+                ],
+                control_period_s=0.02,
+                vMaxForward=10.0,
+                vMaxVertical=10.0,
+                vMaxLateral=10.0,
+            )
+        )
+        turning_strategy.step()
+        transition_speed = 0.2 * turning_strategy._td_forward.x2
+        self.assertAlmostEqual(
+            turning.selfCmd.v.vNorth,
+            (20.0 + transition_speed) * (1.0 + 50.0 / radius),
+        )
+
+    def test_direct_hold_uses_independent_forward_and_lateral_limits(self) -> None:
+        """直接保持的槽位过渡应分别服从前向和侧向权限。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.selfState = _motion(east=0.0, north=0.0, h=1000.0, v_east=20.0)
+        cxt.leaderState = _motion(east=0.0, north=0.0, h=1000.0, v_east=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["斜向"],
+                formPos=[[FormPosS("F01", 100.0, 0.0, 100.0)]],
+                route=[
+                    WayLineS(
+                        start=PosInEarthS(0.0, 0.0, 1000.0),
+                        end=PosInEarthS(1000.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    )
+                ],
+                control_period_s=0.02,
+                rForward=1.0,
+                rLateral=10.0,
+                vMaxForward=20.0,
+                vMaxLateral=20.0,
+            )
+        )
+
+        for _ in range(50):
+            strategy.step()
+
+        self.assertGreater(abs(cxt.selfCmd.pos.north), cxt.selfCmd.pos.east)
+
+    def test_closed_route_starts_from_zero_and_keeps_progress_monotonic(self) -> None:
+        """闭合航线首尾重合时应从起点开始，经过拐点后里程只能向前推进。"""
+
+        cxt = FormContextS()
+        cxt.cmd.pattern = 0
+        cxt.leaderState = _motion(east=0.0, north=0.0, h=1000.0, v_east=20.0)
+        strategy = RouteFormation()
+        strategy.bind(cxt)
+        strategy.init(
+            RouteFormationInitS(
+                selfId="F01",
+                formPat=["闭合"],
+                formPos=[[FormPosS("F01", 0.0, 0.0, 0.0)]],
+                route=[
+                    WayLineS(
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        PosInEarthS(100.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    ),
+                    WayLineS(
+                        PosInEarthS(100.0, 0.0, 1000.0),
+                        PosInEarthS(100.0, 100.0, 1000.0),
+                        vdCmd=20.0,
+                    ),
+                    WayLineS(
+                        PosInEarthS(100.0, 100.0, 1000.0),
+                        PosInEarthS(0.0, 100.0, 1000.0),
+                        vdCmd=20.0,
+                    ),
+                    WayLineS(
+                        PosInEarthS(0.0, 100.0, 1000.0),
+                        PosInEarthS(0.0, 0.0, 1000.0),
+                        vdCmd=20.0,
+                    ),
+                ],
+            )
+        )
+
+        strategy.step()
+        first_s = strategy._leader_s_m
+        cxt.leaderState.pos.east = 100.0
+        cxt.leaderState.pos.north = 20.0
+        strategy.step()
+
+        self.assertAlmostEqual(first_s, 0.0)
+        self.assertIsNotNone(strategy._leader_s_m)
+        self.assertGreater(strategy._leader_s_m, 100.0)
 
     def test_horizontal_rally_adapter_ignores_vertical_velocity(self) -> None:
         """验证集结松散点专用二维适配器只按水平任务航向旋转，不冒充三维 FUR。"""

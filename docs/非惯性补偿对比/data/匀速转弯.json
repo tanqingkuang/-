@@ -1,0 +1,52 @@
+{
+  "duration_s": 70.0,
+  "step_s": 0.02,
+  "algorithm_decimation": 1,
+  "seed": 41,
+  "route": {
+    "speed_mps": 20.0,
+    "waypoints": [
+      {"latitude_deg": 39.0, "longitude_deg": 116.0, "altitude_m": 1000.0, "R": 0.0},
+      {"latitude_deg": 39.0, "longitude_deg": 116.0069263, "altitude_m": 1000.0, "R": 200.0},
+      {"latitude_deg": 39.0054043, "longitude_deg": 116.0069263, "altitude_m": 1000.0, "R": 0.0}
+    ]
+  },
+  "formation": {
+    "coordinate_system": "x_forward_y_up_z_right",
+    "reference_node_id": "A01",
+    "formation_files": ["../../../configs/element/formations/triangle_3_aircraft_a01_a03.json"]
+  },
+  "model": {
+    "gravity_mps2": 9.80665,
+    "min_speed_mps": 1.0,
+    "acceleration_filter": {"natural_frequency_rad_s": 4.0, "damping_ratio": 0.65},
+    "limits": {
+      "acceleration_command_mps2": 20.0,
+      "max_climb_rate_mps": 4.0,
+      "max_descent_rate_mps": 4.0,
+      "nx_min": -1.0,
+      "nx_max": 1.0,
+      "n_normal_min": 0.0,
+      "n_normal_max": 4.0,
+      "phi_min_deg": -70.0,
+      "phi_max_deg": 70.0
+    }
+  },
+  "control": {
+    "velocity_command_limits": {
+      "forward_min_mps": 10.0,
+      "forward_max_mps": 30.0,
+      "vertical_min_mps": -4.0,
+      "vertical_max_mps": 4.0
+    }
+  },
+  "nodes": [
+    {"node_id": "A01", "role": "leader", "x_m": 0.0, "y_m": 0.0, "altitude_m": 1000.0, "psi_v_deg": 0.0, "speed_mps": 20.0},
+    {"node_id": "A02", "role": "wingman", "x_m": -54.0, "y_m": 58.0, "altitude_m": 1000.0, "psi_v_deg": 0.0, "speed_mps": 20.0},
+    {"node_id": "A03", "role": "wingman", "x_m": -54.0, "y_m": -58.0, "altitude_m": 1000.0, "psi_v_deg": 0.0, "speed_mps": 20.0}
+  ],
+  "links": [
+    {"link_id": "A01-A02", "direction": "duplex", "latency_ms": 0.0, "loss_rate": 0.0, "status": "normal"},
+    {"link_id": "A01-A03", "direction": "duplex", "latency_ms": 0.0, "loss_rate": 0.0, "status": "normal"}
+  ]
+}

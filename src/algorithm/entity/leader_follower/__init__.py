@@ -102,13 +102,13 @@ FOLLOWER_PROFILE = EntityProfileS(
                 pos_track=PosTrackStrategyE.PID_SPEED,
             ),
         ),
-        # CATCHUP 起切到最终槽位几何，LOOSE/HOLD 继续继承且不做渐进缩放。
-        # 僚机没有任务航线规划，位置跟踪使用槽位位置闭环。
+        # CATCHUP 起按公共任务航线里程生成队形目标，LOOSE/HOLD 继续继承。
+        # 僚机没有独立航迹规划，位置跟踪使用航线里程目标闭环。
         EntityRouteChangeS(
             state=(FormStageE.RALLY, RallyPhaseE.CATCHUP),
             strategies=EntityStrategiesS(
                 tra_plan=TraPlanStrategyE.NOOP,
-                pos_calc=PosCalcStrategyE.SLOT_GEOMETRY,
+                pos_calc=PosCalcStrategyE.ROUTE_FORMATION,
                 pos_track=PosTrackStrategyE.PID_POSITION,
             ),
         ),

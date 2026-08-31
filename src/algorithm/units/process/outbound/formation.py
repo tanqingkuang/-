@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable
 
 from src.algorithm.context.leaf_types import (
+    AccInEarthS,
     CommDirE,
     FormSnapshotS,
     FormStageE,
@@ -18,6 +19,7 @@ from src.algorithm.context.leaf_types import (
 from src.algorithm.units.process.formation_protocol import (
     FOLLOWER_STATUS_TOPIC,
     LEADER_BROADCAST_TOPIC,
+    acceleration_payload,
     motion_payload,
 )
 from src.algorithm.units.process.outbound.base import (
@@ -47,6 +49,7 @@ class FormationOutboundInputS:
     selfState: MotionProfS | None = None
     selfCmd: MotionProfS | None = None
     effectiveCmd: MotionProfS | None = None
+    selfAccCmd: AccInEarthS | None = None
     rallyPlan: RallyPlanS | None = None
     posCalcStatus: PosCalcStatusS | None = None
 
@@ -79,6 +82,7 @@ class FormationOutbound(OutboundBase):
             selfState=cxt.selfState,
             selfCmd=cxt.selfCmd,
             effectiveCmd=cxt.effectiveCmd,
+            selfAccCmd=cxt.selfAccCmd,
             rallyPlan=cxt.rallyPlan,
             posCalcStatus=cxt.posCalcStatus,
         )
@@ -136,7 +140,14 @@ class FormationOutbound(OutboundBase):
 
     def _write_leader_broadcast(self, u: FormationOutboundInputS, y: FormationOutboundOutputS) -> None:
         """生成长机广播。注意：目标由通信拓扑推导，不向自身发送。"""
-        if u.cmd is None or u.selfState is None or u.selfCmd is None or u.effectiveCmd is None or u.rallyPlan is None:
+        if (
+            u.cmd is None
+            or u.selfState is None
+            or u.selfCmd is None
+            or u.effectiveCmd is None
+            or u.selfAccCmd is None
+            or u.rallyPlan is None
+        ):
             raise ValueError("FormationOutbound leader ports must be bound")
         # 圈数计划将被僚机直接执行，必须在发送前整体校验。
         # bool 虽是 int 子类，但不能充当圈数；负数同样没有协议语义。
@@ -165,6 +176,7 @@ class FormationOutbound(OutboundBase):
                 timestamp=0.0,
                 payload={
                     "leader_state": motion_payload(u.selfState),
+                    "leader_acc_cmd": acceleration_payload(u.selfAccCmd),
                     "cmd": {
                         "stage": int(u.cmd.stage),
                         "pattern": int(u.cmd.pattern),

@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from src.algorithm.context.leaf_types import (
+    AccInEarthS,
     AlgorithmClockS,
     FollowerStateS,
     FormSnapshotS,
     MotionProfS,
     RallyPlanS,
+    copy_acceleration,
     copy_follower_state,
     copy_motion,
     copy_snapshot,
@@ -47,7 +50,9 @@ class FormationInboundOutputS:
     """统一入站私有输出端口。注意：只暴露协议解析需要更新的黑板字段。"""
 
     leaderState: MotionProfS | None = None
+    leaderClock: AlgorithmClockS | None = None
     leaderCmd: MotionProfS | None = None
+    leaderAccCmd: AccInEarthS | None = None
     cmd: FormSnapshotS | None = None
     rallyPlan: RallyPlanS | None = None
     followerStates: list[FollowerStateS] | None = None
@@ -68,7 +73,9 @@ class FormationInbound(InboundBase):
         self._u = FormationInboundInputS(inbox=runtime.inbox, clock=cxt.clock)
         self._y = FormationInboundOutputS(
             leaderState=cxt.leaderState,
+            leaderClock=cxt.leaderClock,
             leaderCmd=cxt.leaderCmd,
+            leaderAccCmd=cxt.leaderAccCmd,
             cmd=cxt.cmd,
             rallyPlan=cxt.rallyPlan,
             followerStates=cxt.followerStates,
@@ -103,7 +110,7 @@ class FormationInbound(InboundBase):
             # topic 是唯一解析路由依据，角色和任务阶段不参与通信解析。
             # 未知 topic 属于其他业务流，统一入站应直接忽略而不是报错。
             if message.topic == LEADER_BROADCAST_TOPIC:
-                self._apply_leader_message(message.payload, y)
+                self._apply_leader_message(message.payload, message.timestamp, y)
             elif message.topic == FOLLOWER_STATUS_TOPIC:
                 parsed = _parse_follower_status(message, u.clock.now_s)
                 if parsed is None:
@@ -120,23 +127,42 @@ class FormationInbound(InboundBase):
         """复位入站单元。注意：运行期数据由 Context 所有者统一清理。"""
         return None
 
-    def _apply_leader_message(self, payload: object, y: FormationInboundOutputS) -> None:
+    def _apply_leader_message(
+        self,
+        payload: object,
+        timestamp_s: float,
+        y: FormationInboundOutputS,
+    ) -> None:
         """解析并提交长机广播。注意：任何字段非法时整条消息丢弃。"""
         # 解析函数先构造完整临时结果，失败时黑板保持上一份有效快照。
         # 只有全部字段通过校验后，状态、指令和计划才一起提交。
         if not isinstance(payload, dict):
             return
+        if not math.isfinite(timestamp_s):
+            return
         try:
             parsed = _parse_leader_broadcast(payload)
         except (TypeError, ValueError, OverflowError):
             return
-        if y.leaderState is None or y.leaderCmd is None or y.cmd is None or y.rallyPlan is None:
+        if (
+            y.leaderState is None
+            or y.leaderClock is None
+            or y.leaderCmd is None
+            or y.leaderAccCmd is None
+            or y.cmd is None
+            or y.rallyPlan is None
+        ):
             raise ValueError("FormationInbound leader ports must be bound")
+        # 动态链路时延可能使旧报文后到；不得用旧快照回退控制和角速度差分基准。
+        if timestamp_s < y.leaderClock.now_s:
+            return
         # 嵌套对象按字段复制，维持其他单元在 init 时绑定的引用。
         # 状态、指令和协调计划来自同一报文，禁止跨报文拼接半份快照。
         # 圈数映射先清后写，避免新计划缺少的旧节点继续保留分配。
         copy_motion(parsed.leader_state, y.leaderState)
+        y.leaderClock.now_s = timestamp_s
         copy_motion(parsed.leader_cmd, y.leaderCmd)
+        copy_acceleration(parsed.leader_acc_cmd, y.leaderAccCmd)
         copy_snapshot(parsed.cmd, y.cmd)
         y.rallyPlan.t_ref = parsed.t_ref
         y.rallyPlan.loop_counts.clear()

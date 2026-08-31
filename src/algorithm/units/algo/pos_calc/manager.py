@@ -25,8 +25,10 @@ from src.algorithm.units.algo.pos_calc.rally_join_pos import (
     route_heading_rad,
 )
 from src.algorithm.units.algo.pos_calc.route_interp import RouteInterp, RouteInterpInitS
+from src.algorithm.units.algo.pos_calc.route_formation import RouteFormation, RouteFormationInitS
 from src.algorithm.units.algo.pos_calc.slot_geometry import SlotGeometry, SlotGeometryInitS
 from src.algorithm.units.process.formation_task.rally import RallyTaskInitS
+from src.algorithm.units.process.tra_plan.leader_route import waypoint_inputs_to_waylines
 
 if TYPE_CHECKING:
     from src.algorithm.entity.types import (
@@ -170,6 +172,29 @@ class PosCalcManager:
                     vMaxLateral=v_lat,
                 )
             strategy.init(init_cfg)
+            return strategy
+        if strategy_type == PosCalcStrategyE.ROUTE_FORMATION:  # 僚机航线里程编队解算产品
+            strategy = RouteFormation()
+            control_period_s = 0.0
+            v_forward = 0.0
+            v_vertical = 0.0
+            v_lateral = 0.0
+            if not cfg.rally_enabled:
+                v_forward, v_vertical, v_lateral = _slot_td_vmax(cfg.velCmdLimit)
+                control_period_s = cfg.control_period_s
+            strategy.init(
+                RouteFormationInitS(
+                    selfId=cfg.selfInit.id,
+                    formPat=cfg.commInit.formPat,
+                    formPos=cfg.commInit.formPos,
+                    route=waypoint_inputs_to_waylines(cfg.route),
+                    control_period_s=control_period_s,
+                    vMaxForward=v_forward,
+                    vMaxVertical=v_vertical,
+                    vMaxLateral=v_lateral,
+                    catchupAltitudeM=cfg.rally_layer_altitude_m,
+                )
+            )
             return strategy
         if strategy_type == PosCalcStrategyE.RALLY_JOIN:  # 待命到切出的有状态集结产品
             strategy = RallyJoinPos()

@@ -15,7 +15,9 @@ from src.algorithm.units.algo.pos_track.base import (
     PosTrackBase,
     PosTrackInitS,
 )
+from src.algorithm.units.algo.pos_track.full_inertial import FullInertialPidCompose
 from src.algorithm.units.algo.pos_track.lateral_track_angle import LateralTrackAngleInitS
+from src.algorithm.units.algo.pos_track.no_inertial import NoInertialPidCompose
 from src.algorithm.units.algo.pos_track.pid_compose import PidCompose, PidComposeInitS
 
 if TYPE_CHECKING:
@@ -144,12 +146,28 @@ def _build_pid_position(cfg: EntityInitS) -> PosTrackBase:
     return strategy
 
 
+def _build_pid_position_no_inertial(cfg: EntityInitS) -> PosTrackBase:
+    """创建不含槽位旋转运输速度和转弯向心前馈的位置跟踪产品。"""
+    strategy = NoInertialPidCompose()
+    strategy.init(_pid_position_init(cfg.control_period_s, cfg.velCmdLimit))
+    return strategy
+
+
+def _build_pid_position_full_inertial(cfg: EntityInitS) -> PosTrackBase:
+    """创建包含长机平动、角加速度和旋转向心项的实验位置跟踪产品。"""
+    strategy = FullInertialPidCompose()
+    strategy.init(_pid_position_init(cfg.control_period_s, cfg.velCmdLimit))
+    return strategy
+
+
 _StrategyBuilder = Callable[["EntityInitS"], PosTrackBase]
 _BUILDERS: dict[PosTrackStrategyE, _StrategyBuilder] = {
     # 建造表只在 init 使用；运行期 registry 保存的是已建对象。
     PosTrackStrategyE.NOOP: _build_noop,
     PosTrackStrategyE.PID_SPEED: _build_pid_speed,
     PosTrackStrategyE.PID_POSITION: _build_pid_position,
+    PosTrackStrategyE.PID_POSITION_NO_INERTIAL: _build_pid_position_no_inertial,
+    PosTrackStrategyE.PID_POSITION_FULL_INERTIAL: _build_pid_position_full_inertial,
 }
 
 

@@ -13,6 +13,7 @@ from src.algorithm.context.leaf_types import (
     PosCalcStatusS,
     RallyPlanS,
     WayLineS,
+    copy_acceleration,
     copy_motion,
     copy_snapshot,
     copy_wayline,
@@ -27,7 +28,9 @@ class FormContextS:
     wayLine: WayLineS = field(default_factory=WayLineS)  # 当前跟踪航段(航路规划产出)
     nextWayLine: WayLineS = field(default_factory=WayLineS)  # 下一航段(供曲率前馈前瞻跨段采样)
     leaderState: MotionProfS = field(default_factory=MotionProfS)  # 长机状态(僚机由入站解析得到)
+    leaderClock: AlgorithmClockS = field(default_factory=AlgorithmClockS)  # 长机状态报文采样时刻
     leaderCmd: MotionProfS = field(default_factory=MotionProfS)  # 长机目标指令(僚机由入站解析得到)
+    leaderAccCmd: AccInEarthS = field(default_factory=AccInEarthS)  # 长机加速度指令(僚机由同拍广播得到)
     selfCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机目标运动状态(位置解算产出)
     effectiveCmd: MotionProfS = field(default_factory=MotionProfS)  # 本机有效运动指令(位置跟踪写/出站读)
     selfState: MotionProfS = field(default_factory=MotionProfS)  # 本机实测运动状态(外部反馈)
@@ -46,14 +49,13 @@ def reset_context(dst: FormContextS) -> None:
     copy_wayline(fresh.wayLine, dst.wayLine)  # 重置当前航段
     copy_wayline(fresh.nextWayLine, dst.nextWayLine)  # 重置下一航段
     copy_motion(fresh.leaderState, dst.leaderState)  # 重置长机状态
+    dst.leaderClock.now_s = fresh.leaderClock.now_s  # 重置长机状态采样时刻
     copy_motion(fresh.leaderCmd, dst.leaderCmd)  # 重置长机目标指令
+    copy_acceleration(fresh.leaderAccCmd, dst.leaderAccCmd)  # 重置长机加速度指令
     copy_motion(fresh.selfCmd, dst.selfCmd)  # 重置本机目标状态
     copy_motion(fresh.effectiveCmd, dst.effectiveCmd)  # 重置本机有效运动指令
     copy_motion(fresh.selfState, dst.selfState)  # 重置本机实测状态
-    # 加速度指令逐分量清零(无 copy 辅助函数，直接赋值)
-    dst.selfAccCmd.accEast = fresh.selfAccCmd.accEast
-    dst.selfAccCmd.accNorth = fresh.selfAccCmd.accNorth
-    dst.selfAccCmd.accUp = fresh.selfAccCmd.accUp
+    copy_acceleration(fresh.selfAccCmd, dst.selfAccCmd)  # 重置本机加速度指令
     dst.posCalcStatus.rally_state = fresh.posCalcStatus.rally_state
     dst.posCalcStatus.planned_path_length_m = fresh.posCalcStatus.planned_path_length_m
     dst.clock.now_s = fresh.clock.now_s

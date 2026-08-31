@@ -109,6 +109,14 @@ class PosCalcManagerTests(unittest.TestCase):
             expected,
         )
 
+    def test_follower_profile_uses_route_formation_after_joining(self) -> None:
+        """通用僚机进入编队飞行后应使用航线里程位置解算和位置控制。"""
+
+        hold = FOLLOWER_PROFILE.require_strategies(FormStageE.HOLD, RallyPhaseE.JOINING)
+
+        self.assertEqual(hold.pos_calc, PosCalcStrategyE.ROUTE_FORMATION)
+        self.assertEqual(hold.pos_track, PosTrackStrategyE.PID_POSITION)
+
     def test_manager_creates_only_pos_calc_products_used_by_profile_table(self) -> None:
         """实例集合应从完整路由表按列去重，不能再读取旧策略能力表。"""
 
@@ -269,8 +277,8 @@ class PosCalcManagerTests(unittest.TestCase):
         self.assertIs(manager._registry[PosCalcStrategyE.RALLY_JOIN], rally_product)
         self.assertIs(manager._registry[PosCalcStrategyE.ROUTE_INTERP], route_product)
 
-    def test_direct_hold_keeps_slot_transition_differentiator_enabled(self) -> None:
-        """统一僚机直接进入 HOLD 时应保留原保持场景的槽位 TD。"""
+    def test_direct_hold_creates_route_formation_without_rally_product(self) -> None:
+        """统一僚机直接进入 HOLD 时只创建任务实际需要的航线编队产品。"""
 
         runtime = _runtime()
         cfg = _entity_cfg(
@@ -288,9 +296,10 @@ class PosCalcManagerTests(unittest.TestCase):
         manager.bind(runtime)
         manager.init(cfg)
 
-        slot_product = manager._registry[PosCalcStrategyE.SLOT_GEOMETRY]
+        route_product = manager._registry[PosCalcStrategyE.ROUTE_FORMATION]
         self.assertNotIn(PosCalcStrategyE.RALLY_JOIN, manager._registry)
-        self.assertTrue(slot_product._td_enabled)  # type: ignore[attr-defined]
+        self.assertIs(route_product._u.leaderState, runtime.context.leaderState)  # type: ignore[attr-defined]
+        self.assertIs(route_product._u.selfState, runtime.context.selfState)  # type: ignore[attr-defined]
 
     def test_manager_writes_runtime_status_to_bound_output(self) -> None:
         """Manager 应原地更新绑定状态，供黑板其他单元读取上一拍结果。"""
@@ -402,13 +411,12 @@ class PosCalcManagerTests(unittest.TestCase):
                 ),
             )
         )
-        slot = follower_manager._registry[PosCalcStrategyE.SLOT_GEOMETRY]
-        self.assertFalse(hasattr(slot, "_cxt"))
-        self.assertIs(slot._u.selfState, follower_cxt.selfState)  # type: ignore[attr-defined]
-        self.assertIs(slot._u.leaderState, follower_cxt.leaderState)  # type: ignore[attr-defined]
-        self.assertIs(slot._u.leaderCmd, follower_cxt.leaderCmd)  # type: ignore[attr-defined]
-        self.assertIs(slot._u.cmd, follower_cxt.cmd)  # type: ignore[attr-defined]
-        self.assertIs(slot._y.selfCmd, follower_cxt.selfCmd)  # type: ignore[attr-defined]
+        route_formation = follower_manager._registry[PosCalcStrategyE.ROUTE_FORMATION]
+        self.assertFalse(hasattr(route_formation, "_cxt"))
+        self.assertIs(route_formation._u.leaderState, follower_cxt.leaderState)  # type: ignore[attr-defined]
+        self.assertIs(route_formation._u.selfState, follower_cxt.selfState)  # type: ignore[attr-defined]
+        self.assertIs(route_formation._u.cmd, follower_cxt.cmd)  # type: ignore[attr-defined]
+        self.assertIs(route_formation._y.selfCmd, follower_cxt.selfCmd)  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

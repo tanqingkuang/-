@@ -1,0 +1,76 @@
+{
+  "experiments": [
+    {
+      "name": "匀速转弯",
+      "config": "docs\\非惯性补偿对比\\data\\匀速转弯.json",
+      "baseline_mode": "none",
+      "compensated_mode": "rotation",
+      "leader_max_state_difference": 0.0,
+      "baseline": {
+        "frames": 785,
+        "samples": 1570,
+        "position_error_rms_m": 28.458998676673026,
+        "position_error_peak_m": 41.105390782436594,
+        "horizontal_acceleration_rms_mps2": 1.79890471964002,
+        "horizontal_acceleration_peak_mps2": 2.5686173276319217
+      },
+      "compensated": {
+        "frames": 785,
+        "samples": 1570,
+        "position_error_rms_m": 2.013229054163904,
+        "position_error_peak_m": 5.182642642508075,
+        "horizontal_acceleration_rms_mps2": 2.6908339084873356,
+        "horizontal_acceleration_peak_mps2": 7.777541193812181
+      },
+      "error_reduction_percent": 92.92586124678348
+    },
+    {
+      "name": "直线加减速",
+      "config": "docs\\非惯性补偿对比\\data\\直线加减速.json",
+      "baseline_mode": "rotation",
+      "compensated_mode": "full",
+      "leader_max_state_difference": 0.0,
+      "baseline": {
+        "frames": 738,
+        "samples": 1476,
+        "position_error_rms_m": 0.21720558159082032,
+        "position_error_peak_m": 0.3222956079157484,
+        "horizontal_acceleration_rms_mps2": 2.1794734130563502,
+        "horizontal_acceleration_peak_mps2": 6.0
+      },
+      "compensated": {
+        "frames": 738,
+        "samples": 1476,
+        "position_error_rms_m": 1.4961755942869956,
+        "position_error_peak_m": 2.842794766523241,
+        "horizontal_acceleration_rms_mps2": 2.5889441090781484,
+        "horizontal_acceleration_peak_mps2": 6.0
+      },
+      "error_reduction_percent": -588.8292572082909
+    },
+    {
+      "name": "S弯变转率",
+      "config": "docs\\非惯性补偿对比\\data\\S弯变转率.json",
+      "baseline_mode": "rotation",
+      "compensated_mode": "full",
+      "leader_max_state_difference": 0.0,
+      "baseline": {
+        "frames": 804,
+        "samples": 1608,
+        "position_error_rms_m": 3.314847720475244,
+        "position_error_peak_m": 6.561712994970569,
+        "horizontal_acceleration_rms_mps2": 3.8634428509241925,
+        "horizontal_acceleration_peak_mps2": 8.577206885377018
+      },
+      "compensated": {
+        "frames": 804,
+        "samples": 1608,
+        "position_error_rms_m": 2.6770101123666366,
+        "position_error_peak_m": 5.31176128526102,
+        "horizontal_acceleration_rms_mps2": 4.118115298113359,
+        "horizontal_acceleration_peak_mps2": 10.183930079248357
+      },
+      "error_reduction_percent": 19.24183739026062
+    }
+  ]
+}

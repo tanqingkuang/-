@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <defs>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .title{font-family:'Microsoft YaHei';font-size:28px;font-weight:700;fill:#172033}
+      .subtitle{font-family:'Microsoft YaHei';font-size:20px;font-weight:700;fill:#334155}
+      .label{font-family:'Microsoft YaHei';font-size:17px;fill:#334155}
+      .small{font-family:'Microsoft YaHei';font-size:14px;fill:#475569}
+      .strong{font-family:'Microsoft YaHei';font-size:18px;font-weight:700;fill:#172033}
+      .tick{font-family:'Microsoft YaHei';font-size:14px;fill:#64748b}
+    </style>
+  </defs>
+
+  <rect width="1200" height="650" fill="#f8fafc"/>
+  <text x="600" y="38" text-anchor="middle" class="title">当前控制下僚机退出转弯后的预期轨迹</text>
+
+  <rect x="24" y="60" width="830" height="560" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="439" y="94" text-anchor="middle" class="subtitle">由仿真日志复原；为看清回钩，横向偏差约放大 10 倍</text>
+
+  <!-- 出弯后的目标直线，x=1000 m。 -->
+  <line x1="600" y1="572" x2="600" y2="120" stroke="#2563eb" stroke-width="5" stroke-dasharray="12 8" marker-end="url(#arrow-blue)"/>
+  <text x="625" y="205" class="strong">出弯后的目标直线</text>
+  <text x="625" y="230" class="label">横向位置 x = 1000 m</text>
+
+  <!-- 僚机实际轨迹方向按仿真日志中的关键位置绘制。 -->
+  <path d="M805 588
+           C790 558 770 526 750 500
+           C680 482 580 464 532 454
+           C480 442 440 423 424 411
+           C420 395 425 380 434 367
+           C452 332 484 296 509 274
+           C542 230 566 170 580 140
+           C589 125 597 116 600 112"
+        fill="none" stroke="#ea580c" stroke-width="8" marker-end="url(#arrow-orange)"/>
+
+  <text x="732" y="554" class="strong">圆弧末段</text>
+
+  <!-- 仿真关键采样点。 -->
+  <circle cx="750" cy="500" r="8" fill="#ea580c"/>
+  <circle cx="532" cy="454" r="8" fill="#ea580c"/>
+  <circle cx="424" cy="411" r="8" fill="#ea580c"/>
+  <circle cx="434" cy="367" r="8" fill="#ea580c"/>
+  <circle cx="509" cy="274" r="8" fill="#ea580c"/>
+  <circle cx="580" cy="140" r="8" fill="#ea580c"/>
+
+  <line x1="750" y1="500" x2="825" y2="500" stroke="#94a3b8" stroke-width="2"/>
+  <text x="825" y="493" text-anchor="end" class="strong">55 s：仍朝左前方飞</text>
+  <text x="825" y="518" text-anchor="end" class="small">x = 1006.23 m，航向 112.36°</text>
+
+  <line x1="532" y1="454" x2="350" y2="470" stroke="#94a3b8" stroke-width="2"/>
+  <text x="336" y="464" text-anchor="end" class="strong">56 s：越过目标直线</text>
+  <text x="336" y="488" text-anchor="end" class="small">x = 997.16 m</text>
+
+  <line x1="424" y1="411" x2="300" y2="405" stroke="#94a3b8" stroke-width="2"/>
+  <text x="286" y="399" text-anchor="end" class="strong">57 s：继续向左偏</text>
+  <text x="286" y="423" text-anchor="end" class="small">x = 992.67 m，航向 93.42°</text>
+
+  <line x1="434" y1="367" x2="300" y2="340" stroke="#94a3b8" stroke-width="2"/>
+  <text x="286" y="334" text-anchor="end" class="strong">58 s：开始向右修正</text>
+  <text x="286" y="358" text-anchor="end" class="small">x = 993.07 m，航向 86.28°</text>
+
+  <line x1="509" y1="274" x2="365" y2="250" stroke="#94a3b8" stroke-width="2"/>
+  <text x="351" y="244" text-anchor="end" class="strong">60 s：逐渐靠近</text>
+  <text x="351" y="268" text-anchor="end" class="small">x = 996.19 m</text>
+
+  <line x1="580" y1="140" x2="380" y2="140" stroke="#94a3b8" stroke-width="2"/>
+  <text x="366" y="134" text-anchor="end" class="strong">64 s：基本回到直线</text>
+  <text x="366" y="158" text-anchor="end" class="small">x = 999.17 m，航向 89.22°</text>
+
+  <line x1="250" y1="575" x2="730" y2="575" stroke="#64748b" stroke-width="2"/>
+  <line x1="360" y1="568" x2="360" y2="582" stroke="#64748b" stroke-width="2"/>
+  <line x1="480" y1="568" x2="480" y2="582" stroke="#64748b" stroke-width="2"/>
+  <line x1="600" y1="568" x2="600" y2="582" stroke="#64748b" stroke-width="2"/>
+  <line x1="720" y1="568" x2="720" y2="582" stroke="#64748b" stroke-width="2"/>
+  <text x="360" y="605" text-anchor="middle" class="tick">990 m</text>
+  <text x="480" y="605" text-anchor="middle" class="tick">995 m</text>
+  <text x="600" y="605" text-anchor="middle" class="tick">1000 m</text>
+  <text x="720" y="605" text-anchor="middle" class="tick">1005 m</text>
+  <text x="250" y="605" text-anchor="middle" class="tick">横向位置 x</text>
+
+  <rect x="882" y="60" width="294" height="560" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1029" y="98" text-anchor="middle" class="subtitle">轨迹为什么“拐回来”</text>
+
+  <circle cx="920" cy="148" r="19" fill="#fff7ed" stroke="#ea580c" stroke-width="3"/>
+  <text x="920" y="155" text-anchor="middle" class="strong">1</text>
+  <text x="952" y="144" class="strong">目标航向先跳到 90°</text>
+  <text x="952" y="170" class="label">真实飞机仍保持原航向</text>
+
+  <line x1="920" y1="181" x2="920" y2="220" stroke="#cbd5e1" stroke-width="3"/>
+  <circle cx="920" cy="242" r="19" fill="#fff7ed" stroke="#ea580c" stroke-width="3"/>
+  <text x="920" y="249" text-anchor="middle" class="strong">2</text>
+  <text x="952" y="238" class="strong">惯性使其继续左偏</text>
+  <text x="952" y="264" class="label">穿过 x=1000 m 直线</text>
+
+  <line x1="920" y1="275" x2="920" y2="314" stroke="#cbd5e1" stroke-width="3"/>
+  <circle cx="920" cy="336" r="19" fill="#fff7ed" stroke="#ea580c" stroke-width="3"/>
+  <text x="920" y="343" text-anchor="middle" class="strong">3</text>
+  <text x="952" y="332" class="strong">控制器向右修正</text>
+  <text x="952" y="358" class="label">航向一度小于 90°</text>
+
+  <line x1="920" y1="369" x2="920" y2="408" stroke="#cbd5e1" stroke-width="3"/>
+  <circle cx="920" cy="430" r="19" fill="#eff6ff" stroke="#2563eb" stroke-width="3"/>
+  <text x="920" y="437" text-anchor="middle" class="strong">4</text>
+  <text x="952" y="426" class="strong">最终捕获直线</text>
+  <text x="952" y="452" class="label">横向误差逐渐归零</text>
+
+  <rect x="908" y="495" width="242" height="92" rx="12" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="1029" y="526" text-anchor="middle" class="strong">橙线就是预期僚机轨迹</text>
+  <text x="1029" y="553" text-anchor="middle" class="label">不是标准圆，也不会在</text>
+  <text x="1029" y="577" text-anchor="middle" class="label">圆弧终点立即变成直线</text>
+</svg>

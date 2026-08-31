@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="650" viewBox="0 0 1200 650">
+  <defs>
+    <marker id="arrow-orange" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#ea580c"/>
+    </marker>
+    <marker id="arrow-blue" markerWidth="9" markerHeight="9" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2563eb"/>
+    </marker>
+    <style>
+      .title{font-family:'Microsoft YaHei';font-size:28px;font-weight:700;fill:#172033}
+      .subtitle{font-family:'Microsoft YaHei';font-size:20px;font-weight:700;fill:#334155}
+      .label{font-family:'Microsoft YaHei';font-size:17px;fill:#334155}
+      .small{font-family:'Microsoft YaHei';font-size:14px;fill:#475569}
+      .strong{font-family:'Microsoft YaHei';font-size:18px;font-weight:700;fill:#172033}
+      .formula{font-family:'Microsoft YaHei';font-size:21px;font-weight:700;fill:#172033}
+    </style>
+  </defs>
+
+  <rect width="1200" height="650" fill="#f8fafc"/>
+  <text x="600" y="38" text-anchor="middle" class="title">直线—90°圆弧—直线过程中的槽位目标线</text>
+
+  <rect x="24" y="60" width="824" height="566" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="436" y="94" text-anchor="middle" class="subtitle">每个蓝点沿飞行切线前移 100 m，得到对应橙点</text>
+
+  <!-- 长机航线：进入直线、90°左转圆弧、退出直线。 -->
+  <path d="M90 500 L430 500 A170 170 0 0 0 600 330 L600 105"
+        fill="none" stroke="#2563eb" stroke-width="8"/>
+  <line x1="120" y1="500" x2="205" y2="500" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow-blue)"/>
+  <line x1="600" y1="195" x2="600" y2="110" stroke="#2563eb" stroke-width="4" marker-end="url(#arrow-blue)"/>
+
+  <!-- 槽位目标点的完整连线：直线段与长机航线重合，圆弧段变为更大半径。 -->
+  <path d="M175 500 L515 500 A190.07 190.07 0 0 0 600 245 L600 105"
+        fill="none" stroke="#ea580c" stroke-width="6" stroke-dasharray="13 8"/>
+
+  <!-- 圆弧上的代表长机点及其切线前方 100 m 槽位点。 -->
+  <line x1="430" y1="500" x2="515" y2="500" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  <line x1="474.0" y1="494.2" x2="556.1" y2="472.2" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  <line x1="515" y1="477.2" x2="588.6" y2="434.7" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  <line x1="550.2" y1="450.2" x2="610.3" y2="390.1" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  <line x1="577.2" y1="415" x2="619.7" y2="341.4" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  <line x1="594.2" y1="374" x2="616.2" y2="291.9" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+  <line x1="600" y1="330" x2="600" y2="245" stroke="#fb923c" stroke-width="3" marker-end="url(#arrow-orange)"/>
+
+  <!-- 长机采样点。 -->
+  <g fill="#2563eb" stroke="#fff" stroke-width="2">
+    <circle cx="430" cy="500" r="8"/><circle cx="474.0" cy="494.2" r="8"/>
+    <circle cx="515" cy="477.2" r="8"/><circle cx="550.2" cy="450.2" r="8"/>
+    <circle cx="577.2" cy="415" r="8"/><circle cx="594.2" cy="374" r="8"/>
+    <circle cx="600" cy="330" r="8"/>
+  </g>
+
+  <!-- 僚机槽位采样点。 -->
+  <g fill="#ea580c" stroke="#fff" stroke-width="2">
+    <circle cx="515" cy="500" r="9"/><circle cx="556.1" cy="472.2" r="9"/>
+    <circle cx="588.6" cy="434.7" r="9"/><circle cx="610.3" cy="390.1" r="9"/>
+    <circle cx="619.7" cy="341.4" r="9"/><circle cx="616.2" cy="291.9" r="9"/>
+    <circle cx="600" cy="245" r="9"/>
+  </g>
+
+  <!-- 圆心和半径。 -->
+  <circle cx="430" cy="330" r="7" fill="#172033"/>
+  <line x1="430" y1="330" x2="600" y2="330" stroke="#64748b" stroke-width="2"/>
+  <line x1="430" y1="330" x2="430" y2="500" stroke="#64748b" stroke-width="2"/>
+  <text x="413" y="319" text-anchor="end" class="label">圆心 C</text>
+  <text x="500" y="320" class="strong">R = 200 m</text>
+
+  <!-- 分段标签。 -->
+  <text x="180" y="475" class="strong">进入直线</text>
+  <text x="655" y="460" class="strong">90°左转</text>
+  <text x="624" y="135" class="strong">退出直线</text>
+  <text x="235" y="530" class="small">蓝线与橙色虚线重合</text>
+  <text x="624" y="187" class="small">蓝线与橙色虚线重合</text>
+
+  <line x1="619.7" y1="341.4" x2="744" y2="317" stroke="#ea580c" stroke-width="2"/>
+  <text x="752" y="311" class="strong">橙色圆弧：</text>
+  <text x="752" y="336" class="label">槽位位置的连线</text>
+
+  <rect x="70" y="555" width="730" height="48" rx="10" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="435" y="585" text-anchor="middle" class="strong">完整橙线就是：进入直线 → 外侧圆弧 → 退出直线。</text>
+
+  <rect x="876" y="60" width="300" height="566" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2"/>
+  <text x="1026" y="98" text-anchor="middle" class="subtitle">如何理解这条线</text>
+
+  <line x1="910" y1="139" x2="970" y2="139" stroke="#2563eb" stroke-width="7"/>
+  <text x="988" y="145" class="strong">长机航线</text>
+  <line x1="910" y1="181" x2="970" y2="181" stroke="#ea580c" stroke-width="6" stroke-dasharray="11 7"/>
+  <text x="988" y="187" class="strong">槽位目标线</text>
+
+  <rect x="904" y="220" width="244" height="132" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="1026" y="252" text-anchor="middle" class="strong">直线段</text>
+  <text x="1026" y="288" text-anchor="middle" class="label">槽位在同一条直线上</text>
+  <text x="1026" y="318" text-anchor="middle" class="label">但沿飞行方向领先 100 m</text>
+
+  <rect x="904" y="376" width="244" height="150" rx="14" fill="#fff7ed" stroke="#fdba74"/>
+  <text x="1026" y="408" text-anchor="middle" class="strong">圆弧段</text>
+  <text x="1026" y="448" text-anchor="middle" class="formula">ρ = √(R² + a²)</text>
+  <text x="1026" y="480" text-anchor="middle" class="formula">= 223.607 m</text>
+  <text x="1026" y="510" text-anchor="middle" class="label">槽位线变成同圆心外侧圆弧</text>
+
+  <rect x="904" y="540" width="244" height="64" rx="12" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="1026" y="566" text-anchor="middle" class="strong">橙线是理想槽位目标</text>
+  <text x="1026" y="590" text-anchor="middle" class="label">实际僚机只会近似跟踪</text>
+</svg>

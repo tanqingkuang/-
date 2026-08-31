@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.algorithm.context.leaf_types import MotionProfS
+from src.algorithm.context.leaf_types import AccInEarthS, MotionProfS
 
 
 # topic 是通信层与算法层共同识别报文类型的稳定协议键。
@@ -26,4 +26,13 @@ def motion_payload(motion: MotionProfS) -> dict[str, dict[str, float]]:
             "vd": motion.v.vd,
             "dVPsi": motion.v.dVPsi,
         },
+    }
+
+
+def acceleration_payload(acceleration: AccInEarthS) -> dict[str, float]:
+    """把地理系加速度转换为通信载荷。注意：字段与入站严格解析保持一致。"""
+    return {
+        "accEast": acceleration.accEast,
+        "accNorth": acceleration.accNorth,
+        "accUp": acceleration.accUp,
     }

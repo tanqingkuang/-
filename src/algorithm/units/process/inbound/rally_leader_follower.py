@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, field
 
 from src.algorithm.context.leaf_types import (
+    AccInEarthS,
     FormSnapshotS,
     FormStageE,
     MotionProfS,
@@ -26,6 +27,7 @@ class _ParsedLeaderBroadcast:
 
     leader_state: MotionProfS  # 长机实际运动状态
     leader_cmd: MotionProfS  # 长机跟踪指令，旧格式回退为实际状态
+    leader_acc_cmd: AccInEarthS  # 长机本拍加速度指令；旧格式回退零值
     cmd: FormSnapshotS  # 已通过枚举校验的编队命令
     t_ref: float  # 固定公共到达时刻
     t_ref_valid: bool  # 固定计划有效位
@@ -67,6 +69,17 @@ def _parse_motion_payload(payload: object) -> MotionProfS:
     return parsed
 
 
+def _parse_acceleration_payload(payload: object) -> AccInEarthS:
+    """解析长机加速度载荷。注意：缺失字段由调用方按旧协议回退零值。"""
+    if not isinstance(payload, dict):
+        raise ValueError("加速度载荷必须为映射")
+    return AccInEarthS(
+        accEast=_finite_number(payload.get("accEast", 0.0)),
+        accNorth=_finite_number(payload.get("accNorth", 0.0)),
+        accUp=_finite_number(payload.get("accUp", 0.0)),
+    )
+
+
 def _parse_cmd_payload(payload: object) -> FormSnapshotS:
     """严格解析编队命令的整数类型与阶段枚举。"""
 
@@ -98,6 +111,12 @@ def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcas
     # 旧格式没有 leader 指令时使用同一条消息内已校验的实际状态，禁止跨消息拼装。
     raw_leader_cmd = raw_cmd.get("leader")
     leader_cmd = leader_state if raw_leader_cmd is None else _parse_motion_payload(raw_leader_cmd)
+    raw_leader_acc = payload.get("leader_acc_cmd")
+    leader_acc_cmd = (
+        AccInEarthS()
+        if raw_leader_acc is None
+        else _parse_acceleration_payload(raw_leader_acc)
+    )
 
     # 时间与有效位共同属于固定计划，不能把非法有效位降级成 False 后部分提交。
     t_ref = _finite_number(payload.get("t_ref", 0.0))
@@ -118,6 +137,7 @@ def _parse_leader_broadcast(payload: dict[str, object]) -> _ParsedLeaderBroadcas
     return _ParsedLeaderBroadcast(
         leader_state=leader_state,
         leader_cmd=leader_cmd,
+        leader_acc_cmd=leader_acc_cmd,
         cmd=cmd,
         t_ref=t_ref,
         t_ref_valid=t_ref_valid,

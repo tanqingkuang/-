@@ -1,6 +1,6 @@
 {
   "metrics": {
-    "completion_time_s": 111.3,
+    "completion_time_s": 111.25,
     "min_inter_aircraft_distance_m": 35.35658637368715,
     "min_obstacle_margin_m": null
   },
@@ -22,7 +22,7 @@
             "x_m": -84.98,
             "y_m": 110.0,
             "altitude_m": 1000.0,
-            "psi_v_deg": 0.0,
+            "psi_v_deg": -0.0,
             "speed_mps": 25.13
           },
           {
@@ -54,7 +54,7 @@
             "x_m": -84.98,
             "y_m": -110.0,
             "altitude_m": 1000.0,
-            "psi_v_deg": 0.0,
+            "psi_v_deg": -0.0,
             "speed_mps": 25.13
           }
         ]
@@ -117,7 +117,7 @@
           },
           {
             "node_id": "A02",
-            "x_m": 15.69,
+            "x_m": 15.7,
             "y_m": 51.68,
             "altitude_m": 1000.0,
             "psi_v_deg": -7.11,
@@ -583,7 +583,7 @@
           },
           {
             "node_id": "A04",
-            "x_m": 198.19,
+            "x_m": 198.18,
             "y_m": -97.98,
             "altitude_m": 1000.0,
             "psi_v_deg": -11.26,
