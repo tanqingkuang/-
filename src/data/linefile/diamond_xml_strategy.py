@@ -182,8 +182,8 @@ def _template_filename_prefix(source_path: Path, header: ET.Element) -> str:
     """提取基础文件名到航线号为止的前缀。注意：同时校验 XML 航线名，避免误取日期数字。"""
     skyway_no = _required_text(header, "SkywayNo", "Item.SkywayNo")
     line_name = _required_text(header, "ByLineName", "Item.ByLineName")
-    filename_prefix, separator, timestamp = source_path.stem.rpartition(f" {line_name} ")
-    if not separator or not timestamp or not filename_prefix.endswith(skyway_no):
+    filename_prefix, separator, timestamp_text = source_path.stem.rpartition(f" {line_name} ")
+    if not separator or not timestamp_text or not filename_prefix.endswith(skyway_no):
         raise ValueError(
             "diamond xml route_file filename must match "
             "'<prefix><SkywayNo> <ByLineName> <CreatTimer>.XML'"

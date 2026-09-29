@@ -51,7 +51,7 @@ class ProjectMetadataTests(unittest.TestCase):
 
         self.assertEqual(
             _dependency_names(project["dependencies"]),
-            {"numpy", "pyside6", "pyside6-addons"},
+            {"numpy", "pyside6", "pyside6-addons", "pyyaml"},
         )
         self.assertEqual(_dependency_names(optional["test"]), {"pytest", "pytest-cov"})
         self.assertEqual(_dependency_names(optional["lint"]), {"ruff", "mypy"})

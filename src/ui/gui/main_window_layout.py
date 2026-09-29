@@ -188,6 +188,8 @@ class MainWindowLayoutMixin:
         choose_config.clicked.connect(self._choose_config)
         self.choose_route_button = QPushButton("选择文件")
         self.choose_route_button.clicked.connect(self._choose_route_file)
+        self.route_name = QLabel("未配置")
+        self.route_name.setWordWrap(True)
         # 场景/算法下拉：窄面板内向右弹出菜单避免被裁切。
         # “场景”即编队队形选择：选项按配置的队形列表动态填充，运行时热切换。
         self.scenario_select = SelectButton(132, popup_side="right")
@@ -203,6 +205,7 @@ class MainWindowLayoutMixin:
         form.addRow("配置", choose_config)
         form.addRow("", self.config_name)
         form.addRow("航线", self.choose_route_button)
+        form.addRow("", self.route_name)
         form.addRow("场景", self.scenario_select)
         form.addRow("算法", self.algorithm_select)
         form.addRow("时长(s)", self.duration_input)

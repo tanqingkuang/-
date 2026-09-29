@@ -2144,6 +2144,8 @@ class GuiViewInteractionTests(unittest.TestCase):
                 self.assertEqual(config["route_file"], "element/selected.json")
                 self.assertEqual(window.sim.last_result_code, "OK")
                 self.assertEqual(window.choose_route_button.text(), "选择文件")
+                self.assertEqual(window.route_name.text(), "selected.json")
+                self.assertEqual(window.route_name.toolTip(), "element/selected.json")
             finally:
                 window.close()
                 self.app.processEvents()

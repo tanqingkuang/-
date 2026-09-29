@@ -12,7 +12,7 @@ from pathlib import Path
 from src.data.linefile import LineFileManager, LineFileStrategyFactory
 from src.data.linefile.diamond_xml_strategy import DiamondXmlLineFileStrategy
 from src.data.config_loader import resolve_config_references
-from src.runner.gui_application import persist_config_route_file
+from src.runner.gui_application import persist_config_route_file, route_export_defaults
 
 
 def _write_diamond_template(path: Path) -> None:
@@ -210,6 +210,32 @@ class LineFileTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "filename must match"):
                 manager.default_output_filename(template_path)
+
+    def test_yaml_config_provides_diamond_xml_export_default(self) -> None:
+        """YAML 主配置也应按 route_file 提供钻石 XML 默认输出名。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template_path = root / "航线1 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
+            config_path = root / "diamond.yaml"
+            config_path.write_text(f"route_file: {template_path.name}\n", encoding="utf-8")
+
+            output_path, selected_filter = route_export_defaults(config_path)
+
+        self.assertTrue(output_path.name.startswith("航线1 威胁避让航线 "))
+        self.assertEqual(output_path.suffix, ".XML")
+        self.assertEqual(selected_filter, "钻石 XML (*.XML *.xml)")
+
+    def test_invalid_yaml_config_falls_back_to_json_export_default(self) -> None:
+        """损坏的 YAML 辅助读取应安全回退，不得把解析异常泄漏到 GUI。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "bad.yaml"
+            config_path.write_text("route_file: [\n", encoding="utf-8")
+
+            output_path, selected_filter = route_export_defaults(config_path)
+
+        self.assertEqual(output_path.name, "avoidance_route.json")
+        self.assertEqual(selected_filter, "JSON 文件 (*.json)")
 
     def test_diamond_xml_strategy_rejects_arc_output(self) -> None:
         """钻石 XML 不支持圆弧航段，保存时必须报错而不是静默丢字段。"""

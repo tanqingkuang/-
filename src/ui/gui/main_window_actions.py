@@ -239,6 +239,9 @@ class MainWindowActionMixin:
             display_path = self._display_config_path(config_path)
             self.config_name.setText(display_path)
             self.config_name.setToolTip(display_path)
+            route_file = self.sim.gui_config.route_file
+            self.route_name.setText(Path(route_file).name if route_file else "未配置")
+            self.route_name.setToolTip(route_file or "")
             self._log("Config", f"加载配置文件 {display_path}")
             # remember=False 用于“自动加载上次配置”场景，避免重复写回。
             if remember:

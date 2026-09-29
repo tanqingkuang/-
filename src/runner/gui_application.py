@@ -145,6 +145,7 @@ class GuiConfigData:
     avoidance_params: AvoidanceParams | None = None
     geo_reference: GeoReference | None = None
     terrain_display_file: str | None = None
+    route_file: str | None = None
 
 
 def load_gui_config(path: str) -> GuiConfigData:
@@ -162,6 +163,7 @@ def load_gui_config(path: str) -> GuiConfigData:
         avoidance_params=params,
         geo_reference=_geo_reference_from_config(path),
         terrain_display_file=terrain_display_file_from_config(path),
+        route_file=_route_file_from_config(Path(path)),
     )
 
 
@@ -588,9 +590,29 @@ def _geo_reference_from_config(path: str) -> GeoReference | None:
 
 
 def _route_file_from_config(path: Path) -> str | None:
-    """读取 route_file。注意：只用于导出默认文件名。"""
+    """读取 JSON/YAML 主配置的 route_file。注意：同时供导出默认名和界面标签使用。"""
 
-    data = _load_json_config(str(path))
+    try:
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() == ".json":
+            data = json.loads(text)
+        elif path.suffix.lower() in {".yaml", ".yml"}:
+            try:
+                import yaml
+            except ImportError:
+                LOGGER.debug("读取 route_file 失败：缺少 YAML 依赖，path=%s", path, exc_info=True)
+                return None
+
+            try:
+                data = yaml.safe_load(text)
+            except yaml.YAMLError:
+                LOGGER.debug("读取 YAML route_file 失败，path=%s", path, exc_info=True)
+                return None
+        else:
+            return None
+    except (OSError, ValueError):
+        LOGGER.debug("读取 route_file 失败，path=%s", path, exc_info=True)
+        return None
     route_file = data.get("route_file") if isinstance(data, dict) else None
     return route_file if isinstance(route_file, str) and route_file.strip() else None
 
