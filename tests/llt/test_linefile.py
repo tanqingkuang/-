@@ -15,6 +15,26 @@ from src.data.config_loader import resolve_config_references
 from src.runner.gui_application import persist_config_route_file
 
 
+def _write_diamond_template(path: Path) -> None:
+    path.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<Root>
+  <Item source="基础航线">
+    <SkywayNo>1</SkywayNo>
+    <SkypointNo>7</SkypointNo>
+    <IdAllNum>99</IdAllNum>
+    <ByLineName>钻石默认航线</ByLineName>
+    <StLine_Type>9</StLine_Type>
+    <StLineExp>继承说明</StLineExp>
+    <ExtraField>保留内容</ExtraField>
+    <CreatTimer>2024/1/2 3:04:05</CreatTimer>
+  </Item>
+</Root>
+""",
+        encoding="utf-8",
+    )
+
+
 class LineFileTests(unittest.TestCase):
     """覆盖 route_file 的解析、生成和策略工厂选择。"""
 
@@ -116,11 +136,13 @@ class LineFileTests(unittest.TestCase):
                 LineFileManager().load_route(route_file, str(route_file))
 
     def test_diamond_xml_strategy_saves_canonical_avoidance_file(self) -> None:
-        """钻石 XML 输出必须固定航线号、名称、航点数和时间戳文件名。"""
+        """钻石 XML 输出继承基础头，仅更新名称、时间、航点数和文件名。"""
         fixed_now = datetime(2025, 9, 11, 20, 32, 49)
         manager = LineFileManager(LineFileStrategyFactory([DiamondXmlLineFileStrategy(lambda: fixed_now)]))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            template_path = root / "航线1 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
             route = {
                 "speed_mps": 45.0,
                 "waypoints": [
@@ -129,16 +151,37 @@ class LineFileTests(unittest.TestCase):
                 ],
             }
 
-            written = manager.save_route(root / "base.json", "客户随便取名.xml", route)
+            written = manager.save_route(
+                root / "base.json",
+                "客户随便取名.xml",
+                route,
+                template_route_file=str(template_path),
+            )
 
-            self.assertEqual(written.name, "航线25 芜湖自动避障航线 2025年9月11日20时32分49秒.XML")
+            self.assertEqual(written.name, "航线1 威胁避让航线 2025年9月11日20时32分49秒.XML")
             xml_root = ET.parse(written).getroot()
         header = xml_root.find("Item")
-        self.assertEqual(header.findtext("SkywayNo"), "25")
-        self.assertEqual(header.findtext("SkypointNo"), "1")
+        self.assertEqual(header.attrib, {"source": "基础航线"})
+        self.assertEqual(
+            [child.tag for child in header],
+            [
+                "SkywayNo",
+                "SkypointNo",
+                "IdAllNum",
+                "ByLineName",
+                "StLine_Type",
+                "StLineExp",
+                "ExtraField",
+                "CreatTimer",
+            ],
+        )
+        self.assertEqual(header.findtext("SkywayNo"), "1")
+        self.assertEqual(header.findtext("SkypointNo"), "7")
         self.assertEqual(header.findtext("IdAllNum"), "2")
-        self.assertEqual(header.findtext("ByLineName"), "芜湖自动避障航线")
-        self.assertEqual(header.findtext("StLine_Type"), "0")
+        self.assertEqual(header.findtext("ByLineName"), "威胁避让航线")
+        self.assertEqual(header.findtext("StLine_Type"), "9")
+        self.assertEqual(header.findtext("StLineExp"), "继承说明")
+        self.assertEqual(header.findtext("ExtraField"), "保留内容")
         self.assertEqual(header.findtext("CreatTimer"), "2025/9/11 20:32:49")
         self.assertEqual(xml_root.find("Item1").attrib["id"], "1")
         self.assertEqual(xml_root.findtext("Item1/Longitude"), "118.722553")
@@ -150,10 +193,23 @@ class LineFileTests(unittest.TestCase):
         """钻石 XML 策略应向 GUI 提供规范默认文件名，避免界面硬编码 JSON 名称。"""
         fixed_now = datetime(2025, 9, 11, 20, 32, 49)
         manager = LineFileManager(LineFileStrategyFactory([DiamondXmlLineFileStrategy(lambda: fixed_now)]))
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "航线1 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
 
-        filename = manager.default_output_filename("input.XML")
+            filename = manager.default_output_filename(template_path)
 
-        self.assertEqual(filename, "航线25 芜湖自动避障航线 2025年9月11日20时32分49秒.XML")
+        self.assertEqual(filename, "航线1 威胁避让航线 2025年9月11日20时32分49秒.XML")
+
+    def test_diamond_xml_strategy_rejects_mismatched_filename(self) -> None:
+        """文件名中的航线号和航线名必须与 XML 一致，避免误识别日期数字。"""
+        manager = LineFileManager(LineFileStrategyFactory([DiamondXmlLineFileStrategy()]))
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "航线99 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
+
+            with self.assertRaisesRegex(ValueError, "filename must match"):
+                manager.default_output_filename(template_path)
 
     def test_diamond_xml_strategy_rejects_arc_output(self) -> None:
         """钻石 XML 不支持圆弧航段，保存时必须报错而不是静默丢字段。"""

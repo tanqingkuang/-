@@ -20,15 +20,26 @@ class LineFileManager:
         # 路径解析和格式策略分开，后续客户格式只替换策略，不影响调用方。
         return self._factory.create(route_path).load(route_path)
 
-    def save_route(self, config_path: str | Path, route_file: object, route: dict[str, object]) -> Path:
+    def save_route(
+        self,
+        config_path: str | Path,
+        route_file: object,
+        route: dict[str, object],
+        *,
+        template_route_file: object | None = None,
+    ) -> Path:
         """按主配置位置生成 route_file。注意：返回实际写入路径，便于界面提示。"""
         route_path = self.resolve_path(config_path, route_file)
+        template_path = (
+            self.resolve_path(config_path, template_route_file) if template_route_file is not None else None
+        )
         # save 与 load 使用同一个工厂，保证同一后缀读写策略一致。
-        return self._factory.create(route_path).save(route_path, route)
+        return self._factory.create(route_path).save(route_path, route, template_path=template_path)
 
     def default_output_filename(self, route_file: str | Path) -> str:
-        """按 route_file 对应策略返回建议输出文件名。注意：只看格式，不读取文件内容。"""
-        return self._factory.create(route_file).default_output_filename()
+        """按基础航线策略返回建议输出文件名。注意：客户格式可读取基础文件头。"""
+        source_path = Path(route_file)
+        return self._factory.create(source_path).default_output_filename(source_path)
 
     @staticmethod
     def resolve_path(config_path: str | Path, route_file: object) -> Path:

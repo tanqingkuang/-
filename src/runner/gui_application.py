@@ -218,7 +218,12 @@ def export_planned_route(
 
     # 先生成格式无关对象，再交给 LineFileManager 选择具体策略。
     route_config = route_inputs_to_config(list(route._waypoints), speed_mps, geo_reference)
-    return _LINE_FILE_MANAGER.save_route(config_path, str(route_path), route_config)
+    return _LINE_FILE_MANAGER.save_route(
+        config_path,
+        str(route_path),
+        route_config,
+        template_route_file=_route_file_from_config(config_path),
+    )
 
 
 def route_export_defaults(config_path: Path) -> tuple[Path, str]:
@@ -230,7 +235,7 @@ def route_export_defaults(config_path: Path) -> tuple[Path, str]:
     route_file = _route_file_from_config(config_path)
     if route_file is None:
         return config_path.parent / "avoidance_route.json", json_filter
-    # 格式策略只查看解析后的路径后缀，不读取原航线内容。
+    # 钻石 XML 默认文件名还会读取基础航线号。
     route_path = _LINE_FILE_MANAGER.resolve_path(config_path, route_file)
     try:
         filename = _LINE_FILE_MANAGER.default_output_filename(route_path)
