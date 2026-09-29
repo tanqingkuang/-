@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -11,10 +12,7 @@ from src.data.linefile.strategy import LineFileStrategy
 
 
 DEFAULT_SPEED_MPS = 45.0
-OUTPUT_SKYWAY_NO = "25"
-OUTPUT_SKYPOINT_NO = "1"
-OUTPUT_LINE_NAME = "芜湖自动避障航线"
-OUTPUT_LINE_TYPE = "0"
+OUTPUT_LINE_NAME = "威胁避让航线"
 DEFAULT_WAYPOINT_TASK = "0010"
 
 _LAT_KEYS = ("latitude_deg", "lat_deg", "lat", "Latitude")
@@ -57,20 +55,22 @@ class DiamondXmlLineFileStrategy(LineFileStrategy):
             waypoints.append(waypoint)
         return {"speed_mps": DEFAULT_SPEED_MPS, "waypoints": waypoints}
 
-    def save(self, path: Path, route: dict[str, object]) -> Path:
-        """输出钻石 XML 避障航线并返回规范化文件名。注意：圆弧字段会被拒绝。"""
-        timestamp = self._now()
-        output_path = _diamond_output_path(path, timestamp)
+    def save(self, path: Path, route: dict[str, object], *, template_path: Path | None = None) -> Path:
+        """基于基础 XML 输出避障航线。注意：圆弧字段会被拒绝。"""
         waypoints = _validated_output_waypoints(route)
+        if template_path is None:
+            raise ValueError("diamond xml output requires a template route_file")
+        timestamp = self._now()
+        template_root = self._parse_root(template_path)
+        header = copy.deepcopy(_required_child(template_root, "Item", "Root.Item"))
+        filename_prefix = _template_filename_prefix(template_path, header)
+        _required_child(header, "IdAllNum", "Item.IdAllNum").text = str(len(waypoints))
+        _required_child(header, "ByLineName", "Item.ByLineName").text = OUTPUT_LINE_NAME
+        _required_child(header, "CreatTimer", "Item.CreatTimer").text = _format_xml_timestamp(timestamp)
+
+        output_path = _diamond_output_path(path, timestamp, filename_prefix)
         root = ET.Element("Root")
-        header = ET.SubElement(root, "Item")
-        _add_text(header, "SkywayNo", OUTPUT_SKYWAY_NO)
-        _add_text(header, "SkypointNo", OUTPUT_SKYPOINT_NO)
-        _add_text(header, "IdAllNum", str(len(waypoints)))
-        _add_text(header, "ByLineName", OUTPUT_LINE_NAME)
-        _add_text(header, "StLine_Type", OUTPUT_LINE_TYPE)
-        ET.SubElement(header, "StLineExp")
-        _add_text(header, "CreatTimer", _format_xml_timestamp(timestamp))
+        root.append(header)
 
         for index, waypoint in enumerate(waypoints, start=1):
             item = ET.SubElement(root, f"Item{index}", {"id": str(index)})
@@ -83,9 +83,13 @@ class DiamondXmlLineFileStrategy(LineFileStrategy):
         _write_xml(output_path, root)
         return output_path
 
-    def default_output_filename(self) -> str:
-        """返回钻石 XML 避障航线默认输出名。注意：文件名带当前时间戳。"""
-        return _diamond_output_filename(self._now())
+    def default_output_filename(self, source_path: Path | None = None) -> str:
+        """按基础航线号返回避障航线默认文件名。注意：文件名带当前时间戳。"""
+        if source_path is None:
+            raise ValueError("diamond xml output requires a template route_file")
+        root = self._parse_root(source_path)
+        header = _required_child(root, "Item", "Root.Item")
+        return _diamond_output_filename(self._now(), _template_filename_prefix(source_path, header))
 
     @staticmethod
     def _parse_root(path: Path) -> ET.Element:
@@ -174,14 +178,27 @@ def _read_point_float(raw: dict[str, object], keys: tuple[str, ...], index: int,
     raise ValueError(f"diamond xml route.waypoints[{index}] missing {field_name}")
 
 
-def _diamond_output_path(path: Path, timestamp: datetime) -> Path:
+def _template_filename_prefix(source_path: Path, header: ET.Element) -> str:
+    """提取基础文件名到航线号为止的前缀。注意：同时校验 XML 航线名，避免误取日期数字。"""
+    skyway_no = _required_text(header, "SkywayNo", "Item.SkywayNo")
+    line_name = _required_text(header, "ByLineName", "Item.ByLineName")
+    filename_prefix, separator, timestamp_text = source_path.stem.rpartition(f" {line_name} ")
+    if not separator or not timestamp_text or not filename_prefix.endswith(skyway_no):
+        raise ValueError(
+            "diamond xml route_file filename must match "
+            "'<prefix><SkywayNo> <ByLineName> <CreatTimer>.XML'"
+        )
+    return filename_prefix
+
+
+def _diamond_output_path(path: Path, timestamp: datetime, filename_prefix: str) -> Path:
     """生成钻石规范输出文件名。注意：忽略用户输入文件名，只保留目录。"""
-    return path.parent / _diamond_output_filename(timestamp)
+    return path.parent / _diamond_output_filename(timestamp, filename_prefix)
 
 
-def _diamond_output_filename(timestamp: datetime) -> str:
+def _diamond_output_filename(timestamp: datetime, filename_prefix: str) -> str:
     """生成钻石规范输出文件名。注意：供保存和 GUI 默认名称共用。"""
-    return f"航线{OUTPUT_SKYWAY_NO} {OUTPUT_LINE_NAME} {_format_filename_timestamp(timestamp)}.XML"
+    return f"{filename_prefix} {OUTPUT_LINE_NAME} {_format_filename_timestamp(timestamp)}.XML"
 
 
 def _format_filename_timestamp(timestamp: datetime) -> str:

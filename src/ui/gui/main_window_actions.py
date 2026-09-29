@@ -194,6 +194,29 @@ class MainWindowActionMixin:
             return
         self._apply_config_path(path)
 
+    def _choose_route_file(self) -> None:
+        """选择航线并更新当前主配置。注意：无效航线不写回。"""
+
+        if self.current_config_path is None:
+            self._log("WARN", "请先选择配置文件")
+            return
+        route_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择航线文件",
+            str(self.current_config_path.parent),
+            "航线文件 (*.XML *.xml *.json)",
+        )
+        if not route_path:
+            return
+        try:
+            reference = self.sim.persist_route_file(self.current_config_path, Path(route_path))
+        except (OSError, ValueError) as exc:
+            self._log("WARN", f"更新航线失败：{exc}")
+            return
+        self._apply_config_path(str(self.current_config_path), remember=False)
+        if self.sim.last_result_code == "OK":
+            self._log("Config", f"更新航线文件 {reference}")
+
     def _apply_config_path(self, path: str, *, remember: bool = True) -> None:
         """应用 config path 设置。注意：只修改对应显示或运行参数。"""
         # 切换配置前停掉定时器，加载后请求自适应铺满新场景。
@@ -216,6 +239,9 @@ class MainWindowActionMixin:
             display_path = self._display_config_path(config_path)
             self.config_name.setText(display_path)
             self.config_name.setToolTip(display_path)
+            route_file = self.sim.gui_config.route_file
+            self.route_name.setText(Path(route_file).name if route_file else "未配置")
+            self.route_name.setToolTip(route_file or "")
             self._log("Config", f"加载配置文件 {display_path}")
             # remember=False 用于“自动加载上次配置”场景，避免重复写回。
             if remember:

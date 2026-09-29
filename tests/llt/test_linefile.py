@@ -12,6 +12,27 @@ from pathlib import Path
 from src.data.linefile import LineFileManager, LineFileStrategyFactory
 from src.data.linefile.diamond_xml_strategy import DiamondXmlLineFileStrategy
 from src.data.config_loader import resolve_config_references
+from src.runner.gui_application import persist_config_route_file, route_export_defaults
+
+
+def _write_diamond_template(path: Path) -> None:
+    path.write_text(
+        """<?xml version="1.0" encoding="utf-8"?>
+<Root>
+  <Item source="基础航线">
+    <SkywayNo>1</SkywayNo>
+    <SkypointNo>7</SkypointNo>
+    <IdAllNum>99</IdAllNum>
+    <ByLineName>钻石默认航线</ByLineName>
+    <StLine_Type>9</StLine_Type>
+    <StLineExp>继承说明</StLineExp>
+    <ExtraField>保留内容</ExtraField>
+    <CreatTimer>2024/1/2 3:04:05</CreatTimer>
+  </Item>
+</Root>
+""",
+        encoding="utf-8",
+    )
 
 
 class LineFileTests(unittest.TestCase):
@@ -115,11 +136,13 @@ class LineFileTests(unittest.TestCase):
                 LineFileManager().load_route(route_file, str(route_file))
 
     def test_diamond_xml_strategy_saves_canonical_avoidance_file(self) -> None:
-        """钻石 XML 输出必须固定航线号、名称、航点数和时间戳文件名。"""
+        """钻石 XML 输出继承基础头，仅更新名称、时间、航点数和文件名。"""
         fixed_now = datetime(2025, 9, 11, 20, 32, 49)
         manager = LineFileManager(LineFileStrategyFactory([DiamondXmlLineFileStrategy(lambda: fixed_now)]))
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            template_path = root / "航线1 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
             route = {
                 "speed_mps": 45.0,
                 "waypoints": [
@@ -128,16 +151,37 @@ class LineFileTests(unittest.TestCase):
                 ],
             }
 
-            written = manager.save_route(root / "base.json", "客户随便取名.xml", route)
+            written = manager.save_route(
+                root / "base.json",
+                "客户随便取名.xml",
+                route,
+                template_route_file=str(template_path),
+            )
 
-            self.assertEqual(written.name, "航线25 芜湖自动避障航线 2025年9月11日20时32分49秒.XML")
+            self.assertEqual(written.name, "航线1 威胁避让航线 2025年9月11日20时32分49秒.XML")
             xml_root = ET.parse(written).getroot()
         header = xml_root.find("Item")
-        self.assertEqual(header.findtext("SkywayNo"), "25")
-        self.assertEqual(header.findtext("SkypointNo"), "1")
+        self.assertEqual(header.attrib, {"source": "基础航线"})
+        self.assertEqual(
+            [child.tag for child in header],
+            [
+                "SkywayNo",
+                "SkypointNo",
+                "IdAllNum",
+                "ByLineName",
+                "StLine_Type",
+                "StLineExp",
+                "ExtraField",
+                "CreatTimer",
+            ],
+        )
+        self.assertEqual(header.findtext("SkywayNo"), "1")
+        self.assertEqual(header.findtext("SkypointNo"), "7")
         self.assertEqual(header.findtext("IdAllNum"), "2")
-        self.assertEqual(header.findtext("ByLineName"), "芜湖自动避障航线")
-        self.assertEqual(header.findtext("StLine_Type"), "0")
+        self.assertEqual(header.findtext("ByLineName"), "威胁避让航线")
+        self.assertEqual(header.findtext("StLine_Type"), "9")
+        self.assertEqual(header.findtext("StLineExp"), "继承说明")
+        self.assertEqual(header.findtext("ExtraField"), "保留内容")
         self.assertEqual(header.findtext("CreatTimer"), "2025/9/11 20:32:49")
         self.assertEqual(xml_root.find("Item1").attrib["id"], "1")
         self.assertEqual(xml_root.findtext("Item1/Longitude"), "118.722553")
@@ -149,10 +193,49 @@ class LineFileTests(unittest.TestCase):
         """钻石 XML 策略应向 GUI 提供规范默认文件名，避免界面硬编码 JSON 名称。"""
         fixed_now = datetime(2025, 9, 11, 20, 32, 49)
         manager = LineFileManager(LineFileStrategyFactory([DiamondXmlLineFileStrategy(lambda: fixed_now)]))
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "航线1 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
 
-        filename = manager.default_output_filename("input.XML")
+            filename = manager.default_output_filename(template_path)
 
-        self.assertEqual(filename, "航线25 芜湖自动避障航线 2025年9月11日20时32分49秒.XML")
+        self.assertEqual(filename, "航线1 威胁避让航线 2025年9月11日20时32分49秒.XML")
+
+    def test_diamond_xml_strategy_rejects_mismatched_filename(self) -> None:
+        """文件名中的航线号和航线名必须与 XML 一致，避免误识别日期数字。"""
+        manager = LineFileManager(LineFileStrategyFactory([DiamondXmlLineFileStrategy()]))
+        with tempfile.TemporaryDirectory() as tmp:
+            template_path = Path(tmp) / "航线99 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
+
+            with self.assertRaisesRegex(ValueError, "filename must match"):
+                manager.default_output_filename(template_path)
+
+    def test_yaml_config_provides_diamond_xml_export_default(self) -> None:
+        """YAML 主配置也应按 route_file 提供钻石 XML 默认输出名。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            template_path = root / "航线1 钻石默认航线 2026年7月6日10时8分18秒.XML"
+            _write_diamond_template(template_path)
+            config_path = root / "diamond.yaml"
+            config_path.write_text(f"route_file: {template_path.name}\n", encoding="utf-8")
+
+            output_path, selected_filter = route_export_defaults(config_path)
+
+        self.assertTrue(output_path.name.startswith("航线1 威胁避让航线 "))
+        self.assertEqual(output_path.suffix, ".XML")
+        self.assertEqual(selected_filter, "钻石 XML (*.XML *.xml)")
+
+    def test_invalid_yaml_config_falls_back_to_json_export_default(self) -> None:
+        """损坏的 YAML 辅助读取应安全回退，不得把解析异常泄漏到 GUI。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "bad.yaml"
+            config_path.write_text("route_file: [\n", encoding="utf-8")
+
+            output_path, selected_filter = route_export_defaults(config_path)
+
+        self.assertEqual(output_path.name, "avoidance_route.json")
+        self.assertEqual(selected_filter, "JSON 文件 (*.json)")
 
     def test_diamond_xml_strategy_rejects_arc_output(self) -> None:
         """钻石 XML 不支持圆弧航段，保存时必须报错而不是静默丢字段。"""
@@ -204,6 +287,51 @@ class LineFileTests(unittest.TestCase):
         self.assertIn("_geo_origin", route)
         self.assertAlmostEqual(route["waypoints"][0]["x_m"], 0.0)
         self.assertAlmostEqual(route["waypoints"][0]["y_m"], 0.0)
+
+    def test_persist_config_route_file_updates_relative_reference_after_validation(self) -> None:
+        """选择有效航线后应把相对引用写回主配置。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "configs" / "base.json"
+            route_path = root / "routes" / "selected.json"
+            config_path.parent.mkdir()
+            route_path.parent.mkdir()
+            config_path.write_text(json.dumps({"duration_s": 1.0}), encoding="utf-8")
+            route_path.write_text(
+                json.dumps(
+                    {
+                        "speed_mps": 20.0,
+                        "waypoints": [
+                            {"longitude_deg": 118.0, "latitude_deg": 31.0, "altitude_m": 1000.0},
+                            {"longitude_deg": 118.01, "latitude_deg": 31.01, "altitude_m": 1000.0},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            reference = persist_config_route_file(config_path, route_path)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(reference, "../routes/selected.json")
+        self.assertEqual(config["route_file"], reference)
+
+    def test_persist_config_route_file_does_not_change_config_for_invalid_route(self) -> None:
+        """航线解析失败时必须保留原配置。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "base.json"
+            route_path = root / "bad.XML"
+            original = '{"duration_s": 1.0}\n'
+            config_path.write_text(original, encoding="utf-8")
+            route_path.write_text("<bad>", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "not valid XML"):
+                persist_config_route_file(config_path, route_path)
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
 
     def test_factory_rejects_unsupported_route_file_format(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported route_file format"):

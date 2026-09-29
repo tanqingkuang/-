@@ -22,6 +22,7 @@ from src.runner.gui_application import (
     geodetic_from_enu,
     load_gui_config,
     persist_config_duration,
+    persist_config_route_file,
     plan_route_for_gui,
     planned_route_from_waypoints,
     preview_route_marker_points,

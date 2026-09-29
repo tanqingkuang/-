@@ -25,6 +25,7 @@ from src.runner.sim_control import (
     load_obstacle_library,
     obstacle_inputs_to_specs,
     persist_config_duration,
+    persist_config_route_file,
     plan_route_for_gui,
     planned_route_from_waypoints,
     route_export_defaults,
@@ -219,6 +220,11 @@ class ControllerSimulationAdapter:
         """把时长写回主配置。注意：只更新 duration_s 字段。"""
 
         persist_config_duration(config_path, duration_s)
+
+    def persist_route_file(self, config_path: Path, route_path: Path) -> str:
+        """校验航线并把引用写回主配置。"""
+
+        return persist_config_route_file(config_path, route_path)
 
     def to_geodetic(
         self,

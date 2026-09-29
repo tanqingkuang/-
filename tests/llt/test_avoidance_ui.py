@@ -285,6 +285,32 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         return window
 
     @staticmethod
+    def _set_diamond_config(window: MainWindow, root: Path) -> None:
+        element = root / "element"
+        element.mkdir()
+        (element / "航线37 原始航线 2024年1月2日3时4分5秒.XML").write_text(
+            """<?xml version="1.0" encoding="utf-8"?>
+<Root>
+  <Item>
+    <SkywayNo>37</SkywayNo><SkypointNo>7</SkypointNo><IdAllNum>1</IdAllNum>
+    <ByLineName>原始航线</ByLineName><StLine_Type>9</StLine_Type><StLineExp>继承说明</StLineExp>
+    <CreatTimer>2024/1/2 3:04:05</CreatTimer>
+  </Item>
+</Root>
+""",
+            encoding="utf-8",
+        )
+        config_path = root / "diamond.json"
+        config_path.write_text(
+            json.dumps(
+                {"route_file": "element/航线37 原始航线 2024年1月2日3时4分5秒.XML"},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        window.current_config_path = config_path
+
+    @staticmethod
     def _set_feasible_params(window: MainWindow) -> None:
         # 用一组已知可飞的参数覆盖控件值，使“生成成功”相关用例不依赖夹具 test.json 的具体 R/L。
         window.turn_radius_spin.setValue(150.0)
@@ -572,7 +598,9 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window = self._window()
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
-        output = Path(temp_dir.name) / "manual_name"
+        root = Path(temp_dir.name)
+        output = root / "manual_name"
+        self._set_diamond_config(window, root)
         window._preview_route = [
             WayPointInputS(pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
             WayPointInputS(pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
@@ -586,13 +614,15 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         ):
             window._export_route()
 
-        saved_files = list(Path(temp_dir.name).glob("航线25 芜湖自动避障航线 *.XML"))
+        saved_files = list(root.glob("航线37 威胁避让航线 *.XML"))
         self.assertEqual(len(saved_files), 1)
         xml_root = ET.parse(saved_files[0]).getroot()
-        self.assertEqual(xml_root.findtext("Item/SkywayNo"), "25")
-        self.assertEqual(xml_root.findtext("Item/SkypointNo"), "1")
+        self.assertEqual(xml_root.findtext("Item/SkywayNo"), "37")
+        self.assertEqual(xml_root.findtext("Item/SkypointNo"), "7")
         self.assertEqual(xml_root.findtext("Item/IdAllNum"), "2")
-        self.assertEqual(xml_root.findtext("Item/ByLineName"), "芜湖自动避障航线")
+        self.assertEqual(xml_root.findtext("Item/ByLineName"), "威胁避让航线")
+        self.assertEqual(xml_root.findtext("Item/StLine_Type"), "9")
+        self.assertEqual(xml_root.findtext("Item/StLineExp"), "继承说明")
         self.assertEqual(xml_root.find("Item1").attrib["id"], "1")
         self.assertIn("已输出航线", window.avoidance_status.text())
 
@@ -601,12 +631,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
         window = self._window()
         temp_dir = tempfile.TemporaryDirectory()
         self.addCleanup(temp_dir.cleanup)
-        config_path = Path(temp_dir.name) / "diamond.json"
-        config_path.write_text(
-            json.dumps({"route_file": "element/input.XML"}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        window.current_config_path = config_path
+        self._set_diamond_config(window, Path(temp_dir.name))
         window._preview_route = [
             WayPointInputS(pos=PosInEarthS(0.0, 0.0, 2400.0), vdCmd=45.0),
             WayPointInputS(pos=PosInEarthS(100.0, 0.0, 2400.0), vdCmd=45.0),
@@ -616,7 +641,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
             window._export_route()
 
         default_path = Path(dialog.call_args.args[2])
-        self.assertRegex(default_path.name, r"^航线25 芜湖自动避障航线 .+\.XML$")
+        self.assertRegex(default_path.name, r"^航线37 威胁避让航线 .+\.XML$")
         self.assertEqual(dialog.call_args.args[4], "钻石 XML (*.XML *.xml)")
 
     def test_export_route_reports_diamond_xml_arc_error(self) -> None:
@@ -645,7 +670,7 @@ class AvoidanceUiFlowTests(unittest.TestCase):
 
         self.assertIn("航线输出失败", window.avoidance_status.text())
         self.assertIn("不支持圆弧航段", window.avoidance_status.text())
-        self.assertEqual(list(Path(temp_dir.name).glob("航线25 芜湖自动避障航线 *.XML")), [])
+        self.assertEqual(list(Path(temp_dir.name).glob("航线* 威胁避让航线 *.XML")), [])
 
 
 if __name__ == "__main__":

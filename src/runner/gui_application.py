@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
+import yaml
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -144,6 +146,7 @@ class GuiConfigData:
     avoidance_params: AvoidanceParams | None = None
     geo_reference: GeoReference | None = None
     terrain_display_file: str | None = None
+    route_file: str | None = None
 
 
 def load_gui_config(path: str) -> GuiConfigData:
@@ -161,6 +164,7 @@ def load_gui_config(path: str) -> GuiConfigData:
         avoidance_params=params,
         geo_reference=_geo_reference_from_config(path),
         terrain_display_file=terrain_display_file_from_config(path),
+        route_file=_route_file_from_config(Path(path)),
     )
 
 
@@ -217,7 +221,12 @@ def export_planned_route(
 
     # 先生成格式无关对象，再交给 LineFileManager 选择具体策略。
     route_config = route_inputs_to_config(list(route._waypoints), speed_mps, geo_reference)
-    return _LINE_FILE_MANAGER.save_route(config_path, str(route_path), route_config)
+    return _LINE_FILE_MANAGER.save_route(
+        config_path,
+        str(route_path),
+        route_config,
+        template_route_file=_route_file_from_config(config_path),
+    )
 
 
 def route_export_defaults(config_path: Path) -> tuple[Path, str]:
@@ -229,7 +238,7 @@ def route_export_defaults(config_path: Path) -> tuple[Path, str]:
     route_file = _route_file_from_config(config_path)
     if route_file is None:
         return config_path.parent / "avoidance_route.json", json_filter
-    # 格式策略只查看解析后的路径后缀，不读取原航线内容。
+    # 钻石 XML 默认文件名还会读取基础航线号。
     route_path = _LINE_FILE_MANAGER.resolve_path(config_path, route_file)
     try:
         filename = _LINE_FILE_MANAGER.default_output_filename(route_path)
@@ -254,11 +263,6 @@ def persist_config_duration(path: Path, duration_s: float) -> None:
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return
     if suffix in {".yaml", ".yml"}:
-        # PyYAML 为可选依赖，只有用户实际编辑 YAML 时才要求安装。
-        try:
-            import yaml
-        except ImportError as exc:  # pragma: no cover - 依赖运行环境
-            raise ValueError("YAML config requires PyYAML") from exc
         config = yaml.safe_load(text)
         if not isinstance(config, dict):
             raise ValueError("config root must be an object")
@@ -266,6 +270,36 @@ def persist_config_duration(path: Path, duration_s: float) -> None:
         path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return
     raise ValueError("config must be .json, .yaml, or .yml")
+
+
+def persist_config_route_file(path: Path, route_path: Path) -> str:
+    """校验航线并更新主配置的 route_file。注意：写回可迁移的相对路径。"""
+
+    suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8")
+    if suffix == ".json":
+        config = json.loads(text)
+    elif suffix in {".yaml", ".yml"}:
+        config = yaml.safe_load(text)
+    else:
+        raise ValueError("config must be .json, .yaml, or .yml")
+    if not isinstance(config, dict):
+        raise ValueError("config root must be an object")
+
+    destination = route_path.resolve()
+    try:
+        reference = Path(os.path.relpath(destination, path.parent.resolve())).as_posix()
+    except ValueError:
+        reference = destination.as_posix()
+    config["route_file"] = reference
+    # 复用正式加载链路校验格式和经纬度，失败时不修改原配置文件。
+    resolve_config_references(config, path)
+
+    if suffix == ".json":
+        path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return reference
 
 
 def geodetic_from_enu(east_m: float, north_m: float, reference: GeoReference | None) -> tuple[float, float] | None:
@@ -288,11 +322,6 @@ def terrain_display_file_from_config(path: str) -> str | None:
             # 与主配置支持范围一致，仅接受 JSON 和 YAML。
             data = json.loads(text)
         elif config_path.suffix.lower() in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError:
-                LOGGER.debug("解析地形显示配置失败：缺少 YAML 依赖，path=%s", path, exc_info=True)
-                return None
             data = yaml.safe_load(text)
         else:
             return None
@@ -548,9 +577,23 @@ def _geo_reference_from_config(path: str) -> GeoReference | None:
 
 
 def _route_file_from_config(path: Path) -> str | None:
-    """读取 route_file。注意：只用于导出默认文件名。"""
+    """读取 JSON/YAML 主配置的 route_file。注意：同时供导出默认名和界面标签使用。"""
 
-    data = _load_json_config(str(path))
+    try:
+        text = path.read_text(encoding="utf-8")
+        if path.suffix.lower() == ".json":
+            data = json.loads(text)
+        elif path.suffix.lower() in {".yaml", ".yml"}:
+            try:
+                data = yaml.safe_load(text)
+            except yaml.YAMLError:
+                LOGGER.debug("读取 YAML route_file 失败，path=%s", path, exc_info=True)
+                return None
+        else:
+            return None
+    except (OSError, ValueError):
+        LOGGER.debug("读取 route_file 失败，path=%s", path, exc_info=True)
+        return None
     route_file = data.get("route_file") if isinstance(data, dict) else None
     return route_file if isinstance(route_file, str) and route_file.strip() else None
 

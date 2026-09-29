@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import yaml
 from dataclasses import asdict, replace
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
@@ -69,7 +70,7 @@ from src.runner.sim_control_types import (
 _RALLY_RUN_STANDBY = "STANDBY"
 _RALLY_RUN_ACTIVE = "ACTIVE"
 class _ConfigLoader:
-    """控制器首版使用的轻量 JSON/YAML 加载器。注意：YAML 依赖缺失时只支持 JSON。"""
+    """控制器首版使用的轻量 JSON/YAML 加载器。"""
 
     # 加载器只负责解析和结构校验，不创建模型、通信或算法实例。
     # 这样 load_config 能在锁外完成文件 IO，真正的运行状态初始化留给控制器。
@@ -79,14 +80,10 @@ class _ConfigLoader:
         if not config_path.exists():
             raise FileNotFoundError(path)
         text = config_path.read_text(encoding="utf-8")
-        # 按扩展名选择解析器：JSON 内建，YAML 需可选依赖 PyYAML。
+        # 按扩展名选择解析器：JSON 或 YAML。
         if config_path.suffix.lower() == ".json":
             data = json.loads(text)
         elif config_path.suffix.lower() in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError as exc:  # pragma: no cover - 依赖运行环境
-                raise ValueError("YAML config requires PyYAML") from exc
             data = yaml.safe_load(text)
         else:
             raise ValueError("config must be .json, .yaml, or .yml")
