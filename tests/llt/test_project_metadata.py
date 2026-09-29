@@ -38,7 +38,7 @@ class ProjectMetadataTests(unittest.TestCase):
         project = self.config["project"]
 
         self.assertEqual(project["name"], "formation-simulation-platform")
-        self.assertEqual(project["version"], "1.0.1")
+        self.assertEqual(project["version"], "1.0.2")
         self.assertEqual(project["readme"], "README.md")
         self.assertEqual(project["requires-python"], ">=3.12")
         self.assertTrue(project["description"])

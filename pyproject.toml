@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "formation-simulation-platform"
-version = "1.0.1"
+version = "1.0.2"
 description = "面向固定翼与无人机编队的仿真、评测和可视化平台"
 readme = "README.md"
 requires-python = ">=3.12"
