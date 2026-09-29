@@ -12,6 +12,7 @@ from pathlib import Path
 from src.data.linefile import LineFileManager, LineFileStrategyFactory
 from src.data.linefile.diamond_xml_strategy import DiamondXmlLineFileStrategy
 from src.data.config_loader import resolve_config_references
+from src.runner.gui_application import persist_config_route_file
 
 
 class LineFileTests(unittest.TestCase):
@@ -204,6 +205,51 @@ class LineFileTests(unittest.TestCase):
         self.assertIn("_geo_origin", route)
         self.assertAlmostEqual(route["waypoints"][0]["x_m"], 0.0)
         self.assertAlmostEqual(route["waypoints"][0]["y_m"], 0.0)
+
+    def test_persist_config_route_file_updates_relative_reference_after_validation(self) -> None:
+        """选择有效航线后应把相对引用写回主配置。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "configs" / "base.json"
+            route_path = root / "routes" / "selected.json"
+            config_path.parent.mkdir()
+            route_path.parent.mkdir()
+            config_path.write_text(json.dumps({"duration_s": 1.0}), encoding="utf-8")
+            route_path.write_text(
+                json.dumps(
+                    {
+                        "speed_mps": 20.0,
+                        "waypoints": [
+                            {"longitude_deg": 118.0, "latitude_deg": 31.0, "altitude_m": 1000.0},
+                            {"longitude_deg": 118.01, "latitude_deg": 31.01, "altitude_m": 1000.0},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            reference = persist_config_route_file(config_path, route_path)
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(reference, "../routes/selected.json")
+        self.assertEqual(config["route_file"], reference)
+
+    def test_persist_config_route_file_does_not_change_config_for_invalid_route(self) -> None:
+        """航线解析失败时必须保留原配置。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = root / "base.json"
+            route_path = root / "bad.XML"
+            original = '{"duration_s": 1.0}\n'
+            config_path.write_text(original, encoding="utf-8")
+            route_path.write_text("<bad>", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "not valid XML"):
+                persist_config_route_file(config_path, route_path)
+
+            self.assertEqual(config_path.read_text(encoding="utf-8"), original)
 
     def test_factory_rejects_unsupported_route_file_format(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported route_file format"):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -266,6 +267,40 @@ def persist_config_duration(path: Path, duration_s: float) -> None:
         path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
         return
     raise ValueError("config must be .json, .yaml, or .yml")
+
+
+def persist_config_route_file(path: Path, route_path: Path) -> str:
+    """校验航线并更新主配置的 route_file。注意：写回可迁移的相对路径。"""
+
+    suffix = path.suffix.lower()
+    text = path.read_text(encoding="utf-8")
+    if suffix == ".json":
+        config = json.loads(text)
+    elif suffix in {".yaml", ".yml"}:
+        try:
+            import yaml
+        except ImportError as exc:  # pragma: no cover - 依赖运行环境
+            raise ValueError("YAML config requires PyYAML") from exc
+        config = yaml.safe_load(text)
+    else:
+        raise ValueError("config must be .json, .yaml, or .yml")
+    if not isinstance(config, dict):
+        raise ValueError("config root must be an object")
+
+    destination = route_path.resolve()
+    try:
+        reference = Path(os.path.relpath(destination, path.parent.resolve())).as_posix()
+    except ValueError:
+        reference = destination.as_posix()
+    config["route_file"] = reference
+    # 复用正式加载链路校验格式和经纬度，失败时不修改原配置文件。
+    resolve_config_references(config, path)
+
+    if suffix == ".json":
+        path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    else:
+        path.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return reference
 
 
 def geodetic_from_enu(east_m: float, north_m: float, reference: GeoReference | None) -> tuple[float, float] | None:

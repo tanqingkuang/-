@@ -2111,6 +2111,43 @@ class GuiViewInteractionTests(unittest.TestCase):
                 window.close()
                 self.app.processEvents()
 
+    def test_choose_route_updates_current_config_and_reloads_it(self) -> None:
+        """选择航线后应更新当前主配置并立即重新加载。"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            project_root = Path(tmp)
+            config_path = self._write_config_file(project_root / "configs" / "base.json")
+            route_path = project_root / "configs" / "element" / "selected.json"
+            route_path.parent.mkdir()
+            route_path.write_text(
+                json.dumps(
+                    {
+                        "speed_mps": 20.0,
+                        "waypoints": [
+                            {"longitude_deg": 118.0, "latitude_deg": 31.0, "altitude_m": 1000.0},
+                            {"longitude_deg": 118.01, "latitude_deg": 31.01, "altitude_m": 1000.0},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            window = MainWindow(project_root=project_root, auto_load_config=False)
+            window._apply_config_path(str(config_path))
+            try:
+                with patch(
+                    "src.ui.gui.main_window_actions.QFileDialog.getOpenFileName",
+                    return_value=(str(route_path), "航线文件 (*.json)"),
+                ):
+                    window._choose_route_file()
+
+                config = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertEqual(config["route_file"], "element/selected.json")
+                self.assertEqual(window.sim.last_result_code, "OK")
+                self.assertEqual(window.choose_route_button.text(), "选择文件")
+            finally:
+                window.close()
+                self.app.processEvents()
+
     def test_successful_config_load_updates_ini_with_relative_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project_root = Path(tmp)
