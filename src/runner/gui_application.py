@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import yaml
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -262,11 +263,6 @@ def persist_config_duration(path: Path, duration_s: float) -> None:
         path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         return
     if suffix in {".yaml", ".yml"}:
-        # PyYAML 为可选依赖，只有用户实际编辑 YAML 时才要求安装。
-        try:
-            import yaml
-        except ImportError as exc:  # pragma: no cover - 依赖运行环境
-            raise ValueError("YAML config requires PyYAML") from exc
         config = yaml.safe_load(text)
         if not isinstance(config, dict):
             raise ValueError("config root must be an object")
@@ -284,10 +280,6 @@ def persist_config_route_file(path: Path, route_path: Path) -> str:
     if suffix == ".json":
         config = json.loads(text)
     elif suffix in {".yaml", ".yml"}:
-        try:
-            import yaml
-        except ImportError as exc:  # pragma: no cover - 依赖运行环境
-            raise ValueError("YAML config requires PyYAML") from exc
         config = yaml.safe_load(text)
     else:
         raise ValueError("config must be .json, .yaml, or .yml")
@@ -330,11 +322,6 @@ def terrain_display_file_from_config(path: str) -> str | None:
             # 与主配置支持范围一致，仅接受 JSON 和 YAML。
             data = json.loads(text)
         elif config_path.suffix.lower() in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError:
-                LOGGER.debug("解析地形显示配置失败：缺少 YAML 依赖，path=%s", path, exc_info=True)
-                return None
             data = yaml.safe_load(text)
         else:
             return None
@@ -597,12 +584,6 @@ def _route_file_from_config(path: Path) -> str | None:
         if path.suffix.lower() == ".json":
             data = json.loads(text)
         elif path.suffix.lower() in {".yaml", ".yml"}:
-            try:
-                import yaml
-            except ImportError:
-                LOGGER.debug("读取 route_file 失败：缺少 YAML 依赖，path=%s", path, exc_info=True)
-                return None
-
             try:
                 data = yaml.safe_load(text)
             except yaml.YAMLError:
